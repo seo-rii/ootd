@@ -1243,7 +1243,98 @@ impl ExcelRuntime {
         self.focus_member_supported("Worksheet", member, false)?;
         match member {
             "Range" => {
-                let rect = parse_range_args(args)?;
+                let rect = match args {
+                    [OmValue::Text(a1)] => parse_rect_a1(a1)?,
+                    [OmValue::Object(handle)] => match self.runtime_object(*handle)? {
+                        RuntimeObjectKind::Range {
+                            workbook: range_workbook,
+                            sheet_id: range_sheet_id,
+                            rect,
+                            ..
+                        } => {
+                            if range_workbook != workbook || range_sheet_id != sheet_id {
+                                return Err(OmError::invalid_argument(
+                                    "Worksheet.Range object argument must belong to the same worksheet",
+                                ));
+                            }
+                            rect
+                        }
+                        _ => {
+                            return Err(OmError::type_mismatch(
+                                "Worksheet.Range expects A1 references or Range objects",
+                            ));
+                        }
+                    },
+                    [start, end] => {
+                        let start = match start {
+                            OmValue::Text(a1) => parse_rect_a1(a1)?,
+                            OmValue::Object(handle) => match self.runtime_object(*handle)? {
+                                RuntimeObjectKind::Range {
+                                    workbook: range_workbook,
+                                    sheet_id: range_sheet_id,
+                                    rect,
+                                    ..
+                                } => {
+                                    if range_workbook != workbook || range_sheet_id != sheet_id {
+                                        return Err(OmError::invalid_argument(
+                                            "Worksheet.Range object arguments must belong to the same worksheet",
+                                        ));
+                                    }
+                                    rect
+                                }
+                                _ => {
+                                    return Err(OmError::type_mismatch(
+                                        "Worksheet.Range expects A1 references or Range objects",
+                                    ));
+                                }
+                            },
+                            _ => {
+                                return Err(OmError::type_mismatch(
+                                    "Worksheet.Range expects A1 references or Range objects",
+                                ));
+                            }
+                        };
+                        let end = match end {
+                            OmValue::Text(a1) => parse_rect_a1(a1)?,
+                            OmValue::Object(handle) => match self.runtime_object(*handle)? {
+                                RuntimeObjectKind::Range {
+                                    workbook: range_workbook,
+                                    sheet_id: range_sheet_id,
+                                    rect,
+                                    ..
+                                } => {
+                                    if range_workbook != workbook || range_sheet_id != sheet_id {
+                                        return Err(OmError::invalid_argument(
+                                            "Worksheet.Range object arguments must belong to the same worksheet",
+                                        ));
+                                    }
+                                    rect
+                                }
+                                _ => {
+                                    return Err(OmError::type_mismatch(
+                                        "Worksheet.Range expects A1 references or Range objects",
+                                    ));
+                                }
+                            },
+                            _ => {
+                                return Err(OmError::type_mismatch(
+                                    "Worksheet.Range expects A1 references or Range objects",
+                                ));
+                            }
+                        };
+                        Rect {
+                            row_first: start.row_first.min(end.row_first),
+                            row_last: start.row_last.max(end.row_last),
+                            col_first: start.col_first.min(end.col_first),
+                            col_last: start.col_last.max(end.col_last),
+                        }
+                    }
+                    _ => {
+                        return Err(OmError::invalid_argument(
+                            "Worksheet.Range expects one A1 reference or Range object, or two A1/range endpoints",
+                        ));
+                    }
+                };
                 Ok(OmValue::Object(
                     self.register_range_handle(workbook, sheet_id, rect).0,
                 ))
@@ -1532,25 +1623,6 @@ fn coerce_positive_index(value: f64, label: &str) -> OmResult<u32> {
         )));
     }
     Ok(value as u32)
-}
-
-fn parse_range_args(args: &[OmValue]) -> OmResult<Rect> {
-    match args {
-        [OmValue::Text(a1)] => parse_rect_a1(a1),
-        [OmValue::Text(start), OmValue::Text(end)] => {
-            let start = parse_cell_a1(start)?;
-            let end = parse_cell_a1(end)?;
-            Ok(Rect {
-                row_first: start.0.min(end.0),
-                row_last: start.0.max(end.0),
-                col_first: start.1.min(end.1),
-                col_last: start.1.max(end.1),
-            })
-        }
-        _ => Err(OmError::invalid_argument(
-            "Worksheet.Range expects one A1 reference or two A1 cell references",
-        )),
-    }
 }
 
 fn parse_cells_args(args: &[OmValue]) -> OmResult<(u32, u32)> {
@@ -2945,6 +3017,159 @@ mod tests {
                     .expect("Cells(1, 1) Value2")
             ),
             "dispatch-edited"
+        );
+    }
+
+    #[test]
+    fn worksheet_range_dispatch_accepts_range_handles_and_mixed_variant_endpoints() {
+        let mut runtime = ExcelRuntime::new();
+        let _workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let active_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook"),
+        );
+        let cell_a1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Cells",
+                    &[OmValue::Number(1.0), OmValue::Number(1.0)],
+                )
+                .expect("Cells(1, 1)"),
+        );
+        let cell_b2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Cells",
+                    &[OmValue::Number(2.0), OmValue::Number(2.0)],
+                )
+                .expect("Cells(2, 2)"),
+        );
+        let header_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B1".to_string())])
+                .expect("Range(A1:B1)"),
+        );
+        let object_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Object(cell_b2), OmValue::Object(cell_a1)],
+                )
+                .expect("Range(cell_b2, cell_a1)"),
+        );
+        let single_object_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Object(header_range)])
+                .expect("Range(header_range)"),
+        );
+        let mixed_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Object(header_range), OmValue::Object(cell_b2)],
+                )
+                .expect("Range(header_range, cell_b2)"),
+        );
+        let text_object_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1".to_string()), OmValue::Object(cell_b2)],
+                )
+                .expect("Range(\"A1\", cell_b2)"),
+        );
+        let second_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open second workbook");
+        let foreign_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(second_workbook.0, "Worksheets", &[])
+                .expect("second workbook worksheets"),
+        );
+        let foreign_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(foreign_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("second workbook worksheet"),
+        );
+        let foreign_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    foreign_sheet,
+                    "Cells",
+                    &[OmValue::Number(1.0), OmValue::Number(1.0)],
+                )
+                .expect("foreign Cells(1, 1)"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(object_range, "Address", &[])
+                    .expect("object_range Address")
+            ),
+            "$A$1:$B$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(single_object_range, "Address", &[])
+                    .expect("single_object_range Address")
+            ),
+            "$A$1:$B$1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(mixed_range, "Address", &[])
+                    .expect("mixed_range Address")
+            ),
+            "$A$1:$B$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(text_object_range, "Address", &[])
+                    .expect("text_object_range Address")
+            ),
+            "$A$1:$B$2"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Object(active_workbook)])
+                .expect_err("Range(workbook) should fail")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Object(foreign_cell)])
+                .expect_err("Range(foreign_cell) should fail")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 
