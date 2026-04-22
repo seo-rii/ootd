@@ -76,8 +76,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 38);
-    assert_eq!(summary.stub_member_count, 38);
+    assert_eq!(summary.member_count, 39);
+    assert_eq!(summary.stub_member_count, 39);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -120,7 +120,7 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 38);
+    assert_eq!(summary.member_count, 39);
 
     let application = document
         .interfaces
@@ -213,6 +213,20 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
             .iter()
             .find(|member| member.name == "Rows")
             .and_then(|member| member.return_type.as_ref())
+            .and_then(|type_ref| type_ref.alias_of.as_deref()),
+        Some("Excel.Range")
+    );
+    let range_item = range
+        .members
+        .iter()
+        .find(|member| member.name == "Item")
+        .expect("Range.Item");
+    assert_eq!(range_item.params.len(), 2);
+    assert!(range_item.params[1].optional);
+    assert_eq!(
+        range_item
+            .return_type
+            .as_ref()
             .and_then(|type_ref| type_ref.alias_of.as_deref()),
         Some("Excel.Range")
     );
@@ -899,7 +913,7 @@ fn writes_canonical_office_idl_json_from_bundle_inputs() {
     assert_eq!(round_trip_summary.enum_count, 1);
     assert_eq!(round_trip_summary.interface_count, 6);
     assert_eq!(round_trip_summary.class_count, 3);
-    assert_eq!(round_trip_summary.member_count, 38);
+    assert_eq!(round_trip_summary.member_count, 39);
     assert_eq!(generation.summary.library, "Excel");
     assert_eq!(generation.summary.version, "16.0");
     assert_eq!(
@@ -968,7 +982,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(application.member_count, 5);
     assert_eq!(workbook.member_count, 10);
     assert_eq!(worksheet.member_count, 6);
-    assert_eq!(range.member_count, 10);
+    assert_eq!(range.member_count, 11);
     assert_eq!(
         application.default_coclasses,
         vec!["Application".to_string()]
@@ -1155,6 +1169,21 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             .and_then(|type_ref| type_ref.alias_of.as_deref()),
         Some("Excel.Range")
     );
+    let range_item = range
+        .members
+        .iter()
+        .find(|member| member.name == "Item")
+        .expect("Range.Item");
+    assert_eq!(range_item.access, AccessMode::Read);
+    assert_eq!(range_item.params.len(), 2);
+    assert!(range_item.params[1].optional);
+    assert_eq!(
+        range_item
+            .return_type
+            .as_ref()
+            .and_then(|type_ref| type_ref.alias_of.as_deref()),
+        Some("Excel.Range")
+    );
     let range_row = range
         .members
         .iter()
@@ -1183,8 +1212,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 38);
-    assert_eq!(coverage.support_counts.stub, 38);
+    assert_eq!(coverage.member_count, 39);
+    assert_eq!(coverage.support_counts.stub, 39);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -1253,8 +1282,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(range_coverage.member_count, 10);
-    assert_eq!(range_coverage.support_counts.stub, 10);
+    assert_eq!(range_coverage.member_count, 11);
+    assert_eq!(range_coverage.support_counts.stub, 11);
     assert_eq!(
         range_coverage.stub_members,
         vec![
@@ -1267,7 +1296,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Column".to_string(),
             "Count".to_string(),
             "Rows".to_string(),
-            "Columns".to_string()
+            "Columns".to_string(),
+            "Item".to_string()
         ]
     );
 }

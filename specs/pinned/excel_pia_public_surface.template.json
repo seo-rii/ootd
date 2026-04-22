@@ -1216,6 +1216,50 @@
               }
             }
           }
+        },
+        {
+          "name": "Item",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "interface",
+            "name": "Range",
+            "aliasOf": "Excel.Range"
+          },
+          "params": [
+            {
+              "name": "RowIndex",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "ColumnIndex",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ],
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Item"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              }
+            }
+          }
         }
       ]
     }

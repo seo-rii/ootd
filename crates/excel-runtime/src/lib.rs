@@ -468,9 +468,108 @@ impl ExcelRuntime {
             RuntimeObjectKind::Worksheet { workbook, sheet_id } => {
                 self.dispatch_invoke_worksheet(workbook, sheet_id, member, args)
             }
-            RuntimeObjectKind::Range { .. } => Err(OmError::unsupported(format!(
-                "member {member} cannot be invoked on Range"
-            ))),
+            RuntimeObjectKind::Range {
+                workbook,
+                sheet_id,
+                rect,
+                projection,
+            } => {
+                self.focus_member_supported("Range", member, false)?;
+                match member {
+                    "Item" => {
+                        let item_rect = match args {
+                            [index] => {
+                                let index = coerce_u32_arg(index, "Range.Item index")?;
+                                match projection {
+                                    RangeProjection::Rows => {
+                                        if index > rect.height() {
+                                            return Err(OmError::invalid_argument(
+                                                "Range.Item row index is out of bounds",
+                                            ));
+                                        }
+                                        Rect {
+                                            row_first: rect.row_first + index - 1,
+                                            row_last: rect.row_first + index - 1,
+                                            col_first: rect.col_first,
+                                            col_last: rect.col_last,
+                                        }
+                                    }
+                                    RangeProjection::Columns => {
+                                        if index > rect.width() {
+                                            return Err(OmError::invalid_argument(
+                                                "Range.Item column index is out of bounds",
+                                            ));
+                                        }
+                                        Rect {
+                                            row_first: rect.row_first,
+                                            row_last: rect.row_last,
+                                            col_first: rect.col_first + index - 1,
+                                            col_last: rect.col_first + index - 1,
+                                        }
+                                    }
+                                    RangeProjection::Cells => {
+                                        if rect.height() == 1 {
+                                            if index > rect.width() {
+                                                return Err(OmError::invalid_argument(
+                                                    "Range.Item column index is out of bounds",
+                                                ));
+                                            }
+                                            Rect::single_cell(
+                                                rect.row_first,
+                                                rect.col_first + index - 1,
+                                            )
+                                        } else if rect.width() == 1 {
+                                            if index > rect.height() {
+                                                return Err(OmError::invalid_argument(
+                                                    "Range.Item row index is out of bounds",
+                                                ));
+                                            }
+                                            Rect::single_cell(
+                                                rect.row_first + index - 1,
+                                                rect.col_first,
+                                            )
+                                        } else {
+                                            return Err(OmError::invalid_argument(
+                                                "Range.Item expects row and column indexes for 2D ranges",
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            [row_index, column_index] => {
+                                let row_index = coerce_u32_arg(row_index, "Range.Item row index")?;
+                                let column_index =
+                                    coerce_u32_arg(column_index, "Range.Item column index")?;
+                                if row_index > rect.height() {
+                                    return Err(OmError::invalid_argument(
+                                        "Range.Item row index is out of bounds",
+                                    ));
+                                }
+                                if column_index > rect.width() {
+                                    return Err(OmError::invalid_argument(
+                                        "Range.Item column index is out of bounds",
+                                    ));
+                                }
+                                Rect::single_cell(
+                                    rect.row_first + row_index - 1,
+                                    rect.col_first + column_index - 1,
+                                )
+                            }
+                            _ => {
+                                return Err(OmError::invalid_argument(
+                                    "Range.Item expects an index and optional column index",
+                                ));
+                            }
+                        };
+                        Ok(OmValue::Object(
+                            self.register_range_handle(workbook, sheet_id, item_rect).0,
+                        ))
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "Range.{member} is not implemented as a method"
+                    ))),
+                }
+            }
         }
     }
 
@@ -2260,6 +2359,136 @@ mod tests {
                     .dispatch_get(active_sheet, "Name", &[])
                     .expect("ActiveSheet.Name")
             )
+        );
+    }
+
+    #[test]
+    fn range_item_dispatch_supports_2d_ranges_and_row_column_projections() {
+        let mut runtime = ExcelRuntime::new();
+        let _workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B2".to_string())])
+                .expect("Range(A1:B2)"),
+        );
+        let rows = expect_object_handle(
+            runtime
+                .dispatch_get(range, "Rows", &[])
+                .expect("Range.Rows"),
+        );
+        let columns = expect_object_handle(
+            runtime
+                .dispatch_get(range, "Columns", &[])
+                .expect("Range.Columns"),
+        );
+        let second_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(range, "Item", &[OmValue::Number(2.0), OmValue::Number(2.0)])
+                .expect("Range.Item(2, 2)"),
+        );
+        let second_row = expect_object_handle(
+            runtime
+                .dispatch_invoke(rows, "Item", &[OmValue::Number(2.0)])
+                .expect("Rows.Item(2)"),
+        );
+        let second_column = expect_object_handle(
+            runtime
+                .dispatch_invoke(columns, "Item", &[OmValue::Number(2.0)])
+                .expect("Columns.Item(2)"),
+        );
+        let single_row_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B1".to_string())])
+                .expect("Range(A1:B1)"),
+        );
+        let single_row_item = expect_object_handle(
+            runtime
+                .dispatch_invoke(single_row_range, "Item", &[OmValue::Number(2.0)])
+                .expect("Range(A1:B1).Item(2)"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(second_cell, "Address", &[])
+                    .expect("Range.Item(2, 2).Address")
+            ),
+            "$B$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(second_row, "Address", &[])
+                    .expect("Rows.Item(2).Address")
+            ),
+            "$A$2:$B$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(second_column, "Address", &[])
+                    .expect("Columns.Item(2).Address")
+            ),
+            "$B$1:$B$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(single_row_item, "Address", &[])
+                    .expect("Range(A1:B1).Item(2).Address")
+            ),
+            "$B$1"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_cell, "Count", &[])
+                    .expect("Range.Item(2, 2).Count")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_row, "Count", &[])
+                    .expect("Rows.Item(2).Count")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_column, "Count", &[])
+                    .expect("Columns.Item(2).Count")
+            ),
+            2.0
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(range, "Item", &[OmValue::Number(2.0)])
+                .expect_err("Range.Item(2) should fail for 2D ranges")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(rows, "Item", &[OmValue::Number(3.0)])
+                .expect_err("Rows.Item(3) should be out of bounds")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 
