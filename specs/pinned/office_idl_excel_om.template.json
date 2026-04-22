@@ -59,6 +59,32 @@
           }
         },
         {
+          "name": "Worksheets",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Worksheets",
+            "aliasOf": "Excel.Worksheets"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Application",
+                  "sourceMember": "Worksheets"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Worksheets",
+                "aliasOf": "Excel.Worksheets"
+              }
+            }
+          }
+        },
+        {
           "name": "ActiveWorkbook",
           "memberKind": "property",
           "returnType": {

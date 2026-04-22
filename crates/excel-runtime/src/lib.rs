@@ -832,7 +832,12 @@ impl ExcelRuntime {
 
     fn dispatch_get_application(&mut self, member: &str, args: &[OmValue]) -> OmResult<OmValue> {
         self.focus_member_supported("Application", member, false)?;
-        if !args.is_empty() && !matches!(member, "Cells" | "Rows" | "Columns" | "Workbooks") {
+        if !args.is_empty()
+            && !matches!(
+                member,
+                "Cells" | "Rows" | "Columns" | "Workbooks" | "Worksheets"
+            )
+        {
             return Err(OmError::invalid_argument(format!(
                 "Application.{member} does not accept index arguments"
             )));
@@ -841,6 +846,19 @@ impl ExcelRuntime {
         match member {
             "Workbooks" => {
                 let handle = self.register_object(RuntimeObjectKind::WorkbooksCollection);
+                if args.is_empty() {
+                    Ok(OmValue::Object(handle))
+                } else {
+                    self.dispatch_invoke(handle, "Item", args)
+                }
+            }
+            "Worksheets" => {
+                let Some(active_workbook) = self.active_workbook else {
+                    return Ok(OmValue::Empty);
+                };
+                let handle = self.register_object(RuntimeObjectKind::WorksheetsCollection {
+                    workbook: active_workbook,
+                });
                 if args.is_empty() {
                     Ok(OmValue::Object(handle))
                 } else {
@@ -6817,6 +6835,139 @@ mod tests {
             empty_runtime
                 .dispatch_get(empty_application, "Columns", &[])
                 .expect("Application.Columns without active workbook"),
+            OmValue::Empty
+        );
+    }
+
+    #[test]
+    fn application_worksheets_dispatch_targets_the_active_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook1 = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook1");
+        let workbook2 = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook2");
+        let worksheets1 = expect_object_handle(
+            runtime
+                .dispatch_get(workbook1.0, "Worksheets", &[])
+                .expect("Workbook1.Worksheets"),
+        );
+        let worksheet1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets1, "Item", &[OmValue::Number(1.0)])
+                .expect("Workbook1.Worksheets.Item(1)"),
+        );
+        let worksheets2 = expect_object_handle(
+            runtime
+                .dispatch_get(workbook2.0, "Worksheets", &[])
+                .expect("Workbook2.Worksheets"),
+        );
+        let worksheet2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets2, "Item", &[OmValue::Number(1.0)])
+                .expect("Workbook2.Worksheets.Item(1)"),
+        );
+
+        runtime
+            .dispatch_set(
+                worksheet1,
+                "Name",
+                OmValue::Text("FirstSheet".to_string()),
+                &[],
+            )
+            .expect("rename workbook1 sheet");
+        runtime
+            .dispatch_set(
+                worksheet2,
+                "Name",
+                OmValue::Text("SecondSheet".to_string()),
+                &[],
+            )
+            .expect("rename workbook2 sheet");
+        runtime
+            .dispatch_invoke(worksheet2, "Activate", &[])
+            .expect("Worksheet.Activate");
+
+        let application = runtime.root_application();
+        let active_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after Activate"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Worksheets", &[])
+                .expect("Application.Worksheets"),
+        );
+        let worksheet_by_index = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Application.Worksheets(1)"),
+        );
+        let worksheet_by_name = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    application,
+                    "Worksheets",
+                    &[OmValue::Text("SecondSheet".to_string())],
+                )
+                .expect("Application.Worksheets(\"SecondSheet\")"),
+        );
+        let selection = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after Application.Worksheets"),
+        );
+
+        assert_eq!(active_workbook, workbook2.0);
+        assert_eq!(
+            runtime
+                .dispatch_get(worksheets, "Count", &[])
+                .expect("Application.Worksheets.Count"),
+            OmValue::Number(1.0)
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(worksheet_by_index, "Name", &[])
+                    .expect("Application.Worksheets(1).Name")
+            ),
+            "SecondSheet"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(worksheet_by_name, "Name", &[])
+                    .expect("Application.Worksheets(\"SecondSheet\").Name")
+            ),
+            "SecondSheet"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection, "Address", &[])
+                    .expect("Selection after Application.Worksheets address")
+            ),
+            "$A$1"
+        );
+
+        let mut empty_runtime = ExcelRuntime::new();
+        let empty_application = empty_runtime.root_application();
+        assert_eq!(
+            empty_runtime
+                .dispatch_get(empty_application, "Worksheets", &[])
+                .expect("Application.Worksheets without active workbook"),
             OmValue::Empty
         );
     }

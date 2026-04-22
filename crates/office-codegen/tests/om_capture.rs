@@ -76,8 +76,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 59);
-    assert_eq!(summary.stub_member_count, 59);
+    assert_eq!(summary.member_count, 60);
+    assert_eq!(summary.stub_member_count, 60);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -120,7 +120,7 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 59);
+    assert_eq!(summary.member_count, 60);
 
     let application = document
         .interfaces
@@ -206,6 +206,15 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
             .and_then(|member| member.return_type.as_ref())
             .and_then(|type_ref| type_ref.alias_of.as_deref()),
         Some("Excel.Range")
+    );
+    assert_eq!(
+        application
+            .members
+            .iter()
+            .find(|member| member.name == "Worksheets")
+            .and_then(|member| member.return_type.as_ref())
+            .and_then(|type_ref| type_ref.alias_of.as_deref()),
+        Some("Excel.Worksheets")
     );
     let calculate_full_rebuild = application
         .members
@@ -1146,7 +1155,7 @@ fn writes_canonical_office_idl_json_from_bundle_inputs() {
     assert_eq!(round_trip_summary.enum_count, 1);
     assert_eq!(round_trip_summary.interface_count, 6);
     assert_eq!(round_trip_summary.class_count, 3);
-    assert_eq!(round_trip_summary.member_count, 59);
+    assert_eq!(round_trip_summary.member_count, 60);
     assert_eq!(generation.summary.library, "Excel");
     assert_eq!(generation.summary.version, "16.0");
     assert_eq!(
@@ -1212,7 +1221,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|entry| entry.name == "Range")
         .expect("Range");
 
-    assert_eq!(application.member_count, 12);
+    assert_eq!(application.member_count, 13);
     assert_eq!(workbook.member_count, 10);
     assert_eq!(worksheet.member_count, 9);
     assert_eq!(range.member_count, 21);
@@ -1333,6 +1342,19 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|member| member.name == "Saved")
         .expect("Workbook.Saved");
     assert_eq!(workbook_saved.access, AccessMode::Readwrite);
+    let application_worksheets = application
+        .members
+        .iter()
+        .find(|member| member.name == "Worksheets")
+        .expect("Application.Worksheets");
+    assert_eq!(application_worksheets.access, AccessMode::Read);
+    assert_eq!(
+        application_worksheets
+            .return_type
+            .as_ref()
+            .and_then(|type_ref| type_ref.alias_of.as_deref()),
+        Some("Excel.Worksheets")
+    );
     let worksheet_parent = worksheet
         .members
         .iter()
@@ -1713,8 +1735,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 59);
-    assert_eq!(coverage.support_counts.stub, 59);
+    assert_eq!(coverage.member_count, 60);
+    assert_eq!(coverage.support_counts.stub, 60);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -1738,12 +1760,13 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|entry| entry.name == "Range")
         .expect("Range coverage");
 
-    assert_eq!(application_coverage.member_count, 12);
-    assert_eq!(application_coverage.support_counts.stub, 12);
+    assert_eq!(application_coverage.member_count, 13);
+    assert_eq!(application_coverage.support_counts.stub, 13);
     assert_eq!(
         application_coverage.stub_members,
         vec![
             "Workbooks".to_string(),
+            "Worksheets".to_string(),
             "ActiveWorkbook".to_string(),
             "ActiveSheet".to_string(),
             "ActiveCell".to_string(),
