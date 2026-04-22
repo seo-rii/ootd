@@ -1,0 +1,34 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/office-idl",
+  "crates/office-codegen",
+  "crates/office-common",
+  "crates/office-opc",
+  "crates/office-capture",
+  "crates/excel-model",
+  "crates/excel-xlsx",
+  "crates/excel-runtime",
+]
+
+default-members = [
+  "crates/office-idl",
+  "crates/office-codegen",
+  "crates/office-common",
+  "crates/office-opc",
+  "crates/office-capture",
+  "crates/excel-model",
+  "crates/excel-xlsx",
+  "crates/excel-runtime",
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.85"
+publish = false
+
+[workspace.dependencies]
+quick-xml = "0.39.2"
+serde = { version = "1", features = ["derive"] }
+zip = "8.4.0"
