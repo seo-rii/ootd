@@ -108,6 +108,33 @@
               }
             }
           }
+        },
+        {
+          "name": "ActiveCell",
+          "memberKind": "property_get",
+          "returnType": {
+            "kind": "interface",
+            "name": "Range",
+            "nullable": true,
+            "aliasOf": "Excel.Range"
+          },
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Application",
+                  "sourceMember": "ActiveCell"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Range",
+                "nullable": true,
+                "aliasOf": "Excel.Range"
+              }
+            }
+          }
         }
       ]
     },
