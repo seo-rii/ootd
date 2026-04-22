@@ -980,6 +980,15 @@ impl ExcelRuntime {
                 )
                 .0,
             )),
+            "Cells" => Ok(OmValue::Object(
+                self.register_projected_range_handle(
+                    workbook,
+                    sheet_id,
+                    rect,
+                    RangeProjection::Cells,
+                )
+                .0,
+            )),
             "CurrentRegion" => Ok(OmValue::Object(
                 self.register_range_handle(
                     workbook,
@@ -2877,6 +2886,90 @@ mod tests {
                     .expect("blank B2.CurrentRegion.Address")
             ),
             "$B$2"
+        );
+    }
+
+    #[test]
+    fn range_dispatch_cells_restores_cell_view_over_row_and_column_projections() {
+        let mut runtime = ExcelRuntime::new();
+        let _workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B2".to_string())])
+                .expect("Range(A1:B2)"),
+        );
+        let rows = expect_object_handle(
+            runtime
+                .dispatch_get(range, "Rows", &[])
+                .expect("Range.Rows"),
+        );
+        let columns = expect_object_handle(
+            runtime
+                .dispatch_get(range, "Columns", &[])
+                .expect("Range.Columns"),
+        );
+        let rows_cells = expect_object_handle(
+            runtime
+                .dispatch_get(rows, "Cells", &[])
+                .expect("Rows.Cells"),
+        );
+        let columns_cells = expect_object_handle(
+            runtime
+                .dispatch_get(columns, "Cells", &[])
+                .expect("Columns.Cells"),
+        );
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(rows, "Count", &[])
+                    .expect("Rows.Count")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(rows_cells, "Count", &[])
+                    .expect("Rows.Cells.Count")
+            ),
+            4.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(columns_cells, "Count", &[])
+                    .expect("Columns.Cells.Count")
+            ),
+            4.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(rows_cells, "Address", &[])
+                    .expect("Rows.Cells.Address")
+            ),
+            "$A$1:$B$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(columns_cells, "Address", &[])
+                    .expect("Columns.Cells.Address")
+            ),
+            "$A$1:$B$2"
         );
     }
 
