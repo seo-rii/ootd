@@ -233,6 +233,31 @@
           }
         },
         {
+          "name": "SaveAs",
+          "memberKind": "method",
+          "params": [
+            {
+              "name": "Filename",
+              "type": {
+                "kind": "primitive",
+                "name": "string",
+                "aliasOf": "BSTR"
+              }
+            }
+          ],
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "SaveAs"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "Close",
           "memberKind": "method",
           "metadata": {
