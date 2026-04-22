@@ -970,6 +970,14 @@ impl ExcelRuntime {
                 )
                 .0,
             )),
+            "CurrentRegion" => Ok(OmValue::Object(
+                self.register_range_handle(
+                    workbook,
+                    sheet_id,
+                    self.current_region_rect(workbook, sheet_id, rect)?,
+                )
+                .0,
+            )),
             "Count" => Ok(OmValue::Number(match projection {
                 RangeProjection::Cells => rect.width() * rect.height(),
                 RangeProjection::Rows => rect.height(),
@@ -1503,6 +1511,103 @@ impl ExcelRuntime {
             col_first,
             col_last,
         })
+    }
+
+    fn current_region_rect(
+        &self,
+        workbook: WorkbookHandle,
+        sheet_id: SheetId,
+        seed_rect: Rect,
+    ) -> OmResult<Rect> {
+        let worksheet_data = self
+            .runtime_workbook(workbook)?
+            .loaded
+            .state
+            .worksheet_data_for_sheet(sheet_id)?;
+        let cell_is_occupied = |row: u32, col: u32| {
+            worksheet_data.cells.get(&(row, col)).is_some_and(|cell| {
+                cell.formula.is_some() || !matches!(cell.value, office_common::CellValue::Blank)
+            })
+        };
+        let row_has_occupied = |row: u32, col_first: u32, col_last: u32| {
+            (col_first..=col_last).any(|col| cell_is_occupied(row, col))
+        };
+        let col_has_occupied = |col: u32, row_first: u32, row_last: u32| {
+            (row_first..=row_last).any(|row| cell_is_occupied(row, col))
+        };
+
+        let occupied_cells = worksheet_data
+            .cells
+            .iter()
+            .filter(|((row, col), cell)| {
+                *row >= seed_rect.row_first
+                    && *row <= seed_rect.row_last
+                    && *col >= seed_rect.col_first
+                    && *col <= seed_rect.col_last
+                    && (cell.formula.is_some()
+                        || !matches!(cell.value, office_common::CellValue::Blank))
+            })
+            .map(|((row, col), _)| (*row, *col))
+            .collect::<Vec<_>>();
+        let Some((first_row, first_col)) = occupied_cells.first().copied() else {
+            return Ok(seed_rect);
+        };
+
+        let mut region = Rect {
+            row_first: occupied_cells
+                .iter()
+                .map(|(row, _)| *row)
+                .min()
+                .unwrap_or(first_row),
+            row_last: occupied_cells
+                .iter()
+                .map(|(row, _)| *row)
+                .max()
+                .unwrap_or(first_row),
+            col_first: occupied_cells
+                .iter()
+                .map(|(_, col)| *col)
+                .min()
+                .unwrap_or(first_col),
+            col_last: occupied_cells
+                .iter()
+                .map(|(_, col)| *col)
+                .max()
+                .unwrap_or(first_col),
+        };
+
+        loop {
+            let mut changed = false;
+
+            while region.row_first > 1
+                && row_has_occupied(region.row_first - 1, region.col_first, region.col_last)
+            {
+                region.row_first -= 1;
+                changed = true;
+            }
+            while region.row_last < u32::MAX
+                && row_has_occupied(region.row_last + 1, region.col_first, region.col_last)
+            {
+                region.row_last += 1;
+                changed = true;
+            }
+            while region.col_first > 1
+                && col_has_occupied(region.col_first - 1, region.row_first, region.row_last)
+            {
+                region.col_first -= 1;
+                changed = true;
+            }
+            while region.col_last < u32::MAX
+                && col_has_occupied(region.col_last + 1, region.row_first, region.row_last)
+            {
+                region.col_last += 1;
+                changed = true;
+            }
+
+            if !changed {
+                return Ok(region);
+            }
+        }
     }
 
     fn range_ref(
@@ -2561,6 +2666,100 @@ mod tests {
                 .expect_err("Rows.Item(3) should be out of bounds")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn range_dispatch_current_region_expands_contiguous_region_and_preserves_blank_seed() {
+        let mut runtime = ExcelRuntime::new();
+        let _workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formula_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Range(B1)"),
+        );
+        let partial_region = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B1".to_string())])
+                .expect("Range(A1:B1)"),
+        );
+        let formula_current_region = expect_object_handle(
+            runtime
+                .dispatch_get(formula_cell, "CurrentRegion", &[])
+                .expect("B1.CurrentRegion"),
+        );
+        let partial_current_region = expect_object_handle(
+            runtime
+                .dispatch_get(partial_region, "CurrentRegion", &[])
+                .expect("A1:B1.CurrentRegion"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(formula_current_region, "Address", &[])
+                    .expect("B1.CurrentRegion.Address")
+            ),
+            "$A$1:$C$1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(partial_current_region, "Address", &[])
+                    .expect("A1:B1.CurrentRegion.Address")
+            ),
+            "$A$1:$C$1"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(formula_current_region, "Count", &[])
+                    .expect("B1.CurrentRegion.Count")
+            ),
+            3.0
+        );
+
+        let blank_workbook = runtime.create_workbook().expect("blank workbook");
+        let blank_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(blank_workbook.0, "Worksheets", &[])
+                .expect("blank worksheets"),
+        );
+        let blank_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(blank_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("blank worksheet"),
+        );
+        let blank_seed = expect_object_handle(
+            runtime
+                .dispatch_invoke(blank_sheet, "Range", &[OmValue::Text("B2".to_string())])
+                .expect("blank Range(B2)"),
+        );
+        let blank_current_region = expect_object_handle(
+            runtime
+                .dispatch_get(blank_seed, "CurrentRegion", &[])
+                .expect("blank B2.CurrentRegion"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(blank_current_region, "Address", &[])
+                    .expect("blank B2.CurrentRegion.Address")
+            ),
+            "$B$2"
         );
     }
 

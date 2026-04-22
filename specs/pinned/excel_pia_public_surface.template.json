@@ -1168,6 +1168,31 @@
           }
         },
         {
+          "name": "CurrentRegion",
+          "memberKind": "property_get",
+          "returnType": {
+            "kind": "interface",
+            "name": "Range",
+            "aliasOf": "Excel.Range"
+          },
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Range",
+                  "sourceMember": "CurrentRegion"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              }
+            }
+          }
+        },
+        {
           "name": "Rows",
           "memberKind": "property_get",
           "returnType": {
