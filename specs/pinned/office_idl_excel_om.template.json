@@ -383,6 +383,38 @@
           }
         },
         {
+          "name": "Saved",
+          "memberKind": "property",
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "Saved"
+                },
+                {
+                  "kind": "property_set",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "Saved"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          }
+        },
+        {
           "name": "Save",
           "memberKind": "method",
           "support": "stub",

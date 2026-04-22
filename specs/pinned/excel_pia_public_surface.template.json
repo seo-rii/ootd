@@ -367,6 +367,61 @@
           }
         },
         {
+          "name": "Saved",
+          "memberKind": "property_get",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          },
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "Saved"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          }
+        },
+        {
+          "name": "Saved",
+          "memberKind": "property_set",
+          "params": [
+            {
+              "name": "RHS",
+              "type": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          ],
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_set",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "Saved"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          }
+        },
+        {
           "name": "Save",
           "memberKind": "method",
           "metadata": {

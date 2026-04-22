@@ -24,6 +24,7 @@ struct RuntimeWorkbook {
     loaded: LoadedXlsxWorkbook,
     read_only: bool,
     source_path: Option<PathBuf>,
+    dirty: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -137,6 +138,7 @@ impl ExcelRuntime {
                 loaded,
                 read_only: spec.read_only,
                 source_path,
+                dirty: false,
             },
         );
         self.objects.insert(
@@ -290,6 +292,32 @@ impl ExcelRuntime {
         args: &[OmValue],
     ) -> OmResult<()> {
         match self.runtime_object(handle)? {
+            RuntimeObjectKind::Workbook { workbook } => {
+                self.focus_member_supported("Workbook", member, true)?;
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "Workbook.{member} does not accept index arguments"
+                    )));
+                }
+                match member {
+                    "Saved" => {
+                        let OmValue::Bool(saved) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Workbook.Saved expects a boolean value",
+                            ));
+                        };
+                        if saved {
+                            self.clear_workbook_dirty_state(workbook)?;
+                        } else {
+                            self.runtime_workbook_mut(workbook)?.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "Workbook.{member} is not writable"
+                    ))),
+                }
+            }
             RuntimeObjectKind::Worksheet { workbook, sheet_id } => {
                 self.focus_member_supported("Worksheet", member, true)?;
                 if !args.is_empty() {
@@ -346,7 +374,10 @@ impl ExcelRuntime {
                             .ok_or_else(|| {
                                 OmError::new(OmErrorCode::NotFound, "unknown worksheet")
                             })?;
-                        worksheet.name = new_name;
+                        if worksheet.name != new_name {
+                            worksheet.name = new_name;
+                            runtime.dirty = true;
+                        }
                         Ok(())
                     }
                     _ => Err(OmError::unsupported(format!(
@@ -361,7 +392,6 @@ impl ExcelRuntime {
             } => self.dispatch_set_range(workbook, sheet_id, rect, member, value, args),
             RuntimeObjectKind::Application
             | RuntimeObjectKind::WorkbooksCollection
-            | RuntimeObjectKind::Workbook { .. }
             | RuntimeObjectKind::WorksheetsCollection { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
             ))),
@@ -547,6 +577,16 @@ impl ExcelRuntime {
                 ))
             }
             "ReadOnly" => Ok(OmValue::Bool(self.runtime_workbook(workbook)?.read_only)),
+            "Saved" => Ok(OmValue::Bool({
+                let runtime = self.runtime_workbook(workbook)?;
+                !runtime.dirty
+                    && runtime
+                        .loaded
+                        .state
+                        .worksheet_data
+                        .values()
+                        .all(|worksheet| !worksheet.dirty)
+            })),
             "Worksheets" => Ok(OmValue::Object(
                 self.register_object(RuntimeObjectKind::WorksheetsCollection { workbook }),
             )),
@@ -754,7 +794,8 @@ impl ExcelRuntime {
                     workbook,
                     range: self.range_ref(workbook, sheet_id, rect)?,
                     values,
-                })
+                })?;
+                Ok(())
             }
             _ => Err(OmError::unsupported(format!(
                 "Range.{member} is not writable"
@@ -793,6 +834,7 @@ impl ExcelRuntime {
                             format!("failed to write workbook {}: {error}", path.display()),
                         )
                     })?;
+                    self.clear_workbook_dirty_state(workbook)?;
                 }
                 Ok(OmValue::Empty)
             }
@@ -841,12 +883,15 @@ impl ExcelRuntime {
                     .and_then(|value| value.to_str())
                     .filter(|value| !value.is_empty())
                     .map(str::to_owned);
-                let runtime = self.runtime_workbook_mut(workbook)?;
-                runtime.source_path = Some(path);
-                runtime.loaded.state.model.format = format;
-                if let Some(display_name) = display_name {
-                    runtime.loaded.state.model.display_name = display_name;
+                {
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    runtime.source_path = Some(path);
+                    runtime.loaded.state.model.format = format;
+                    if let Some(display_name) = display_name {
+                        runtime.loaded.state.model.display_name = display_name;
+                    }
                 }
+                self.clear_workbook_dirty_state(workbook)?;
                 Ok(OmValue::Empty)
             }
             "Close" => {
@@ -1135,6 +1180,16 @@ impl ExcelRuntime {
             sheet_id,
             rect,
         ))
+    }
+
+    fn clear_workbook_dirty_state(&mut self, workbook: WorkbookHandle) -> OmResult<()> {
+        let runtime = self.runtime_workbook_mut(workbook)?;
+        runtime.dirty = false;
+        for worksheet in runtime.loaded.state.worksheet_data.values_mut() {
+            worksheet.dirty = false;
+            worksheet.dirty_cells.clear();
+        }
+        Ok(())
     }
 }
 
@@ -2679,6 +2734,11 @@ mod tests {
                 .dispatch_get(active_workbook, "ReadOnly", &[])
                 .expect("Workbook.ReadOnly")
         ));
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(active_workbook, "Saved", &[])
+                .expect("Workbook.Saved")
+        ));
         assert_eq!(
             expect_number(
                 runtime
@@ -2888,6 +2948,147 @@ mod tests {
         );
 
         fs::remove_dir_all(&base_dir).expect("cleanup SaveAs fixture");
+    }
+
+    #[test]
+    fn workbook_saved_dispatch_tracks_dirty_state_across_mutations_and_saves() {
+        let mut runtime = ExcelRuntime::new();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let base_dir = std::env::temp_dir().join(format!("ootd-saved-state-{unique}"));
+        let source_dir = base_dir.join("source");
+        let target_dir = base_dir.join("target");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        fs::create_dir_all(&target_dir).expect("create target dir");
+        let source_path = source_dir.join("source.xlsx");
+        let target_path = target_dir.join("saved-target.xlsx");
+        fs::write(&source_path, synthetic_workbook_bytes()).expect("write source workbook");
+
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+        let workbook = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[OmValue::Text(source_path.to_string_lossy().into_owned())],
+                )
+                .expect("Workbooks.Open"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let first_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("Workbook.Saved on open")
+        ));
+
+        runtime
+            .dispatch_set(workbook, "Saved", OmValue::Bool(false), &[])
+            .expect("Workbook.Saved = false");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("Workbook.Saved after false")
+        ));
+
+        runtime
+            .dispatch_set(workbook, "Saved", OmValue::Bool(true), &[])
+            .expect("Workbook.Saved = true");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("Workbook.Saved after true")
+        ));
+
+        runtime
+            .dispatch_set(
+                active_sheet,
+                "Name",
+                OmValue::Text("DirtyRename".to_string()),
+                &[],
+            )
+            .expect("rename worksheet");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("Workbook.Saved after rename")
+        ));
+
+        runtime
+            .dispatch_set(workbook, "Saved", OmValue::Bool(true), &[])
+            .expect("Workbook.Saved = true after rename");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("Workbook.Saved after reset")
+        ));
+
+        runtime
+            .dispatch_set(
+                first_cell,
+                "Value",
+                OmValue::Text("dirty value".to_string()),
+                &[],
+            )
+            .expect("Range.Value");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("Workbook.Saved after cell edit")
+        ));
+
+        runtime
+            .dispatch_invoke(workbook, "Save", &[])
+            .expect("Workbook.Save");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("Workbook.Saved after Save")
+        ));
+
+        runtime
+            .dispatch_set(
+                active_sheet,
+                "Name",
+                OmValue::Text("SavedAfterSaveAs".to_string()),
+                &[],
+            )
+            .expect("rename worksheet before SaveAs");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("Workbook.Saved before SaveAs")
+        ));
+
+        runtime
+            .dispatch_invoke(
+                workbook,
+                "SaveAs",
+                &[OmValue::Text(target_path.to_string_lossy().into_owned())],
+            )
+            .expect("Workbook.SaveAs");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("Workbook.Saved after SaveAs")
+        ));
+
+        fs::remove_dir_all(&base_dir).expect("cleanup Saved fixture");
     }
 
     #[test]
