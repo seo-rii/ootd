@@ -1766,6 +1766,77 @@ impl ExcelRuntime {
                     .0,
                 ))
             }
+            "Union" => {
+                if args.len() != 2 {
+                    return Err(OmError::invalid_argument(
+                        "Application.Union expects two range arguments",
+                    ));
+                }
+
+                let parse_range = |value: &OmValue,
+                                   label: &str,
+                                   runtime: &ExcelRuntime|
+                 -> OmResult<(WorkbookHandle, SheetId, Rect)> {
+                    match value {
+                        OmValue::Object(handle) => match runtime.runtime_object(*handle)? {
+                            RuntimeObjectKind::Range {
+                                workbook,
+                                sheet_id,
+                                rect,
+                                ..
+                            } => Ok((workbook, sheet_id, rect)),
+                            _ => Err(OmError::type_mismatch(format!(
+                                "Application.Union {label} expects range objects"
+                            ))),
+                        },
+                        _ => Err(OmError::type_mismatch(format!(
+                            "Application.Union {label} expects range objects"
+                        ))),
+                    }
+                };
+
+                let (workbook1, sheet_id1, rect1) = parse_range(&args[0], "Arg1", self)?;
+                let (workbook2, sheet_id2, rect2) = parse_range(&args[1], "Arg2", self)?;
+                if workbook1 != workbook2 || sheet_id1 != sheet_id2 {
+                    return Err(OmError::invalid_argument(
+                        "Application.Union expects ranges from the same worksheet",
+                    ));
+                }
+
+                let rect = Rect {
+                    row_first: rect1.row_first.min(rect2.row_first),
+                    row_last: rect1.row_last.max(rect2.row_last),
+                    col_first: rect1.col_first.min(rect2.col_first),
+                    col_last: rect1.col_last.max(rect2.col_last),
+                };
+                let rect_area =
+                    |rect: Rect| -> u64 { u64::from(rect.width()) * u64::from(rect.height()) };
+                let intersection_row_first = rect1.row_first.max(rect2.row_first);
+                let intersection_row_last = rect1.row_last.min(rect2.row_last);
+                let intersection_col_first = rect1.col_first.max(rect2.col_first);
+                let intersection_col_last = rect1.col_last.min(rect2.col_last);
+                let intersection_area = if intersection_row_first > intersection_row_last
+                    || intersection_col_first > intersection_col_last
+                {
+                    0
+                } else {
+                    rect_area(Rect {
+                        row_first: intersection_row_first,
+                        row_last: intersection_row_last,
+                        col_first: intersection_col_first,
+                        col_last: intersection_col_last,
+                    })
+                };
+                if rect_area(rect) != rect_area(rect1) + rect_area(rect2) - intersection_area {
+                    return Err(OmError::unsupported(
+                        "Application.Union is only implemented for rectangular unions",
+                    ));
+                }
+
+                Ok(OmValue::Object(
+                    self.register_range_handle(workbook1, sheet_id1, rect).0,
+                ))
+            }
             _ => Err(OmError::unsupported(format!(
                 "Application.{member} is not implemented as a method"
             ))),
@@ -6239,6 +6310,144 @@ mod tests {
                     &[OmValue::Object(range1), OmValue::Object(workbook1.0)],
                 )
                 .expect_err("Application.Intersect should reject non-range objects")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+    }
+
+    #[test]
+    fn application_union_returns_rectangular_unions_and_rejects_multi_area_results() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook1 = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook1");
+        let workbook2 = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook2");
+        let worksheets1 = expect_object_handle(
+            runtime
+                .dispatch_get(workbook1.0, "Worksheets", &[])
+                .expect("Workbook1.Worksheets"),
+        );
+        let worksheet1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets1, "Item", &[OmValue::Number(1.0)])
+                .expect("Workbook1.Worksheets.Item(1)"),
+        );
+        let worksheets2 = expect_object_handle(
+            runtime
+                .dispatch_get(workbook2.0, "Worksheets", &[])
+                .expect("Workbook2.Worksheets"),
+        );
+        let worksheet2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets2, "Item", &[OmValue::Number(1.0)])
+                .expect("Workbook2.Worksheets.Item(1)"),
+        );
+
+        runtime
+            .dispatch_invoke(worksheet1, "Activate", &[])
+            .expect("Worksheet.Activate");
+
+        let application = runtime.root_application();
+        let range1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(application, "Range", &[OmValue::Text("A1:B2".to_string())])
+                .expect("Application.Range(A1:B2)"),
+        );
+        let range2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(application, "Range", &[OmValue::Text("B1:C2".to_string())])
+                .expect("Application.Range(B1:C2)"),
+        );
+        let union = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    application,
+                    "Union",
+                    &[OmValue::Object(range1), OmValue::Object(range2)],
+                )
+                .expect("Application.Union(range1, range2)"),
+        );
+        let selection_after_union = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after Union"),
+        );
+        let disjoint = expect_object_handle(
+            runtime
+                .dispatch_invoke(application, "Range", &[OmValue::Text("E1".to_string())])
+                .expect("Application.Range(E1)"),
+        );
+        let foreign_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet2, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Workbook2.Range(A1)"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(union, "Address", &[])
+                    .expect("Application.Union address")
+            ),
+            "$A$1:$C$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection_after_union, "Address", &[])
+                    .expect("Selection after Union address")
+            ),
+            "$B$1:$C$2"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    application,
+                    "Union",
+                    &[OmValue::Object(range1), OmValue::Object(disjoint)],
+                )
+                .expect_err("Application.Union should reject multi-area results")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    application,
+                    "Union",
+                    &[OmValue::Object(range1), OmValue::Object(foreign_range)],
+                )
+                .expect_err("Application.Union should reject foreign ranges")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(application, "Union", &[OmValue::Object(range1)])
+                .expect_err("Application.Union requires two args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    application,
+                    "Union",
+                    &[OmValue::Object(range1), OmValue::Object(workbook1.0)],
+                )
+                .expect_err("Application.Union should reject non-range objects")
                 .code,
             OmErrorCode::TypeMismatch
         );

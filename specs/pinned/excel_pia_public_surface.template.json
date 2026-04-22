@@ -291,6 +291,49 @@
               }
             }
           }
+        },
+        {
+          "name": "Union",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "interface",
+            "name": "Range",
+            "aliasOf": "Excel.Range"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              }
+            }
+          ],
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Application",
+                  "sourceMember": "Union"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              }
+            }
+          }
         }
       ]
     },
