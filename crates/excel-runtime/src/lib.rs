@@ -2011,25 +2011,18 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         args: &[OmValue],
     ) -> OmResult<WorksheetHandle> {
+        let is_omitted =
+            |value: &OmValue| matches!(value, OmValue::Missing | OmValue::Empty | OmValue::Null);
         if args.len() > 4 {
             return Err(OmError::invalid_argument(
                 "Worksheets.Add accepts at most Before, After, Count, and Type arguments",
             ));
         }
-        if matches!(
-            args.first(),
-            Some(value) if !matches!(value, OmValue::Missing | OmValue::Empty | OmValue::Null)
-        ) {
-            return Err(OmError::unsupported(
-                "Worksheets.Add currently only supports omitted Before arguments",
-            ));
-        }
-        if matches!(
-            args.get(1),
-            Some(value) if !matches!(value, OmValue::Missing | OmValue::Empty | OmValue::Null)
-        ) {
-            return Err(OmError::unsupported(
-                "Worksheets.Add currently only supports omitted After arguments",
+        if matches!(args.first(), Some(value) if !is_omitted(value))
+            && matches!(args.get(1), Some(value) if !is_omitted(value))
+        {
+            return Err(OmError::invalid_argument(
+                "Worksheets.Add cannot specify both Before and After",
             ));
         }
         if let Some(value) = args.get(2) {
@@ -2062,19 +2055,75 @@ impl ExcelRuntime {
             ));
         }
 
-        let insertion_index = self
-            .selection
-            .filter(|selection| selection.workbook == workbook)
-            .and_then(|selection| {
-                self.runtime_workbook(workbook)
-                    .ok()?
-                    .loaded
-                    .state
-                    .worksheets
-                    .iter()
-                    .position(|worksheet| worksheet.id == selection.sheet_id)
-            })
-            .unwrap_or(0);
+        let insertion_index = if let Some(value) = args.first().filter(|value| !is_omitted(value)) {
+            let OmValue::Object(handle) = value else {
+                return Err(OmError::type_mismatch(
+                    "Worksheets.Add Before expects a Worksheet object when provided",
+                ));
+            };
+            let RuntimeObjectKind::Worksheet {
+                workbook: target_workbook,
+                sheet_id,
+            } = self.runtime_object(*handle)?
+            else {
+                return Err(OmError::type_mismatch(
+                    "Worksheets.Add Before expects a Worksheet object when provided",
+                ));
+            };
+            if target_workbook != workbook {
+                return Err(OmError::invalid_argument(
+                    "Worksheets.Add Before worksheet must belong to the same workbook",
+                ));
+            }
+            self.runtime_workbook(workbook)?
+                .loaded
+                .state
+                .worksheets
+                .iter()
+                .position(|worksheet| worksheet.id == sheet_id)
+                .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?
+        } else if let Some(value) = args.get(1).filter(|value| !is_omitted(value)) {
+            let OmValue::Object(handle) = value else {
+                return Err(OmError::type_mismatch(
+                    "Worksheets.Add After expects a Worksheet object when provided",
+                ));
+            };
+            let RuntimeObjectKind::Worksheet {
+                workbook: target_workbook,
+                sheet_id,
+            } = self.runtime_object(*handle)?
+            else {
+                return Err(OmError::type_mismatch(
+                    "Worksheets.Add After expects a Worksheet object when provided",
+                ));
+            };
+            if target_workbook != workbook {
+                return Err(OmError::invalid_argument(
+                    "Worksheets.Add After worksheet must belong to the same workbook",
+                ));
+            }
+            self.runtime_workbook(workbook)?
+                .loaded
+                .state
+                .worksheets
+                .iter()
+                .position(|worksheet| worksheet.id == sheet_id)
+                .map(|index| index + 1)
+                .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?
+        } else {
+            self.selection
+                .filter(|selection| selection.workbook == workbook)
+                .and_then(|selection| {
+                    self.runtime_workbook(workbook)
+                        .ok()?
+                        .loaded
+                        .state
+                        .worksheets
+                        .iter()
+                        .position(|worksheet| worksheet.id == selection.sheet_id)
+                })
+                .unwrap_or(0)
+        };
         let sheet_id = {
             let runtime = self.runtime_workbook_mut(workbook)?;
             if runtime.read_only {
@@ -8174,7 +8223,134 @@ mod tests {
     }
 
     #[test]
-    fn worksheets_add_rejects_non_default_arguments_and_read_only_workbooks() {
+    fn worksheets_add_supports_before_and_after_worksheet_targets() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheet1 = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("initial ActiveSheet"),
+        );
+        let sheet2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Add", &[])
+                .expect("default Worksheets.Add"),
+        );
+        let sheet3 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Add", &[OmValue::Object(sheet1)])
+                .expect("Worksheets.Add Before:=Sheet1"),
+        );
+        let sheet4 = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheets,
+                    "Add",
+                    &[OmValue::Missing, OmValue::Object(sheet2)],
+                )
+                .expect("Worksheets.Add After:=Sheet2"),
+        );
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(worksheets, "Count", &[])
+                    .expect("Worksheets.Count after placement adds")
+            ),
+            4.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheet2, "Index", &[])
+                    .expect("Sheet2 index after placement adds")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheet4, "Index", &[])
+                    .expect("Sheet4 index after placement adds")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheet3, "Index", &[])
+                    .expect("Sheet3 index after placement adds")
+            ),
+            3.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheet1, "Index", &[])
+                    .expect("Sheet1 index after placement adds")
+            ),
+            4.0
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after placement adds"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("active sheet name after placement adds")
+            ),
+            "Sheet4"
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen saved workbook");
+
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .map(|worksheet| worksheet.name.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                "Sheet2".to_string(),
+                "Sheet4".to_string(),
+                "Sheet3".to_string(),
+                "Sheet1".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn worksheets_add_rejects_invalid_placement_arguments_and_read_only_workbooks() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -8189,12 +8365,51 @@ mod tests {
                 .dispatch_get(workbook.0, "Worksheets", &[])
                 .expect("Workbook.Worksheets"),
         );
+        let sheet1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let foreign_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open foreign workbook");
+        let foreign_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(foreign_workbook.0, "Worksheets", &[])
+                .expect("foreign Workbook.Worksheets"),
+        );
+        let foreign_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(foreign_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("foreign Worksheets.Item(1)"),
+        );
 
         let before_error = runtime
             .dispatch_invoke(worksheets, "Add", &[OmValue::Text("Sheet1".to_string())])
-            .expect_err("Worksheets.Add should reject Before");
-        assert_eq!(before_error.code, OmErrorCode::Unsupported);
-        assert!(before_error.message.contains("omitted Before"));
+            .expect_err("Worksheets.Add should reject non-object Before");
+        assert_eq!(before_error.code, OmErrorCode::TypeMismatch);
+        assert!(before_error.message.contains("Worksheet object"));
+
+        let conflicting_error = runtime
+            .dispatch_invoke(
+                worksheets,
+                "Add",
+                &[OmValue::Object(sheet1), OmValue::Object(sheet1)],
+            )
+            .expect_err("Worksheets.Add should reject both Before and After");
+        assert_eq!(conflicting_error.code, OmErrorCode::InvalidArgument);
+        assert!(conflicting_error.message.contains("both Before and After"));
+
+        let foreign_error = runtime
+            .dispatch_invoke(worksheets, "Add", &[OmValue::Object(foreign_sheet)])
+            .expect_err("Worksheets.Add should reject foreign worksheets");
+        assert_eq!(foreign_error.code, OmErrorCode::InvalidArgument);
+        assert!(foreign_error.message.contains("same workbook"));
 
         let count_error = runtime
             .dispatch_invoke(
