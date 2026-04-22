@@ -2223,10 +2223,41 @@ fn parse_cells_args(args: &[OmValue]) -> OmResult<(u32, u32)> {
             "Worksheet.Cells expects row and column arguments",
         ));
     }
-    Ok((
-        coerce_u32_arg(&args[0], "Worksheet.Cells row")?,
-        coerce_u32_arg(&args[1], "Worksheet.Cells column")?,
-    ))
+    let column = match &args[1] {
+        OmValue::Number(number) => coerce_positive_index(*number, "Worksheet.Cells column")?,
+        OmValue::Text(reference) => {
+            let reference = reference.trim().replace('$', "").to_ascii_uppercase();
+            if reference.is_empty() || !reference.chars().all(|ch| ch.is_ascii_alphabetic()) {
+                return Err(OmError::invalid_argument(
+                    "Worksheet.Cells column text selector must be a column label like \"B\"",
+                ));
+            }
+
+            let mut index = 0u32;
+            for ch in reference.bytes() {
+                index = index
+                    .checked_mul(26)
+                    .and_then(|value| value.checked_add((ch - b'A' + 1) as u32))
+                    .ok_or_else(|| {
+                        OmError::invalid_argument(
+                            "Worksheet.Cells column text selector overflows column bounds",
+                        )
+                    })?;
+            }
+            if index > EXCEL_MAX_COLUMN_INDEX {
+                return Err(OmError::invalid_argument(
+                    "Worksheet.Cells column text selector is out of bounds",
+                ));
+            }
+            index
+        }
+        _ => {
+            return Err(OmError::type_mismatch(
+                "Worksheet.Cells column must be numeric or a column label string",
+            ));
+        }
+    };
+    Ok((coerce_u32_arg(&args[0], "Worksheet.Cells row")?, column))
 }
 
 fn parse_rect_a1(input: &str) -> OmResult<Rect> {
@@ -4119,6 +4150,70 @@ mod tests {
                     .expect("Cells.Columns.Count")
             ),
             16384.0
+        );
+    }
+
+    #[test]
+    fn worksheet_cells_dispatch_accepts_excel_column_labels() {
+        let mut runtime = ExcelRuntime::new();
+        let _workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let get_cell = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    active_sheet,
+                    "Cells",
+                    &[OmValue::Number(2.0), OmValue::Text("B".to_string())],
+                )
+                .expect("Cells(2, \"B\")"),
+        );
+        let invoke_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Cells",
+                    &[OmValue::Number(3.0), OmValue::Text("$C".to_string())],
+                )
+                .expect("Cells(3, \"$C\")"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(get_cell, "Address", &[])
+                    .expect("Cells(2, \"B\").Address")
+            ),
+            "$B$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(invoke_cell, "Address", &[])
+                    .expect("Cells(3, \"$C\").Address")
+            ),
+            "$C$3"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    active_sheet,
+                    "Cells",
+                    &[OmValue::Number(1.0), OmValue::Text("XFE".to_string())],
+                )
+                .expect_err("Cells(1, \"XFE\") should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 
