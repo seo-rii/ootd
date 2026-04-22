@@ -910,6 +910,70 @@
           }
         },
         {
+          "name": "Add",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "interface",
+            "name": "Worksheet",
+            "aliasOf": "Excel.Worksheet"
+          },
+          "params": [
+            {
+              "name": "Before",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "After",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Count",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Type",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Worksheets",
+                  "sourceMember": "Add"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Worksheet",
+                "aliasOf": "Excel.Worksheet"
+              }
+            }
+          }
+        },
+        {
           "name": "Item",
           "memberKind": "method",
           "returnType": {

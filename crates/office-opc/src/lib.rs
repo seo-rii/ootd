@@ -104,6 +104,18 @@ impl OpcPackage {
         Ok(())
     }
 
+    pub fn add_part(&mut self, mut part: OpcPart) -> OmResult<()> {
+        part.name = normalize_part_name(&part.name)?;
+        if self.parts.iter().any(|existing| existing.name == part.name) {
+            return Err(OmError::new(
+                OmErrorCode::InvalidArgument,
+                format!("OPC part already exists: {}", part.name),
+            ));
+        }
+        self.parts.push(part);
+        Ok(())
+    }
+
     pub fn remove_part(&mut self, name: &str) -> bool {
         let normalized = name.trim_start_matches('/');
         let original_len = self.parts.len();
@@ -347,6 +359,69 @@ mod tests {
                 .as_slice(),
             b"<new/>"
         );
+    }
+
+    #[test]
+    fn adds_new_part_with_normalized_name() {
+        let mut package = OpcPackage::new(vec![OpcPart {
+            name: "xl/workbook.xml".to_string(),
+            content_type: Some(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
+                    .to_string(),
+            ),
+            compression: CompressionMethod::Stored,
+            bytes: b"<workbook/>".to_vec(),
+        }]);
+
+        package
+            .add_part(OpcPart {
+                name: "/xl/worksheets/sheet2.xml".to_string(),
+                content_type: Some(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
+                        .to_string(),
+                ),
+                compression: CompressionMethod::Stored,
+                bytes: b"<worksheet/>".to_vec(),
+            })
+            .expect("add worksheet part");
+
+        assert!(package.contains("xl/worksheets/sheet2.xml"));
+        assert_eq!(
+            package
+                .part("xl/worksheets/sheet2.xml")
+                .expect("worksheet part")
+                .bytes
+                .as_slice(),
+            b"<worksheet/>"
+        );
+    }
+
+    #[test]
+    fn add_part_rejects_duplicate_part_names() {
+        let mut package = OpcPackage::new(vec![OpcPart {
+            name: "xl/workbook.xml".to_string(),
+            content_type: Some(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
+                    .to_string(),
+            ),
+            compression: CompressionMethod::Stored,
+            bytes: b"<workbook/>".to_vec(),
+        }]);
+
+        let error = package
+            .add_part(OpcPart {
+                name: "/xl/workbook.xml".to_string(),
+                content_type: Some(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
+                        .to_string(),
+                ),
+                compression: CompressionMethod::Stored,
+                bytes: b"<other/>".to_vec(),
+            })
+            .expect_err("duplicate part should be rejected");
+
+        assert_eq!(error.code, OmErrorCode::InvalidArgument);
+        assert!(error.message.contains("xl/workbook.xml"));
     }
 
     #[test]

@@ -13,3 +13,4 @@ office-codegen = { path = "../office-codegen" }
 office-common = { path = "../office-common" }
 office-idl = { path = "../office-idl" }
 office-opc = { path = "../office-opc" }
+quick-xml.workspace = true
