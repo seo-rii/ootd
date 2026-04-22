@@ -668,6 +668,8 @@ impl ExcelRuntime {
                 }
             }
             "Address" => Ok(OmValue::Text(format_rect_address(rect))),
+            "Row" => Ok(OmValue::Number(rect.row_first as f64)),
+            "Column" => Ok(OmValue::Number(rect.col_first as f64)),
             "Count" => Ok(OmValue::Number((rect.width() * rect.height()) as f64)),
             _ => Err(OmError::unsupported(format!(
                 "Range.{member} is not implemented"
@@ -1750,6 +1752,14 @@ mod tests {
         assert_eq!(
             expect_number(runtime.dispatch_get(range, "Count", &[]).expect("Count")),
             4.0
+        );
+        assert_eq!(
+            expect_number(runtime.dispatch_get(range, "Row", &[]).expect("Row")),
+            1.0
+        );
+        assert_eq!(
+            expect_number(runtime.dispatch_get(range, "Column", &[]).expect("Column")),
+            1.0
         );
     }
 

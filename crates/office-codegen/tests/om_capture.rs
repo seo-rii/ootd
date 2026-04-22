@@ -76,8 +76,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 20);
-    assert_eq!(summary.stub_member_count, 20);
+    assert_eq!(summary.member_count, 22);
+    assert_eq!(summary.stub_member_count, 22);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -120,7 +120,7 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 20);
+    assert_eq!(summary.member_count, 22);
 
     let worksheet = document
         .interfaces
@@ -741,7 +741,7 @@ fn writes_canonical_office_idl_json_from_bundle_inputs() {
     assert_eq!(round_trip_summary.enum_count, 1);
     assert_eq!(round_trip_summary.interface_count, 6);
     assert_eq!(round_trip_summary.class_count, 3);
-    assert_eq!(round_trip_summary.member_count, 20);
+    assert_eq!(round_trip_summary.member_count, 22);
     assert_eq!(generation.summary.library, "Excel");
     assert_eq!(generation.summary.version, "16.0");
     assert_eq!(
@@ -810,7 +810,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(application.member_count, 3);
     assert_eq!(workbook.member_count, 5);
     assert_eq!(worksheet.member_count, 5);
-    assert_eq!(range.member_count, 3);
+    assert_eq!(range.member_count, 5);
     assert_eq!(
         application.default_coclasses,
         vec!["Application".to_string()]
@@ -883,11 +883,23 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|member| member.name == "Count")
         .expect("Range.Count");
     assert_eq!(range_count.access, AccessMode::Read);
+    let range_row = range
+        .members
+        .iter()
+        .find(|member| member.name == "Row")
+        .expect("Range.Row");
+    assert_eq!(range_row.access, AccessMode::Read);
+    let range_column = range
+        .members
+        .iter()
+        .find(|member| member.name == "Column")
+        .expect("Range.Column");
+    assert_eq!(range_column.access, AccessMode::Read);
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 20);
-    assert_eq!(coverage.support_counts.stub, 20);
+    assert_eq!(coverage.member_count, 22);
+    assert_eq!(coverage.support_counts.stub, 22);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -948,13 +960,15 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(range_coverage.member_count, 3);
-    assert_eq!(range_coverage.support_counts.stub, 3);
+    assert_eq!(range_coverage.member_count, 5);
+    assert_eq!(range_coverage.support_counts.stub, 5);
     assert_eq!(
         range_coverage.stub_members,
         vec![
             "Value2".to_string(),
             "Address".to_string(),
+            "Row".to_string(),
+            "Column".to_string(),
             "Count".to_string()
         ]
     );
