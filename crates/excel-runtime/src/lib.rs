@@ -784,6 +784,35 @@ impl ExcelRuntime {
                         "Workbook.Close accepts at most one save_changes argument",
                     ));
                 }
+                let save_changes = match args {
+                    [] | [OmValue::Missing] | [OmValue::Empty] | [OmValue::Null] => false,
+                    [OmValue::Bool(save_changes)] => *save_changes,
+                    [_] => {
+                        return Err(OmError::type_mismatch(
+                            "Workbook.Close save_changes expects a boolean when provided",
+                        ));
+                    }
+                    _ => unreachable!("Workbook.Close argument count already validated"),
+                };
+                if save_changes {
+                    let format = self.workbook_model(workbook)?.format;
+                    let bytes = self.save_workbook(
+                        workbook,
+                        SaveWorkbookSpec {
+                            format,
+                            profile: ExcelProfile::Excel365,
+                            lossless: true,
+                        },
+                    )?;
+                    if let Some(path) = self.runtime_workbook(workbook)?.source_path.as_ref() {
+                        fs::write(path, &bytes).map_err(|error| {
+                            OmError::new(
+                                OmErrorCode::Io,
+                                format!("failed to write workbook {}: {error}", path.display()),
+                            )
+                        })?;
+                    }
+                }
                 self.close_workbook(workbook)?;
                 Ok(OmValue::Empty)
             }
@@ -2599,6 +2628,126 @@ mod tests {
 
         fs::remove_file(&source_path).expect("cleanup source fixture");
         fs::remove_file(&target_path).expect("cleanup target fixture");
+    }
+
+    #[test]
+    fn workbook_close_dispatch_with_save_changes_persists_and_invalidates_handle() {
+        let mut runtime = ExcelRuntime::new();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let source_path =
+            std::env::temp_dir().join(format!("ootd-close-save-changes-{unique}.xlsx"));
+        fs::write(&source_path, synthetic_workbook_bytes()).expect("write source workbook");
+
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+        let workbook = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[OmValue::Text(source_path.to_string_lossy().into_owned())],
+                )
+                .expect("Workbooks.Open"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+
+        runtime
+            .dispatch_set(
+                active_sheet,
+                "Name",
+                OmValue::Text("ClosedSaved".to_string()),
+                &[],
+            )
+            .expect("rename worksheet before close");
+        runtime
+            .dispatch_invoke(workbook, "Close", &[OmValue::Bool(true)])
+            .expect("Workbook.Close(true)");
+
+        let stale_error = runtime
+            .dispatch_get(workbook, "Name", &[])
+            .expect_err("closed workbook handle should be stale");
+        assert_eq!(stale_error.code, OmErrorCode::InvalidState);
+
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(
+                &fs::read(&source_path).expect("read closed workbook"),
+                office_common::LoadOptions::default(),
+            )
+            .expect("reload closed workbook");
+        assert_eq!(reopened.state.worksheets[0].name, "ClosedSaved");
+
+        fs::remove_file(&source_path).expect("cleanup source fixture");
+    }
+
+    #[test]
+    fn workbook_close_dispatch_without_save_changes_leaves_source_file_untouched() {
+        let mut runtime = ExcelRuntime::new();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let source_path =
+            std::env::temp_dir().join(format!("ootd-close-without-save-{unique}.xlsx"));
+        fs::write(&source_path, synthetic_workbook_bytes()).expect("write source workbook");
+
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+        let workbook = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[OmValue::Text(source_path.to_string_lossy().into_owned())],
+                )
+                .expect("Workbooks.Open"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+
+        runtime
+            .dispatch_set(
+                active_sheet,
+                "Name",
+                OmValue::Text("DiscardedRename".to_string()),
+                &[],
+            )
+            .expect("rename worksheet before close");
+        runtime
+            .dispatch_invoke(workbook, "Close", &[OmValue::Bool(false)])
+            .expect("Workbook.Close(false)");
+
+        let stale_error = runtime
+            .dispatch_get(workbook, "Name", &[])
+            .expect_err("closed workbook handle should be stale");
+        assert_eq!(stale_error.code, OmErrorCode::InvalidState);
+
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(
+                &fs::read(&source_path).expect("read closed workbook"),
+                office_common::LoadOptions::default(),
+            )
+            .expect("reload closed workbook");
+        assert_eq!(reopened.state.worksheets[0].name, "Sheet1");
+
+        fs::remove_file(&source_path).expect("cleanup source fixture");
     }
 
     fn synthetic_workbook_bytes() -> Vec<u8> {
