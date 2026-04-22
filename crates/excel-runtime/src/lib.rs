@@ -21,6 +21,7 @@ const FIRST_DYNAMIC_OBJECT_HANDLE_VALUE: u64 = 1_000_000;
 const EXCEL_MAX_ROW_INDEX: u32 = 1_048_576;
 const EXCEL_MAX_COLUMN_INDEX: u32 = 16_384;
 const XL_SHEET_TYPE_WORKSHEET: i32 = -4167;
+const XL_WBA_TEMPLATE_WORKSHEET: i32 = -4167;
 const CONTENT_TYPES_PART_NAME: &str = "[Content_Types].xml";
 const WORKBOOK_PART_NAME: &str = "xl/workbook.xml";
 const WORKBOOK_RELS_PART_NAME: &str = "xl/_rels/workbook.xml.rels";
@@ -1948,10 +1949,32 @@ impl ExcelRuntime {
     fn dispatch_invoke_workbooks(&mut self, member: &str, args: &[OmValue]) -> OmResult<OmValue> {
         match member {
             "Add" => {
-                if !args.is_empty() {
+                if args.len() > 1 {
                     return Err(OmError::invalid_argument(
-                        "Workbooks.Add does not accept arguments",
+                        "Workbooks.Add accepts at most a single Template argument",
                     ));
+                }
+                if let Some(value) = args.first() {
+                    match value {
+                        OmValue::Missing | OmValue::Empty | OmValue::Null => {}
+                        OmValue::Number(template)
+                            if *template == f64::from(XL_WBA_TEMPLATE_WORKSHEET) => {}
+                        OmValue::Number(_) => {
+                            return Err(OmError::unsupported(
+                                "Workbooks.Add currently only supports Template := xlWBATWorksheet",
+                            ));
+                        }
+                        OmValue::Text(_) => {
+                            return Err(OmError::unsupported(
+                                "Workbooks.Add template file arguments are not implemented",
+                            ));
+                        }
+                        _ => {
+                            return Err(OmError::type_mismatch(
+                                "Workbooks.Add Template expects an XlWBATemplate numeric value or template path when provided",
+                            ));
+                        }
+                    }
                 }
                 Ok(OmValue::Object(self.create_workbook()?.0))
             }
@@ -6762,6 +6785,91 @@ mod tests {
                 .code,
             OmErrorCode::InvalidArgument
         );
+    }
+
+    #[test]
+    fn workbooks_add_supports_explicit_xlwbatworksheet_template() {
+        let mut runtime = ExcelRuntime::new();
+        let application = runtime.root_application();
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Workbooks", &[])
+                .expect("Application.Workbooks"),
+        );
+        let workbook = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Add",
+                    &[OmValue::Number(f64::from(super::XL_WBA_TEMPLATE_WORKSHEET))],
+                )
+                .expect("Workbooks.Add Template:=xlWBATWorksheet"),
+        );
+        let active_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+
+        assert_eq!(workbook, active_workbook);
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(workbook, "Name", &[])
+                    .expect("Workbook.Name")
+            ),
+            "Book1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("ActiveSheet.Name")
+            ),
+            "Sheet1"
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("Workbook.Saved")
+        ));
+    }
+
+    #[test]
+    fn workbooks_add_rejects_unsupported_template_variants() {
+        let mut runtime = ExcelRuntime::new();
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Application.Workbooks"),
+        );
+
+        let unsupported_template = runtime
+            .dispatch_invoke(workbooks, "Add", &[OmValue::Number(-4109.0)])
+            .expect_err("Workbooks.Add should reject non-worksheet templates");
+        assert_eq!(unsupported_template.code, OmErrorCode::Unsupported);
+        assert!(unsupported_template.message.contains("xlWBATWorksheet"));
+
+        let template_file_error = runtime
+            .dispatch_invoke(
+                workbooks,
+                "Add",
+                &[OmValue::Text("template.xlsx".to_string())],
+            )
+            .expect_err("Workbooks.Add should reject template files for now");
+        assert_eq!(template_file_error.code, OmErrorCode::Unsupported);
+        assert!(template_file_error.message.contains("template file"));
+
+        let type_mismatch_error = runtime
+            .dispatch_invoke(workbooks, "Add", &[OmValue::Bool(true)])
+            .expect_err("Workbooks.Add should reject invalid Template coercions");
+        assert_eq!(type_mismatch_error.code, OmErrorCode::TypeMismatch);
+        assert!(type_mismatch_error.message.contains("XlWBATemplate"));
     }
 
     #[test]
