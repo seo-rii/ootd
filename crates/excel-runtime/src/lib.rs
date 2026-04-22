@@ -1208,6 +1208,50 @@ impl ExcelRuntime {
                     Ok(OmValue::Array(array))
                 }
             }
+            "Text" => {
+                let array = self.get_range_values(GetRangeValuesSpec {
+                    workbook,
+                    range: self.range_ref(workbook, sheet_id, rect)?,
+                })?;
+                let render_text = |value: &OmValue| match value {
+                    OmValue::Missing | OmValue::Empty | OmValue::Null => String::new(),
+                    OmValue::Bool(true) => "TRUE".to_string(),
+                    OmValue::Bool(false) => "FALSE".to_string(),
+                    OmValue::Number(number) => number.to_string(),
+                    OmValue::Text(text) => text.clone(),
+                    OmValue::Error(error) => match error {
+                        office_common::CellError::Null => "#NULL!".to_string(),
+                        office_common::CellError::Div0 => "#DIV/0!".to_string(),
+                        office_common::CellError::Value => "#VALUE!".to_string(),
+                        office_common::CellError::Ref => "#REF!".to_string(),
+                        office_common::CellError::Name => "#NAME?".to_string(),
+                        office_common::CellError::Num => "#NUM!".to_string(),
+                        office_common::CellError::NA => "#N/A".to_string(),
+                        office_common::CellError::GettingData => "#GETTING_DATA".to_string(),
+                        office_common::CellError::Spill => "#SPILL!".to_string(),
+                        office_common::CellError::Calc => "#CALC!".to_string(),
+                        office_common::CellError::Field => "#FIELD!".to_string(),
+                        office_common::CellError::Blocked => "#BLOCKED!".to_string(),
+                        office_common::CellError::Unknown => "#UNKNOWN!".to_string(),
+                    },
+                    OmValue::Object(_) | OmValue::Array(_) => String::new(),
+                };
+                let Some(first) = array.values.first() else {
+                    return Ok(OmValue::Text(String::new()));
+                };
+                let first_text = render_text(first);
+                if array.values.len() == 1 {
+                    Ok(OmValue::Text(first_text))
+                } else if array
+                    .values
+                    .iter()
+                    .all(|value| render_text(value) == first_text)
+                {
+                    Ok(OmValue::Text(first_text))
+                } else {
+                    Ok(OmValue::Null)
+                }
+            }
             "HasFormula" => {
                 let worksheet_data = self
                     .runtime_workbook(workbook)?
@@ -3586,6 +3630,97 @@ mod tests {
                 .expect("A1:C1.HasFormula"),
             OmValue::Null
         ));
+    }
+
+    #[test]
+    fn range_dispatch_text_returns_display_text_for_scalar_and_uniform_ranges() {
+        let mut runtime = ExcelRuntime::new();
+        let _workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let number_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        let formula_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Range(B1)"),
+        );
+        let mixed_row = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:C1".to_string())])
+                .expect("Range(A1:C1)"),
+        );
+        let uniform_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A2:B2".to_string())])
+                .expect("Range(A2:B2)"),
+        );
+        let blank_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C3".to_string())])
+                .expect("Range(C3)"),
+        );
+
+        runtime
+            .dispatch_set(
+                uniform_range,
+                "Value2",
+                OmValue::Text("same".to_string()),
+                &[],
+            )
+            .expect("Range(A2:B2).Value2");
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(number_cell, "Text", &[])
+                    .expect("A1.Text")
+            ),
+            "42"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(formula_cell, "Text", &[])
+                    .expect("B1.Text")
+            ),
+            "SHARED"
+        );
+        assert!(matches!(
+            runtime
+                .dispatch_get(mixed_row, "Text", &[])
+                .expect("A1:C1.Text"),
+            OmValue::Null
+        ));
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(uniform_range, "Text", &[])
+                    .expect("A2:B2.Text")
+            ),
+            "same"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(blank_cell, "Text", &[])
+                    .expect("C3.Text")
+            ),
+            ""
+        );
     }
 
     #[test]
