@@ -173,6 +173,32 @@
           }
         },
         {
+          "name": "Cells",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Range",
+            "aliasOf": "Excel.Range"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Application",
+                  "sourceMember": "Cells"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              }
+            }
+          }
+        },
+        {
           "name": "CalculateFullRebuild",
           "memberKind": "method",
           "support": "stub",
