@@ -2006,23 +2006,92 @@ impl ExcelRuntime {
         }
     }
 
+    fn worksheet_placement_index(
+        &self,
+        workbook: WorkbookHandle,
+        before: Option<&OmValue>,
+        after: Option<&OmValue>,
+        operation: &str,
+    ) -> OmResult<Option<usize>> {
+        if matches!(before, Some(value) if !om_value_is_omitted(value))
+            && matches!(after, Some(value) if !om_value_is_omitted(value))
+        {
+            return Err(OmError::invalid_argument(format!(
+                "{operation} cannot specify both Before and After"
+            )));
+        }
+        if let Some(value) = before.filter(|value| !om_value_is_omitted(value)) {
+            let OmValue::Object(handle) = value else {
+                return Err(OmError::type_mismatch(format!(
+                    "{operation} Before expects a Worksheet object when provided"
+                )));
+            };
+            let RuntimeObjectKind::Worksheet {
+                workbook: target_workbook,
+                sheet_id,
+            } = self.runtime_object(*handle)?
+            else {
+                return Err(OmError::type_mismatch(format!(
+                    "{operation} Before expects a Worksheet object when provided"
+                )));
+            };
+            if target_workbook != workbook {
+                return Err(OmError::invalid_argument(format!(
+                    "{operation} Before worksheet must belong to the same workbook"
+                )));
+            }
+            return self
+                .runtime_workbook(workbook)?
+                .loaded
+                .state
+                .worksheets
+                .iter()
+                .position(|worksheet| worksheet.id == sheet_id)
+                .map(Some)
+                .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"));
+        }
+        if let Some(value) = after.filter(|value| !om_value_is_omitted(value)) {
+            let OmValue::Object(handle) = value else {
+                return Err(OmError::type_mismatch(format!(
+                    "{operation} After expects a Worksheet object when provided"
+                )));
+            };
+            let RuntimeObjectKind::Worksheet {
+                workbook: target_workbook,
+                sheet_id,
+            } = self.runtime_object(*handle)?
+            else {
+                return Err(OmError::type_mismatch(format!(
+                    "{operation} After expects a Worksheet object when provided"
+                )));
+            };
+            if target_workbook != workbook {
+                return Err(OmError::invalid_argument(format!(
+                    "{operation} After worksheet must belong to the same workbook"
+                )));
+            }
+            return self
+                .runtime_workbook(workbook)?
+                .loaded
+                .state
+                .worksheets
+                .iter()
+                .position(|worksheet| worksheet.id == sheet_id)
+                .map(|index| Some(index + 1))
+                .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"));
+        }
+
+        Ok(None)
+    }
+
     fn add_worksheet(
         &mut self,
         workbook: WorkbookHandle,
         args: &[OmValue],
     ) -> OmResult<WorksheetHandle> {
-        let is_omitted =
-            |value: &OmValue| matches!(value, OmValue::Missing | OmValue::Empty | OmValue::Null);
         if args.len() > 4 {
             return Err(OmError::invalid_argument(
                 "Worksheets.Add accepts at most Before, After, Count, and Type arguments",
-            ));
-        }
-        if matches!(args.first(), Some(value) if !is_omitted(value))
-            && matches!(args.get(1), Some(value) if !is_omitted(value))
-        {
-            return Err(OmError::invalid_argument(
-                "Worksheets.Add cannot specify both Before and After",
             ));
         }
         if let Some(value) = args.get(2) {
@@ -2046,84 +2115,28 @@ impl ExcelRuntime {
                 }
             }
         }
-        if matches!(
-            args.get(3),
-            Some(value) if !matches!(value, OmValue::Missing | OmValue::Empty | OmValue::Null)
-        ) {
+        if matches!(args.get(3), Some(value) if !om_value_is_omitted(value)) {
             return Err(OmError::unsupported(
                 "Worksheets.Add currently only supports omitted Type arguments",
             ));
         }
 
-        let insertion_index = if let Some(value) = args.first().filter(|value| !is_omitted(value)) {
-            let OmValue::Object(handle) = value else {
-                return Err(OmError::type_mismatch(
-                    "Worksheets.Add Before expects a Worksheet object when provided",
-                ));
-            };
-            let RuntimeObjectKind::Worksheet {
-                workbook: target_workbook,
-                sheet_id,
-            } = self.runtime_object(*handle)?
-            else {
-                return Err(OmError::type_mismatch(
-                    "Worksheets.Add Before expects a Worksheet object when provided",
-                ));
-            };
-            if target_workbook != workbook {
-                return Err(OmError::invalid_argument(
-                    "Worksheets.Add Before worksheet must belong to the same workbook",
-                ));
-            }
-            self.runtime_workbook(workbook)?
-                .loaded
-                .state
-                .worksheets
-                .iter()
-                .position(|worksheet| worksheet.id == sheet_id)
-                .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?
-        } else if let Some(value) = args.get(1).filter(|value| !is_omitted(value)) {
-            let OmValue::Object(handle) = value else {
-                return Err(OmError::type_mismatch(
-                    "Worksheets.Add After expects a Worksheet object when provided",
-                ));
-            };
-            let RuntimeObjectKind::Worksheet {
-                workbook: target_workbook,
-                sheet_id,
-            } = self.runtime_object(*handle)?
-            else {
-                return Err(OmError::type_mismatch(
-                    "Worksheets.Add After expects a Worksheet object when provided",
-                ));
-            };
-            if target_workbook != workbook {
-                return Err(OmError::invalid_argument(
-                    "Worksheets.Add After worksheet must belong to the same workbook",
-                ));
-            }
-            self.runtime_workbook(workbook)?
-                .loaded
-                .state
-                .worksheets
-                .iter()
-                .position(|worksheet| worksheet.id == sheet_id)
-                .map(|index| index + 1)
-                .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?
-        } else {
-            self.selection
-                .filter(|selection| selection.workbook == workbook)
-                .and_then(|selection| {
-                    self.runtime_workbook(workbook)
-                        .ok()?
-                        .loaded
-                        .state
-                        .worksheets
-                        .iter()
-                        .position(|worksheet| worksheet.id == selection.sheet_id)
-                })
-                .unwrap_or(0)
-        };
+        let insertion_index = self
+            .worksheet_placement_index(workbook, args.first(), args.get(1), "Worksheets.Add")?
+            .unwrap_or_else(|| {
+                self.selection
+                    .filter(|selection| selection.workbook == workbook)
+                    .and_then(|selection| {
+                        self.runtime_workbook(workbook)
+                            .ok()?
+                            .loaded
+                            .state
+                            .worksheets
+                            .iter()
+                            .position(|worksheet| worksheet.id == selection.sheet_id)
+                    })
+                    .unwrap_or(0)
+            });
         let sheet_id = {
             let runtime = self.runtime_workbook_mut(workbook)?;
             if runtime.read_only {
@@ -2352,6 +2365,79 @@ impl ExcelRuntime {
         Ok(self.register_worksheet_handle(workbook, sheet_id))
     }
 
+    fn move_worksheet(
+        &mut self,
+        workbook: WorkbookHandle,
+        sheet_id: SheetId,
+        args: &[OmValue],
+    ) -> OmResult<()> {
+        if args.len() > 2 {
+            return Err(OmError::invalid_argument(
+                "Worksheet.Move accepts at most Before and After arguments",
+            ));
+        }
+
+        let Some(insertion_index) =
+            self.worksheet_placement_index(workbook, args.first(), args.get(1), "Worksheet.Move")?
+        else {
+            return Err(OmError::unsupported(
+                "Worksheet.Move currently requires Before or After worksheet arguments",
+            ));
+        };
+
+        let runtime = self.runtime_workbook_mut(workbook)?;
+        if runtime.read_only {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                "cannot modify a read-only workbook",
+            ));
+        }
+
+        let current_index = runtime
+            .loaded
+            .state
+            .worksheets
+            .iter()
+            .position(|worksheet| worksheet.id == sheet_id)
+            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?;
+        let mut target_index = insertion_index.min(runtime.loaded.state.worksheets.len());
+        if target_index > current_index {
+            target_index -= 1;
+        }
+        if target_index == current_index {
+            return Ok(());
+        }
+
+        let worksheet = runtime.loaded.state.worksheets.remove(current_index);
+        runtime
+            .loaded
+            .state
+            .worksheets
+            .insert(target_index, worksheet);
+        let workbook_xml = runtime
+            .loaded
+            .package
+            .part(WORKBOOK_PART_NAME)
+            .ok_or_else(|| {
+                OmError::new(
+                    OmErrorCode::Parse,
+                    format!("workbook package is missing {WORKBOOK_PART_NAME}"),
+                )
+            })?
+            .bytes
+            .clone();
+        runtime.loaded.package.replace_part_bytes(
+            WORKBOOK_PART_NAME,
+            reorder_workbook_sheet_entries(
+                workbook_xml.as_slice(),
+                &runtime.loaded.state.worksheets,
+            )?,
+        )?;
+        runtime.dirty = true;
+
+        Ok(())
+    }
+
     fn dispatch_invoke_worksheet(
         &mut self,
         workbook: WorkbookHandle,
@@ -2482,6 +2568,10 @@ impl ExcelRuntime {
                 Ok(OmValue::Object(
                     self.register_range_handle(workbook, sheet_id, rect).0,
                 ))
+            }
+            "Move" => {
+                self.move_worksheet(workbook, sheet_id, args)?;
+                Ok(OmValue::Empty)
             }
             "Delete" => {
                 if !args.is_empty() {
@@ -2989,6 +3079,10 @@ fn xml_local_name(name: &[u8]) -> &[u8] {
     name.rsplit(|byte| *byte == b':').next().unwrap_or(name)
 }
 
+fn om_value_is_omitted(value: &OmValue) -> bool {
+    matches!(value, OmValue::Missing | OmValue::Empty | OmValue::Null)
+}
+
 fn runtime_xml_error(error: impl std::fmt::Display) -> OmError {
     OmError::new(OmErrorCode::Parse, error.to_string())
 }
@@ -3195,6 +3289,156 @@ fn insert_sheet_into_workbook_xml(
     }
 
     Ok(writer.into_inner().into_inner())
+}
+
+fn reorder_workbook_sheet_entries(
+    workbook_xml: &[u8],
+    worksheets: &[WorksheetModel],
+) -> OmResult<Vec<u8>> {
+    let mut reader = Reader::from_reader(Cursor::new(workbook_xml));
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut buffer = Vec::new();
+    let mut inside_sheets = false;
+    let mut skip_sheet_depth = 0usize;
+    let mut sheet_entries = Vec::<(SheetId, Option<String>, BytesStart<'static>)>::new();
+
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(_)) if skip_sheet_depth > 0 => {
+                skip_sheet_depth += 1;
+            }
+            Ok(Event::End(_)) if skip_sheet_depth > 0 => {
+                skip_sheet_depth -= 1;
+            }
+            Ok(Event::Start(element)) if xml_local_name(element.name().as_ref()) == b"sheets" => {
+                inside_sheets = true;
+                writer
+                    .write_event(Event::Start(element.into_owned()))
+                    .map_err(runtime_xml_error)?;
+            }
+            Ok(Event::Empty(element)) if xml_local_name(element.name().as_ref()) == b"sheets" => {
+                let qualified_name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
+                writer
+                    .write_event(Event::Start(element.into_owned()))
+                    .map_err(runtime_xml_error)?;
+                for worksheet in worksheets {
+                    let entry = sheet_entries
+                        .iter()
+                        .find(|(entry_sheet_id, entry_relationship_id, _)| {
+                            *entry_sheet_id == worksheet.id
+                                || entry_relationship_id.as_deref()
+                                    == worksheet.relationship_id.as_deref()
+                        })
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::Parse,
+                                format!(
+                                    "workbook.xml is missing a sheet entry for {}",
+                                    worksheet.name
+                                ),
+                            )
+                        })?;
+                    writer
+                        .write_event(Event::Empty(entry.2.clone()))
+                        .map_err(runtime_xml_error)?;
+                }
+                writer
+                    .write_event(Event::End(BytesEnd::new(qualified_name)))
+                    .map_err(runtime_xml_error)?;
+            }
+            Ok(Event::Empty(element))
+                if inside_sheets && xml_local_name(element.name().as_ref()) == b"sheet" =>
+            {
+                sheet_entries.push(read_workbook_sheet_entry_identity(
+                    &element,
+                    reader.decoder(),
+                )?);
+            }
+            Ok(Event::Start(element))
+                if inside_sheets && xml_local_name(element.name().as_ref()) == b"sheet" =>
+            {
+                sheet_entries.push(read_workbook_sheet_entry_identity(
+                    &element,
+                    reader.decoder(),
+                )?);
+                skip_sheet_depth = 1;
+            }
+            Ok(Event::End(element))
+                if inside_sheets && xml_local_name(element.name().as_ref()) == b"sheets" =>
+            {
+                for worksheet in worksheets {
+                    let entry = sheet_entries
+                        .iter()
+                        .find(|(entry_sheet_id, entry_relationship_id, _)| {
+                            *entry_sheet_id == worksheet.id
+                                || entry_relationship_id.as_deref()
+                                    == worksheet.relationship_id.as_deref()
+                        })
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::Parse,
+                                format!(
+                                    "workbook.xml is missing a sheet entry for {}",
+                                    worksheet.name
+                                ),
+                            )
+                        })?;
+                    writer
+                        .write_event(Event::Empty(entry.2.clone()))
+                        .map_err(runtime_xml_error)?;
+                }
+                inside_sheets = false;
+                writer
+                    .write_event(Event::End(element.into_owned()))
+                    .map_err(runtime_xml_error)?;
+            }
+            Ok(Event::Text(_)) | Ok(Event::CData(_)) | Ok(Event::Comment(_)) if inside_sheets => {}
+            Ok(Event::Eof) => break,
+            Ok(event) if skip_sheet_depth == 0 => writer
+                .write_event(event.into_owned())
+                .map_err(runtime_xml_error)?,
+            Ok(_) => {}
+            Err(error) => return Err(runtime_xml_error(error)),
+        }
+        buffer.clear();
+    }
+
+    Ok(writer.into_inner().into_inner())
+}
+
+fn read_workbook_sheet_entry_identity(
+    element: &BytesStart<'_>,
+    decoder: quick_xml::encoding::Decoder,
+) -> OmResult<(SheetId, Option<String>, BytesStart<'static>)> {
+    let mut parsed_sheet_id = None::<SheetId>;
+    let mut relationship_id = None::<String>;
+    for attr in element.attributes() {
+        let attr = attr.map_err(runtime_xml_error)?;
+        let value = attr
+            .decode_and_unescape_value(decoder)
+            .map_err(runtime_xml_error)?
+            .into_owned();
+        match attr.key.as_ref() {
+            b"sheetId" => {
+                parsed_sheet_id = value.parse::<u64>().ok().map(SheetId);
+            }
+            b"r:id" => {
+                relationship_id = Some(value);
+            }
+            _ => {}
+        }
+    }
+    Ok((
+        parsed_sheet_id.ok_or_else(|| {
+            OmError::new(
+                OmErrorCode::Parse,
+                "workbook.xml sheet entry is missing a valid sheetId",
+            )
+        })?,
+        relationship_id,
+        element.to_owned(),
+    ))
 }
 
 fn strip_workbook_sheet_entry(
@@ -9015,6 +9259,244 @@ mod tests {
         let read_only_error = read_only_runtime
             .dispatch_invoke(read_only_sheet, "Delete", &[])
             .expect_err("Worksheet.Delete should reject read-only workbooks");
+        assert_eq!(read_only_error.code, OmErrorCode::InvalidState);
+        assert!(read_only_error.message.contains("read-only"));
+    }
+
+    #[test]
+    fn worksheet_move_reorders_sheets_and_persists_on_save() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        runtime
+            .dispatch_invoke(worksheets, "Add", &[])
+            .expect("Worksheets.Add Sheet2");
+        runtime
+            .dispatch_invoke(worksheets, "Add", &[])
+            .expect("Worksheets.Add Sheet3");
+        let sheet1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Text("Sheet1".to_string())])
+                .expect("Worksheets.Item(Sheet1)"),
+        );
+        let sheet3 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Text("Sheet3".to_string())])
+                .expect("Worksheets.Item(Sheet3)"),
+        );
+        let sheet2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Text("Sheet2".to_string())])
+                .expect("Worksheets.Item(Sheet2)"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(sheet1, "Move", &[OmValue::Object(sheet3)])
+                .expect("Worksheet.Move Before:=Sheet3"),
+            OmValue::Empty
+        ));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheet1, "Index", &[])
+                    .expect("Sheet1 index after move")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheet3, "Index", &[])
+                    .expect("Sheet3 index after move")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheet2, "Index", &[])
+                    .expect("Sheet2 index after move")
+            ),
+            3.0
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after move"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("ActiveSheet name after move")
+            ),
+            "Sheet3"
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen saved workbook");
+
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .map(|worksheet| worksheet.name.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                "Sheet1".to_string(),
+                "Sheet3".to_string(),
+                "Sheet2".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn worksheet_move_supports_after_targets_and_rejects_invalid_arguments() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheet2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Add", &[])
+                .expect("Worksheets.Add Sheet2"),
+        );
+        let sheet1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Text("Sheet1".to_string())])
+                .expect("Worksheets.Item(Sheet1)"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(sheet2, "Move", &[OmValue::Missing, OmValue::Object(sheet1)],)
+                .expect("Worksheet.Move After:=Sheet1"),
+            OmValue::Empty
+        ));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheet1, "Index", &[])
+                    .expect("Sheet1 index after after-move")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheet2, "Index", &[])
+                    .expect("Sheet2 index after after-move")
+            ),
+            2.0
+        );
+
+        let no_args_error = runtime
+            .dispatch_invoke(sheet1, "Move", &[])
+            .expect_err("Worksheet.Move without placement args should be rejected");
+        assert_eq!(no_args_error.code, OmErrorCode::Unsupported);
+
+        let conflicting_error = runtime
+            .dispatch_invoke(
+                sheet1,
+                "Move",
+                &[OmValue::Object(sheet2), OmValue::Object(sheet2)],
+            )
+            .expect_err("Worksheet.Move should reject both Before and After");
+        assert_eq!(conflicting_error.code, OmErrorCode::InvalidArgument);
+
+        let type_error = runtime
+            .dispatch_invoke(sheet1, "Move", &[OmValue::Text("Sheet2".to_string())])
+            .expect_err("Worksheet.Move should reject non-object Before");
+        assert_eq!(type_error.code, OmErrorCode::TypeMismatch);
+
+        let foreign_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open foreign workbook");
+        let foreign_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(foreign_workbook.0, "Worksheets", &[])
+                .and_then(|worksheets| {
+                    let worksheets = expect_object_handle(worksheets);
+                    runtime.dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                })
+                .expect("foreign Worksheets.Item(1)"),
+        );
+        let foreign_error = runtime
+            .dispatch_invoke(sheet1, "Move", &[OmValue::Object(foreign_sheet)])
+            .expect_err("Worksheet.Move should reject foreign worksheets");
+        assert_eq!(foreign_error.code, OmErrorCode::InvalidArgument);
+
+        let mut read_only_runtime = ExcelRuntime::new();
+        let read_only_workbook = read_only_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook");
+        let read_only_sheet = expect_object_handle(
+            read_only_runtime
+                .dispatch_get(read_only_runtime.root_application(), "ActiveSheet", &[])
+                .expect("read-only ActiveSheet"),
+        );
+        let read_only_target = expect_object_handle(
+            read_only_runtime
+                .dispatch_get(read_only_workbook.0, "Worksheets", &[])
+                .and_then(|worksheets| {
+                    let worksheets = expect_object_handle(worksheets);
+                    read_only_runtime.dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                })
+                .expect("read-only Worksheets.Item(1)"),
+        );
+        let read_only_error = read_only_runtime
+            .dispatch_invoke(
+                read_only_sheet,
+                "Move",
+                &[OmValue::Object(read_only_target)],
+            )
+            .expect_err("Worksheet.Move should reject read-only workbooks");
         assert_eq!(read_only_error.code, OmErrorCode::InvalidState);
         assert!(read_only_error.message.contains("read-only"));
     }

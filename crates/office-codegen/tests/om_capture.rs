@@ -76,8 +76,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 63);
-    assert_eq!(summary.stub_member_count, 63);
+    assert_eq!(summary.member_count, 64);
+    assert_eq!(summary.stub_member_count, 64);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -120,7 +120,7 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 63);
+    assert_eq!(summary.member_count, 64);
 
     let application = document
         .interfaces
@@ -356,6 +356,16 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
             .and_then(|type_ref| type_ref.alias_of.as_deref()),
         Some("VARIANT_BOOL")
     );
+    let worksheet_move = worksheet
+        .members
+        .iter()
+        .find(|member| member.name == "Move")
+        .expect("Worksheet.Move");
+    assert_eq!(worksheet_move.access, AccessMode::Read);
+    assert_eq!(worksheet_move.params.len(), 2);
+    assert!(worksheet_move.params[0].optional);
+    assert!(worksheet_move.params[1].optional);
+    assert!(worksheet_move.return_type.is_none());
     assert_eq!(
         worksheet
             .members
@@ -1198,7 +1208,7 @@ fn writes_canonical_office_idl_json_from_bundle_inputs() {
     assert_eq!(round_trip_summary.enum_count, 1);
     assert_eq!(round_trip_summary.interface_count, 6);
     assert_eq!(round_trip_summary.class_count, 3);
-    assert_eq!(round_trip_summary.member_count, 63);
+    assert_eq!(round_trip_summary.member_count, 64);
     assert_eq!(generation.summary.library, "Excel");
     assert_eq!(generation.summary.version, "16.0");
     assert_eq!(
@@ -1266,7 +1276,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(application.member_count, 14);
     assert_eq!(workbook.member_count, 10);
-    assert_eq!(worksheet.member_count, 10);
+    assert_eq!(worksheet.member_count, 11);
     assert_eq!(range.member_count, 21);
     assert_eq!(
         application.default_coclasses,
@@ -1788,8 +1798,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 63);
-    assert_eq!(coverage.support_counts.stub, 63);
+    assert_eq!(coverage.member_count, 64);
+    assert_eq!(coverage.support_counts.stub, 64);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -1853,8 +1863,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(worksheet_coverage.member_count, 10);
-    assert_eq!(worksheet_coverage.support_counts.stub, 10);
+    assert_eq!(worksheet_coverage.member_count, 11);
+    assert_eq!(worksheet_coverage.support_counts.stub, 11);
     assert_eq!(
         worksheet_coverage.stub_members,
         vec![
@@ -1867,7 +1877,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Rows".to_string(),
             "Columns".to_string(),
             "Activate".to_string(),
-            "Delete".to_string()
+            "Delete".to_string(),
+            "Move".to_string()
         ]
     );
 
