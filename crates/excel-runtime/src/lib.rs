@@ -681,7 +681,7 @@ impl ExcelRuntime {
         }
 
         match member {
-            "Value2" => {
+            "Value" | "Value2" => {
                 let array = self.get_range_values(GetRangeValuesSpec {
                     workbook,
                     range: self.range_ref(workbook, sheet_id, rect)?,
@@ -722,7 +722,7 @@ impl ExcelRuntime {
         }
 
         match member {
-            "Value2" => {
+            "Value" | "Value2" => {
                 let values = match value {
                     OmValue::Array(array) => array,
                     scalar => OmArray::new(
@@ -2199,6 +2199,53 @@ mod tests {
             })
             .expect("updated range");
         assert_eq!(updated.values, array.values);
+    }
+
+    #[test]
+    fn range_dispatch_value_alias_matches_value2_semantics() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+
+        runtime
+            .dispatch_set(range, "Value", OmValue::Text("alias".to_string()), &[])
+            .expect("set Value");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(range, "Value2", &[])
+                    .expect("Value2 after Value set")
+            ),
+            "alias"
+        );
+
+        runtime
+            .dispatch_set(range, "Value2", OmValue::Text("updated".to_string()), &[])
+            .expect("set Value2");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(range, "Value", &[])
+                    .expect("Value after Value2 set")
+            ),
+            "updated"
+        );
     }
 
     #[test]

@@ -669,6 +669,61 @@
       },
       "members": [
         {
+          "name": "Value",
+          "memberKind": "property_get",
+          "returnType": {
+            "kind": "variant",
+            "name": "Variant",
+            "aliasOf": "VARIANT"
+          },
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Value"
+                }
+              ],
+              "typeInfo": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          }
+        },
+        {
+          "name": "Value",
+          "memberKind": "property_set",
+          "params": [
+            {
+              "name": "RHS",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_set",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Value"
+                }
+              ],
+              "typeInfo": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          }
+        },
+        {
           "name": "Value2",
           "memberKind": "property_get",
           "returnType": {
