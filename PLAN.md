@@ -1,0 +1,4277 @@
+# OOTD Phase 1 Plan
+
+## Goal
+
+`ootd`는 단순한 `.xlsx` 파서/라이터가 아니라, 문서 번들에서 정의한 대로 Excel Object Model 호환 코어를 향해 가는 Rust 기반 라이브러리로 시작한다.
+
+이번 첫 구현의 목표는 전체 제품을 한 번에 만들지 않고, 이후 확장이 가능한 최소 토대를 세우는 것이다.
+
+## Reference Documents
+
+- `excel_compatibility_bundle/excel_compatibility_architecture.md`
+- `excel_compatibility_bundle/excel_project_structure_and_interfaces.md`
+- `excel_compatibility_bundle/excel_engine_principles_and_pitfalls.md`
+- `excel_compatibility_bundle/excel_test_corpus_and_validation_guide.md`
+- `excel_compatibility_bundle/core_interfaces.rs`
+- `excel_compatibility_bundle/sources.toml`
+- `excel_compatibility_bundle/office-idl.schema.json`
+
+## Fixed Principles
+
+1. Object Model은 내부 저장 구조가 아니라 facade로 유지한다.
+2. 포맷 codec은 runtime/calc를 직접 알지 않게 분리한다.
+3. 초기 `.xlsx` 지원은 feature-complete보다 lossless-first round-trip을 우선한다.
+4. unknown part, relationship, extension은 typed model과 별개로 보존 가능한 구조를 둔다.
+5. 테스트는 synthetic fixture와 byte/package round-trip 검증을 기준으로 쌓는다.
+
+## Implemented This Turn
+
+- `docs`
+  - 심화 구현 전에 따라야 할 공식 spec root와 intake 순서를 `docs/spec_roots.md`에 정리했다.
+  - Excel OM source acquisition 절차와 환경별 pinning 경계를 `docs/specs/om_source_acquisition.md`에 정리했다.
+  - future Windows runner가 따라야 할 input/output contract를 `docs/specs/windows_capture_runner.md`에 정리했다.
+  - Step 1 확정 범위를 `dispid`, getter/setter origin, alias/type info, inheritance metadata까지로 고정했다.
+- `specs/pinned`
+  - `om_sources.toml`을 추가해 Excel 16.0 type library, `Microsoft.Office.Interop.Excel` PIA, 그리고 Windows capture 시점에 확정해야 할 channel/build/arch 필드를 분리해 고정했다.
+  - `windows_capture.template.toml`과 `office_idl_excel_om.template.json`을 추가해 capture runner input과 canonical dataset placeholder를 고정했다.
+  - `excel_pia_public_surface.template.json`을 추가해 synthetic PIA public surface capture JSON shape를 고정했다.
+  - `raw_typelib_identity.template.json`을 추가해 type library GUID/IID/CLSID capture JSON shape를 고정했다.
+  - Step 1에서 member-level origin, alias, inheritance metadata를 템플릿에 반영했다.
+- `office-idl`
+  - bundled schema를 Rust struct로 적재하고 JSON load helper를 제공한다.
+  - optional sidecar metadata를 통해 namespace, type library GUID, IID, CLSID, origin, alias, inheritance 같은 capture identity를 보존한다.
+- `office-codegen`
+  - IDL 문서를 읽어 요약 통계를 만드는 최소 codegen metadata 경로를 제공한다.
+  - pinned OM source manifest를 읽고 capture readiness를 요약하는 최소 loader를 제공한다.
+  - synthetic PIA public surface capture JSON을 `office-idl` document로 정규화하는 최소 extractor 경로를 제공한다.
+  - raw type library identity와 PIA surface를 함께 읽어 library/version alignment를 검증하는 capture bundle 경로를 제공한다.
+  - capture bundle 정규화 시 document/interface/class sidecar metadata에 type library GUID, IID, CLSID를 주입한다.
+- `office-capture`
+  - pinned Windows capture template을 로드하고 Windows absolute path와 capture root boundary를 검증한다.
+  - raw/snapshot/log/manifest/checksum output layout을 `capture_root` 기준으로 정규화한다.
+  - portable test 환경에서도 검증 가능한 raw bundle writer와 manifest/checksum writer를 제공한다.
+- `office-common`
+  - runtime/codec가 공유하는 error, id, workbook/sheet metadata primitive를 정리한다.
+- `office-opc`
+  - ZIP package를 entry 단위로 로드하고 원본 bytes를 보존한다.
+- `excel-model`
+  - workbook/sheet/opaque part 상태를 묶는 canonical state를 제공한다.
+  - worksheet cell storage와 rectangular range read/write를 제공한다.
+- `excel-xlsx`
+  - `workbook.xml`과 `workbook.xml.rels`에서 sheet metadata와 target uri를 추출한다.
+  - worksheet cell과 shared string을 읽어 model에 적재한다.
+  - dirty worksheet save에서 `sheetData`와 `dimension`을 다시 써서 변경 값을 package에 반영한다.
+  - 기존 worksheet의 row/cell/formula 속성과 metadata row를 가능한 범위에서 유지하면서 dirty save를 수행한다.
+  - dirty cell이 아닌 기존 cell은 raw XML fragment를 재사용해 shared string storage와 lightweight opaque payload를 가능한 범위에서 보존한다.
+  - dirty row가 아닌 기존 row는 raw XML fragment를 재사용해 row 내부 non-cell payload와 원래 row layout을 가능한 범위에서 보존한다.
+  - dirty row와 dirty cell도 original child sequence를 따라 opaque payload를 다시 써서 row-local/cell-local unknown XML을 가능한 범위에서 보존한다.
+  - dirty row에 새 cell을 삽입할 때도 original segment order를 기준으로 다음 existing cell 및 trailing opaque payload 앞에 배치해 row-level XML 순서를 최대한 유지한다.
+- `excel-runtime`
+  - load/save orchestration, workbook/session lookup, range get/set을 제공한다.
+
+## Implementation Order
+
+### Phase 0. Workspace bootstrap
+
+- Rust workspace와 공통 메타데이터를 만든다.
+- `docs/`, `specs/`, `fixtures/`, `crates/` 기본 구조를 만든다.
+- 번들에 들어 있던 스펙 레지스트리와 IDL schema를 canonical 위치로 옮긴다.
+
+### Phase 1. Build-time contract and core primitives
+
+- `spec intake`
+  - 심화 OM 작업 전에 `docs/spec_roots.md` 기준으로 공식 문서 루트와 machine-readable source acquisition path를 고정한다.
+  - Excel type library/PIA 추출물을 `office-idl` canonical dataset으로 정규화하는 경로를 준비한다.
+  - `specs/pinned/om_sources.toml`에 stable identity와 pending Windows capture field를 분리해 source pinning을 시작한다.
+  - `dispid`, getter/setter origin, alias/type info, inheritance metadata를 capture contract의 Step 1 범위로 고정한다.
+- `office-idl`
+  - canonical schema를 Rust 타입으로 적재하는 crate를 만든다.
+  - 지원 상태, interface/member/typeRef를 serde 기반으로 로드 가능하게 만든다.
+- `office-codegen`
+  - 아직 전체 codegen은 하지 않더라도, IDL을 읽어 Rust-friendly metadata로 변환하는 최소 파이프라인을 만든다.
+- `office-common`
+  - error, ids, value, range/address primitive를 정리한다.
+
+### Phase 2. Lossless XLSX foundation
+
+- `office-opc`
+  - ZIP package 엔트리와 relationship/content-type 보존 레이어를 만든다.
+- `excel-model`
+  - workbook/worksheet/cell의 최소 canonical model을 만든다.
+- `excel-xlsx`
+  - `.xlsx` sniff/load/save 최소 경로를 만든다.
+  - workbook/sheet 메타데이터와 opaque part 보존을 우선 지원한다.
+  - no-op save에서 package 손실이 없도록 round-trip 테스트를 추가한다.
+
+### Phase 3. Runtime vertical slice
+
+- `excel-runtime`
+  - `create_workbook`, `open_workbook`, `save_workbook`, `get/set range values`의 최소 host를 만든다.
+  - 아직 calc/render 전체 구현은 하지 않고, model + codec orchestration만 연결한다.
+
+## Next Execution Plan
+
+아래 순서는 현재 코드베이스 기준의 실제 다음 작업 순서다.
+핵심 선행 조건은 `Windows capture -> canonical office-idl dataset -> facade/runtime integration` 흐름이다.
+
+### Step 1. Capture Schema Hardening
+
+- 상태
+  - core schema/template/codegen hardening 완료
+  - 실제 Windows capture artifact로 검증하는 단계는 Step 2 이후에 이어진다.
+- 목표
+  - Windows에서 추출할 raw artifact shape를 member-level까지 고정한다.
+  - `dispid`, getter/setter origin, alias/type info, inheritance metadata를 capture contract에 포함할지 확정한다.
+- 산출물
+  - `specs/pinned/*.template.json` 업데이트
+  - `office-idl` sidecar metadata 확장
+  - synthetic capture regression 추가
+- 선행 의존성
+  - 없음
+- 병렬화 가능
+  - `office-idl` schema/type 확장
+  - synthetic capture fixture 확장
+  - capture/output contract 문서 보강
+
+### Step 2. Windows Capture Runner Implementation
+
+- 상태
+  - `office-capture` crate 기반 config loader, output layout resolver, raw bundle writer, manifest/checksum writer 구현 완료
+  - invocation plan 계산과 PowerShell script emission 구현 완료
+  - execution bundle materialization과 receipt template까지 구현 완료
+  - execution receipt file 기반 bundle completion까지 구현 완료
+  - 실제 Windows host execution lifecycle은 다음 slice로 남아 있다.
+
+- 목표
+  - `windows_capture.template.toml`을 읽고 실제 Windows + Excel 환경에서 raw capture bundle을 생성한다.
+  - 먼저 invocation plan을 계산하고, 필요하면 emission-only script를 생성한다.
+  - `capture_manifest.json`, `raw_typelib_identity.json`, `excel_pia_identity.json`, `excel_pia_public_surface.json`, snapshot artifact를 일관된 경로에 쓴다.
+  - `office_idl_excel_om.json`은 생성하지 않고 downstream extractor 전용 경로로 예약한다.
+- 산출물
+  - runner script 또는 executable
+  - invocation plan / emission script
+  - config loader
+  - raw output writer
+  - manifest/checksum/log layout
+- 선행 의존성
+  - Step 1
+- 병렬화 가능
+  - config/CLI loader 구현
+  - invocation plan / script emission 구현
+  - `oleview`/`tlbimp` invocation wrapper
+  - output path/layout validation 테스트
+  - manifest/checksum schema tests
+
+### Step 2.1. Step 2 Contract Tests And Docs
+
+- 상태
+  - output layout, downstream reservation, failure-mode contract 문서화 완료
+  - layout regression은 `office-capture` crate 테스트로 고정했다.
+  - invocation plan과 script emission boundary를 문서에 추가했고, manual `oleview` 단계와 automated interop reflection 범위를 구분했다.
+
+- 목표
+  - Windows capture runner의 실패 조건, path layout, downstream boundary를 문서와 테스트로 고정한다.
+- 산출물
+  - `docs/specs/windows_capture_runner.md` contract update
+  - `specs/pinned/windows_capture.template.toml` layout update
+  - output layout regression tests
+- 선행 의존성
+  - Step 1
+- 병렬화 가능
+  - docs/template tightening
+  - output layout regression tests
+  - failure-mode expectation tests
+
+### Step 2.2. Direct-Exec Preparation
+
+- 상태
+  - `scripts/capture.ps1`, `manifest/execution_plan.json`, `manifest/execution_receipt.template.json` materialization 구현 완료
+  - receipt-aware `capture_manifest.json` completion 경로를 library 테스트로 고정했다.
+  - `manifest/execution_receipt.json`을 읽어 completion하는 CLI/library 경로도 구현 완료
+- 목표
+  - emitted PowerShell script를 output bundle 안에 파일로 materialize한다.
+  - `capture_manifest.json`과 `output_checksums.json`의 completion boundary를 direct-exec 전/후로 나눈다.
+  - Windows host에서 script를 실행할 때 어떤 receipt가 완료로 간주되는지 명시한다.
+- 산출물
+  - emitted script path
+  - execution bundle materialization helper
+  - execution receipt file path
+  - receipt/manifest completion contract
+- 선행 의존성
+  - Step 2.1
+- 병렬화 가능
+  - emitted script path layout 문서화
+  - receipt/manifest completion boundary 정의
+  - direct-exec preflight expectation tests
+
+### Step 2.3. Direct-Exec Launcher Generation
+
+- 상태
+  - launcher path는 `scripts/run_capture.cmd`로 고정했고, launcher status template/result path는 `manifest/direct_exec_status.template.json`과 `manifest/direct_exec_status.json`으로 고정했다.
+  - capture receipt path는 `manifest/execution_receipt.template.json`과 `manifest/execution_receipt.json`으로 고정했다.
+  - launcher materialization과 receipt-driven completion, 그리고 launcher/status template materialization은 끝났다.
+- 목표
+  - generated launcher를 `scripts/run_capture.cmd`에 두고, launcher status template/result를 `manifest/direct_exec_status.template.json`과 `manifest/direct_exec_status.json`에 둔다.
+  - capture receipt는 `manifest/execution_receipt.template.json`과 `manifest/execution_receipt.json`으로 유지한다.
+  - launcher generation 이후 남는 direct-exec wrapper boundary를 다음 slice로 넘긴다.
+- 산출물
+  - generated launcher path
+  - launcher status template path
+  - launcher status result path
+  - capture receipt path
+  - direct-launch wrapper boundary definition
+- 선행 의존성
+  - Step 2.2
+- 병렬화 가능
+  - launcher path layout 문서화
+  - status template/result path contract 문서화
+  - launcher generation regression tests
+
+### Step 2.4. Direct-Exec Runtime Orchestration
+
+- 상태
+  - `run_execution_bundle` library path와 `--run-execution-bundle DIR` CLI mode를 추가해 Windows host에서 `scripts/run_capture.cmd`를 spawn하고 `manifest/direct_exec_status.json`을 읽은 뒤 final manifest/checksum completion까지 잇는 wrapper를 구현했다.
+  - non-Windows host rejection과 materialized launcher/script preflight failure는 테스트로 고정했다.
+  - 남은 일은 실제 Windows host에서 end-to-end validation을 돌리고 manual `oleview` step 운영 방식을 다듬는 것이다.
+- 목표
+  - Windows host에서 `scripts/run_capture.cmd`를 실제로 실행하는 wrapper를 안정적으로 제공한다.
+  - process exit code, host identity, tool invocation result, status file population을 launcher/status/receipt contract에 맞춰 연결한다.
+  - `manifest/direct_exec_status.json`과 `manifest/execution_receipt.json`을 실행 결과로 갱신하고, final manifest completion을 그 결과와 연결한다.
+- 산출물
+  - Windows process spawn wrapper
+  - host identity/status writer
+  - tool result/exit code propagation
+  - final manifest orchestration
+  - non-Windows/preflight regression tests
+- 선행 의존성
+  - Step 2.3
+- 병렬화 가능
+  - Windows host validation fixture 수집
+  - `oleview` manual-step UX 정리
+  - failure-path regression tests
+
+### Step 3. Canonical OM Dataset Generation
+
+- 상태
+  - `office-codegen` generator path가 capture bundle directory를 canonical `office-idl` JSON output으로 정규화한다.
+  - synthetic bundle regression과 capture bundle validator로 contract를 고정했다.
+  - 실제 Windows-captured bundle을 pinning하는 일은 아직 남아 있다.
+- 목표
+  - `office-codegen`에서 capture bundle directory를 읽어 canonical `office-idl` JSON output을 생성한다.
+  - `typeLibraryGuid`, `iid`, `clsid`, `dispid`, property normalization을 모두 canonical dataset으로 고정한다.
+- 산출물
+  - capture bundle validator
+  - canonical JSON writer
+  - synthetic bundle regression
+- 선행 의존성
+  - Step 2
+- 병렬화 가능
+  - typelib identity mapping
+  - PIA member normalization
+  - snapshot comparison / coverage report
+  - canonical JSON write regression
+
+### Step 4. OM Metadata Tables And Coverage Report
+
+- 상태
+  - `office-codegen` registry/coverage path가 pinned dataset을 기준으로 우선 surface metadata table을 만든다.
+  - `Application`, `Workbook`, `Worksheet`는 registry에 들어오고, `Range`는 synthetic dataset에서 missing focus surface로 보고될 수 있다.
+  - Step 5 dispatch 경로는 이 registry를 metadata source로 사용한다.
+- 목표
+  - pinned dataset을 기준으로 `Application`, `Workbook`, `Worksheet`, `Range` 우선 surface의 metadata table을 만든다.
+  - 현재 구현 범위와 미구현 범위를 support state와 missing focus surface 기준으로 보고 가능하게 만든다.
+- 산출물
+  - focus surface registry
+  - coverage summary
+  - missing focus surface reporting
+  - synthetic regression
+- 선행 의존성
+  - Step 3
+- 병렬화 가능
+  - `Application`/`Workbook` surface table
+  - `Worksheet`/`Range` surface table
+  - coverage summary/report generator
+  - missing focus surface regression
+
+### Step 5. Runtime Dispatch Vertical Slice
+
+- 상태
+  - `excel-runtime`의 object-handle dispatch slice를 workbook/worksheet/range facade 기준으로 구현했다.
+  - Step 4 registry를 dispatch metadata source로 연결했고, stale-handle rejection과 member gating까지 포함하는 최소 vertical slice를 닫았다.
+  - 현재 범위는 `Application`/`Workbooks`/`Workbook`/`Worksheets`/`Worksheet`/`Range`의 최소 get/set/invoke와 `Variant`/`OmValue` coercion, stale object rejection, collection item lookup까지다.
+
+- 목표
+  - `excel-runtime`에 object handle 기반 최소 dispatch를 붙인다.
+  - `Workbook`, `Worksheet`, `Range` thin facade를 `office-idl` metadata 기준으로 연결한다.
+  - Step 4 registry를 dispatch metadata source로 사용한다.
+  - handle lifecycle, property/method dispatch, stale-handle rejection, and minimal coercion을 한 slice로 묶는다.
+- 산출물
+  - application/workbooks/worksheets/range handle lifecycle
+  - dispatch get/set/invoke
+  - stale object rejection
+  - metadata-backed member gating
+  - `Variant`/`OmValue` coercion path
+- 선행 의존성
+  - Step 4
+- 병렬화 가능
+  - workbook/session handle lifecycle
+  - worksheet/range property dispatch
+  - coercion/error mapping 회귀 테스트
+  - metadata gating regression tests
+
+### Step 6. XLSX Fidelity Follow-up
+
+- 현재 위치
+  - `Step 6.1`부터 `Step 6.4`까지는 완료됐다.
+  - `Step 6.1`부터 `Step 6.5b2b2c2b2b2b2b2b2b2b2b1`까지와 `Step 6.6a`는 완료됐고, `Step 6.5b2b2c2b2b2b2b2b2b2b2b2`와 `Step 6.6b`가 남아 있다.
+  - 현재 남은 범위는 deeper `style/theme` typed preservation과 hyperlink/comment mutation-aware rewrite다.
+- 세부 단계
+  - `Step 6.1 DONE` worksheet rewrite baseline과 raw XML preservation
+  - 범위: dirty worksheet save, `mergeCells`, raw row/cell fragment, row/cell opaque payload 보존
+  - `Step 6.2 DONE` formula cached value / calcChain handling
+  - 범위: untouched formula cached value 보존, dirty mutation 시 stale `calcChain` invalidation, clean save에서 calcChain 유지
+  - `Step 6.3 DONE` style/theme artifact byte preservation과 support-part guard
+  - 범위: `styles.xml`, `theme1.xml`, workbook rels byte-preservation, styled blank / styled formula cell round-trip, explicit styles/theme support-part fail-fast
+  - `Step 6.4 DONE` worksheet-local hyperlink/comment support integrity
+  - 범위: `sheet rels`, `comments.xml`, `vmlDrawing` target 추적, `r:id`/relationship type 검증, `comments.xml` comment anchor ref drift 검증
+  - `Step 6.5a DONE` styles.xml typed validation
+  - 범위: typed stylesheet summary, style-id to cellXfs bounds validation, broken xf component reference rejection, custom `numFmtId` definition validation, minimal `theme1.xml` typed root validation
+  - `Step 6.5b1 DONE` workbook-level style/theme/calcChain relationship integrity와 stylesheet structural validation
+  - 범위: `xl/_rels/workbook.xml.rels`에서 explicit styles/theme/calcChain relationship id, type, target drift를 save 전에 검증하고, `styles.xml` root/count structural drift를 typed validation으로 고정
+  - `Step 6.5b2a DONE` theme semantics와 stylesheet style-graph typed validation
+  - 범위: `themeElements` 아래 `clrScheme`/`fontScheme`/`fmtScheme` semantic child를 typed summary로 추적하고, `styles.xml`의 `cellStyles`/`tableStyles` graph를 typed validation과 회귀 테스트로 고정
+  - `Step 6.5b2b1 DONE` stylesheet container multiplicity와 theme duplicate semantic-child regressions
+  - 범위: duplicate `cellStyles`/`tableStyles` container를 structural validation으로 거부하고, duplicate `themeElements`/`fontScheme` 회귀를 테스트로 고정
+  - `Step 6.5b2b2a DONE` theme root-level child set/order typed preservation
+  - 범위: `theme1.xml`의 direct child set과 order를 typed summary로 추적하고, root-level child set/order drift를 dirty save 회귀로 고정
+  - `Step 6.5b2b2b DONE` optional theme root semantic-child multiplicity validation
+  - 범위: `objectDefaults`/`extraClrSchemeLst`/`custClrLst`/`extLst` 같은 optional root semantic child를 typed field로 보존하고 duplicate child를 structural validation으로 거부
+  - `Step 6.5b2b2c1 DONE` cellStyleXfs typed style-graph validation
+  - 범위: `cellStyleXfs`를 count-only에서 typed `xf` summary로 승격하고, base style graph의 custom `numFmtId`/font/fill/border reference를 save 전에 검증
+  - `Step 6.5b2b2c2a DONE` tableStyles entry-name typed preservation
+  - 범위: `tableStyles`의 local `tableStyle` entry name을 typed summary로 보존하고, missing/duplicate entry name을 structural validation으로 거부
+  - `Step 6.5b2b2c2b1 DONE` cellStyles identity typed preservation과 uniqueness validation
+  - 범위: `cellStyle`의 `name`/`xfId` required attr와 `builtinId`/`customBuiltin`/`hidden` attr를 typed summary로 보존하고, duplicate style name과 duplicate `builtinId`를 structural validation으로 거부
+  - `Step 6.5b2b2c2b2a DONE` cellStyles required-name validation
+  - 범위: `cellStyle`의 `name` attr를 required semantic field로 승격하고, 이름 없는 `cellStyle` entry를 structural validation으로 거부
+  - `Step 6.5b2b2c2b2b1 DONE` cellStyles customBuiltin/builtinId cross-validation
+  - 범위: `cellStyle`가 `customBuiltin="1"`을 가지면 `builtinId`도 함께 가져야 한다는 semantic constraint를 typed validation으로 고정
+  - `Step 6.5b2b2c2b2b2a DONE` optional stylesheet root semantic-child multiplicity validation
+  - 범위: `styles.xml` root의 optional `colors`/`dxfs`/`extLst` child presence와 `dxfs` entry count를 typed summary로 보존하고, duplicate container 및 mismatched `dxfs` count를 structural validation으로 거부
+  - `Step 6.5b2b2c2b2b2b1 DONE` non-empty style-name validation
+  - 범위: `cellStyle`와 `tableStyle`의 `name` attr를 non-empty semantic field로 취급하고, 빈 문자열 name entry를 structural validation으로 거부
+  - `Step 6.5b2b2c2b2b2b2a DONE` dxfs structural validation regressions
+  - 범위: optional `dxfs` root child의 duplicate container와 declared `count` drift를 regression으로 고정하고 typed summary 검증 경로를 보강
+  - `Step 6.5b2b2c2b2b2b2b1 DONE` tableStyles default-name non-empty validation
+  - 범위: `defaultTableStyle`와 `defaultPivotStyle`를 non-empty semantic field로 취급하고, 빈 문자열 기본 스타일 이름을 structural validation으로 거부
+  - `Step 6.5b2b2c2b2b2b2b2a DONE` colors child semantic multiplicity validation
+  - 범위: optional `colors` root child 아래 `indexedColors`와 `mruColors` presence를 typed summary로 보존하고 duplicate child를 structural validation으로 거부
+  - `Step 6.5b2b2c2b2b2b2b2b1 DONE` cellXfs apply-flag typed preservation
+  - 범위: `cellXfs`의 `applyNumberFormat`/`applyFont`/`applyFill`/`applyBorder`/`applyAlignment`/`applyProtection` attr를 typed summary로 보존하고, dirty save에서 apply-flag drift를 structural regression으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2a DONE` clrScheme child set/order typed preservation
+  - 범위: `theme1.xml`의 `<clrScheme>` direct child set과 order를 typed summary로 추적하고, color-scheme child set/order drift를 dirty save 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b1 DONE` custom numFmt formatCode typed preservation
+  - 범위: `styles.xml`의 custom `numFmtId`를 존재 여부만이 아니라 `numFmtId -> formatCode` typed summary로 보존하고, custom format code drift를 dirty save 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2a DONE` cellStyleXfs apply-flag typed preservation
+  - 범위: `cellStyleXfs`의 `applyNumberFormat`/`applyFill` 같은 style-base apply flag를 typed summary로 고정하고, base style apply-flag drift를 dirty save 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b1 DONE` fontScheme child set/order typed preservation
+  - 범위: `theme1.xml`의 `<fontScheme>` direct child set과 order를 typed summary로 추적하고, font-scheme child set/order drift를 dirty save 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2a DONE` fmtScheme child set/order typed preservation
+  - 범위: `theme1.xml`의 `<fmtScheme>` direct child set과 order를 typed summary로 추적하고, format-scheme child set/order drift를 dirty save 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b1 DONE` colors child set/order typed preservation
+  - 범위: `styles.xml`의 `<colors>` direct child set과 order를 typed summary로 추적하고, colors child set/order drift를 dirty save 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2a DONE` tableStyles entry set/order typed preservation
+  - 범위: `tableStyles`의 local `tableStyle` entry sequence를 typed summary로 보존하고, entry order/set drift를 dirty save 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1 DONE` custom numFmt entry order typed preservation
+  - 범위: `styles.xml`의 custom `numFmt` entry를 id->code map뿐 아니라 실제 entry sequence로도 typed summary에 고정해서, custom format set은 같아도 entry order만 바뀌는 drift를 dirty save 회귀로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b2 DONE` xf nested alignment/protection typed preservation
+  - 범위: `cellStyleXfs` / `cellXfs`의 `<alignment>` / `<protection>` child attr set/value를 typed summary에 고정해서, xf apply-flag만 같고 nested child semantics가 drift하는 케이스도 dirty save 회귀로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b3 DONE` tableStyle attr-map typed preservation
+  - 범위: `tableStyles`의 각 `tableStyle` entry에서 `name` 외의 local attr set/value도 typed summary로 고정해서, entry sequence는 같아도 `table` / `pivot` 같은 entry-local semantics가 drift하는 케이스를 dirty save 회귀로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b4 DONE` cellStyle attr-map typed preservation
+  - 범위: `cellStyles`의 각 `cellStyle` entry에서 typed field 외의 local attr set/value도 summary에 고정해서, `name/xfId/builtinId/customBuiltin/hidden`이 같아도 `iLevel` 같은 entry-local semantics drift를 dirty save 회귀로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b5 DONE` fill child attr-map typed preservation
+  - 범위: `styles.xml`의 각 `<fill>` entry에서 direct child sequence와 child attr-map을 typed summary로 고정해서, `fillId` range와 count는 같아도 `patternFill patternType` 같은 fill-local semantics drift를 dirty save 회귀로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b6 DONE` font child attr-map typed preservation
+  - 범위: `styles.xml`의 각 `<font>` entry에서 direct child sequence와 child attr-map을 typed summary로 고정해서, `fontId` range와 count는 같아도 `name val` 같은 font-local semantics drift를 dirty save 회귀로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b7 DONE` border child attr-map typed preservation
+  - 범위: `styles.xml`의 각 `<border>` entry에서 direct child sequence와 child attr-map을 typed summary로 고정해서, `borderId` range와 count는 같아도 border child order나 local attrs drift를 dirty save 회귀로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b8 DONE` dxf child attr-map typed preservation
+  - 범위: `styles.xml`의 각 `<dxf>` entry에서 direct child sequence와 child attr-map을 typed summary로 고정해서, `dxfs` container/count는 같아도 `numFmt` 같은 dxf-local semantics drift를 dirty save 회귀로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b9 DONE` fill nested descendant typed preservation
+  - 범위: `styles.xml`의 각 `<fill>` entry에서 `patternFill` 같은 direct child 아래 nested child sequence와 attr-map도 typed summary로 고정해서, `patternType`은 같아도 `fgColor`/`bgColor` 같은 nested fill semantics drift를 dirty save 회귀로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b10 DONE` border nested descendant typed preservation
+  - 범위: `styles.xml`의 각 `<border>` entry에서 `left/right/top/bottom` 같은 direct child 아래 nested child sequence와 attr-map도 typed summary로 고정해서, border child attr은 같아도 nested `color` 같은 semantics drift를 dirty save 회귀로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b11 DONE` dxf nested descendant typed preservation
+  - 범위: `styles.xml`의 각 `<dxf>` entry에서 direct child 아래 nested child sequence와 attr-map도 typed summary로 고정해서, direct dxf child는 같아도 nested `font/color` 같은 semantics drift를 dirty save 회귀로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b12 DONE` theme clrScheme nested descendant typed preservation
+  - 범위: `theme1.xml`의 `<clrScheme>` direct child(`dk1/lt1/...`) 아래 nested child sequence와 attr-map도 typed summary로 고정해서, color-scheme child order는 같아도 nested `sysClr/srgbClr` semantics drift를 dirty save 회귀로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b13 DONE` theme fontScheme nested descendant typed preservation
+  - 범위: `theme1.xml`의 `<fontScheme>` direct child(`majorFont/minorFont`) 아래 nested child sequence와 attr-map도 typed summary로 고정해서, font-scheme child order는 같아도 nested `latin/font` typeface/script semantics drift를 dirty save 회귀로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b14 DONE` theme fmtScheme nested descendant typed preservation
+  - 범위: `theme1.xml`의 `<fmtScheme>` direct child(`fillStyleLst/lnStyleLst/effectStyleLst/bgFillStyleLst`) 아래 nested child sequence와 attr-map도 typed summary로 고정해서, format-scheme child order는 같아도 nested `solidFill/ln/effectStyle` semantics drift를 dirty save 회귀로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b15 DONE` theme fmtScheme fill grandchild typed preservation
+  - 범위: `theme1.xml`의 `<fmtScheme><fillStyleLst><solidFill><schemeClr .../></solidFill></fillStyleLst>` 경로를 한 단계 더 깊은 typed summary로 고정해서, nested `solidFill`은 같아도 grandchild `schemeClr` semantics drift를 dirty save 회귀로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b16 DONE` theme fmtScheme effect great-grandchild typed preservation
+  - 범위: `theme1.xml`의 `<fmtScheme><effectStyleLst><effectStyle><effectLst><outerShdw .../></effectLst></effectStyle></effectStyleLst>` 경로를 한 단계 더 깊은 typed summary로 고정해서, grandchild `effectLst`는 같아도 great-grandchild `outerShdw` semantics drift를 dirty save 회귀로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b17 DONE` theme fmtScheme bgFill great-grandchild typed preservation
+  - 범위: `theme1.xml`의 `<fmtScheme><bgFillStyleLst><gradFill><gsLst><gs pos=\"...\"/></gsLst></gradFill></bgFillStyleLst>` 경로를 typed summary와 dirty save 회귀로 고정해서, grandchild `gsLst`는 같아도 great-grandchild `gs@pos` semantics drift를 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b18 DONE` theme fmtScheme effect color great-great-grandchild typed preservation
+  - 범위: `theme1.xml`의 `<fmtScheme><effectStyleLst><effectStyle><effectLst><outerShdw ...><schemeClr .../></outerShdw></effectLst></effectStyle></effectStyleLst>` 경로를 한 단계 더 깊은 typed summary와 dirty save 회귀로 고정해서, great-grandchild `outerShdw`는 같아도 great-great-grandchild `schemeClr` semantics drift를 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b19 DONE` theme fmtScheme bgFill color great-great-grandchild typed preservation
+  - 범위: `theme1.xml`의 `<fmtScheme><bgFillStyleLst><gradFill><gsLst><gs ...><schemeClr .../></gs></gsLst></gradFill></bgFillStyleLst>` 경로를 한 단계 더 깊은 typed summary와 dirty save 회귀로 고정해서, great-grandchild `gs`는 같아도 great-great-grandchild `schemeClr` semantics drift를 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b20 DONE` theme fmtScheme fill color great-grandchild typed preservation
+  - 범위: `theme1.xml`의 `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><tint .../></schemeClr></solidFill></fillStyleLst>` 경로를 existing great-grandchild typed summary와 dirty save 회귀로 고정해서, grandchild `schemeClr`는 같아도 great-grandchild `tint` semantics drift를 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b21 DONE` theme fmtScheme fill color transform sequence typed preservation
+  - 범위: `theme1.xml`의 `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><tint .../><satMod .../></schemeClr></solidFill></fillStyleLst>` 경로에서 great-grandchild transform child sequence와 attr-map을 typed summary와 dirty save 회귀로 고정해서, 동일한 transform set이라도 `tint/satMod` order drift를 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b22 DONE` theme fmtScheme fill color transform set preservation
+  - 범위: `theme1.xml`의 `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><tint .../><satMod .../></schemeClr></solidFill></fillStyleLst>` 경로에서 great-grandchild transform child set도 dirty save 회귀로 고정해서, 동일한 prefix가 남아도 sibling `satMod` 삭제 같은 set drift를 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b23 DONE` theme fmtScheme fill color second-transform attr preservation
+  - 범위: `theme1.xml`의 `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><tint .../><satMod .../></schemeClr></solidFill></fillStyleLst>` 경로에서 second transform `satMod@val`도 dirty save 회귀로 고정해서, sequence/set은 같아도 trailing transform attr drift를 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b24 DONE` theme fmtScheme fill color second-transform name preservation
+  - 범위: `theme1.xml`의 `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><tint .../><satMod .../></schemeClr></solidFill></fillStyleLst>` 경로에서 trailing transform tag name도 dirty save 회귀로 고정해서, attr/value가 같아도 `satMod`를 다른 transform tag로 바꾸는 type drift를 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b25 DONE` theme fmtScheme fill color first-transform name preservation
+  - 범위: `theme1.xml`의 `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><tint .../><satMod .../></schemeClr></solidFill></fillStyleLst>` 경로에서 leading transform tag name도 dirty save 회귀로 고정해서, trailing transform이 그대로여도 `tint`를 다른 transform tag로 바꾸는 type drift를 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b26 DONE` theme fmtScheme fill color first-transform set preservation
+  - 범위: `theme1.xml`의 `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><tint .../><satMod .../></schemeClr></solidFill></fillStyleLst>` 경로에서 leading transform child set도 dirty save 회귀로 고정해서, trailing transform이 남아 있어도 `tint` 삭제 같은 set drift를 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b27 DONE` theme fmtScheme fill color first-transform attr-with-siblings preservation
+  - 범위: `theme1.xml`의 `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><tint .../><satMod .../></schemeClr></solidFill></fillStyleLst>` 경로에서 sibling이 함께 있는 상태의 leading transform `tint@val`도 dirty save 회귀로 고정해서, 단일-child case와 별개로 leading transform attr drift를 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b28 DONE` theme fmtScheme fill color extra-transform preservation
+  - 범위: `theme1.xml`의 `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><tint .../><satMod .../></schemeClr></solidFill></fillStyleLst>` 경로에서 extra sibling transform 추가도 dirty save 회귀로 고정해서, 기존 sequence/set 뒤에 `shade` 같은 transform이 더 붙는 addition drift를 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b29 DONE` theme fmtScheme fill color duplicate-transform preservation
+  - 범위: `theme1.xml`의 `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><tint .../><satMod .../></schemeClr></solidFill></fillStyleLst>` 경로에서 existing transform tag의 duplicate sibling 추가도 dirty save 회귀로 고정해서, 단순한 새로운 tag 추가뿐 아니라 duplicate `satMod` addition drift도 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b30 DONE` theme fmtScheme fill color duplicate-transform load coverage
+  - 범위: `theme1.xml`의 `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><tint .../><satMod .../><satMod .../></schemeClr></solidFill></fillStyleLst>` fixture를 load assertion으로 고정해서, parser가 duplicate `satMod` sibling도 collapse 없이 순서와 attr-map 그대로 수집하는지 검증
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b31 DONE` theme fmtScheme fill color extra-transform load coverage
+  - 범위: `theme1.xml`의 `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><tint .../><satMod .../><shade .../></schemeClr></solidFill></fillStyleLst>` fixture를 load assertion으로 고정해서, parser가 extra sibling transform도 순서와 attr-map 그대로 수집하는지 검증
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b32 DONE` theme fmtScheme fill color front-inserted transform load coverage
+  - 범위: `theme1.xml`의 `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><shade .../><tint .../><satMod .../></schemeClr></solidFill></fillStyleLst>` fixture를 load assertion으로 고정해서, parser가 prepended transform sibling도 순서와 attr-map 그대로 수집하는지 검증
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b33 DONE` theme fmtScheme fill color extra-transform attr preservation
+  - 범위: 기존 3-transform fixture `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><tint .../><satMod .../><shade .../></schemeClr></solidFill></fillStyleLst>`를 load한 뒤 trailing extra transform `shade@val`만 drift시켜도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, extra transform addition뿐 아니라 그 attr drift도 typed summary mismatch로 검출되게 함
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b34 DONE` theme fmtScheme fill color middle-inserted transform load coverage
+  - 범위: `theme1.xml`의 `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><tint .../><shade .../><satMod .../></schemeClr></solidFill></fillStyleLst>` fixture를 load assertion으로 고정해서, parser가 가운데에 끼어든 extra sibling transform도 순서와 attr-map 그대로 수집하는지 검증
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b35 DONE` theme fmtScheme fill color middle-transform attr preservation
+  - 범위: middle-inserted 3-transform fixture `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><tint .../><shade .../><satMod .../></schemeClr></solidFill></fillStyleLst>`를 load한 뒤 가운데 `shade@val`만 drift시켜도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, extra transform attr drift 검출이 trailing 위치에만 한정되지 않게 함
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b36 DONE` theme fmtScheme fill color middle-transform name preservation
+  - 범위: 같은 middle-inserted 3-transform fixture에서 가운데 `<shade .../>` tag 자체를 `<lumMod .../>`로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, middle-position extra transform 검출이 attr drift뿐 아니라 tag/name drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b37 DONE` theme fmtScheme fill color middle-transform set preservation
+  - 범위: 같은 middle-inserted 3-transform fixture에서 가운데 `<shade .../>` sibling을 통째로 삭제해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, middle-position extra transform 검출이 attr/name drift뿐 아니라 transform set drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b38 DONE` theme fmtScheme fill color front-transform attr preservation
+  - 범위: front-inserted 3-transform fixture `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><shade .../><tint .../><satMod .../></schemeClr></solidFill></fillStyleLst>`를 load한 뒤 맨 앞 `shade@val`만 drift시켜도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, prepended extra transform 검출도 load-only가 아니라 save-side attr drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b39 DONE` theme fmtScheme fill color front-transform name preservation
+  - 범위: 같은 front-inserted 3-transform fixture에서 맨 앞 `<shade .../>` tag 자체를 `<lumMod .../>`로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, prepended extra transform 검출이 attr drift뿐 아니라 tag/name drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b40 DONE` theme fmtScheme fill color front-transform set preservation
+  - 범위: 같은 front-inserted 3-transform fixture에서 맨 앞 `<shade .../>` sibling을 통째로 삭제해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, prepended extra transform 검출이 attr/name drift뿐 아니라 transform set drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b41 DONE` theme fmtScheme fill color extra-transform name preservation
+  - 범위: trailing extra-transform fixture `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><tint .../><satMod .../><shade .../></schemeClr></solidFill></fillStyleLst>`를 load한 뒤 마지막 `<shade .../>` tag 자체를 `<lumMod .../>`로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, trailing extra transform 검출이 attr drift뿐 아니라 tag/name drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b42 DONE` theme fmtScheme fill color extra-transform set preservation
+  - 범위: 같은 trailing extra-transform fixture에서 마지막 `<shade .../>` sibling을 통째로 삭제해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, trailing extra transform 검출이 attr/name drift뿐 아니라 transform set drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b43 DONE` theme fmtScheme fill color duplicate-transform attr preservation
+  - 범위: duplicate-transform fixture `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><tint .../><satMod .../><satMod .../></schemeClr></solidFill></fillStyleLst>`를 load한 뒤 trailing duplicate `satMod@val`만 drift시켜도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, duplicate sibling 검출이 load coverage에만 머물지 않고 attr drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b44 DONE` theme fmtScheme fill color duplicate-transform name preservation
+  - 범위: 같은 duplicate-transform fixture에서 trailing duplicate `<satMod .../>` tag 자체를 `<lumMod .../>`로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, duplicate sibling 검출이 attr drift뿐 아니라 tag/name drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b45 DONE` theme fmtScheme fill color duplicate-transform set preservation
+  - 범위: 같은 duplicate-transform fixture에서 trailing duplicate `<satMod .../>` sibling을 통째로 삭제해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, duplicate sibling 검출이 attr/name drift뿐 아니라 transform set drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b46 DONE` theme fmtScheme effect color great-great-grandchild name preservation
+  - 범위: `<fmtScheme><effectStyleLst><effectStyle><effectLst><outerShdw ...><schemeClr .../></outerShdw></effectLst></effectStyle></effectStyleLst>` fixture를 load한 뒤 great-great-grandchild `<schemeClr .../>` tag 자체를 `<srgbClr .../>`로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, effect color descendant 검출이 attr drift뿐 아니라 tag/name drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b47 DONE` theme fmtScheme effect color great-great-grandchild set preservation
+  - 범위: 같은 effect color fixture에서 great-great-grandchild `<schemeClr .../>` child를 통째로 삭제해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, effect color descendant 검출이 attr/name drift뿐 아니라 child set drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b48 DONE` theme fmtScheme bgFill color great-great-grandchild name preservation
+  - 범위: `<fmtScheme><bgFillStyleLst><gradFill><gsLst><gs ...><schemeClr .../></gs></gsLst></gradFill></bgFillStyleLst>` fixture를 load한 뒤 great-great-grandchild `<schemeClr .../>` tag 자체를 `<srgbClr .../>`로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, bgFill color descendant 검출이 attr drift뿐 아니라 tag/name drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b49 DONE` theme fmtScheme bgFill color great-great-grandchild set preservation
+  - 범위: 같은 bgFill color fixture에서 great-great-grandchild `<schemeClr .../>` child를 통째로 삭제해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, bgFill color descendant 검출이 attr/name drift뿐 아니라 child set drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b50 DONE` theme fmtScheme effect great-grandchild name preservation
+  - 범위: `<fmtScheme><effectStyleLst><effectStyle><effectLst><outerShdw .../></effectLst></effectStyle></effectStyleLst>` fixture를 load한 뒤 great-grandchild `<outerShdw .../>` tag 자체를 `<innerShdw .../>`로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, effect descendant 검출이 attr drift뿐 아니라 tag/name drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b51 DONE` theme fmtScheme effect great-grandchild set preservation
+  - 범위: 같은 effect fixture에서 great-grandchild `<outerShdw .../>` child를 통째로 삭제해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, effect descendant 검출이 attr/name drift뿐 아니라 child set drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b52 DONE` theme fmtScheme bgFill great-grandchild name preservation
+  - 범위: `<fmtScheme><bgFillStyleLst><gradFill><gsLst><gs .../></gsLst></gradFill></bgFillStyleLst>` fixture를 load한 뒤 great-grandchild `<gs .../>` tag 자체를 `<tileRect .../>`로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, bgFill descendant 검출이 attr drift뿐 아니라 tag/name drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b53 DONE` theme fmtScheme bgFill great-grandchild set preservation
+  - 범위: 같은 bgFill fixture에서 great-grandchild `<gs .../>` child를 통째로 삭제해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, bgFill descendant 검출이 attr/name drift뿐 아니라 child set drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b54 DONE` fill nested descendant name preservation
+  - 범위: `styles.xml`의 `<fill><patternFill ...><fgColor .../><bgColor .../></patternFill></fill>` fixture를 load한 뒤 nested child `<fgColor .../>` tag 자체를 `<color .../>`로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, fill nested descendant 검출이 attr drift뿐 아니라 tag/name drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b55 DONE` fill nested descendant set preservation
+  - 범위: 같은 fill fixture에서 nested child `<bgColor .../>`를 통째로 삭제해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, fill nested descendant 검출이 attr/name drift뿐 아니라 child set drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b56 DONE` border nested descendant name preservation
+  - 범위: `styles.xml`의 `<border><left ...><color .../></left>...</border>` fixture를 load한 뒤 nested child `<color .../>` tag 자체를 `<fgColor .../>`로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, border nested descendant 검출이 attr drift뿐 아니라 tag/name drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b57 DONE` border nested descendant set preservation
+  - 범위: 같은 border fixture에서 nested child `<color .../>`를 통째로 삭제해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, border nested descendant 검출이 attr/name drift뿐 아니라 child set drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b58 DONE` dxf nested descendant name preservation
+  - 범위: `styles.xml`의 `<dxf><font><color .../></font></dxf>` fixture를 load한 뒤 nested child `<color .../>` tag 자체를 `<schemeClr .../>`로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, dxf nested descendant 검출이 attr drift뿐 아니라 tag/name drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b59 DONE` dxf nested descendant set preservation
+  - 범위: 같은 dxf fixture에서 nested child `<color .../>`를 통째로 삭제해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, dxf nested descendant 검출이 attr/name drift뿐 아니라 child set drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b60 DONE` fill nested descendant order preservation
+  - 범위: 같은 fill fixture에서 nested child `<fgColor .../><bgColor .../>` 순서를 뒤집어도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, fill nested descendant 검출이 attr/name/set drift뿐 아니라 sibling order drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b61 DONE` font child order preservation
+  - 범위: `styles.xml`의 `<font><sz .../><name .../></font>` fixture를 load한 뒤 child 순서를 뒤집어도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, font child 검출이 attr drift뿐 아니라 sibling order drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b62 DONE` font child name preservation
+  - 범위: 같은 font fixture에서 child `<name .../>` tag 자체를 `<family .../>`로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, font child 검출이 attr drift뿐 아니라 tag/name drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b63 DONE` font child set preservation
+  - 범위: 같은 font fixture에서 child `<name .../>`를 통째로 삭제해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, font child 검출이 attr/name drift뿐 아니라 child set drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b64 DONE` fill child name preservation
+  - 범위: `styles.xml`의 `<fill><patternFill .../></fill>` fixture를 load한 뒤 child `<patternFill .../>` tag 자체를 `<solidFill .../>`로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, fill child 검출이 attr drift뿐 아니라 tag/name drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b65 DONE` fill child set preservation
+  - 범위: 같은 fill fixture에서 child `<patternFill .../>`를 통째로 삭제해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, fill child 검출이 attr/name drift뿐 아니라 child set drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b66 DONE` border child attr preservation
+  - 범위: `styles.xml`의 `<border><left style="thin"/>...</border>` fixture를 load한 뒤 direct child attr `style="thin"`을 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, border child 검출이 order drift뿐 아니라 attr drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b67 DONE` border child name preservation
+  - 범위: 같은 border fixture에서 child `<right/>` tag 자체를 `<diagonal/>`로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, border child 검출이 order drift뿐 아니라 tag/name drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b68 DONE` border child set preservation
+  - 범위: 같은 border fixture에서 child `<right/>`를 통째로 삭제해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, border child 검출이 order/name drift뿐 아니라 child set drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b69 DONE` dxf child name preservation
+  - 범위: `styles.xml`의 `<dxf><numFmt .../></dxf>` fixture를 load한 뒤 child `<numFmt .../>` tag 자체를 `<font .../>`로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, dxf child 검출이 attr drift뿐 아니라 tag/name drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b70 DONE` dxf child set preservation
+  - 범위: 같은 dxf fixture에서 child `<numFmt .../>`를 통째로 삭제해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, dxf child 검출이 attr/name drift뿐 아니라 child set drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b71 DONE` theme clrScheme nested child name preservation
+  - 범위: `theme1.xml`의 `<clrScheme><dk1><sysClr .../></dk1><lt1><srgbClr .../></lt1></clrScheme>` fixture를 load한 뒤 nested child `<sysClr .../>` tag 자체를 `<srgbClr .../>`로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, clrScheme nested descendant 검출이 attr drift뿐 아니라 tag/name drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b72 DONE` theme clrScheme nested child set preservation
+  - 범위: 같은 clrScheme fixture에서 nested child `<sysClr .../>`를 통째로 삭제해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, clrScheme nested descendant 검출이 attr/name drift뿐 아니라 child set drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b73 DONE` theme fontScheme nested child order preservation
+  - 범위: `theme1.xml`의 `<fontScheme><majorFont><latin .../><font .../></majorFont>...</fontScheme>` fixture를 load한 뒤 nested child 순서를 뒤집어도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, fontScheme nested descendant 검출이 attr drift뿐 아니라 sibling order drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b74 DONE` theme fontScheme nested child name preservation
+  - 범위: 같은 fontScheme fixture에서 nested child `<font .../>` tag 자체를 `<ea .../>`로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, fontScheme nested descendant 검출이 attr/order drift뿐 아니라 tag/name drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b75 DONE` theme fontScheme nested child set preservation
+  - 범위: 같은 fontScheme fixture에서 nested child `<font .../>`를 통째로 삭제해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, fontScheme nested descendant 검출이 attr/order/name drift뿐 아니라 child set drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b76 DONE` theme fmtScheme nested child name preservation
+  - 범위: `theme1.xml`의 `<fmtScheme><effectStyleLst><effectStyle/></effectStyleLst>...</fmtScheme>` fixture를 load한 뒤 nested child `<effectStyle/>` tag 자체를 `<effectLst/>`로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, fmtScheme nested descendant 검출이 attr drift뿐 아니라 tag/name drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b77 DONE` theme fmtScheme nested child set preservation
+  - 범위: 같은 fmtScheme fixture에서 nested child `<effectStyle/>`를 통째로 삭제해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, fmtScheme nested descendant 검출이 attr/name drift뿐 아니라 child set drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b78 DONE` cellXf protection attr preservation
+  - 범위: `styles.xml`의 `cellXfs` fixture에서 `<protection locked="0"/>` attr를 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, cellXf typed preservation이 alignment attr뿐 아니라 protection attr drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b79 DONE` cellXf applyAlignment flag preservation
+  - 범위: 같은 `cellXfs` fixture에서 `applyAlignment="1"` flag를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, cellXf typed preservation이 nested alignment/protection body뿐 아니라 apply flag drift도 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b80 DONE` cellXf applyProtection flag preservation
+  - 범위: 같은 `cellXfs` fixture에서 `applyProtection="1"` flag를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, cellXf typed preservation이 protection body와 apply flag의 조합 drift도 막도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b81 DONE` cellStyleXf alignment attr preservation
+  - 범위: `styles.xml`의 `cellStyleXfs` fixture에서 `<alignment horizontal="center" wrapText="1"/>` attr를 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, cellStyleXf typed preservation이 protection attr뿐 아니라 alignment attr drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b82 DONE` cellStyleXf applyAlignment flag preservation
+  - 범위: 같은 `cellStyleXfs` fixture에서 `applyAlignment="1"` flag를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, cellStyleXf typed preservation이 nested alignment body뿐 아니라 apply flag drift도 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b83 DONE` cellStyleXf applyProtection flag preservation
+  - 범위: 같은 `cellStyleXfs` fixture에서 `applyProtection="1"` flag를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, cellStyleXf typed preservation이 protection body와 apply flag의 조합 drift도 막도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b84 DONE` theme fmtScheme fill grandchild name preservation
+  - 범위: `theme1.xml`의 `<fmtScheme><fillStyleLst><solidFill><schemeClr .../></solidFill></fillStyleLst>` fixture를 load한 뒤 grandchild `<schemeClr .../>` tag 자체를 `<srgbClr .../>`로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, fill grandchild typed preservation이 attr drift뿐 아니라 tag/name drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b85 DONE` theme fmtScheme fill grandchild set preservation
+  - 범위: 같은 fill grandchild fixture에서 `<schemeClr .../>` child를 통째로 삭제해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, fill grandchild typed preservation이 attr/name drift뿐 아니라 child set drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b86 DONE` theme fmtScheme fill color great-grandchild name preservation
+  - 범위: `theme1.xml`의 `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><tint .../></schemeClr></solidFill></fillStyleLst>` fixture를 load한 뒤 great-grandchild `<tint .../>` tag 자체를 `<shade .../>`로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, fill color great-grandchild typed preservation이 attr drift뿐 아니라 tag/name drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b87 DONE` theme clrScheme name preservation
+  - 범위: `theme1.xml`의 `<clrScheme name="Office">...</clrScheme>` fixture를 load한 뒤 container `name` attr를 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, theme color scheme typed preservation이 child sequence뿐 아니라 scheme name drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b88 DONE` theme fontScheme name preservation
+  - 범위: `theme1.xml`의 `<fontScheme name="Office">...</fontScheme>` fixture를 load한 뒤 container `name` attr를 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, theme font scheme typed preservation이 child sequence뿐 아니라 scheme name drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b89 DONE` theme fmtScheme name preservation
+  - 범위: `theme1.xml`의 `<fmtScheme name="Office">...</fmtScheme>` fixture를 load한 뒤 container `name` attr를 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, theme format scheme typed preservation이 child sequence뿐 아니라 scheme name drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b90 DONE` cellStyleXf protection attr preservation
+  - 범위: `styles.xml`의 `cellStyleXfs` fixture에서 `<protection locked="0" hidden="1"/>` attr를 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, cellStyleXf typed preservation이 alignment attr과 apply flag뿐 아니라 protection attr drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b91 DONE` theme fmtScheme fill color extra-transform order preservation
+  - 범위: `theme1.xml`의 `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><tint .../><satMod .../><shade .../></schemeClr></solidFill></fillStyleLst>` fixture를 load한 뒤 trailing extra transform sibling order를 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, extra-transform typed preservation이 attr/name/set뿐 아니라 sibling order drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b92 DONE` theme fmtScheme fill color middle-transform order preservation
+  - 범위: `theme1.xml`의 `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><tint .../><shade .../><satMod .../></schemeClr></solidFill></fillStyleLst>` fixture를 load한 뒤 middle inserted transform sibling order를 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, middle-transform typed preservation이 attr/name/set뿐 아니라 sibling order drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b93 DONE` theme fmtScheme fill color front-transform order preservation
+  - 범위: `theme1.xml`의 `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><shade .../><tint .../><satMod .../></schemeClr></solidFill></fillStyleLst>` fixture를 load한 뒤 front inserted transform sibling order를 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, front-transform typed preservation이 attr/name/set뿐 아니라 sibling order drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b94 DONE` theme fmtScheme fill color duplicate-transform order preservation
+  - 범위: `theme1.xml`의 `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><tint .../><satMod val="120000"/><satMod val="90000"/></schemeClr></solidFill></fillStyleLst>` fixture를 load한 뒤 duplicate transform sibling order를 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, duplicate-transform typed preservation이 attr/name/set뿐 아니라 sibling order drift까지 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b95 DONE` cellStyle name preservation
+  - 범위: `styles.xml`의 `<cellStyle name="Normal" .../>` fixture를 load한 뒤 `name` 값을 다른 non-empty 값으로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `CellStyleSummary` typed preservation이 `xfId/builtinId/hidden/attr_map`뿐 아니라 `name` drift도 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b96 DONE` cellStyle customBuiltin flag preservation
+  - 범위: 같은 `cellStyle` fixture에서 valid `builtinId`를 유지한 채 `customBuiltin="1"` flag만 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `CellStyleSummary.custom_builtin` drift도 typed styles summary로 막도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b97 DONE` tableStyles defaultPivotStyle preservation
+  - 범위: `styles.xml`의 `<tableStyles ... defaultPivotStyle="PivotStyleMedium9"/>` fixture를 load한 뒤 `defaultPivotStyle`을 다른 non-empty 값으로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `TableStylesSummary.default_pivot_style` drift를 empty-validation과 별개로 typed summary에서 검출하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b98 DONE` theme fmtScheme fill color only-transform addition preservation
+  - 범위: `theme1.xml`의 `<fmtScheme><fillStyleLst><solidFill><schemeClr ...><tint .../></schemeClr></solidFill></fillStyleLst>` fixture를 load한 뒤 only-transform branch에 extra sibling transform을 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, single-transform color descendant 검출이 sibling addition drift도 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b99 DONE` cellStyles count preservation
+  - 범위: `styles.xml`의 `<cellStyles count="1">...</cellStyles>` fixture를 load한 뒤 declared `count`를 실제 entry 수와 다르게 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `cellStyles` container count mismatch가 parser-level validation으로 유지되도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b100 DONE` cellStyleXfs count preservation
+  - 범위: `styles.xml`의 `<cellStyleXfs count="1">...</cellStyleXfs>` fixture를 load한 뒤 declared `count`를 실제 entry 수와 다르게 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `cellStyleXfs` container count mismatch가 parser-level validation으로 유지되도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b101 DONE` theme optional root child name preservation
+  - 범위: `theme1.xml`의 single `<a:objectDefaults/>` fixture를 load한 뒤 같은 root-level slot의 child name을 다른 optional child 이름으로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `ThemePartSummary.root_child_names` drift를 pure deletion/addition과 별개로 typed summary에서 검출하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b102 DONE` theme extLst presence preservation
+  - 범위: base `theme1.xml` fixture를 load한 뒤 absent `<a:extLst/>` optional child를 하나 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `ThemePartSummary.has_extension_list` boolean drift를 duplicate validation과 별개로 typed summary에서 검출하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b103 DONE` theme extraClrSchemeLst presence preservation
+  - 범위: base `theme1.xml` fixture를 load한 뒤 absent `<a:extraClrSchemeLst/>` optional child를 하나 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `ThemePartSummary.has_extra_color_scheme_list` boolean drift를 duplicate validation과 별개로 typed summary에서 검출하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b104 DONE` theme custClrLst presence preservation
+  - 범위: base `theme1.xml` fixture를 load한 뒤 absent `<a:custClrLst/>` optional child를 하나 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `ThemePartSummary.has_custom_color_list` boolean drift를 duplicate validation과 별개로 typed summary에서 검출하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b105 DONE` theme clrScheme child name preservation
+  - 범위: `theme1.xml`의 `<clrScheme>` child-name fixture를 load한 뒤 immediate child tag 하나를 다른 local name으로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `ThemePartSummary.color_scheme_child_names` typed preservation이 order/set뿐 아니라 name drift도 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b106 DONE` theme fontScheme child name preservation
+  - 범위: `theme1.xml`의 `<fontScheme>` child-name fixture를 load한 뒤 immediate child tag 하나를 다른 local name으로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `ThemePartSummary.font_scheme_child_names` typed preservation이 order/set뿐 아니라 name drift도 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b107 DONE` theme fmtScheme child name preservation
+  - 범위: `theme1.xml`의 `<fmtScheme>` child-name fixture를 load한 뒤 immediate child tag 하나를 다른 local name으로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `ThemePartSummary.format_scheme_child_names` typed preservation이 order/set뿐 아니라 name drift도 포함하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b108 DONE` themeElements clrScheme required-child symmetry
+  - 범위: base `theme1.xml` fixture를 load한 뒤 `<a:themeElements>` 안의 required `<a:clrScheme .../>` child를 삭제하거나 duplicate로 늘려도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `clrScheme` count invariant가 parser-level validation으로 대칭 보존되도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b109 DONE` themeElements fontScheme missing-child preservation
+  - 범위: base `theme1.xml` fixture를 load한 뒤 `<a:themeElements>` 안의 required `<a:fontScheme .../>` child를 삭제해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, 기존 duplicate-side coverage와 짝을 이루는 missing-child symmetry를 parser-level validation으로 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b110 DONE` themeElements fmtScheme duplicate-child preservation
+  - 범위: base `theme1.xml` fixture를 load한 뒤 `<a:themeElements>` 안의 required `<a:fmtScheme .../>` child를 duplicate로 늘려도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, 기존 missing-side coverage와 짝을 이루는 duplicate-child symmetry를 parser-level validation으로 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b111 DONE` themeElements required-child count symmetry batch
+  - 범위: `themeElements`의 required child count validation을 `clrScheme/fontScheme/fmtScheme` 전부에 대해 missing/duplicate 대칭으로 채워서, theme immediate-child count mismatch coverage를 완성
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b112 DONE` styles optional root child name preservation
+  - 범위: base `styles.xml` fixture를 load한 뒤 `<tableStyles .../>` root child를 다른 optional root child 이름으로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `StylesheetSummary.root_child_names` drift를 pure insertion/deletion과 별개로 typed summary에서 검출하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b113 DONE` styles extLst presence preservation
+  - 범위: base `styles.xml` fixture를 load한 뒤 absent `<extLst/>` root container를 하나 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `StylesheetSummary.has_extension_list` boolean drift를 duplicate validation과 별개로 typed summary에서 검출하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b114 DONE` styles dxfs presence preservation
+  - 범위: base `styles.xml` fixture를 load한 뒤 absent `<dxfs count="0"/>` root container를 하나 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `StylesheetSummary.has_dxfs` 및 `dxf_entries_count` drift를 duplicate/count validation과 별개로 typed summary에서 검출하도록 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b115 DONE` styles numFmts container count symmetry
+  - 범위: custom `numFmts` fixture를 load한 뒤 `<numFmts>` declared `count`를 실제 entry 수와 다르게 바꾸거나 container를 duplicate해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `numFmts` direct-container count/container invariant를 parser-level validation으로 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b116 DONE` styles fonts container count symmetry
+  - 범위: base `styles.xml` fixture를 load한 뒤 `<fonts>` declared `count`를 실제 entry 수와 다르게 바꾸거나 container를 duplicate해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `fonts` direct-container count/container invariant를 parser-level validation으로 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b117 DONE` styles fills container count symmetry
+  - 범위: base `styles.xml` fixture를 load한 뒤 `<fills>` declared `count`를 실제 entry 수와 다르게 바꾸거나 container를 duplicate해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `fills` direct-container count/container invariant를 parser-level validation으로 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b118 DONE` styles borders container count symmetry
+  - 범위: base `styles.xml` fixture를 load한 뒤 `<borders>` declared `count`를 실제 entry 수와 다르게 바꾸거나 container를 duplicate해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `borders` direct-container count/container invariant를 parser-level validation으로 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b119 DONE` styles cellStyleXfs duplicate-container preservation
+  - 범위: base `styles.xml` fixture를 load한 뒤 `<cellStyleXfs>` container를 duplicate해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, 기존 count-drift coverage와 별개로 container duplication invariant를 parser-level validation으로 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b120 DONE` styles cellXfs duplicate-container preservation
+  - 범위: base `styles.xml` fixture를 load한 뒤 `<cellXfs>` container를 duplicate해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, 기존 count-drift coverage와 별개로 container duplication invariant를 parser-level validation으로 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b121 DONE` styles custom numFmt duplicate-id preservation
+  - 범위: multiple custom `numFmt` fixture를 load한 뒤 second `numFmtId`를 first와 같게 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, duplicate custom `numFmtId` validation을 parser-level 회귀로 보강
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b122 DONE` styles cellXf duplicate alignment-child preservation
+  - 범위: `xf` alignment fixture를 load한 뒤 worksheet-level `cellXf` 안에 `<alignment .../>` child를 하나 더 붙여도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, duplicate `<alignment>` child validation을 parser-level 회귀로 보강
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b123 DONE` styles cellStyleXf duplicate alignment-child preservation
+  - 범위: 같은 `xf` alignment fixture를 load한 뒤 `cellStyleXf` 안에 `<alignment .../>` child를 하나 더 붙여도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, duplicate `<alignment>` child validation의 style-xf surface를 보강
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b124 DONE` styles cellXf duplicate protection-child preservation
+  - 범위: `xf` protection fixture를 load한 뒤 worksheet-level `cellXf` 안에 `<protection .../>` child를 하나 더 붙여도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, duplicate `<protection>` child validation을 parser-level 회귀로 보강
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b125 DONE` styles cellStyleXf duplicate protection-child preservation
+  - 범위: 같은 `xf` protection fixture를 load한 뒤 `cellStyleXf` 안에 `<protection .../>` child를 하나 더 붙여도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, duplicate `<protection>` child validation의 style-xf surface를 보강
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b126 DONE` styles custom numFmt missing-id validation
+  - 범위: custom `numFmt` fixture를 load한 뒤 `<numFmt>`의 required `numFmtId` attr를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `parse_num_fmt`의 missing-id validation branch를 parser-level regression으로 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b127 DONE` styles custom numFmt missing-formatCode validation
+  - 범위: custom `numFmt` fixture를 load한 뒤 `<numFmt>`의 required `formatCode` attr를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `parse_num_fmt`의 missing-formatCode validation branch를 parser-level regression으로 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b128 DONE` styles custom numFmt empty-formatCode validation
+  - 범위: custom `numFmt` fixture를 load한 뒤 `<numFmt formatCode="..."/>` 값을 empty string으로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `parse_num_fmt`의 empty-formatCode validation branch를 parser-level regression으로 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b129 DONE` theme clrScheme child addition preservation
+  - 범위: `clrScheme` child fixture를 load한 뒤 immediate child를 duplicate로 하나 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `ThemePartSummary.color_scheme_child_names`의 addition-side set drift를 보강
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b130 DONE` theme clrScheme nested child addition preservation
+  - 범위: `clrScheme` nested child fixture를 load한 뒤 nested color child를 duplicate로 하나 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `ThemePartSummary.color_scheme_child_nested_names`의 addition-side set drift를 보강
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b131 DONE` theme fontScheme nested child addition preservation
+  - 범위: `fontScheme` nested child fixture를 load한 뒤 nested font child를 duplicate로 하나 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `ThemePartSummary.font_scheme_child_nested_names`의 addition-side set drift를 보강
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b132 DONE` theme fontScheme child addition preservation
+  - 범위: `fontScheme` child fixture를 load한 뒤 immediate child를 duplicate로 하나 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `ThemePartSummary.font_scheme_child_names`의 addition-side set drift를 보강
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b133 DONE` theme fmtScheme child addition preservation
+  - 범위: `fmtScheme` child fixture를 load한 뒤 immediate child를 duplicate로 하나 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `ThemePartSummary.format_scheme_child_names`의 addition-side set drift를 보강
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b134 DONE` theme fmtScheme nested child addition preservation
+  - 범위: `fmtScheme` nested child fixture를 load한 뒤 nested child를 duplicate로 하나 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `ThemePartSummary.format_scheme_child_nested_names`의 addition-side set drift를 보강
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b135 DONE` theme fmtScheme fill grandchild addition preservation
+  - 범위: `fillStyleLst` fixture를 load한 뒤 grandchild fill sibling을 하나 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, removal-only였던 `format_scheme_grandchild_names` set drift를 addition-side 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b136 DONE` theme fmtScheme effect great-grandchild addition preservation
+  - 범위: `effectStyleLst` fixture를 load한 뒤 great-grandchild effect sibling을 하나 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, removal-only였던 `format_scheme_great_grandchild_names` effect branch set drift를 addition-side 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b137 DONE` theme fmtScheme bgFill great-grandchild addition preservation
+  - 범위: `bgFillStyleLst` fixture를 load한 뒤 great-grandchild bgFill sibling을 하나 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, removal-only였던 `format_scheme_great_grandchild_names` bgFill branch set drift를 addition-side 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b138 DONE` theme fmtScheme effect color great-great-grandchild addition preservation
+  - 범위: `outerShdw` color fixture를 load한 뒤 great-great-grandchild color sibling을 하나 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, removal-only였던 `format_scheme_great_great_grandchild_names` effect-color branch set drift를 addition-side 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b139 DONE` theme fmtScheme bgFill color great-great-grandchild addition preservation
+  - 범위: `gs` color fixture를 load한 뒤 great-great-grandchild color sibling을 하나 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, removal-only였던 `format_scheme_great_great_grandchild_names` bgFill-color branch set drift를 addition-side 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b140 DONE` theme fmtScheme fill color only-transform duplicate addition preservation
+  - 범위: single-transform color fixture를 load한 뒤 only child `<a:tint .../>`를 same-name duplicate sibling으로 하나 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, heterogeneous transform addition만 있던 single-transform branch를 duplicate addition symmetry까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b141 DONE` styles dxf numFmt missing-id validation
+  - 범위: `dxf > numFmt` fixture를 load한 뒤 `<numFmt>`의 required `numFmtId` attr를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `parse_num_fmt`의 missing-id validation branch를 `dxfs` 경로 parser-level regression까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b142 DONE` styles dxf numFmt missing-formatCode validation
+  - 범위: `dxf > numFmt` fixture를 load한 뒤 `<numFmt>`의 required `formatCode` attr를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `parse_num_fmt`의 missing-formatCode validation branch를 `dxfs` 경로 parser-level regression까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b143 DONE` styles dxf numFmt empty-formatCode validation
+  - 범위: `dxf > numFmt` fixture를 load한 뒤 `<numFmt formatCode="..."/>` 값을 empty string으로 바꿔도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `parse_num_fmt`의 empty-formatCode validation branch를 `dxfs` 경로 parser-level regression까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b144 DONE` styles dxf child addition preservation
+  - 범위: `dxf > numFmt` fixture를 load한 뒤 sibling direct child를 하나 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, removal-only였던 `DxfSummary.child_names` direct-child set drift를 addition-side 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b145 DONE` styles dxf nested child addition preservation
+  - 범위: `dxf > font > color` fixture를 load한 뒤 nested child를 하나 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, removal-only였던 `DxfSummary.nested_child_names` nested-child set drift를 addition-side 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b146 DONE` styles dxf multiple-child load coverage
+  - 범위: multi-child `dxf` synthetic workbook(`numFmt -> font/color`)을 load해서, `StylesheetSummary.dxfs[*].child_names`와 nested attr-map sequence가 direct-child order를 collapse하지 않고 그대로 수집되는지 load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b147 DONE` styles dxf multiple-nested-child load coverage
+  - 범위: multi-nested-child `dxf > font` synthetic workbook(`color -> name`)을 load해서, `StylesheetSummary.dxfs[*].nested_child_names`와 nested attr-map sequence가 nested-child order를 collapse하지 않고 그대로 수집되는지 load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b148 DONE` styles dxf child order preservation
+  - 범위: multi-child `dxf` fixture를 load한 뒤 direct child order를 `numFmt -> font`에서 `font -> numFmt`로 뒤집어도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `DxfSummary.child_names` sequence typed preservation을 multi-entry case까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b149 DONE` styles dxf nested child order preservation
+  - 범위: multi-nested-child `dxf > font` fixture를 load한 뒤 nested child order를 `color -> name`에서 `name -> color`로 뒤집어도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `DxfSummary.nested_child_names` sequence typed preservation을 multi-entry case까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b150 DONE` styles custom numFmt non-numeric id validation
+  - 범위: custom `numFmt` fixture를 load한 뒤 `<numFmt numFmtId="...">`를 non-numeric 값으로 바꿔도 save가 parse failure로 fail-fast 되는지 회귀로 고정해서, `parse_num_fmt`의 `u64` parse branch를 `numFmts` 경로 parser-level regression으로 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b151 DONE` styles dxf numFmt non-numeric id validation
+  - 범위: `dxf > numFmt` fixture를 load한 뒤 `<numFmt numFmtId="...">`를 non-numeric 값으로 바꿔도 save가 parse failure로 fail-fast 되는지 회귀로 고정해서, 같은 `parse_num_fmt`의 `dxfs` 경로 `u64` parse branch를 parser-level regression으로 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b152 DONE` styles custom numFmt addition preservation
+  - 범위: multi-entry custom `numFmt` fixture를 load한 뒤 새 `<numFmt>` sibling을 하나 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, `custom_num_fmt_ids_in_order`/`custom_num_fmts` typed summary를 addition-side set drift까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b153 DONE` styles numFmts non-numeric count validation
+  - 범위: custom `numFmt` container fixture를 load한 뒤 `<numFmts count="...">`를 non-numeric 값으로 바꿔도 save가 parse failure로 fail-fast 되는지 회귀로 고정해서, `parse_count_attr`의 `numFmts` 경로 parse branch를 parser-level regression으로 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b154 DONE` styles dxfs non-numeric count validation
+  - 범위: `dxfs` fixture를 load한 뒤 `<dxfs count="...">`를 non-numeric 값으로 바꿔도 save가 parse failure로 fail-fast 되는지 회귀로 고정해서, `parse_count_attr`의 `dxfs` 경로 parse branch를 parser-level regression으로 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b155 DONE` theme fmtScheme fill grandchild attr-key deletion preservation
+  - 범위: `fillStyleLst > solidFill > schemeClr` fixture를 load한 뒤 `schemeClr@val` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, value drift만 있던 attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b156 DONE` theme fmtScheme effect great-grandchild attr-key deletion preservation
+  - 범위: `effectStyleLst > effectStyle > effectLst > outerShdw` fixture를 load한 뒤 `outerShdw@blurRad` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, value drift만 있던 attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b157 DONE` theme fmtScheme effect color great-great-grandchild attr-key deletion preservation
+  - 범위: `outerShdw > schemeClr` fixture를 load한 뒤 `schemeClr@val` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, effect color attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b158 DONE` theme fmtScheme bgFill great-grandchild attr-key deletion preservation
+  - 범위: `bgFillStyleLst > gradFill > gsLst > gs` fixture를 load한 뒤 `gs@pos` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, bgFill stop attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b159 DONE` theme fmtScheme bgFill color great-great-grandchild attr-key deletion preservation
+  - 범위: `gs > schemeClr` fixture를 load한 뒤 `schemeClr@val` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, bgFill color attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b160 DONE` theme root name attr deletion preservation
+  - 범위: theme root fixture를 load한 뒤 `<a:theme name="...">`의 `name` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, root-level name attr typed preservation을 value drift에서 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b161 DONE` theme clrScheme name attr deletion preservation
+  - 범위: `clrScheme` fixture를 load한 뒤 `<a:clrScheme name="...">`의 `name` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, color-scheme name attr typed preservation을 value drift에서 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b162 DONE` theme fontScheme name attr deletion preservation
+  - 범위: `fontScheme` fixture를 load한 뒤 `<a:fontScheme name="...">`의 `name` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, font-scheme name attr typed preservation을 value drift에서 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b163 DONE` theme fmtScheme name attr deletion preservation
+  - 범위: `fmtScheme` fixture를 load한 뒤 `<a:fmtScheme name="...">`의 `name` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, format-scheme name attr typed preservation을 value drift에서 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b164 DONE` styles fill child addition preservation
+  - 범위: baseline `fill` fixture를 load한 뒤 `<fill>` direct child sibling을 하나 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, removal-only였던 `FillSummary.child_names` direct-child set drift를 addition-side 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b165 DONE` styles fill nested child addition preservation
+  - 범위: `patternFill > fgColor/bgColor` fixture를 load한 뒤 nested child sibling을 하나 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, removal-only였던 `FillSummary.nested_child_names` nested-child set drift를 addition-side 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b166 DONE` styles font child addition preservation
+  - 범위: baseline `font` fixture를 load한 뒤 `<font>` direct child sibling을 하나 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, removal-only였던 `FontSummary.child_names` direct-child set drift를 addition-side 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b167 DONE` styles border child addition preservation
+  - 범위: `border` fixture를 load한 뒤 `<border>` direct child sibling을 하나 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, removal-only였던 `BorderSummary.child_names` direct-child set drift를 addition-side 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b168 DONE` styles border nested child addition preservation
+  - 범위: `left > color` fixture를 load한 뒤 nested child sibling을 하나 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, removal-only였던 `BorderSummary.nested_child_names` nested-child set drift를 addition-side 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b169 DONE` styles fill child attr-key deletion preservation
+  - 범위: baseline `fill` fixture를 load한 뒤 `patternFill@patternType` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, fill child attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b170 DONE` styles fill nested child attr-key deletion preservation
+  - 범위: `patternFill > fgColor/bgColor` fixture를 load한 뒤 `fgColor@rgb` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, fill nested child attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b171 DONE` styles font child attr-key deletion preservation
+  - 범위: baseline `font` fixture를 load한 뒤 `name@val` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, font child attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b172 DONE` styles border child attr-key deletion preservation
+  - 범위: `border` fixture를 load한 뒤 `left@style` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, border child attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b173 DONE` styles border nested child attr-key deletion preservation
+  - 범위: `left > color` fixture를 load한 뒤 `color@rgb` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, border nested child attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b174 DONE` styles dxf nested child attr-key deletion preservation
+  - 범위: `dxf > font > color` fixture를 load한 뒤 `color@rgb` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, dxf nested child attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b175 DONE` styles cellStyle optional attr-key deletion preservation
+  - 범위: optional `iLevel` attr가 있는 `cellStyle` fixture를 load한 뒤 `iLevel` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, cellStyle attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b176 DONE` styles tableStyles defaultTableStyle attr-key deletion preservation
+  - 범위: baseline `tableStyles` fixture를 load한 뒤 `defaultTableStyle` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, tableStyles default attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b177 DONE` styles tableStyles defaultPivotStyle attr-key deletion preservation
+  - 범위: baseline `tableStyles` fixture를 load한 뒤 `defaultPivotStyle` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, tableStyles default attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b178 DONE` styles tableStyle entry attr-key deletion preservation
+  - 범위: `tableStyle` attr fixture를 load한 뒤 entry-level `pivot` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, tableStyle entry attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b179 DONE` styles font same-name duplicate addition preservation
+  - 범위: baseline `font` fixture를 load한 뒤 existing `<name .../>` child를 한 번 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, font child addition typed preservation을 same-name duplicate 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b180 DONE` styles border same-name duplicate addition preservation
+  - 범위: baseline `border` fixture를 load한 뒤 existing `<right/>` child를 한 번 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, border child addition typed preservation을 same-name duplicate 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b181 DONE` styles dxf child same-name duplicate addition preservation
+  - 범위: baseline `dxf > numFmt` fixture를 load한 뒤 existing `<numFmt .../>` child를 한 번 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, dxf child addition typed preservation을 same-name duplicate 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b182 DONE` styles dxf nested child same-name duplicate addition preservation
+  - 범위: `dxf > font > color` fixture를 load한 뒤 existing `<color .../>` child를 한 번 더 추가해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, dxf nested child addition typed preservation을 same-name duplicate 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b183 DONE` theme fmtScheme fill color single-transform attr-key deletion preservation
+  - 범위: single-transform `fmtScheme fill color` fixture를 load한 뒤 `<a:tint val="..."/>`의 `val` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, single-transform attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b184 DONE` theme fmtScheme fill color second-transform attr-key deletion preservation
+  - 범위: `tint -> satMod` sequence fixture를 load한 뒤 second transform `<a:satMod val="..."/>`의 `val` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, second-transform attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b185 DONE` theme fmtScheme fill color first-transform attr-key deletion with siblings preservation
+  - 범위: `tint -> satMod` sequence fixture를 load한 뒤 leading transform `<a:tint val="..."/>`의 `val` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, sibling이 있는 first-transform attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b186 DONE` theme fmtScheme fill color extra-transform attr-key deletion preservation
+  - 범위: `tint -> satMod -> shade` fixture를 load한 뒤 trailing extra transform `<a:shade val="..."/>`의 `val` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, extra-transform attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b187 DONE` theme fmtScheme fill color middle-transform attr-key deletion preservation
+  - 범위: `tint -> shade -> satMod` fixture를 load한 뒤 middle transform `<a:shade val="..."/>`의 `val` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, middle-transform attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b188 DONE` theme fmtScheme fill color front-transform attr-key deletion preservation
+  - 범위: `shade -> tint -> satMod` fixture를 load한 뒤 front transform `<a:shade val="..."/>`의 `val` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, front-transform attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b189 DONE` theme fmtScheme fill color duplicate-transform attr-key deletion preservation
+  - 범위: duplicate-transform fixture를 load한 뒤 trailing duplicate `<a:satMod val="..."/>`의 `val` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, duplicate-transform attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b190 DONE` theme clrScheme nested child lastClr attr-key deletion preservation
+  - 범위: `clrScheme` value-child fixture를 load한 뒤 nested `sysClr@lastClr` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, clrScheme nested child attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b191 DONE` theme clrScheme nested child val attr-key deletion preservation
+  - 범위: `clrScheme` value-child fixture를 load한 뒤 nested `sysClr@val` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, clrScheme nested child attr-map typed preservation을 다른 attr key까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b192 DONE` theme fontScheme nested child typeface attr-key deletion preservation
+  - 범위: `fontScheme` value-child fixture를 load한 뒤 nested `latin@typeface` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, fontScheme nested child attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b193 DONE` theme fontScheme nested child script attr-key deletion preservation
+  - 범위: `fontScheme` value-child fixture를 load한 뒤 nested `font@script` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, fontScheme nested child attr-map typed preservation을 다른 attr key까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b194 DONE` theme fmtScheme nested child width attr-key deletion preservation
+  - 범위: `fmtScheme` value-child fixture를 load한 뒤 nested `ln@w` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, fmtScheme nested child attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b195 DONE` styles cellXf alignment attr-key deletion preservation
+  - 범위: `cellXf` alignment fixture를 load한 뒤 `alignment@vertical` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, cellXf alignment attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b196 DONE` styles cellStyleXf alignment attr-key deletion preservation
+  - 범위: `cellStyleXf` alignment fixture를 load한 뒤 `alignment@wrapText` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, cellStyleXf alignment attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b197 DONE` styles cellXf protection attr-key deletion preservation
+  - 범위: `cellXf` protection fixture를 load한 뒤 `protection@locked` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, cellXf protection attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b198 DONE` styles cellStyleXf protection attr-key deletion preservation
+  - 범위: `cellStyleXf` protection fixture를 load한 뒤 `protection@hidden` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, cellStyleXf protection attr-map typed preservation을 key deletion 대칭까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b199 DONE` styles tableStyle table attr-key deletion preservation
+  - 범위: `tableStyle` attr fixture를 load한 뒤 entry-level `table` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, tableStyle entry attr-map typed preservation을 다른 attr key까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b200 DONE` styles cellXf alignment second attr-key deletion preservation
+  - 범위: `cellXf` alignment fixture를 load한 뒤 `alignment@horizontal` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, cellXf alignment attr-map typed preservation을 second attr key까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b201 DONE` styles cellStyleXf alignment second attr-key deletion preservation
+  - 범위: `cellStyleXf` alignment fixture를 load한 뒤 `alignment@horizontal` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, cellStyleXf alignment attr-map typed preservation을 second attr key까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b202 DONE` styles cellStyleXf protection second attr-key deletion preservation
+  - 범위: `cellStyleXf` protection fixture를 load한 뒤 `protection@locked` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, cellStyleXf protection attr-map typed preservation을 second attr key까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b203 DONE` theme clrScheme alternate nested child attr-key deletion preservation
+  - 범위: `clrScheme` value-child fixture를 load한 뒤 alternate nested child `srgbClr@val` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, clrScheme nested child attr-map typed preservation을 alternate branch까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b204 DONE` theme fontScheme alternate nested child attr-key deletion preservation
+  - 범위: `fontScheme` value-child fixture를 load한 뒤 script-font branch의 `font@typeface` attr key 자체를 제거해도 dirty save가 fail-fast로 막히는지 회귀로 고정해서, fontScheme nested child attr-map typed preservation을 alternate branch까지 확장
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b205 DONE` theme optional extension-list name-drift preservation
+  - 범위: `theme1.xml`에 optional `<extLst/>`가 이미 있는 상태에서 같은 root-level optional child를 `<custClrLst/>`로 바꾸는 회귀를 추가해서, optional root child presence만이 아니라 child name drift도 dirty save에서 fail-fast로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b206 DONE` theme optional extra-color-scheme-list name-drift preservation
+  - 범위: `theme1.xml`에 optional `<extraClrSchemeLst/>`가 이미 있는 상태에서 이를 `<custClrLst/>`로 바꾸는 회귀를 추가해서, optional root child의 same-count name drift도 dirty save에서 fail-fast로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b207 DONE` theme optional custom-color-list name-drift preservation
+  - 범위: `theme1.xml`에 optional `<custClrLst/>`가 이미 있는 상태에서 이를 `<extLst/>`로 바꾸는 회귀를 추가해서, optional root child의 same-count name drift도 dirty save에서 fail-fast로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b208 DONE` styles colors-container name-drift preservation
+  - 범위: `styles.xml`에 `<colors>...</colors>` container가 이미 있는 상태에서 이를 `<extLst/>`로 바꾸는 회귀를 추가해서, optional styles container의 same-count name drift도 dirty save에서 fail-fast로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b209 DONE` styles extension-list-container name-drift preservation
+  - 범위: `styles.xml`에 optional `<extLst/>` container가 이미 있는 상태에서 이를 `<colors/>`로 바꾸는 회귀를 추가해서, optional styles container의 same-count name drift도 dirty save에서 fail-fast로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b210 DONE` styles dxfs-container name-drift preservation
+  - 범위: `styles.xml`에 `<dxfs>...</dxfs>` container가 이미 있는 상태에서 이를 `<extLst/>`로 바꾸는 회귀를 추가해서, optional styles container의 same-count name drift도 dirty save에서 fail-fast로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b211 DONE` theme optional extension-list positive-load preservation
+  - 범위: `theme1.xml`에 optional `<extLst/>`를 추가한 입력을 load해서 `root_child_names`와 `has_extension_list`가 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b212 DONE` theme optional extra-color-scheme-list positive-load preservation
+  - 범위: `theme1.xml`에 optional `<extraClrSchemeLst/>`를 추가한 입력을 load해서 `root_child_names`와 `has_extra_color_scheme_list`가 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b213 DONE` theme optional custom-color-list positive-load preservation
+  - 범위: `theme1.xml`에 optional `<custClrLst/>`를 추가한 입력을 load해서 `root_child_names`와 `has_custom_color_list`가 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b214 DONE` styles extension-list positive-load preservation
+  - 범위: `styles.xml`에 optional `<extLst/>` container를 추가한 입력을 load해서 `root_child_names`와 `has_extension_list`가 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b215 DONE` styles empty dxfs positive-load preservation
+  - 범위: `styles.xml`에 빈 `<dxfs count="0"/>` container를 추가한 입력을 load해서 `root_child_names`, `has_dxfs`, `dxf_entries_count=0`이 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b216 DONE` styles empty colors positive-load preservation
+  - 범위: `styles.xml`에 빈 `<colors/>` container를 추가한 입력을 load해서 `root_child_names`, `has_colors`, empty child sequence가 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b217 DONE` styles colors-container addition preservation
+  - 범위: `styles.xml`에 optional `<colors/>` container를 새로 추가하는 dirty-save 회귀를 추가해서, colors container도 extLst/dxfs와 대칭적으로 fail-fast로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b218 DONE` theme optional extension-list alternate name-drift preservation
+  - 범위: `theme1.xml`에 optional `<extLst/>`가 이미 있는 상태에서 이를 남은 third optional root child `<extraClrSchemeLst/>`로 바꾸는 회귀를 추가해서, optional root child same-count name drift permutation을 더 촘촘히 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b219 DONE` theme optional extra-color-scheme-list alternate name-drift preservation
+  - 범위: `theme1.xml`에 optional `<extraClrSchemeLst/>`가 이미 있는 상태에서 이를 `<extLst/>`로 바꾸는 회귀를 추가해서, optional root child same-count name drift permutation을 더 촘촘히 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b220 DONE` theme optional custom-color-list alternate name-drift preservation
+  - 범위: `theme1.xml`에 optional `<custClrLst/>`가 이미 있는 상태에서 이를 남은 third optional root child `<extraClrSchemeLst/>`로 바꾸는 회귀를 추가해서, optional root child same-count name drift permutation을 더 촘촘히 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b221 DONE` styles colors-container alternate name-drift preservation
+  - 범위: `styles.xml`에 `<colors>...</colors>` container가 이미 있는 상태에서 이를 남은 third optional container `<dxfs count="0"/>`로 바꾸는 회귀를 추가해서, optional styles container same-count name drift permutation을 더 촘촘히 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b222 DONE` styles extension-list-container alternate name-drift preservation
+  - 범위: `styles.xml`에 optional `<extLst/>` container가 이미 있는 상태에서 이를 `<dxfs count="0"/>`로 바꾸는 회귀를 추가해서, optional styles container same-count name drift permutation을 더 촘촘히 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b223 DONE` styles dxfs-container alternate name-drift preservation
+  - 범위: `styles.xml`에 `<dxfs>...</dxfs>` container가 이미 있는 상태에서 이를 `<colors/>`로 바꾸는 회귀를 추가해서, optional styles container same-count name drift permutation을 더 촘촘히 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b224 DONE` theme optional extension-list order-drift preservation
+  - 범위: `theme1.xml`에 optional `<extLst/>`가 이미 있는 상태에서 이를 `objectDefaults` 앞뒤 순서만 바꾸는 회귀를 추가해서, optional root child presence/name만이 아니라 root child order drift도 dirty save에서 fail-fast로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b225 DONE` theme optional extra-color-scheme-list order-drift preservation
+  - 범위: `theme1.xml`에 optional `<extraClrSchemeLst/>`가 이미 있는 상태에서 이를 `objectDefaults` 앞뒤 순서만 바꾸는 회귀를 추가해서, optional root child order drift permutation을 더 촘촘히 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b226 DONE` theme optional custom-color-list order-drift preservation
+  - 범위: `theme1.xml`에 optional `<custClrLst/>`가 이미 있는 상태에서 이를 `objectDefaults` 앞뒤 순서만 바꾸는 회귀를 추가해서, optional root child order drift permutation을 더 촘촘히 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b227 DONE` styles colors-container order-drift preservation
+  - 범위: `styles.xml`에 optional `<colors>...</colors>` container가 이미 있는 상태에서 이를 `tableStyles` 뒤로 보내는 회귀를 추가해서, optional styles container root order drift도 dirty save에서 fail-fast로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b228 DONE` styles extension-list-container order-drift preservation
+  - 범위: `styles.xml`에 optional `<extLst/>` container가 이미 있는 상태에서 이를 `tableStyles` 뒤로 보내는 회귀를 추가해서, optional styles container root order drift permutation을 더 촘촘히 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b229 DONE` styles dxfs-container order-drift preservation
+  - 범위: `styles.xml`에 optional `<dxfs count="0"/>` container가 이미 있는 상태에서 이를 `tableStyles` 뒤로 보내는 회귀를 추가해서, optional styles container root order drift permutation을 더 촘촘히 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b230 DONE` styles cellXfs non-numeric count parse preservation
+  - 범위: `cellXfs@count`를 숫자 대신 문자열로 깨뜨린 입력을 dirty save 회귀로 추가해서, cellXfs count parser가 mismatch뿐 아니라 malformed count도 `Parse`로 fail-fast 하도록 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b231 DONE` styles cellStyles non-numeric count parse preservation
+  - 범위: `cellStyles@count`를 숫자 대신 문자열로 깨뜨린 입력을 dirty save 회귀로 추가해서, cellStyles count parser malformed case를 `Parse`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b232 DONE` styles cellStyleXfs non-numeric count parse preservation
+  - 범위: `cellStyleXfs@count`를 숫자 대신 문자열로 깨뜨린 입력을 dirty save 회귀로 추가해서, cellStyleXfs count parser malformed case를 `Parse`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b233 DONE` styles fonts non-numeric count parse preservation
+  - 범위: `fonts@count`를 숫자 대신 문자열로 깨뜨린 입력을 dirty save 회귀로 추가해서, fonts count parser malformed case를 `Parse`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b234 DONE` styles fills non-numeric count parse preservation
+  - 범위: `fills@count`를 숫자 대신 문자열로 깨뜨린 입력을 dirty save 회귀로 추가해서, fills count parser malformed case를 `Parse`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b235 DONE` styles borders non-numeric count parse preservation
+  - 범위: `borders@count`를 숫자 대신 문자열로 깨뜨린 입력을 dirty save 회귀로 추가해서, borders count parser malformed case를 `Parse`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b236 DONE` styles tableStyles non-numeric count parse preservation
+  - 범위: `tableStyles@count`를 숫자 대신 문자열로 깨뜨린 입력을 dirty save 회귀로 추가해서, tableStyles count parser malformed case를 `Parse`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b237 DONE` styles dxfs non-numeric count parse preservation
+  - 범위: `dxfs@count`를 숫자 대신 문자열로 깨뜨린 입력을 dirty save 회귀로 추가해서, dxfs count parser malformed case를 `Parse`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b238 DONE` styles cellXfs count-attr presence preservation
+  - 범위: `cellXfs@count` attr key 자체를 제거한 dirty save 회귀를 추가하고 typed summary가 count-attr presence도 보존하도록 올려서, malformed/non-numeric뿐 아니라 attr deletion도 fail-fast로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b239 DONE` styles cellStyles count-attr presence preservation
+  - 범위: `cellStyles@count` attr key 자체를 제거한 dirty save 회귀를 추가하고 typed summary가 count-attr presence도 보존하도록 올려서, count attr deletion을 fail-fast로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b240 DONE` styles cellStyleXfs count-attr presence preservation
+  - 범위: `cellStyleXfs@count` attr key 자체를 제거한 dirty save 회귀를 추가하고 typed summary가 count-attr presence도 보존하도록 올려서, count attr deletion을 fail-fast로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b241 DONE` styles numFmts count-attr presence preservation
+  - 범위: `numFmts@count` attr key 자체를 제거한 dirty save 회귀를 추가하고 typed summary가 count-attr presence도 보존하도록 올려서, count attr deletion을 fail-fast로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b242 DONE` styles fonts count-attr presence preservation
+  - 범위: `fonts@count` attr key 자체를 제거한 dirty save 회귀를 추가하고 typed summary가 count-attr presence도 보존하도록 올려서, count attr deletion을 fail-fast로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b243 DONE` styles fills count-attr presence preservation
+  - 범위: `fills@count` attr key 자체를 제거한 dirty save 회귀를 추가하고 typed summary가 count-attr presence도 보존하도록 올려서, count attr deletion을 fail-fast로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b244 DONE` styles borders count-attr presence preservation
+  - 범위: `borders@count` attr key 자체를 제거한 dirty save 회귀를 추가하고 typed summary가 count-attr presence도 보존하도록 올려서, count attr deletion을 fail-fast로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b245 DONE` styles tableStyles count-attr presence preservation
+  - 범위: `tableStyles@count` attr key 자체를 제거한 dirty save 회귀를 추가하고 typed summary가 count-attr presence도 보존하도록 올려서, count attr deletion을 fail-fast로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b246 DONE` styles dxfs count-attr presence preservation
+  - 범위: `dxfs@count` attr key 자체를 제거한 dirty save 회귀를 추가하고 typed summary가 count-attr presence도 보존하도록 올려서, count attr deletion을 fail-fast로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b247 DONE` styles base count-attr positive-load preservation
+  - 범위: 기본 `styles.xml` load assertion에 `fonts/fills/borders/cellStyleXfs/cellStyles/tableStyles/cellXfs`의 count-attr presence flag와 `numFmts/dxfs` absence flag를 추가해서, 새 typed summary 필드가 positive-load path에서도 실제로 채워지는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b248 DONE` styles numFmts and dxfs count-attr positive-load preservation
+  - 범위: custom `numFmt`와 empty `dxfs` load assertion에 count-attr presence flag를 추가해서, optional count-bearing container의 positive-load path도 typed summary로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b249 DONE` styles colors-child boolean positive-load preservation
+  - 범위: `colors` child sequence load assertion에 `has_indexed_colors/has_mru_colors` boolean도 함께 검증해서, child order뿐 아니라 presence flags도 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b250 DONE` styles tableStyles false-path positive-load preservation
+  - 범위: `<tableStyles/>`를 제거한 `styles.xml` load test를 추가해서, `table_styles.is_none()`와 count-attr absence가 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b251 DONE` theme objectDefaults false-path positive-load preservation
+  - 범위: `<a:objectDefaults/>`를 제거한 `theme1.xml` load test를 추가해서, `root_child_names`와 `has_object_defaults=false`가 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b252 DONE` styles fill-child parent-boundary parse preservation
+  - 범위: `fills` 바로 아래에 `patternFill`을 orphan으로 두는 dirty save 회귀를 추가해서, fill child outside `<fill>` malformed branch를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b253 DONE` styles alignment parent-boundary parse preservation
+  - 범위: `cellXfs` 아래 `xf` 대신 wrapper를 두고 그 안에 `alignment`를 넣는 dirty save 회귀를 추가해서, `<alignment>` outside `<xf>` malformed branch를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b254 DONE` styles duplicate indexedColors parse preservation
+  - 범위: `colors` 아래 `indexedColors`를 중복 추가한 dirty save 회귀를 추가해서, duplicate `<indexedColors>` malformed branch를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b255 DONE` styles duplicate mruColors parse preservation
+  - 범위: `colors` 아래 `mruColors`를 중복 추가한 dirty save 회귀를 추가해서, duplicate `<mruColors>` malformed branch를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b256 DONE` styles dxfs count mismatch parse preservation
+  - 범위: `dxfs@count`를 실제 entry 수와 다르게 깨뜨린 dirty save 회귀를 추가해서, dxfs count mismatch malformed branch를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b257 DONE` styles dxf-child parent-boundary parse preservation
+  - 범위: `dxfs` 바로 아래에 `numFmt`를 orphan으로 두는 dirty save 회귀를 추가해서, dxf child outside `<dxf>` malformed branch를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b258 DONE` styles font-child parent-boundary parse preservation
+  - 범위: `fonts` 아래 `font` 대신 wrapper를 두고 그 안에 `name` child를 넣는 dirty save 회귀를 추가해서, font child outside `<font>` malformed branch를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b259 DONE` styles border-child parent-boundary parse preservation
+  - 범위: `borders` 아래 `border` 대신 wrapper를 두고 그 안에 `left` child를 넣는 dirty save 회귀를 추가해서, border child outside `<border>` malformed branch를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b260 DONE` styles protection parent-boundary parse preservation
+  - 범위: `cellStyleXfs` 아래 `xf` 대신 wrapper를 두고 그 안에 `protection` child를 넣는 dirty save 회귀를 추가해서, `<protection>` outside `<xf>` malformed branch를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b261 DONE` styles cellStyle iLevel addition preservation
+  - 범위: baseline `cellStyle`에 `iLevel="1"`을 추가하는 dirty save 회귀를 추가해서, existing removal/value-drift coverage와 대칭으로 pure addition-side attr drift도 fail-fast로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b262 DONE` styles tableStyle pivot addition preservation
+  - 범위: `table="1"`만 있던 `tableStyle` entry에 `pivot="1"`을 추가하는 dirty save 회귀를 추가해서, tableStyle attr-map의 pure addition-side drift를 fail-fast로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b263 DONE` styles tableStyle table addition preservation
+  - 범위: `pivot="1"`만 있던 `tableStyle` entry에 `table="1"`을 추가하는 dirty save 회귀를 추가해서, tableStyle attr-map의 반대편 addition-side drift도 fail-fast로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b264 DONE` theme optional-root combination positive-load preservation
+  - 범위: `objectDefaults + extraClrSchemeLst + custClrLst + extLst`가 함께 있는 `theme1.xml` load 회귀를 추가해서, root child sequence와 optional-root presence booleans가 조합 상태에서도 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b265 DONE` theme optional-root false-path combination positive-load preservation
+  - 범위: `objectDefaults` 없이 `extraClrSchemeLst + custClrLst + extLst`만 있는 `theme1.xml` load 회귀를 추가해서, false-path와 remaining optional-root presence booleans의 독립성을 typed summary로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b266 DONE` styles optional-root combination positive-load preservation
+  - 범위: `colors + dxfs + extLst + tableStyles`가 함께 있는 `styles.xml` load 회귀를 추가해서, root child sequence와 optional container/count-attr booleans가 조합 상태에서도 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b267 DONE` styles optional-root false-path combination positive-load preservation
+  - 범위: `tableStyles` 없이 `colors + dxfs + extLst`만 있는 `styles.xml` load 회귀를 추가해서, optional container false-path와 remaining presence/count-attr booleans의 독립성을 typed summary로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b268 DONE` styles tableStyles defaultTableStyle false-path positive-load preservation
+  - 범위: `tableStyle` entries는 유지한 채 `defaultTableStyle`만 제거한 `styles.xml` load 회귀를 추가해서, `default_table_style=None`과 entry attr-map 보존이 typed summary에 독립적으로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b269 DONE` styles tableStyles defaultPivotStyle false-path positive-load preservation
+  - 범위: `tableStyle` entries는 유지한 채 `defaultPivotStyle`만 제거한 `styles.xml` load 회귀를 추가해서, `default_pivot_style=None`과 entry attr-map 보존이 typed summary에 독립적으로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b270 DONE` styles cellStyle hidden positive-load preservation
+  - 범위: baseline `cellStyle`에 `hidden="1"`을 추가한 `styles.xml` load 회귀를 추가해서, `hidden` semantic field와 attr_map이 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b271 DONE` styles cellStyle customBuiltin positive-load preservation
+  - 범위: baseline `cellStyle`에 `customBuiltin="1"`을 추가한 `styles.xml` load 회귀를 추가해서, `custom_builtin` semantic field와 attr_map이 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b272 DONE` styles tableStyles dual-default false-path positive-load preservation
+  - 범위: `tableStyle` entries는 유지한 채 `defaultTableStyle/defaultPivotStyle`를 둘 다 제거한 `styles.xml` load 회귀를 추가해서, 두 optional default field가 동시에 `None`이어도 entry attr-map 보존이 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b273 DONE` styles tableStyle combined attr-map positive-load preservation
+  - 범위: single `tableStyle` entry에 `table="1" + pivot="1"`을 함께 넣은 `styles.xml` load 회귀를 추가해서, combined attr-map이 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b274 DONE` styles cellStyle builtinId false-path positive-load preservation
+  - 범위: baseline `cellStyle`에서 `builtinId`만 제거한 `styles.xml` load 회귀를 추가해서, `builtin_id=None` false-path와 attr_map 축소가 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b275 DONE` styles cellStyle hidden+customBuiltin mixed positive-load preservation
+  - 범위: baseline `cellStyle`에 `hidden="1" + customBuiltin="1"`을 함께 넣은 `styles.xml` load 회귀를 추가해서, mixed semantic booleans와 attr_map이 typed summary에 동시에 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b276 DONE` styles tableStyle explicit-zero attr-map positive-load preservation
+  - 범위: existing `tableStyle` entries의 `table/pivot`를 `"1"` 대신 `"0"`으로 둔 `styles.xml` load 회귀를 추가해서, explicit false-path attr values도 typed summary attr_map에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b277 DONE` styles cellStyle explicit-false flags positive-load preservation
+  - 범위: baseline `cellStyle`에 `customBuiltin="0" + hidden="0"`을 함께 넣은 `styles.xml` load 회귀를 추가해서, false semantic booleans와 explicit false attr_map이 동시에 typed summary에 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b278 DONE` styles dxfs multi-entry positive-load preservation
+  - 범위: `numFmt` dxf와 nested `font(color,name)` dxf가 함께 있는 `styles.xml` load 회귀를 추가해서, multi-entry `dxfs` order/count와 per-entry child+nested summary가 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b279 DONE` styles xf attrs-without-apply-flags positive-load preservation
+  - 범위: `alignment/protection` child는 유지하되 `applyAlignment/applyProtection`는 제거한 `cellStyleXf/cellXf` load 회귀를 추가해서, child attr_map과 apply-flag false-path가 독립적으로 typed summary에 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b280 DONE` styles xf font/border apply-flags positive-load preservation
+  - 범위: `cellStyleXf/cellXf`에 `applyFont="1" + applyBorder="1"`을 추가한 `styles.xml` load 회귀를 추가해서, 기존 number/fill/alignment/protection 외의 apply flags와 `xfId`/child absence false-path가 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b281 DONE` theme theme-name false-path positive-load preservation
+  - 범위: root `<a:theme>`의 `name` attr를 제거한 `theme1.xml` load 회귀를 추가해서, `theme_name=None` false-path와 root child sequence 보존이 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b282 DONE` theme color-scheme-name false-path positive-load preservation
+  - 범위: `<a:clrScheme>`의 `name` attr를 제거한 `theme1.xml` load 회귀를 추가해서, `color_scheme_name=None` false-path가 sibling scheme name들과 독립적으로 typed summary에 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b283 DONE` theme font-scheme-name false-path positive-load preservation
+  - 범위: `<a:fontScheme>`의 `name` attr를 제거한 `theme1.xml` load 회귀를 추가해서, `font_scheme_name=None` false-path가 remaining scheme name들과 독립적으로 typed summary에 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b284 DONE` theme format-scheme-name false-path positive-load preservation
+  - 범위: `<a:fmtScheme>`의 `name` attr를 제거한 `theme1.xml` load 회귀를 추가해서, `format_scheme_name=None` false-path가 remaining scheme name들과 독립적으로 typed summary에 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b285 DONE` styles xf explicit-false font/border flags positive-load preservation
+  - 범위: `cellStyleXf/cellXf`에 `applyFont="0" + applyBorder="0"`을 명시한 `styles.xml` load 회귀를 추가해서, explicit false attr와 `apply_number_format`/`xfId` 보존이 typed summary에 독립적으로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b286 DONE` styles cellXf missing-xfId mixed positive-load preservation
+  - 범위: `alignment/protection` child와 apply flags는 유지하되 `cellXf`의 `xfId`만 제거한 `styles.xml` load 회귀를 추가해서, `xf_id=None` false-path와 child attr_map 보존이 동시에 typed summary에 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b287 DONE` styles xf alignment-only mixed positive-load preservation
+  - 범위: `cellStyleXf/cellXf`에서 `protection` child와 `applyProtection`만 제거한 `styles.xml` load 회귀를 추가해서, `alignment_attrs` 보존과 `apply_protection=false`/`protection_attrs=None` mixed state가 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b288 DONE` styles xf protection-only mixed positive-load preservation
+  - 범위: `cellStyleXf/cellXf`에서 `alignment` child와 `applyAlignment`만 제거한 `styles.xml` load 회귀를 추가해서, `protection_attrs` 보존과 `apply_alignment=false`/`alignment_attrs=None` mixed state가 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b289 DONE` styles xf alignment-only false-flag positive-load preservation
+  - 범위: `alignment` child만 남기고 `applyAlignment/applyProtection`를 둘 다 제거한 `styles.xml` load 회귀를 추가해서, child attr-map 보존과 dual false apply-flag state의 독립성이 typed summary에 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b290 DONE` styles xf protection-only false-flag positive-load preservation
+  - 범위: `protection` child만 남기고 `applyAlignment/applyProtection`를 둘 다 제거한 `styles.xml` load 회귀를 추가해서, child attr-map 보존과 dual false apply-flag state의 독립성이 typed summary에 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b291 DONE` styles dxfs multi-entry no-count positive-load preservation
+  - 범위: multi-entry `dxfs`에서 `count` attr만 제거한 `styles.xml` load 회귀를 추가해서, `has_dxfs_count_attr=false` false-path와 multi-entry `DxfSummary` vector 보존이 typed summary에 동시에 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b292 DONE` styles dxfs empty-entry vector positive-load preservation
+  - 범위: empty `dxf` entry와 populated `dxf` entry가 함께 있는 `styles.xml` load 회귀를 추가해서, 빈 entry의 empty summary와 trailing populated summary가 순서대로 typed summary에 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b293 DONE` styles cellStyleXf number/fill explicit-false positive-load preservation
+  - 범위: `cellStyleXfs`에 `applyNumberFormat="0" + applyFill="1"`와 `applyNumberFormat="1" + applyFill="0"`를 각각 둔 load 회귀를 추가해서, `apply_number_format`/`apply_fill` explicit-false independence가 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b294 DONE` styles cellXf number/fill explicit-false positive-load preservation
+  - 범위: existing `cellXf` entries에 opposite explicit false attr를 얹은 load 회귀를 추가해서, `apply_number_format`/`apply_fill` explicit-false independence가 `cellXfs` vector에서도 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b295 DONE` styles cellStyleXf number-format-only positive-load preservation
+  - 범위: `workbook_with_cell_style_xf_apply_flags` fixture에서 `applyFill`만 제거한 `styles.xml` load 회귀를 추가해서, `apply_number_format=true`와 `apply_fill=false` one-sided mixed state가 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b296 DONE` styles cellStyleXf fill-only positive-load preservation
+  - 범위: 같은 fixture에서 `applyNumberFormat`만 제거한 `styles.xml` load 회귀를 추가해서, `apply_fill=true`와 `apply_number_format=false` one-sided mixed state가 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b297 DONE` styles cellStyleXf dual explicit-false number/fill positive-load preservation
+  - 범위: 같은 fixture의 `applyNumberFormat/applyFill`를 둘 다 `"0"`으로 바꾼 `styles.xml` load 회귀를 추가해서, dual explicit false attr values가 typed summary boolean false-path로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b298 DONE` styles cellXf dual explicit-false number/fill positive-load preservation
+  - 범위: baseline `cellXf` entries의 `applyNumberFormat/applyFill`를 둘 다 `"0"`으로 바꾼 `styles.xml` load 회귀를 추가해서, dual explicit false attr values와 unchanged ids가 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b299 DONE` styles xf font-only positive-load preservation
+  - 범위: `cellStyleXf/cellXf`에 `applyFont`만 추가한 `styles.xml` load 회귀를 추가해서, `apply_font=true`와 `apply_border=false` one-sided mixed state가 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b300 DONE` styles xf border-only positive-load preservation
+  - 범위: `cellStyleXf/cellXf`에 `applyBorder`만 추가한 `styles.xml` load 회귀를 추가해서, `apply_border=true`와 `apply_font=false` one-sided mixed state가 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b301 DONE` styles cellStyleXf font/border explicit-false independence positive-load preservation
+  - 범위: `cellStyleXfs`에 `applyFont="0" + applyBorder="1"`와 `applyFont="1" + applyBorder="0"`를 각각 둔 load 회귀를 추가해서, `apply_font`/`apply_border` explicit-false independence가 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b302 DONE` styles cellXf font/border explicit-false independence positive-load preservation
+  - 범위: existing `cellXf` entries에 opposite explicit false attr를 얹은 load 회귀를 추가해서, `apply_font`/`apply_border` explicit-false independence가 `cellXfs` vector에서도 typed summary에 그대로 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b303 DONE` styles dxfs trailing-empty vector positive-load preservation
+  - 범위: populated `dxf` 뒤에 empty `dxf`가 오는 `styles.xml` load 회귀를 추가해서, trailing empty entry summary도 vector 순서대로 typed summary에 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b304 DONE` styles dxfs empty-leading no-count positive-load preservation
+  - 범위: empty-leading multi-entry `dxfs`에서 `count` attr를 제거한 `styles.xml` load 회귀를 추가해서, empty entry summary와 `has_dxfs_count_attr=false` false-path가 동시에 typed summary에 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b305 DONE` styles dxfs trailing-empty no-count positive-load preservation
+  - 범위: trailing-empty multi-entry `dxfs`에서 `count` attr를 제거한 `styles.xml` load 회귀를 추가해서, trailing empty entry summary와 no-count false-path가 동시에 typed summary에 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b306 DONE` styles dxfs multi-entry nested-attr preservation
+  - 범위: two-entry `dxfs` fixture를 load한 뒤 second `dxf > font > color@rgb`를 바꿔도 dirty save가 fail-fast로 막히는지 회귀를 추가해서, per-entry nested attr-map drift가 multi-entry vector에서도 그대로 검출되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b307 DONE` styles dxfs multi-entry second-entry name preservation
+  - 범위: two-entry `dxfs` fixture를 load한 뒤 second `dxf`의 direct child를 `font`에서 `fill`로 바꿔도 dirty save가 fail-fast로 막히는지 회귀를 추가해서, per-entry child-name drift가 trailing entry에서도 그대로 검출되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b308 DONE` styles dxfs multi-entry set preservation
+  - 범위: two-entry `dxfs` fixture를 load한 뒤 trailing `dxf` entry를 통째로 삭제하고 `count`도 맞춰도 dirty save가 fail-fast로 막히는지 회귀를 추가해서, parser count mismatch와 별개로 `dxfs` vector set drift를 typed summary에서 검출하도록 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b309 DONE` styles dxfs multi-entry order preservation
+  - 범위: two-entry `dxfs` fixture를 load한 뒤 two `dxf` entry 순서를 뒤집어도 dirty save가 fail-fast로 막히는지 회귀를 추가해서, multi-entry `dxfs` vector order drift도 typed summary에서 검출되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b310 DONE` styles dxfs empty-populated-empty vector positive-load preservation
+  - 범위: empty/populated/empty 3-entry `dxfs` load 회귀를 추가해서, middle populated entry와 양끝 empty entry가 vector 순서대로 typed summary에 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b311 DONE` styles dxfs empty-populated-empty no-count positive-load preservation
+  - 범위: 같은 3-entry `dxfs`에서 `count` attr를 제거한 load 회귀를 추가해서, empty-edge vector 보존과 `has_dxfs_count_attr=false` false-path가 동시에 typed summary에 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b312 DONE` styles dxfs populated-empty-populated vector positive-load preservation
+  - 범위: populated/empty/populated 3-entry `dxfs` load 회귀를 추가해서, middle empty entry가 populated neighbors 사이에서도 vector 순서대로 typed summary에 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b313 DONE` styles dxfs populated-empty-populated no-count positive-load preservation
+  - 범위: 같은 3-entry `dxfs`에서 `count` attr를 제거한 load 회귀를 추가해서, middle empty entry 보존과 `has_dxfs_count_attr=false` false-path가 동시에 typed summary에 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b314 DONE` styles cellXf without-xfId alignment-only positive-load preservation
+  - 범위: `xfId` 없는 `cellXf`에서 `alignment`만 남기고 `protection`을 제거한 load 회귀를 추가해서, `xf_id=None` 상태에서도 one-sided alignment summary가 정확히 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b315 DONE` styles cellXf without-xfId protection-only positive-load preservation
+  - 범위: `xfId` 없는 `cellXf`에서 `protection`만 남기고 `alignment`를 제거한 load 회귀를 추가해서, `xf_id=None` 상태에서도 one-sided protection summary가 정확히 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b316 DONE` styles cellXf without-xfId alignment-only flagless positive-load preservation
+  - 범위: `xfId` 없는 `cellXf`에서 apply flags 없이 `alignment` child만 남기는 load 회귀를 추가해서, `apply_alignment=false`와 retained alignment attr-map이 함께 반영되는 false-path를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b317 DONE` styles cellXf without-xfId protection-only flagless positive-load preservation
+  - 범위: `xfId` 없는 `cellXf`에서 apply flags 없이 `protection` child만 남기는 load 회귀를 추가해서, `apply_protection=false`와 retained protection attr-map이 함께 반영되는 false-path를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b318 DONE` styles cellXf without-xfId alignment-only save drift rejection
+  - 범위: `xfId` 없는 alignment-only `cellXf`를 load한 뒤 alignment attr drift를 주는 dirty-save 회귀를 추가해서, same family의 no-`xfId` summary drift도 fail-fast로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b319 DONE` styles cellXf without-xfId protection-only save drift rejection
+  - 범위: `xfId` 없는 protection-only `cellXf`를 load한 뒤 protection attr drift를 주는 dirty-save 회귀를 추가해서, no-`xfId` protection branch의 save-side typed summary drift도 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b320 DONE` styles cellXf without-xfId alignment-only flagless apply drift rejection
+  - 범위: `xfId` 없는 flagless alignment-only `cellXf`를 load한 뒤 `applyAlignment`를 추가하는 dirty-save 회귀를 추가해서, false-path boolean drift가 no-`xfId` branch에서도 fail-fast로 막히는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b321 DONE` styles cellXf without-xfId protection-only flagless apply drift rejection
+  - 범위: `xfId` 없는 flagless protection-only `cellXf`를 load한 뒤 `applyProtection`를 추가하는 dirty-save 회귀를 추가해서, false-path boolean drift가 no-`xfId` branch에서도 fail-fast로 막히는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b322 DONE` styles cellXf without-xfId alignment+protection flagless positive-load preservation
+  - 범위: `xfId` 없는 `cellXf`에서 apply flags 없이 `alignment/protection` child를 함께 유지하는 load 회귀를 추가해서, dual false apply flags와 retained two-child attr-map이 동시에 typed summary에 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b323 DONE` styles cellXf without-xfId alignment+protection explicit-false positive-load preservation
+  - 범위: `xfId` 없는 `cellXf`에서 `applyAlignment="0" applyProtection="0"`과 두 child를 함께 유지하는 load 회귀를 추가해서, explicit-false dual boolean과 retained attr-map이 동시에 typed summary에 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b324 DONE` styles cellXf without-xfId alignment-false protection-true positive-load preservation
+  - 범위: `xfId` 없는 `cellXf`에서 `applyAlignment="0" applyProtection="1"`과 두 child를 함께 유지하는 load 회귀를 추가해서, explicit-false independence와 retained two-child attr-map이 함께 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b325 DONE` styles cellXf without-xfId alignment-true protection-false positive-load preservation
+  - 범위: `xfId` 없는 `cellXf`에서 `applyAlignment="1" applyProtection="0"`과 두 child를 함께 유지하는 load 회귀를 추가해서, 반대 방향 explicit-false independence와 retained two-child attr-map이 함께 반영되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b326 DONE` styles cellXf without-xfId alignment+protection flagless applyAlignment drift rejection
+  - 범위: `xfId` 없는 dual-child flagless `cellXf`를 load한 뒤 `applyAlignment`를 추가하는 dirty-save 회귀를 추가해서, dual-child false-path boolean drift가 save-side에서도 fail-fast로 막히는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b327 DONE` styles cellXf without-xfId alignment+protection flagless applyProtection drift rejection
+  - 범위: `xfId` 없는 dual-child flagless `cellXf`를 load한 뒤 `applyProtection`를 추가하는 dirty-save 회귀를 추가해서, 같은 branch의 opposite boolean drift도 fail-fast로 막히는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b328 DONE` styles cellXf without-xfId alignment+protection explicit-false applyAlignment drift rejection
+  - 범위: `xfId` 없는 explicit-false dual-child `cellXf`를 load한 뒤 `applyAlignment="0"`을 `"1"`로 바꾸는 dirty-save 회귀를 추가해서, explicit-false branch의 boolean drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b329 DONE` styles cellXf without-xfId alignment+protection explicit-false applyProtection drift rejection
+  - 범위: `xfId` 없는 explicit-false dual-child `cellXf`를 load한 뒤 `applyProtection="0"`을 `"1"`로 바꾸는 dirty-save 회귀를 추가해서, 같은 explicit-false branch의 opposite boolean drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b330 DONE` styles cellXf without-xfId alignment-false protection-true applyAlignment drift rejection
+  - 범위: `xfId` 없는 mixed explicit-false `cellXf`에서 `applyAlignment="0"`을 `"1"`로 바꾸는 dirty-save 회귀를 추가해서, mixed branch의 false-side boolean drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b331 DONE` styles cellXf without-xfId alignment-true protection-false applyProtection drift rejection
+  - 범위: `xfId` 없는 mixed explicit-false `cellXf`에서 `applyProtection="0"`을 `"1"`로 바꾸는 dirty-save 회귀를 추가해서, opposite mixed branch의 false-side boolean drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b332 DONE` styles cellXf without-xfId alignment+protection flagless alignment-child removal rejection
+  - 범위: `xfId` 없는 dual-child flagless `cellXf`에서 `alignment` child를 제거하는 dirty-save 회귀를 추가해서, same branch의 child set drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b333 DONE` styles cellXf without-xfId alignment+protection flagless protection-child removal rejection
+  - 범위: `xfId` 없는 dual-child flagless `cellXf`에서 `protection` child를 제거하는 dirty-save 회귀를 추가해서, opposite child set drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b334 DONE` styles cellXf without-xfId alignment+protection explicit-false duplicate-alignment rejection
+  - 범위: `xfId` 없는 explicit-false dual-child `cellXf`에서 `alignment` child를 duplicate시키는 dirty-save 회귀를 추가해서, no-`xfId` explicit-false branch의 duplicate child rejection을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b335 DONE` styles cellXf without-xfId alignment+protection explicit-false duplicate-protection rejection
+  - 범위: `xfId` 없는 explicit-false dual-child `cellXf`에서 `protection` child를 duplicate시키는 dirty-save 회귀를 추가해서, 같은 branch의 opposite duplicate child rejection을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b336 DONE` styles cellXf without-xfId alignment-only vertical attr removal rejection
+  - 범위: `xfId` 없는 alignment-only `cellXf`를 load한 뒤 `alignment@vertical` key를 제거하는 dirty-save 회귀를 추가해서, no-`xfId` alignment attr-key drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b337 DONE` styles cellXf without-xfId protection-only locked attr removal rejection
+  - 범위: `xfId` 없는 protection-only `cellXf`를 load한 뒤 `protection@locked` key를 제거하는 dirty-save 회귀를 추가해서, no-`xfId` protection attr-key drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b338 DONE` styles cellXf without-xfId alignment+protection flagless vertical attr removal rejection
+  - 범위: `xfId` 없는 dual-child flagless `cellXf`를 load한 뒤 `alignment@vertical` key를 제거하는 dirty-save 회귀를 추가해서, dual-child false-path branch의 attr-key drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b339 DONE` styles cellXf without-xfId alignment+protection explicit-false locked attr removal rejection
+  - 범위: `xfId` 없는 explicit-false dual-child `cellXf`를 load한 뒤 `protection@locked` key를 제거하는 dirty-save 회귀를 추가해서, explicit-false dual-child branch의 attr-key drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b340 DONE` styles cellXf without-xfId alignment-only horizontal attr removal rejection
+  - 범위: `xfId` 없는 alignment-only `cellXf`를 load한 뒤 `alignment@horizontal` key를 제거하는 dirty-save 회귀를 추가해서, no-`xfId` alignment attr-key drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b341 DONE` styles cellXf without-xfId alignment+protection flagless horizontal attr removal rejection
+  - 범위: `xfId` 없는 dual-child flagless `cellXf`를 load한 뒤 `alignment@horizontal` key를 제거하는 dirty-save 회귀를 추가해서, dual-child false-path branch의 opposite alignment attr-key drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b342 DONE` styles cellXf without-xfId alignment+protection explicit-false horizontal attr removal rejection
+  - 범위: `xfId` 없는 explicit-false dual-child `cellXf`를 load한 뒤 `alignment@horizontal` key를 제거하는 dirty-save 회귀를 추가해서, explicit-false dual-child branch의 opposite alignment attr-key drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b343 DONE` styles cellXf without-xfId alignment-false protection-true horizontal attr removal rejection
+  - 범위: `xfId` 없는 mixed explicit-false `cellXf`를 load한 뒤 `alignment@horizontal` key를 제거하는 dirty-save 회귀를 추가해서, mixed explicit-false branch의 alignment attr-key drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b344 DONE` styles cellXf without-xfId alignment+protection flagless locked attr removal rejection
+  - 범위: `xfId` 없는 dual-child flagless `cellXf`를 load한 뒤 `protection@locked` key를 제거하는 dirty-save 회귀를 추가해서, dual-child false-path branch의 protection attr-key drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b345 DONE` styles cellXf without-xfId alignment+protection explicit-false vertical attr removal rejection
+  - 범위: `xfId` 없는 explicit-false dual-child `cellXf`를 load한 뒤 `alignment@vertical` key를 제거하는 dirty-save 회귀를 추가해서, explicit-false dual-child branch의 remaining alignment attr-key drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b346 DONE` styles cellXf without-xfId alignment-false protection-true vertical attr removal rejection
+  - 범위: `xfId` 없는 mixed explicit-false `cellXf`를 load한 뒤 `alignment@vertical` key를 제거하는 dirty-save 회귀를 추가해서, mixed branch의 remaining alignment attr-key drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b347 DONE` styles cellXf without-xfId alignment-false protection-true locked attr removal rejection
+  - 범위: `xfId` 없는 mixed explicit-false `cellXf`를 load한 뒤 `protection@locked` key를 제거하는 dirty-save 회귀를 추가해서, same mixed branch의 protection attr-key drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b348 DONE` styles cellXf without-xfId alignment-true protection-false locked attr removal rejection
+  - 범위: `xfId` 없는 opposite mixed explicit-false `cellXf`를 load한 뒤 `protection@locked` key를 제거하는 dirty-save 회귀를 추가해서, opposite mixed branch의 protection attr-key drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b349 DONE` styles cellXf without-xfId alignment+protection flagless duplicate-alignment rejection
+  - 범위: `xfId` 없는 dual-child flagless `cellXf`에서 `alignment` child를 duplicate시키는 dirty-save 회귀를 추가해서, same branch의 duplicate child rejection을 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b350 DONE` styles cellXf without-xfId alignment+protection flagless duplicate-protection rejection
+  - 범위: `xfId` 없는 dual-child flagless `cellXf`에서 `protection` child를 duplicate시키는 dirty-save 회귀를 추가해서, same branch의 opposite duplicate child rejection을 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b351 DONE` styles cellXf without-xfId alignment-only duplicate-alignment rejection
+  - 범위: `xfId` 없는 alignment-only `cellXf`에서 `alignment` child를 duplicate시키는 dirty-save 회귀를 추가해서, single-child no-`xfId` branch의 duplicate child rejection을 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b352 DONE` styles cellXf without-xfId protection-only duplicate-protection rejection
+  - 범위: `xfId` 없는 protection-only `cellXf`에서 `protection` child를 duplicate시키는 dirty-save 회귀를 추가해서, opposite single-child no-`xfId` branch의 duplicate child rejection을 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b353 DONE` styles cellXf without-xfId alignment-true protection-false vertical attr removal rejection
+  - 범위: `xfId` 없는 opposite mixed explicit-false `cellXf`를 load한 뒤 `alignment@vertical` key를 제거하는 dirty-save 회귀를 추가해서, opposite mixed branch의 remaining alignment attr-key drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b354 DONE` styles cellXf without-xfId alignment-true protection-false horizontal attr removal rejection
+  - 범위: `xfId` 없는 opposite mixed explicit-false `cellXf`를 load한 뒤 `alignment@horizontal` key를 제거하는 dirty-save 회귀를 추가해서, opposite mixed branch의 opposite alignment attr-key drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b355 DONE` styles cellXf without-xfId alignment-false protection-true alignment child removal rejection
+  - 범위: `xfId` 없는 mixed explicit-false `cellXf`를 load한 뒤 false-side `alignment` child를 제거하는 dirty-save 회귀를 추가해서, same mixed branch의 child-set drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b356 DONE` styles cellXf without-xfId alignment-true protection-false protection child removal rejection
+  - 범위: `xfId` 없는 opposite mixed explicit-false `cellXf`를 load한 뒤 false-side `protection` child를 제거하는 dirty-save 회귀를 추가해서, opposite mixed branch의 child-set drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b357 DONE` styles cellXf without-xfId alignment-false protection-true duplicate-alignment rejection
+  - 범위: `xfId` 없는 mixed explicit-false `cellXf`에서 false-side `alignment` child를 duplicate시키는 dirty-save 회귀를 추가해서, same mixed branch의 duplicate child rejection을 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b358 DONE` styles cellXf without-xfId alignment-true protection-false duplicate-protection rejection
+  - 범위: `xfId` 없는 opposite mixed explicit-false `cellXf`에서 false-side `protection` child를 duplicate시키는 dirty-save 회귀를 추가해서, opposite mixed branch의 duplicate child rejection을 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b359 DONE` theme optional object-defaults alternate name-drift to extra-color-scheme-list preservation
+  - 범위: `theme1.xml`의 root-level `<objectDefaults/>`를 `<extraClrSchemeLst/>`로 바꾸는 dirty-save 회귀를 추가해서, optional root child same-count name drift permutation을 더 촘촘히 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b360 DONE` theme optional object-defaults alternate name-drift to custom-color-list preservation
+  - 범위: `theme1.xml`의 root-level `<objectDefaults/>`를 `<custClrLst/>`로 바꾸는 dirty-save 회귀를 추가해서, optional root child same-count name drift permutation을 더 촘촘히 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b361 DONE` theme optional extension-list alternate name-drift to object-defaults preservation
+  - 범위: `theme1.xml`에 optional `<extLst/>`가 이미 있는 상태에서 이를 `<objectDefaults/>`로 바꾸는 dirty-save 회귀를 추가해서, optional root child same-count name drift permutation을 더 촘촘히 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b362 DONE` theme optional extra-color-scheme-list alternate name-drift to object-defaults preservation
+  - 범위: `theme1.xml`에 optional `<extraClrSchemeLst/>`가 이미 있는 상태에서 이를 `<objectDefaults/>`로 바꾸는 dirty-save 회귀를 추가해서, optional root child same-count name drift permutation을 더 촘촘히 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b363 DONE` theme optional custom-color-list alternate name-drift to object-defaults preservation
+  - 범위: `theme1.xml`에 optional `<custClrLst/>`가 이미 있는 상태에서 이를 `<objectDefaults/>`로 바꾸는 dirty-save 회귀를 추가해서, optional root child same-count name drift permutation을 더 촘촘히 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b364 DONE` styles multi-entry custom numFmt entry-removal preservation
+  - 범위: 두 개의 custom `numFmt` entry가 있는 `styles.xml` fixture를 load한 뒤 trailing `<numFmt .../>` entry를 통째로 제거하는 dirty-save 회귀를 추가해서, multi-entry custom numFmt set drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b365 DONE` styles multi-entry custom numFmt trailing-id drift preservation
+  - 범위: 두 개의 custom `numFmt` entry가 있는 `styles.xml` fixture를 load한 뒤 second entry의 `numFmtId`를 다른 unique 값으로 바꾸는 dirty-save 회귀를 추가해서, multi-entry custom numFmt trailing-id drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b366 DONE` styles multi-entry custom numFmt first-formatCode drift preservation
+  - 범위: 두 개의 custom `numFmt` entry가 있는 `styles.xml` fixture를 load한 뒤 first entry의 `formatCode`를 바꾸는 dirty-save 회귀를 추가해서, multi-entry custom numFmt leading format drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b367 DONE` styles multi-entry custom numFmt second-formatCode drift preservation
+  - 범위: 두 개의 custom `numFmt` entry가 있는 `styles.xml` fixture를 load한 뒤 second entry의 `formatCode`를 바꾸는 dirty-save 회귀를 추가해서, multi-entry custom numFmt trailing format drift를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b368 DONE` styles multi-entry custom numFmt leading-id drift to undefined-reference rejection
+  - 범위: 두 개의 custom `numFmt` entry가 있는 `styles.xml` fixture를 load한 뒤 first entry의 `numFmtId`를 다른 unique 값으로 바꾸는 dirty-save 회귀를 추가해서, referencing `xf`가 stale custom numFmtId를 가리킬 때 fail-fast로 막음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b369 DONE` styles multi-entry custom numFmt trailing-formatCode missing rejection
+  - 범위: 두 개의 custom `numFmt` entry가 있는 `styles.xml` fixture를 load한 뒤 second entry의 `formatCode`를 제거하는 dirty-save 회귀를 추가해서, trailing custom numFmt의 malformed missing-formatCode branch를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b370 DONE` styles multi-entry custom numFmt trailing-formatCode empty rejection
+  - 범위: 두 개의 custom `numFmt` entry가 있는 `styles.xml` fixture를 load한 뒤 second entry의 `formatCode=""`로 비우는 dirty-save 회귀를 추가해서, trailing custom numFmt의 malformed empty-formatCode branch를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b371 DONE` styles multi-entry custom numFmt trailing-id non-numeric rejection
+  - 범위: 두 개의 custom `numFmt` entry가 있는 `styles.xml` fixture를 load한 뒤 second entry의 `numFmtId`를 non-numeric 값으로 바꾸는 dirty-save 회귀를 추가해서, trailing custom numFmt의 malformed id parse branch를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b372 DONE` styles tableStyle outside-tableStyles malformed preservation
+  - 범위: `styles.xml`에서 `<tableStyle>`를 `<tableStyles>` 밖으로 밀어내는 dirty-save 회귀를 추가해서, parent-boundary malformed branch를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b373 DONE` styles multi-entry custom numFmt leading-entry removal malformed preservation
+  - 범위: 두 개의 custom `numFmt` entry가 있는 `styles.xml` fixture를 load한 뒤 leading `<numFmt .../>` entry를 제거하는 dirty-save 회귀를 추가해서, referenced custom numFmt definition disappearance를 save-side에서 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b374 DONE` theme malformed clrScheme nested-before-direct preservation
+  - 범위: `theme1.xml`의 `clrScheme` value-child fixture에서 nested color child를 direct `clrScheme` child보다 앞에 두는 dirty-save 회귀를 추가해서, `nested clrScheme child before clrScheme child` parser branch를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b375 DONE` theme malformed fontScheme nested-before-direct preservation
+  - 범위: `theme1.xml`의 `fontScheme` value-child fixture에서 nested font child를 direct `fontScheme` child보다 앞에 두는 dirty-save 회귀를 추가해서, `nested fontScheme child before fontScheme child` parser branch를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b376 DONE` theme malformed fmtScheme nested-before-direct preservation
+  - 범위: `theme1.xml`의 `fmtScheme` value-child fixture에서 nested format child를 direct `fmtScheme` child보다 앞에 두는 dirty-save 회귀를 추가해서, `nested fmtScheme child before fmtScheme child` parser branch를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b377 DONE` styles multi-entry custom numFmt leading-id missing rejection
+  - 범위: 두 개의 custom `numFmt` entry가 있는 `styles.xml` fixture를 load한 뒤 first entry의 `numFmtId`를 제거하는 dirty-save 회귀를 추가해서, leading custom numFmt의 malformed missing-id branch를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b378 DONE` styles multi-entry custom numFmt trailing-id missing rejection
+  - 범위: 두 개의 custom `numFmt` entry가 있는 `styles.xml` fixture를 load한 뒤 second entry의 `numFmtId`를 제거하는 dirty-save 회귀를 추가해서, trailing custom numFmt의 malformed missing-id branch를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b379 DONE` styles multi-entry custom numFmt leading-formatCode missing rejection
+  - 범위: 두 개의 custom `numFmt` entry가 있는 `styles.xml` fixture를 load한 뒤 first entry의 `formatCode`를 제거하는 dirty-save 회귀를 추가해서, leading custom numFmt의 malformed missing-formatCode branch를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b380 DONE` styles multi-entry custom numFmt leading-formatCode empty rejection
+  - 범위: 두 개의 custom `numFmt` entry가 있는 `styles.xml` fixture를 load한 뒤 first entry의 `formatCode=""`로 비우는 dirty-save 회귀를 추가해서, leading custom numFmt의 malformed empty-formatCode branch를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b381 DONE` styles multi-entry custom numFmt leading-id non-numeric rejection
+  - 범위: 두 개의 custom `numFmt` entry가 있는 `styles.xml` fixture를 load한 뒤 first entry의 `numFmtId`를 non-numeric 값으로 바꾸는 dirty-save 회귀를 추가해서, leading custom numFmt의 malformed id parse branch를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b382 DONE` styles multi-entry custom numFmt three-entry load preservation
+  - 범위: 두 개의 custom `numFmt` entry가 있는 `styles.xml` fixture를 세 개 entry로 확장한 뒤 load assertion을 추가해서, `custom_num_fmt_ids_in_order`와 `custom_num_fmts` 맵이 3-entry sibling sequence를 count attr과 함께 그대로 보존하는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b383 DONE` styles multi-entry custom numFmt three-entry no-count load preservation
+  - 범위: 두 개의 custom `numFmt` entry가 있는 `styles.xml` fixture를 세 개 entry로 확장하고 `<numFmts>`의 `count` attr을 제거한 뒤 load assertion을 추가해서, 3-entry sibling sequence가 no-count branch에서도 동일하게 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b384 DONE` styles empty numFmts presence load preservation
+  - 범위: base `styles.xml` fixture에 empty `<numFmts count="0"/>` container를 삽입한 load assertion을 추가해서, empty custom numFmt container presence와 root child order가 count attr과 함께 typed summary에 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b385 DONE` styles empty numFmts no-count load preservation
+  - 범위: base `styles.xml` fixture에 empty `<numFmts/>` container를 삽입한 load assertion을 추가해서, empty custom numFmt container presence가 no-count branch에서도 typed summary에 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b386 DONE` styles cellStyleXfs no-count load preservation
+  - 범위: base `styles.xml` fixture에서 `<cellStyleXfs>`의 `count` attr만 제거한 load assertion을 추가해서, `cell_style_xfs_count`와 `cell_style_xfs` vector가 no-count branch에서도 동일하게 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b387 DONE` styles cellStyles no-count load preservation
+  - 범위: base `styles.xml` fixture에서 `<cellStyles>`의 `count` attr만 제거한 load assertion을 추가해서, `cellStyles` entry semantic fields가 no-count branch에서도 동일하게 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b388 DONE` styles cellXfs no-count load preservation
+  - 범위: base `styles.xml` fixture에서 `<cellXfs>`의 `count` attr만 제거한 load assertion을 추가해서, `cellXfs` vector와 representative apply flags가 no-count branch에서도 동일하게 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b389 DONE` styles tableStyles no-count load preservation
+  - 범위: populated `tableStyles` fixture에서 `<tableStyles>`의 `count` attr만 제거한 load assertion을 추가해서, default styles와 table/pivot attr-map이 no-count branch에서도 동일하게 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b390 DONE` styles empty tableStyles no-count load preservation
+  - 범위: base `styles.xml` fixture의 empty `<tableStyles>`에서 `count` attr을 제거한 load assertion을 추가해서, empty tableStyles container와 default style attrs가 no-count branch에서도 동일하게 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b391 DONE` styles optional-root dxfs no-count load preservation
+  - 범위: `colors + dxfs + extLst + tableStyles` optional root container fixture에서 empty `<dxfs>`의 `count` attr을 제거한 load assertion을 추가해서, root child sequence와 empty dxfs summary가 no-count branch에서도 동일하게 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b392 DONE` styles optional-root tableStyles no-count load preservation
+  - 범위: `colors + dxfs + extLst + tableStyles` optional root container fixture에서 empty `<tableStyles>`의 `count` attr을 제거한 load assertion을 추가해서, root child sequence와 default style attrs가 no-count branch에서도 동일하게 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b393 DONE` styles optional-root dxfs+tableStyles no-count load preservation
+  - 범위: `colors + dxfs + extLst + tableStyles` optional root container fixture에서 empty `<dxfs>`와 empty `<tableStyles>`의 `count` attr을 함께 제거한 load assertion을 추가해서, dual no-count 조합도 typed summary에 동일하게 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b394 DONE` styles optional-root without-colors load preservation
+  - 범위: `dxfs + extLst + tableStyles`만 남기고 optional root `colors` container를 생략한 load assertion을 추가해서, middle optional-root omission에서도 root child sequence와 presence booleans가 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b395 DONE` styles optional-root without-dxfs load preservation
+  - 범위: `colors + extLst + tableStyles`만 남기고 optional root `dxfs` container를 생략한 load assertion을 추가해서, `has_dxfs` false-path와 surrounding root child sequence가 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b396 DONE` styles optional-root without-extLst load preservation
+  - 범위: `colors + dxfs + tableStyles`만 남기고 optional root `extLst` container를 생략한 load assertion을 추가해서, `has_extension_list` false-path와 surrounding root child sequence가 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b397 DONE` theme optional-root extra+custom pair load preservation
+  - 범위: `theme1.xml` fixture에 `<extraClrSchemeLst/>`와 `<custClrLst/>`를 함께 추가한 load assertion을 추가해서, theme optional root child pairwise presence가 typed summary에 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b398 DONE` theme optional-root extra+ext pair load preservation
+  - 범위: `theme1.xml` fixture에 `<extraClrSchemeLst/>`와 `<extLst/>`를 함께 추가한 load assertion을 추가해서, theme optional root child pairwise presence가 typed summary에 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b399 DONE` theme optional-root custom+ext pair load preservation
+  - 범위: `theme1.xml` fixture에 `<custClrLst/>`와 `<extLst/>`를 함께 추가한 load assertion을 추가해서, theme optional root child pairwise presence가 typed summary에 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b400 DONE` theme optional-root extra+custom pair without objectDefaults load preservation
+  - 범위: `theme1.xml` fixture에서 `<objectDefaults/>`를 제거한 뒤 `<extraClrSchemeLst/> + <custClrLst/>` pairwise 조합의 load assertion을 추가해서, without-objectDefaults branch에서도 pairwise presence가 typed summary에 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b401 DONE` theme optional-root extra+ext pair without objectDefaults load preservation
+  - 범위: `theme1.xml` fixture에서 `<objectDefaults/>`를 제거한 뒤 `<extraClrSchemeLst/> + <extLst/>` pairwise 조합의 load assertion을 추가해서, without-objectDefaults branch에서도 pairwise presence가 typed summary에 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b402 DONE` theme optional-root custom+ext pair without objectDefaults load preservation
+  - 범위: `theme1.xml` fixture에서 `<objectDefaults/>`를 제거한 뒤 `<custClrLst/> + <extLst/>` pairwise 조합의 load assertion을 추가해서, without-objectDefaults branch에서도 pairwise presence가 typed summary에 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b403 DONE` styles optional-root without tableStyles/colors load preservation
+  - 범위: `styles.xml` optional root fixture에서 `tableStyles`와 `colors`를 함께 생략한 load assertion을 추가해서, `dxfs + extLst` pairwise 조합의 root child sequence와 booleans가 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b404 DONE` styles optional-root without tableStyles/dxfs load preservation
+  - 범위: `styles.xml` optional root fixture에서 `tableStyles`와 `dxfs`를 함께 생략한 load assertion을 추가해서, `colors + extLst` pairwise 조합의 root child sequence와 booleans가 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b405 DONE` styles optional-root without tableStyles/extLst load preservation
+  - 범위: `styles.xml` optional root fixture에서 `tableStyles`와 `extLst`를 함께 생략한 load assertion을 추가해서, `colors + dxfs` pairwise 조합의 root child sequence와 booleans가 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b406 DONE` theme optional-root extra-only without objectDefaults load preservation
+  - 범위: `theme1.xml` fixture에서 `<objectDefaults/>`를 제거한 뒤 `<extraClrSchemeLst/>` 하나만 남기는 load assertion을 추가해서, single optional root child도 without-objectDefaults branch에서 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b407 DONE` theme optional-root custom-only without objectDefaults load preservation
+  - 범위: `theme1.xml` fixture에서 `<objectDefaults/>`를 제거한 뒤 `<custClrLst/>` 하나만 남기는 load assertion을 추가해서, single optional root child도 without-objectDefaults branch에서 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b408 DONE` theme optional-root ext-only without objectDefaults load preservation
+  - 범위: `theme1.xml` fixture에서 `<objectDefaults/>`를 제거한 뒤 `<extLst/>` 하나만 남기는 load assertion을 추가해서, single optional root child도 without-objectDefaults branch에서 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b409 DONE` styles optional-root colors-only without tableStyles load preservation
+  - 범위: `styles.xml` fixture에서 `<tableStyles>`를 제거한 뒤 `<colors>` 하나만 남기는 load assertion을 추가해서, single optional root container도 without-tableStyles branch에서 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b410 DONE` styles optional-root dxfs-only without tableStyles load preservation
+  - 범위: `styles.xml` fixture에서 `<tableStyles>`를 제거한 뒤 `<dxfs>` 하나만 남기는 load assertion을 추가해서, single optional root container도 without-tableStyles branch에서 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b411 DONE` styles optional-root extLst-only without tableStyles load preservation
+  - 범위: `styles.xml` fixture에서 `<tableStyles>`를 제거한 뒤 `<extLst>` 하나만 남기는 load assertion을 추가해서, single optional root container도 without-tableStyles branch에서 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b412 DONE` styles optional-root dxfs-only without tableStyles no-count load preservation
+  - 범위: `styles.xml` fixture에서 `<tableStyles>`를 제거한 뒤 empty `<dxfs/>` 하나만 남기는 load assertion을 추가해서, single optional root container의 `has_dxfs_count_attr` false-path도 without-tableStyles branch에서 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b413 DONE` styles optional-root dxfs+ext without tableStyles no-count load preservation
+  - 범위: `styles.xml` fixture에서 `<tableStyles>`를 제거한 뒤 `<dxfs/> + <extLst/>` 조합의 load assertion을 추가해서, pairwise without-tableStyles branch의 `has_dxfs_count_attr` false-path를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b414 DONE` styles optional-root colors+dxfs without tableStyles no-count load preservation
+  - 범위: `styles.xml` fixture에서 `<tableStyles>`를 제거한 뒤 `<colors> + <dxfs/>` 조합의 load assertion을 추가해서, pairwise without-tableStyles branch의 `has_dxfs_count_attr` false-path를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b415 DONE` styles optional-root colors+dxfs+ext without tableStyles no-count load preservation
+  - 범위: `styles.xml` fixture에서 `<tableStyles>`를 제거한 뒤 `<colors> + <dxfs/> + <extLst/>` 조합의 load assertion을 추가해서, all-optional without-tableStyles branch의 `has_dxfs_count_attr` false-path를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b416 DONE` styles optional-root without colors tableStyles no-count load preservation
+  - 범위: `styles.xml` fixture에서 `without-colors` single-optional branch의 `<tableStyles count>`를 제거한 load assertion을 추가해서, `has_table_styles_count_attr` false-path도 typed summary에 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b417 DONE` styles optional-root without dxfs tableStyles no-count load preservation
+  - 범위: `styles.xml` fixture에서 `without-dxfs` single-optional branch의 `<tableStyles count>`를 제거한 load assertion을 추가해서, `has_table_styles_count_attr` false-path도 typed summary에 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b418 DONE` styles optional-root without extLst tableStyles no-count load preservation
+  - 범위: `styles.xml` fixture에서 `without-extLst` single-optional branch의 `<tableStyles count>`를 제거한 load assertion을 추가해서, `has_table_styles_count_attr` false-path도 typed summary에 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b419 DONE` styles optional-root without colors dxfs no-count load preservation
+  - 범위: `styles.xml` fixture에서 `without-colors` single-optional branch의 `<dxfs count>`를 제거한 load assertion을 추가해서, `has_dxfs_count_attr` false-path도 typed summary에 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b420 DONE` styles optional-root without colors dxfs+tableStyles dual no-count load preservation
+  - 범위: `styles.xml` fixture에서 `without-colors` single-optional branch의 `<dxfs count>`와 `<tableStyles count>`를 함께 제거한 load assertion을 추가해서, dual false-path 조합도 typed summary에 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b421 DONE` styles optional-root without extLst dxfs no-count load preservation
+  - 범위: `styles.xml` fixture에서 `without-extLst` single-optional branch의 `<dxfs count>`를 제거한 load assertion을 추가해서, `has_dxfs_count_attr` false-path도 typed summary에 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b422 DONE` styles optional-root without extLst dxfs+tableStyles dual no-count load preservation
+  - 범위: `styles.xml` fixture에서 `without-extLst` single-optional branch의 `<dxfs count>`와 `<tableStyles count>`를 함께 제거한 load assertion을 추가해서, dual false-path 조합도 typed summary에 그대로 보존되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b423 DONE` styles optional-root tableStyles addition drift rejection
+  - 범위: `styles.xml`을 `without-tableStyles`로 load한 뒤 `<tableStyles/>`를 다시 추가하고 dirty save를 수행하는 회귀를 추가해서, absent optional-root container의 addition drift를 fail-fast로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b424 DONE` styles optional-root tableStyles to extLst name drift rejection
+  - 범위: existing `<tableStyles/>` root container를 `<extLst/>`로 바꾸는 dirty save 회귀를 추가해서, tableStyles root-child name drift를 fail-fast로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b425 DONE` styles optional-root tableStyles to colors name drift rejection
+  - 범위: existing `<tableStyles/>` root container를 `<colors/>`로 바꾸는 dirty save 회귀를 추가해서, tableStyles root-child name drift를 fail-fast로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b426 DONE` styles optional-root tableStyles to dxfs name drift rejection
+  - 범위: existing `<tableStyles/>` root container를 `<dxfs/>`로 바꾸는 dirty save 회귀를 추가해서, tableStyles root-child name drift를 fail-fast로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b427 DONE` styles optional-root tableStyles order drift rejection
+  - 범위: `<colors/> + <tableStyles/>` 조합을 load한 뒤 root child 순서를 뒤집는 dirty save 회귀를 추가해서, tableStyles root-child order drift를 fail-fast로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b428 DONE` styles optional-root tableStyles removal drift rejection
+  - 범위: existing `<tableStyles/>` root container를 제거한 뒤 dirty save를 수행하는 회귀를 추가해서, present optional-root container의 removal drift를 fail-fast로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b429 DONE` styles optional-root colors removal drift rejection
+  - 범위: existing `<colors/>` root container를 제거한 뒤 dirty save를 수행하는 회귀를 추가해서, present optional-root container의 removal drift를 fail-fast로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b430 DONE` styles optional-root extLst removal drift rejection
+  - 범위: existing `<extLst/>` root container를 제거한 뒤 dirty save를 수행하는 회귀를 추가해서, present optional-root container의 removal drift를 fail-fast로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b431 DONE` styles optional-root dxfs removal drift rejection
+  - 범위: existing `<dxfs/>` root container를 제거한 뒤 dirty save를 수행하는 회귀를 추가해서, present optional-root container의 removal drift를 fail-fast로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b432 DONE` theme optional-root objectDefaults removal drift rejection
+  - 범위: existing `<a:objectDefaults/>` root child를 제거한 뒤 dirty save를 수행하는 회귀를 추가해서, present optional theme child의 removal drift를 fail-fast로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b433 DONE` theme optional-root extLst removal drift rejection
+  - 범위: existing `<a:extLst/>` root child를 제거한 뒤 dirty save를 수행하는 회귀를 추가해서, present optional theme child의 removal drift를 fail-fast로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b434 DONE` theme optional-root extraClrSchemeLst removal drift rejection
+  - 범위: existing `<a:extraClrSchemeLst/>` root child를 제거한 뒤 dirty save를 수행하는 회귀를 추가해서, present optional theme child의 removal drift를 fail-fast로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b435 DONE` theme optional-root custClrLst removal drift rejection
+  - 범위: existing `<a:custClrLst/>` root child를 제거한 뒤 dirty save를 수행하는 회귀를 추가해서, present optional theme child의 removal drift를 fail-fast로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b436 DONE` styles numFmts container removal drift rejection
+  - 범위: existing `<numFmts/>` root container를 제거한 뒤 dirty save를 수행하는 회귀를 추가해서, present styles root container의 removal drift를 fail-fast로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b437 DONE` styles numFmts container addition drift rejection
+  - 범위: absent `numFmts` root container를 추가한 뒤 dirty save를 수행하는 회귀를 추가해서, absent styles root container의 addition drift를 fail-fast로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b438 DONE` styles numFmts container name drift rejection
+  - 범위: existing `<numFmts/>` root container를 다른 root child 이름으로 바꾸는 dirty save 회귀를 추가해서, numFmts root-child name drift를 fail-fast로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b439 DONE` styles numFmts container order drift rejection
+  - 범위: existing `<numFmts/>` root container의 root child 순서를 뒤집는 dirty save 회귀를 추가해서, numFmts root-child order drift를 fail-fast로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b440 DONE` theme optional-root duplicate objectDefaults load reject
+  - 범위: `theme1.xml`에 duplicate `<a:objectDefaults/>`를 삽입한 load 회귀를 추가해서, optional root child duplicate parser guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b441 DONE` theme optional-root duplicate extraClrSchemeLst load reject
+  - 범위: `theme1.xml`에 duplicate `<a:extraClrSchemeLst/>`를 삽입한 load 회귀를 추가해서, optional root child duplicate parser guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b442 DONE` theme optional-root duplicate custClrLst load reject
+  - 범위: `theme1.xml`에 duplicate `<a:custClrLst/>`를 삽입한 load 회귀를 추가해서, optional root child duplicate parser guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b443 DONE` theme optional-root duplicate extLst load reject
+  - 범위: `theme1.xml`에 duplicate `<a:extLst/>`를 삽입한 load 회귀를 추가해서, optional root child duplicate parser guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b444 DONE` styles duplicate numFmts container load reject
+  - 범위: `styles.xml`에 duplicate `<numFmts/>` root container를 삽입한 load 회귀를 추가해서, root container duplicate parser guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b445 DONE` styles duplicate fonts container load reject
+  - 범위: `styles.xml`에 duplicate `<fonts/>` root container를 삽입한 load 회귀를 추가해서, root container duplicate parser guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b446 DONE` styles duplicate fills container load reject
+  - 범위: `styles.xml`에 duplicate `<fills/>` root container를 삽입한 load 회귀를 추가해서, root container duplicate parser guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b447 DONE` styles duplicate borders container load reject
+  - 범위: `styles.xml`에 duplicate `<borders/>` root container를 삽입한 load 회귀를 추가해서, root container duplicate parser guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b448 DONE` styles duplicate cellStyleXfs container load reject
+  - 범위: `styles.xml`에 duplicate `<cellStyleXfs/>` root container를 삽입한 load 회귀를 추가해서, root container duplicate parser guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b449 DONE` styles duplicate cellStyles container load reject
+  - 범위: `styles.xml`에 duplicate `<cellStyles/>` root container를 삽입한 load 회귀를 추가해서, root container duplicate parser guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b450 DONE` styles duplicate tableStyles container load reject
+  - 범위: `styles.xml`에 duplicate `<tableStyles/>` root container를 삽입한 load 회귀를 추가해서, root container duplicate parser guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b451 DONE` styles duplicate cellXfs container load reject
+  - 범위: `styles.xml`에 duplicate `<cellXfs/>` root container를 삽입한 load 회귀를 추가해서, root container duplicate parser guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b452 DONE` styles duplicate colors container load reject
+  - 범위: `styles.xml`에 duplicate `<colors/>` root container를 삽입한 load 회귀를 추가해서, root container duplicate parser guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b453 DONE` styles duplicate extLst container load reject
+  - 범위: `styles.xml`에 duplicate `<extLst/>` root container를 삽입한 load 회귀를 추가해서, root container duplicate parser guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b454 DONE` styles duplicate dxfs container load reject
+  - 범위: `styles.xml`에 duplicate `<dxfs/>` root container를 삽입한 load 회귀를 추가해서, root container duplicate parser guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b455 DONE` theme duplicate themeElements child load reject
+  - 범위: `theme1.xml` root 아래 duplicate `<a:themeElements/>` branch를 삽입한 load 회귀를 추가해서, required root child duplicate parser guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b456 DONE` theme duplicate clrScheme child load reject
+  - 범위: `<a:themeElements>` 안에 duplicate `<a:clrScheme/>`를 삽입한 load 회귀를 추가해서, required child duplicate parser guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b457 DONE` theme duplicate fontScheme child load reject
+  - 범위: `<a:themeElements>` 안에 duplicate `<a:fontScheme/>`를 삽입한 load 회귀를 추가해서, required child duplicate parser guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b458 DONE` theme duplicate fmtScheme child load reject
+  - 범위: `<a:themeElements>` 안에 duplicate `<a:fmtScheme/>`를 삽입한 load 회귀를 추가해서, required child duplicate parser guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b459 DONE` theme missing themeElements load reject
+  - 범위: `theme1.xml`에서 `<a:themeElements/>` block을 제거한 load 회귀를 추가해서, required root child missing parser guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b460 DONE` theme missing clrScheme load reject
+  - 범위: `<a:themeElements>` 안에서 `<a:clrScheme/>`를 제거한 load 회귀를 추가해서, required child missing parser guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b461 DONE` theme missing fontScheme load reject
+  - 범위: `<a:themeElements>` 안에서 `<a:fontScheme/>`를 제거한 load 회귀를 추가해서, required child missing parser guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b462 DONE` theme missing fmtScheme load reject
+  - 범위: `<a:themeElements>` 안에서 `<a:fmtScheme/>`를 제거한 load 회귀를 추가해서, required child missing parser guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b463 DONE` styles missing fonts container load reject
+  - 범위: `styles.xml`에서 required `<fonts/>` root container를 제거한 load 회귀를 추가해서, `cellStyleXf`의 `fontId` range guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b464 DONE` styles missing fills container load reject
+  - 범위: `styles.xml`에서 required `<fills/>` root container를 제거한 load 회귀를 추가해서, `cellStyleXf`의 `fillId` range guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b465 DONE` styles missing borders container load reject
+  - 범위: `styles.xml`에서 required `<borders/>` root container를 제거한 load 회귀를 추가해서, `cellStyleXf`의 `borderId` range guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b466 DONE` styles missing cellStyleXfs container load reject
+  - 범위: `styles.xml`에서 required `<cellStyleXfs/>` root container를 제거한 load 회귀를 추가해서, `cellStyle`의 `xfId` range guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b467 DONE` styles missing cellXfs container load reject
+  - 범위: `styles.xml`에서 required `<cellXfs/>` root container를 제거한 load 회귀를 추가해서, worksheet cell `style id` range guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b468 DONE` theme wrong-root load reject
+  - 범위: `theme1.xml` root를 `<a:notTheme>`로 바꾼 load 회귀를 추가해서, theme parser의 root-name guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b469 DONE` theme empty-part load reject
+  - 범위: empty `theme1.xml` part를 로드하는 회귀를 추가해서, theme parser의 EOF-empty guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b470 DONE` styles wrong-root load reject
+  - 범위: `styles.xml` root를 `<notStyleSheet>`로 바꾼 load 회귀를 추가해서, styles parser의 root-name guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b471 DONE` styles empty-part load reject
+  - 범위: empty `styles.xml` part를 로드하는 회귀를 추가해서, styles parser의 EOF-empty guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b472 DONE` styles alignment outside xf load reject
+  - 범위: `<alignment>`가 `<xf>` 밖에 나타나는 malformed `styles.xml` load 회귀를 추가해서, parser의 parent-boundary guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b473 DONE` styles protection outside xf load reject
+  - 범위: `<protection>`이 `<xf>` 밖에 나타나는 malformed `styles.xml` load 회귀를 추가해서, parser의 parent-boundary guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b474 DONE` styles duplicate cellStyle name load reject
+  - 범위: duplicate `cellStyle name`을 가진 malformed `styles.xml` load 회귀를 추가해서, stylesheet validation guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b475 DONE` styles font child outside font load reject
+  - 범위: font direct child가 `<font>` 밖에 나타나는 malformed `styles.xml` load 회귀를 추가해서, parser의 parent-boundary guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b476 DONE` styles fill child outside fill load reject
+  - 범위: fill direct child가 `<fill>` 밖에 나타나는 malformed `styles.xml` load 회귀를 추가해서, parser의 parent-boundary guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b477 DONE` styles border child outside border load reject
+  - 범위: border direct child가 `<border>` 밖에 나타나는 malformed `styles.xml` load 회귀를 추가해서, parser의 parent-boundary guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b478 DONE` styles dxf child outside dxf load reject
+  - 범위: dxf direct child가 `<dxf>` 밖에 나타나는 malformed `styles.xml` load 회귀를 추가해서, parser의 parent-boundary guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b479 DONE` styles cellStyle missing name load reject
+  - 범위: `styles.xml`의 `<cellStyle>`에서 required `name` attr를 제거한 load 회귀를 추가해서, parser의 required-attr guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b480 DONE` styles cellStyle empty name load reject
+  - 범위: `styles.xml`의 `<cellStyle name="">` empty-name load 회귀를 추가해서, parser의 non-empty-name guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b481 DONE` styles cellStyle missing xfId load reject
+  - 범위: `styles.xml`의 `<cellStyle>`에서 required `xfId` attr를 제거한 load 회귀를 추가해서, parser의 required-attr guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b482 DONE` styles duplicate cellStyle builtinId load reject
+  - 범위: duplicate `cellStyle builtinId`를 가진 malformed `styles.xml` load 회귀를 추가해서, stylesheet validation guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b483 DONE` styles customBuiltin cellStyle without builtinId load reject
+  - 범위: `customBuiltin="1"`인데 `builtinId`가 없는 malformed `styles.xml` load 회귀를 추가해서, stylesheet validation guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b484 DONE` styles empty defaultTableStyle load reject
+  - 범위: `styles.xml <tableStyles defaultTableStyle="">` empty-default load 회귀를 추가해서, parser의 non-empty-default guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b485 DONE` styles empty defaultPivotStyle load reject
+  - 범위: `styles.xml <tableStyles defaultPivotStyle="">` empty-default load 회귀를 추가해서, parser의 non-empty-default guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b486 DONE` styles tableStyle missing name load reject
+  - 범위: `styles.xml`의 `<tableStyle>`에서 required `name` attr를 제거한 load 회귀를 추가해서, parser의 required-attr guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b487 DONE` styles tableStyle empty name load reject
+  - 범위: `styles.xml <tableStyle name="">` empty-name load 회귀를 추가해서, parser의 non-empty-name guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b488 DONE` styles duplicate tableStyle name load reject
+  - 범위: duplicate `tableStyle name`을 가진 malformed `styles.xml` load 회귀를 추가해서, stylesheet validation guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b489 DONE` styles cellStyle xfId range load reject
+  - 범위: `styles.xml`의 `cellStyle xfId`가 `cellStyleXfs` 범위를 벗어나는 load 회귀를 추가해서, stylesheet validation guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b490 DONE` styles duplicate indexedColors child load reject
+  - 범위: duplicate `<indexedColors/>` child를 가진 malformed `styles.xml` load 회귀를 추가해서, colors child duplicate guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b491 DONE` styles duplicate mruColors child load reject
+  - 범위: duplicate `<mruColors/>` child를 가진 malformed `styles.xml` load 회귀를 추가해서, colors child duplicate guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b492 DONE` styles duplicate custom numFmtId load reject
+  - 범위: duplicate custom `numFmtId`를 가진 malformed root `<numFmts>` load 회귀를 추가해서, stylesheet validation guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b493 DONE` styles custom numFmt missing id load reject
+  - 범위: root `<numFmt>`에서 required `numFmtId` attr를 제거한 load 회귀를 추가해서, shared `parse_num_fmt` required-attr guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b494 DONE` styles custom numFmt missing formatCode load reject
+  - 범위: root `<numFmt>`에서 required `formatCode` attr를 제거한 load 회귀를 추가해서, shared `parse_num_fmt` required-attr guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b495 DONE` styles custom numFmt empty formatCode load reject
+  - 범위: root `<numFmt formatCode="">` empty-format load 회귀를 추가해서, shared `parse_num_fmt` non-empty guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b496 DONE` styles custom numFmt non-numeric id load reject
+  - 범위: root `<numFmt numFmtId="abc">` malformed-id load 회귀를 추가해서, shared `parse_num_fmt` numeric parse guard를 `Parse`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b497 DONE` styles dxf numFmt missing id load reject
+  - 범위: `dxfs > dxf > numFmt`에서 required `numFmtId` attr를 제거한 load 회귀를 추가해서, shared `parse_num_fmt` required-attr guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b498 DONE` styles dxf numFmt missing formatCode load reject
+  - 범위: `dxfs > dxf > numFmt`에서 required `formatCode` attr를 제거한 load 회귀를 추가해서, shared `parse_num_fmt` required-attr guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b499 DONE` styles dxf numFmt empty formatCode load reject
+  - 범위: `dxfs > dxf > numFmt formatCode=""` empty-format load 회귀를 추가해서, shared `parse_num_fmt` non-empty guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b500 DONE` styles dxf numFmt non-numeric id load reject
+  - 범위: `dxfs > dxf > numFmt numFmtId="abc"` malformed-id load 회귀를 추가해서, shared `parse_num_fmt` numeric parse guard를 `Parse`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b501 DONE` styles second custom numFmt missing id load reject
+  - 범위: multi-entry root `<numFmts>`에서 second `<numFmt>`의 required `numFmtId` attr를 제거한 load 회귀를 추가해서, later-sibling `parse_num_fmt` required-attr guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b502 DONE` styles second custom numFmt missing formatCode load reject
+  - 범위: multi-entry root `<numFmts>`에서 second `<numFmt>`의 required `formatCode` attr를 제거한 load 회귀를 추가해서, later-sibling `parse_num_fmt` required-attr guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b503 DONE` styles second custom numFmt empty formatCode load reject
+  - 범위: multi-entry root `<numFmts>`에서 second `<numFmt formatCode="">` empty-format load 회귀를 추가해서, later-sibling `parse_num_fmt` non-empty guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b504 DONE` styles second custom numFmt non-numeric id load reject
+  - 범위: multi-entry root `<numFmts>`에서 second `<numFmt numFmtId="abc">` malformed-id load 회귀를 추가해서, later-sibling `parse_num_fmt` numeric parse guard를 `Parse`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b505 DONE` styles duplicate cellXf alignment child load reject
+  - 범위: `cellXfs > xf` 아래 duplicate `<alignment/>` child를 가진 malformed `styles.xml` load 회귀를 추가해서, xf duplicate-child guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b506 DONE` styles duplicate cellStyleXf alignment child load reject
+  - 범위: `cellStyleXfs > xf` 아래 duplicate `<alignment/>` child를 가진 malformed `styles.xml` load 회귀를 추가해서, xf duplicate-child guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b507 DONE` styles duplicate cellXf protection child load reject
+  - 범위: `cellXfs > xf` 아래 duplicate `<protection/>` child를 가진 malformed `styles.xml` load 회귀를 추가해서, xf duplicate-child guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b508 DONE` styles duplicate cellStyleXf protection child load reject
+  - 범위: `cellStyleXfs > xf` 아래 duplicate `<protection/>` child를 가진 malformed `styles.xml` load 회귀를 추가해서, xf duplicate-child guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b509 DONE` styles non-numeric numFmts count load reject
+  - 범위: root `<numFmts count="abc">` malformed-count load 회귀를 추가해서, count parse guard를 `Parse`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b510 DONE` styles non-numeric fonts count load reject
+  - 범위: root `<fonts count="abc">` malformed-count load 회귀를 추가해서, count parse guard를 `Parse`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b511 DONE` styles non-numeric fills count load reject
+  - 범위: root `<fills count="abc">` malformed-count load 회귀를 추가해서, count parse guard를 `Parse`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b512 DONE` styles non-numeric borders count load reject
+  - 범위: root `<borders count="abc">` malformed-count load 회귀를 추가해서, count parse guard를 `Parse`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b513 DONE` styles non-numeric cellStyleXfs count load reject
+  - 범위: root `<cellStyleXfs count="abc">` malformed-count load 회귀를 추가해서, count parse guard를 `Parse`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b514 DONE` styles non-numeric cellStyles count load reject
+  - 범위: root `<cellStyles count="abc">` malformed-count load 회귀를 추가해서, count parse guard를 `Parse`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b515 DONE` styles non-numeric tableStyles count load reject
+  - 범위: root `<tableStyles count="abc">` malformed-count load 회귀를 추가해서, count parse guard를 `Parse`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b516 DONE` styles non-numeric cellXfs count load reject
+  - 범위: root `<cellXfs count="abc">` malformed-count load 회귀를 추가해서, count parse guard를 `Parse`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b517 DONE` styles non-numeric dxfs count load reject
+  - 범위: root `<dxfs count="abc">` malformed-count load 회귀를 추가해서, count parse guard를 `Parse`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b518 DONE` styles first custom numFmt missing id load reject
+  - 범위: multi-entry root `<numFmts>`에서 first `<numFmt>`의 required `numFmtId` attr를 제거한 load 회귀를 추가해서, leading-sibling `parse_num_fmt` required-attr guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b519 DONE` styles first custom numFmt missing formatCode load reject
+  - 범위: multi-entry root `<numFmts>`에서 first `<numFmt>`의 required `formatCode` attr를 제거한 load 회귀를 추가해서, leading-sibling `parse_num_fmt` required-attr guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b520 DONE` styles first custom numFmt empty formatCode load reject
+  - 범위: multi-entry root `<numFmts>`에서 first `<numFmt formatCode="">` empty-format load 회귀를 추가해서, leading-sibling `parse_num_fmt` non-empty guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b521 DONE` styles first custom numFmt non-numeric id load reject
+  - 범위: multi-entry root `<numFmts>`에서 first `<numFmt numFmtId="abc">` malformed-id load 회귀를 추가해서, leading-sibling `parse_num_fmt` numeric parse guard를 `Parse`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b522 DONE` styles mismatched numFmts count load reject
+  - 범위: root `<numFmts count>`가 actual entry 수와 어긋나는 load 회귀를 추가해서, count validation guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b523 DONE` styles mismatched fonts count load reject
+  - 범위: root `<fonts count>`가 actual entry 수와 어긋나는 load 회귀를 추가해서, count validation guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b524 DONE` styles mismatched fills count load reject
+  - 범위: root `<fills count>`가 actual entry 수와 어긋나는 load 회귀를 추가해서, count validation guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b525 DONE` styles mismatched borders count load reject
+  - 범위: root `<borders count>`가 actual entry 수와 어긋나는 load 회귀를 추가해서, count validation guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b526 DONE` styles mismatched cellStyleXfs count load reject
+  - 범위: root `<cellStyleXfs count>`가 actual entry 수와 어긋나는 load 회귀를 추가해서, count validation guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b527 DONE` styles mismatched cellStyles count load reject
+  - 범위: root `<cellStyles count>`가 actual entry 수와 어긋나는 load 회귀를 추가해서, count validation guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b528 DONE` styles mismatched tableStyles count load reject
+  - 범위: root `<tableStyles count>`가 actual entry 수와 어긋나는 load 회귀를 추가해서, count validation guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b529 DONE` styles mismatched cellXfs count load reject
+  - 범위: root `<cellXfs count>`가 actual entry 수와 어긋나는 load 회귀를 추가해서, count validation guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b530 DONE` styles mismatched dxfs count load reject
+  - 범위: root `<dxfs count>`가 actual entry 수와 어긋나는 load 회귀를 추가해서, count validation guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b531 DONE` styles cellStyleXf undefined custom numFmt load reject
+  - 범위: `cellStyleXf`가 matching `<numFmts>` entry 없이 custom `numFmtId`를 참조하는 load 회귀를 추가해서, direct reference guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b532 DONE` styles cellStyleXf out-of-range fillId load reject
+  - 범위: `cellStyleXf fillId`가 `fills` 범위를 벗어나는 load 회귀를 추가해서, direct reference guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b533 DONE` styles cellXf undefined custom numFmt load reject
+  - 범위: `cellXf`가 matching `<numFmts>` entry 없이 custom `numFmtId`를 참조하는 load 회귀를 추가해서, direct reference guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b534 DONE` styles cellXf out-of-range fillId load reject
+  - 범위: `cellXf fillId`가 `fills` 범위를 벗어나는 load 회귀를 추가해서, direct reference guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b535 DONE` styles cellXf out-of-range xfId load reject
+  - 범위: `cellXf xfId`가 `cellStyleXfs` 범위를 벗어나는 load 회귀를 추가해서, direct reference guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b536 DONE` styles cellStyleXf out-of-range fontId load reject
+  - 범위: `cellStyleXf fontId`가 `fonts` 범위를 벗어나는 load 회귀를 추가해서, direct reference guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b537 DONE` styles cellStyleXf out-of-range borderId load reject
+  - 범위: `cellStyleXf borderId`가 `borders` 범위를 벗어나는 load 회귀를 추가해서, direct reference guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b538 DONE` styles cellXf out-of-range fontId load reject
+  - 범위: `cellXf fontId`가 `fonts` 범위를 벗어나는 load 회귀를 추가해서, direct reference guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b539 DONE` styles cellXf out-of-range borderId load reject
+  - 범위: `cellXf borderId`가 `borders` 범위를 벗어나는 load 회귀를 추가해서, direct reference guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b540 DONE` styles save reject broken cellStyleXf font reference
+  - 범위: dirty `styles.xml`의 `cellStyleXf fontId`가 `fonts` 범위를 벗어나는 save 회귀를 추가해서, direct reference guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b541 DONE` styles save reject broken cellStyleXf border reference
+  - 범위: dirty `styles.xml`의 `cellStyleXf borderId`가 `borders` 범위를 벗어나는 save 회귀를 추가해서, direct reference guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b542 DONE` styles save reject broken cellXf font reference
+  - 범위: dirty `styles.xml`의 `cellXf fontId`가 `fonts` 범위를 벗어나는 save 회귀를 추가해서, direct reference guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b543 DONE` styles save reject broken cellXf border reference
+  - 범위: dirty `styles.xml`의 `cellXf borderId`가 `borders` 범위를 벗어나는 save 회귀를 추가해서, direct reference guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b544 DONE` styles save reject broken cellXf style reference
+  - 범위: dirty `styles.xml`의 `cellXf xfId`가 `cellStyleXfs` 범위를 벗어나는 save 회귀를 추가해서, direct reference guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b545 DONE` styles save reject cellXf xfId attr removal
+  - 범위: dirty `styles.xml`에서 tracked `cellXf xfId` attr를 제거한 save 회귀를 추가해서, optional attr removal이 typed styles summary drift로 fail-fast 되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b546 DONE` styles save reject removed fonts container
+  - 범위: dirty `styles.xml`에서 required `<fonts>` container를 제거한 save 회귀를 추가해서, `cellStyleXf fontId` direct reference guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b547 DONE` styles save reject removed fills container
+  - 범위: dirty `styles.xml`에서 required `<fills>` container를 제거한 save 회귀를 추가해서, `cellStyleXf fillId` direct reference guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b548 DONE` styles save reject removed borders container
+  - 범위: dirty `styles.xml`에서 required `<borders>` container를 제거한 save 회귀를 추가해서, `cellStyleXf borderId` direct reference guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b549 DONE` styles save reject removed cellStyleXfs container
+  - 범위: dirty `styles.xml`에서 required `<cellStyleXfs>` container를 제거한 save 회귀를 추가해서, `cellXf xfId` direct reference guard를 `InvalidState`로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b550 DONE` styles save reject removed cellXfs container
+  - 범위: dirty `styles.xml`에서 required `<cellXfs>` container를 제거한 save 회귀를 추가해서, referenced cellXf drop이 typed styles summary drift로 fail-fast 되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b551 DONE` theme fmtScheme effect added great-grandchild load coverage
+  - 범위: `effectStyleLst > effectStyle > effectLst` 아래 duplicate `outerShdw` sibling을 가진 theme load 회귀를 추가해서, deep sequence/attr-map 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b552 DONE` theme fmtScheme effect added great-great-grandchild load coverage
+  - 범위: `effectStyleLst > effectStyle > effectLst > outerShdw` 아래 added color sibling을 가진 theme load 회귀를 추가해서, deep sequence/attr-map 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b553 DONE` theme fmtScheme bgFill added great-grandchild load coverage
+  - 범위: `bgFillStyleLst > gradFill > gsLst` 아래 duplicate `gs` sibling을 가진 theme load 회귀를 추가해서, deep sequence/attr-map 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b554 DONE` theme fmtScheme bgFill added great-great-grandchild load coverage
+  - 범위: `bgFillStyleLst > gradFill > gsLst > gs` 아래 added color sibling을 가진 theme load 회귀를 추가해서, deep sequence/attr-map 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b555 DONE` theme clrScheme added child load coverage
+  - 범위: `clrScheme` 아래 duplicate terminal color child를 가진 theme load 회귀를 추가해서, child sequence 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b556 DONE` theme clrScheme added nested child load coverage
+  - 범위: `clrScheme` child 아래 duplicate color-value child를 가진 theme load 회귀를 추가해서, nested sequence/attr-map 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b557 DONE` theme fontScheme added child load coverage
+  - 범위: `fontScheme` 아래 duplicate `major/minorFont` sibling을 가진 theme load 회귀를 추가해서, child sequence 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b558 DONE` theme fontScheme added nested child load coverage
+  - 범위: `fontScheme` child 아래 duplicate nested font child를 가진 theme load 회귀를 추가해서, nested sequence/attr-map 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b559 DONE` theme fmtScheme added child load coverage
+  - 범위: `fmtScheme` 아래 duplicate direct child를 가진 theme load 회귀를 추가해서, child sequence 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b560 DONE` theme fmtScheme added nested child load coverage
+  - 범위: `fmtScheme` direct child 아래 duplicate nested child를 가진 theme load 회귀를 추가해서, nested sequence/attr-map 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b561 DONE` theme fmtScheme fill added grandchild load coverage
+  - 범위: `fillStyleLst` 아래 second `solidFill` sibling이 추가된 theme load 회귀를 추가해서, grandchild sequence/attr-map과 trailing empty descendant vectors 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b562 DONE` styles fill added child load coverage
+  - 범위: second `fill` entry 아래 duplicate `patternFill` child를 가진 styles load 회귀를 추가해서, child sequence/attr-map 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b563 DONE` styles fill added nested child load coverage
+  - 범위: `patternFill` 아래 duplicate nested `bgColor` child를 가진 styles load 회귀를 추가해서, nested sequence/attr-map 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b564 DONE` styles font added child load coverage
+  - 범위: `font` 아래 trailing `family` child가 추가된 styles load 회귀를 추가해서, child sequence/attr-map 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b565 DONE` styles border added child load coverage
+  - 범위: `border` 아래 trailing `diagonal` child가 추가된 styles load 회귀를 추가해서, child sequence/attr-map과 empty nested vectors 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b566 DONE` styles border added nested child load coverage
+  - 범위: `left` border 아래 duplicate `color` nested child를 가진 styles load 회귀를 추가해서, nested sequence/attr-map 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b567 DONE` styles dxf added child load coverage
+  - 범위: `dxf` 아래 trailing `font` child가 추가된 styles load 회귀를 추가해서, child sequence/attr-map과 empty nested vectors 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b568 DONE` styles dxf added nested child load coverage
+  - 범위: `dxf > font` 아래 trailing `name` nested child가 추가된 styles load 회귀를 추가해서, nested sequence/attr-map 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b569 DONE` styles numFmts added container exact load mirror
+  - 범위: base styles에서 `<numFmts>` container를 새로 삽입하는 exact mutation load 회귀를 추가해서, root child order와 custom numFmt id/code 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b570 DONE` styles tableStyle added table attr exact load mirror
+  - 범위: `tableStyleMedium2` entry에 trailing `table="1"` attr을 추가하는 exact mutation load 회귀를 추가해서, style attr-map 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b571 DONE` styles cellStyle iLevel exact load mirror
+  - 범위: base styles의 `cellStyle`에 trailing `iLevel="1"` attr을 추가하는 exact mutation load 회귀를 추가해서, cellStyle attr-map 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b572 DONE` styles font same-name duplicate child load coverage
+  - 범위: `font` 아래 duplicate `name` child를 가진 styles load 회귀를 추가해서, same-name child sequence/attr-map 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b573 DONE` styles border same-name duplicate child load coverage
+  - 범위: `border` 아래 duplicate `right` child를 가진 styles load 회귀를 추가해서, same-name child sequence/attr-map 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b574 DONE` styles dxf same-name duplicate child load coverage
+  - 범위: `dxf` 아래 duplicate `numFmt` child를 가진 styles load 회귀를 추가해서, same-name child sequence/attr-map 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b575 DONE` styles dxf same-name duplicate nested child load coverage
+  - 범위: `dxf > font` 아래 duplicate `color` nested child를 가진 styles load 회귀를 추가해서, same-name nested child sequence/attr-map 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b576 DONE` styles custom numFmt order exact load mirror
+  - 범위: two-entry custom `numFmt` 순서를 뒤집는 exact mutation load 회귀를 추가해서, `custom_num_fmt_ids_in_order` 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b577 DONE` styles tableStyle order exact load mirror
+  - 범위: two-entry `tableStyle` 순서를 뒤집는 exact mutation load 회귀를 추가해서, `style_names`와 attr-map order 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b578 DONE` styles dxf child order exact load mirror
+  - 범위: `dxf` direct child 순서를 뒤집는 exact mutation load 회귀를 추가해서, child sequence와 nested attr-map order 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b579 DONE` styles dxf nested child order exact load mirror
+  - 범위: `dxf > font` nested child 순서를 뒤집는 exact mutation load 회귀를 추가해서, nested sequence/attr-map order 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b580 DONE` theme fill transform order exact load mirror
+  - 범위: `fmtScheme fill color` transform 순서를 뒤집는 exact mutation load 회귀를 추가해서, great-grandchild transform sequence/attr-map order 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b581 DONE` theme effect great-grandchild order exact load mirror
+  - 범위: duplicate `outerShdw` sibling 순서를 뒤집는 exact mutation load 회귀를 추가해서, effect great-grandchild sequence/attr-map order 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b582 DONE` theme effect great-great-grandchild order exact load mirror
+  - 범위: `outerShdw` color child 순서를 뒤집는 exact mutation load 회귀를 추가해서, effect great-great-grandchild sequence/attr-map order 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b583 DONE` theme bgFill great-grandchild order exact load mirror
+  - 범위: duplicate `gs` sibling 순서를 뒤집는 exact mutation load 회귀를 추가해서, bgFill great-grandchild sequence/attr-map order 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b584 DONE` theme bgFill great-great-grandchild order exact load mirror
+  - 범위: `gs` color child 순서를 뒤집는 exact mutation load 회귀를 추가해서, bgFill great-great-grandchild sequence/attr-map order 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b585 DONE` styles numFmts container order exact load mirror
+  - 범위: single-entry `numFmts` container를 `fonts` 뒤로 옮기는 exact mutation load 회귀를 추가해서, root child sequence와 custom numFmt summary 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b586 DONE` styles tableStyles-colors root order exact load mirror
+  - 범위: `tableStyles`를 `colors` 앞에 두는 exact mutation load 회귀를 추가해서, root child sequence와 colors child sequence 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b587 DONE` styles tableStyles-extensionList root order exact load mirror
+  - 범위: `tableStyles`를 `extLst` 앞에 두는 exact mutation load 회귀를 추가해서, root child sequence와 extension-list presence 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b588 DONE` styles tableStyles-dxfs root order exact load mirror
+  - 범위: `tableStyles`를 `dxfs` 앞에 두는 exact mutation load 회귀를 추가해서, root child sequence와 dxfs empty-container summary 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b589 DONE` styles colors child order exact load mirror
+  - 범위: `colors` 아래 `indexedColors/mruColors` 순서를 뒤집는 exact mutation load 회귀를 추가해서, child sequence 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b590 DONE` theme custom theme-name positive-load mirror
+  - 범위: root `<a:theme>`의 `name` 값을 `Custom Theme`로 바꾸는 positive-load 회귀를 추가해서, non-default theme name 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b591 DONE` theme custom color-scheme-name positive-load mirror
+  - 범위: `<a:clrScheme name>` 값을 `Custom`으로 바꾸는 positive-load 회귀를 추가해서, non-default color scheme name 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b592 DONE` theme custom font-scheme-name positive-load mirror
+  - 범위: `<a:fontScheme name>` 값을 `Custom`으로 바꾸는 positive-load 회귀를 추가해서, non-default font scheme name 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b593 DONE` theme custom format-scheme-name positive-load mirror
+  - 범위: `<a:fmtScheme name>` 값을 `Custom`으로 바꾸는 positive-load 회귀를 추가해서, non-default format scheme name 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b594 DONE` theme root child order exact load mirror
+  - 범위: `themeElements/objectDefaults` 순서를 뒤집는 exact mutation load 회귀를 추가해서, root child sequence와 themeElements child sequence 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b595 DONE` themeElements child order exact load mirror
+  - 범위: `clrScheme/fontScheme/fmtScheme` 순서를 바꾸는 exact mutation load 회귀를 추가해서, themeElements child sequence 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b596 DONE` theme clrScheme child order exact load mirror
+  - 범위: `clrScheme`의 leading child 순서를 뒤집는 exact mutation load 회귀를 추가해서, color-scheme child sequence 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b597 DONE` theme fontScheme child order exact load mirror
+  - 범위: `fontScheme`의 `majorFont/minorFont` 순서를 뒤집는 exact mutation load 회귀를 추가해서, font-scheme child sequence 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b598 DONE` theme fmtScheme child order exact load mirror
+  - 범위: `fmtScheme`의 leading child 순서를 뒤집는 exact mutation load 회귀를 추가해서, format-scheme child sequence 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b599 DONE` theme extLst root order exact load mirror
+  - 범위: `extLst`를 `objectDefaults` 앞에 두는 exact mutation load 회귀를 추가해서, root child sequence와 optional-root presence 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b600 DONE` theme extraClrSchemeLst root order exact load mirror
+  - 범위: `extraClrSchemeLst`를 `objectDefaults` 앞에 두는 exact mutation load 회귀를 추가해서, root child sequence와 optional-root presence 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b601 DONE` theme custClrLst root order exact load mirror
+  - 범위: `custClrLst`를 `objectDefaults` 앞에 두는 exact mutation load 회귀를 추가해서, root child sequence와 optional-root presence 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b602 DONE` styles custom defaultTableStyle positive-load mirror
+  - 범위: `tableStyles@defaultTableStyle` 값을 `TableStyleLight1`로 바꾸는 positive-load 회귀를 추가해서, non-default defaultTableStyle과 existing tableStyle attr-map 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b603 DONE` styles custom defaultPivotStyle positive-load mirror
+  - 범위: `tableStyles@defaultPivotStyle` 값을 `PivotStyleLight16`로 바꾸는 positive-load 회귀를 추가해서, non-default defaultPivotStyle과 existing tableStyle attr-map 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b604 DONE` styles colors indexed-only positive-load mirror
+  - 범위: `colors`에서 `mruColors`를 제거한 positive-load 회귀를 추가해서, indexed-only child set 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b605 DONE` styles colors mru-only positive-load mirror
+  - 범위: `colors`에서 `indexedColors`를 제거한 positive-load 회귀를 추가해서, mru-only child set 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b606 DONE` styles all-optional root reorder exact load mirror
+  - 범위: `tableStyles`를 `colors/dxfs/extLst` 앞에 두는 exact mutation load 회귀를 추가해서, all-optional root child sequence와 presence booleans 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b607 DONE` styles all-optional root reorder without dxfs count attr
+  - 범위: `dxfs@count`가 없는 all-optional fixture에서 `tableStyles`를 앞에 두는 exact mutation load 회귀를 추가해서, root child sequence와 dxfs count-attr false-path 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b608 DONE` styles all-optional root reorder without tableStyles count attr
+  - 범위: `tableStyles@count`가 없는 all-optional fixture에서 `tableStyles`를 앞에 두는 exact mutation load 회귀를 추가해서, root child sequence와 tableStyles count-attr false-path 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b609 DONE` styles all-optional root reorder without dxfs and tableStyles count attrs
+  - 범위: `dxfs@count`와 `tableStyles@count`가 모두 없는 all-optional fixture에서 `tableStyles`를 앞에 두는 exact mutation load 회귀를 추가해서, dual false-path 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b610 DONE` styles tableStyles-to-extLst positive-load mirror
+  - 범위: `tableStyles` container를 `extLst`로 치환하는 positive-load 회귀를 추가해서, valid container rename 시 root child sequence와 presence booleans 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b611 DONE` styles tableStyles-to-colors positive-load mirror
+  - 범위: `tableStyles` container를 `colors`로 치환하는 positive-load 회귀를 추가해서, valid container rename 시 colors empty-container summary 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b612 DONE` styles tableStyles-to-dxfs positive-load mirror
+  - 범위: `tableStyles` container를 `dxfs`로 치환하는 positive-load 회귀를 추가해서, valid container rename 시 dxfs empty-container summary 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b613 DONE` styles colors-to-extLst positive-load mirror
+  - 범위: `colors` container를 `extLst`로 치환하는 positive-load 회귀를 추가해서, valid container rename 시 root child sequence와 optional-root presence 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b614 DONE` styles colors-to-dxfs positive-load mirror
+  - 범위: `colors` container를 `dxfs`로 치환하는 positive-load 회귀를 추가해서, valid container rename 시 dxfs empty-container summary와 root child sequence 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b615 DONE` styles extLst-to-colors positive-load mirror
+  - 범위: `extLst` container를 `colors`로 치환하는 positive-load 회귀를 추가해서, valid container rename 시 colors empty-container summary와 root child sequence 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b616 DONE` styles extLst-to-dxfs positive-load mirror
+  - 범위: `extLst` container를 `dxfs`로 치환하는 positive-load 회귀를 추가해서, valid container rename 시 dxfs empty-container summary와 root child sequence 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b617 DONE` styles dxfs-to-extLst positive-load mirror
+  - 범위: populated `dxfs` container를 `extLst`로 치환하는 positive-load 회귀를 추가해서, valid container rename 시 optional-root presence와 root child sequence 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b618 DONE` styles dxfs-to-colors positive-load mirror
+  - 범위: populated `dxfs` container를 `colors`로 치환하는 positive-load 회귀를 추가해서, valid container rename 시 colors empty-container summary와 root child sequence 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b619 DONE` styles colors-to-tableStyles positive-load mirror without target present
+  - 범위: `tableStyles`가 없는 colors-only optional-root fixture에서 `colors` container를 `tableStyles`로 치환하는 positive-load 회귀를 추가해서, valid container rename 시 tableStyles default attrs와 root child sequence 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b620 DONE` styles dxfs-to-tableStyles positive-load mirror without target present
+  - 범위: `tableStyles`가 없는 dxfs-only optional-root fixture에서 `dxfs` container를 `tableStyles`로 치환하는 positive-load 회귀를 추가해서, valid container rename 시 tableStyles default attrs와 root child sequence 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b621 DONE` styles extLst-to-tableStyles positive-load mirror without target present
+  - 범위: `tableStyles`가 없는 extLst-only optional-root fixture에서 `extLst` container를 `tableStyles`로 치환하는 positive-load 회귀를 추가해서, valid container rename 시 tableStyles default attrs와 root child sequence 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b622 DONE` styles extLst-to-dxfs positive-load mirror with colors and tableStyles present
+  - 범위: `colors + extLst + tableStyles` optional-root fixture에서 `extLst` container를 `dxfs`로 치환하는 positive-load 회귀를 추가해서, valid container rename 시 dxfs empty-container summary와 root child sequence 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b623 DONE` styles dxfs-to-extLst positive-load mirror with colors and tableStyles present
+  - 범위: `colors + dxfs + tableStyles` optional-root fixture에서 `dxfs` container를 `extLst`로 치환하는 positive-load 회귀를 추가해서, valid container rename 시 optional-root presence와 root child sequence 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b624 DONE` theme fontScheme nested child reorder exact load mirror
+  - 범위: `majorFont` nested child 순서를 `latin -> font`에서 `font -> latin`으로 바꾸는 positive-load 회귀를 추가해서, `font_scheme_child_nested_names`와 attr-map order 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b625 DONE` styles extLst-to-dxfs no-count positive-load mirror with colors and tableStyles present
+  - 범위: `colors + extLst + tableStyles` optional-root fixture에서 `extLst`를 `<dxfs/>`로 치환하는 positive-load 회귀를 추가해서, dxfs count-attr false-path와 root child sequence 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b626 DONE` styles dxfs-to-extLst no-count positive-load mirror with colors and tableStyles present
+  - 범위: `colors + <dxfs/> + tableStyles` optional-root fixture에서 `dxfs`를 `extLst`로 치환하는 positive-load 회귀를 추가해서, dxfs count-attr false-path 제거와 optional-root presence 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b627 DONE` styles extLst-to-dxfs no-count positive-load mirror with colors and tableStyles present and tableStyles count attr absent
+  - 범위: `colors + extLst + tableStyles` optional-root fixture에서 `tableStyles@count`가 없는 branch에 `extLst -> <dxfs/>` positive-load 회귀를 추가해서, dual false-path 중 dxfs count-attr false-path와 tableStyles count-attr false-path 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b628 DONE` styles dxfs-to-extLst no-count positive-load mirror with colors and tableStyles present and tableStyles count attr absent
+  - 범위: `colors + <dxfs/> + tableStyles` optional-root fixture에서 `tableStyles@count`가 없는 branch에 `dxfs -> extLst` positive-load 회귀를 추가해서, tableStyles count-attr false-path와 optional-root presence 보존을 typed styles summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b629 DONE` theme fontScheme nested child name exact load mirror
+  - 범위: `fontScheme` nested child의 `font -> ea` name drift exact mutation load 회귀를 추가해서, `font_scheme_child_nested_names`와 attr-map 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b630 DONE` theme fontScheme latin typeface attr-removal exact load mirror
+  - 범위: `fontScheme` nested `latin@typeface` 제거 exact mutation load 회귀를 추가해서, majorFont latin attr-map empty case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b631 DONE` theme fontScheme font typeface attr-removal exact load mirror
+  - 범위: `fontScheme` nested `font@typeface` 제거 exact mutation load 회귀를 추가해서, script-only attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b632 DONE` theme fontScheme font script attr-removal exact load mirror
+  - 범위: `fontScheme` nested `font@script` 제거 exact mutation load 회귀를 추가해서, typeface-only attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b633 DONE` theme fontScheme majorFont child-removal exact load mirror
+  - 범위: `majorFont`에서 nested `font` child를 제거하는 exact mutation load 회귀를 추가해서, one-sided nested child set 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b634 DONE` theme fontScheme child name exact load mirror
+  - 범위: `fontScheme` immediate child의 `minorFont -> minorFontAlt` name drift exact mutation load 회귀를 추가해서, `font_scheme_child_names` sequence 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b635 DONE` theme fontScheme child-removal exact load mirror
+  - 범위: `fontScheme` immediate child `minorFont` 제거 exact mutation load 회귀를 추가해서, one-sided direct child set 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b636 DONE` theme fontScheme nested attr-value exact load mirror
+  - 범위: `fontScheme` nested `latin@typeface`의 `Cambria -> Aptos` exact mutation load 회귀를 추가해서, nested attr-map value drift 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b637 DONE` theme fmtScheme nested attr-value exact load mirror
+  - 범위: `fmtScheme` nested `ln@w`의 `9525 -> 19050` exact mutation load 회귀를 추가해서, nested attr-map value drift 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b638 DONE` theme fmtScheme nested child name exact load mirror
+  - 범위: `fmtScheme` nested child의 `effectStyle -> effectLst` exact mutation load 회귀를 추가해서, nested child name drift 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b639 DONE` theme fmtScheme nested child-removal exact load mirror
+  - 범위: `fmtScheme` nested `effectStyle` 제거 exact mutation load 회귀를 추가해서, one-sided nested child set 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b640 DONE` theme fmtScheme fill grandchild attr-value exact load mirror
+  - 범위: `fmtScheme` fill grandchild `schemeClr@val`의 `phClr -> tx1` exact mutation load 회귀를 추가해서, grandchild attr-map value drift 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b641 DONE` theme fmtScheme fill grandchild attr-removal exact load mirror
+  - 범위: `fmtScheme` fill grandchild `schemeClr@val` 제거 exact mutation load 회귀를 추가해서, empty grandchild attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b642 DONE` theme fmtScheme fill grandchild name exact load mirror
+  - 범위: `fmtScheme` fill grandchild의 `schemeClr -> srgbClr` exact mutation load 회귀를 추가해서, grandchild name drift 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b643 DONE` theme fmtScheme fill grandchild-removal exact load mirror
+  - 범위: `fmtScheme` fill grandchild `schemeClr` 제거 exact mutation load 회귀를 추가해서, one-sided grandchild set 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b644 DONE` theme fmtScheme child-removal exact load mirror
+  - 범위: `fmtScheme` direct child `bgFillStyleLst` 제거 exact mutation load 회귀를 추가해서, one-sided child sequence 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b645 DONE` theme fmtScheme child name exact load mirror
+  - 범위: `fmtScheme` direct child의 `bgFillStyleLst -> bgFillStyleAlt` exact mutation load 회귀를 추가해서, child name drift 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b646 DONE` theme fmtScheme custom-name exact load mirror on child fixture
+  - 범위: child-bearing `fmtScheme` fixture에서 `name="Office" -> "Custom"` exact mutation load 회귀를 추가해서, richer fixture의 `format_scheme_name` drift 보존을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b647 DONE` theme fmtScheme name-removal exact load mirror on child fixture
+  - 범위: child-bearing `fmtScheme` fixture에서 `name` attr 제거 exact mutation load 회귀를 추가해서, richer fixture의 `format_scheme_name == None` case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b648 DONE` theme clrScheme nested-before-parent exact load mirror
+  - 범위: `clrScheme` nested child가 parent child보다 먼저 나오는 exact mutation load 회귀를 추가해서, malformed shape가 typed theme summary에서 direct-child sequence로 어떻게 수집되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b649 DONE` theme fontScheme nested-before-parent exact load mirror
+  - 범위: `fontScheme` nested child가 parent child보다 먼저 나오는 exact mutation load 회귀를 추가해서, malformed shape가 typed theme summary에서 direct-child/nested-child sequence로 어떻게 수집되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b650 DONE` theme fmtScheme nested-before-parent exact load mirror
+  - 범위: `fmtScheme` nested child가 parent child보다 먼저 나오는 exact mutation load 회귀를 추가해서, malformed shape가 typed theme summary에서 direct-child/nested-child sequence로 어떻게 수집되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b651 DONE` theme fmtScheme effect great-grandchild attr-removal exact load mirror
+  - 범위: `fmtScheme` effect great-grandchild `outerShdw@blurRad` 제거 exact mutation load 회귀를 추가해서, empty attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b652 DONE` theme fmtScheme effect great-great-grandchild attr-removal exact load mirror
+  - 범위: `fmtScheme` effect great-great-grandchild `schemeClr@val` 제거 exact mutation load 회귀를 추가해서, empty attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b653 DONE` theme fmtScheme bgFill great-grandchild attr-removal exact load mirror
+  - 범위: `fmtScheme` bgFill great-grandchild `gs@pos` 제거 exact mutation load 회귀를 추가해서, empty attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b654 DONE` theme fmtScheme bgFill great-great-grandchild attr-removal exact load mirror
+  - 범위: `fmtScheme` bgFill great-great-grandchild `schemeClr@val` 제거 exact mutation load 회귀를 추가해서, empty attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b655 DONE` theme fmtScheme fill color attr-value exact load mirror
+  - 범위: single-transform `fmtScheme fill color` fixture에서 `tint@val` value drift exact mutation load 회귀를 추가해서, drifted attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b656 DONE` theme fmtScheme fill color attr-removal exact load mirror
+  - 범위: single-transform `fmtScheme fill color` fixture에서 `tint@val` 제거 exact mutation load 회귀를 추가해서, empty attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b657 DONE` theme fmtScheme fill color name exact load mirror
+  - 범위: single-transform `fmtScheme fill color` fixture에서 `tint -> shade` exact mutation load 회귀를 추가해서, renamed transform child를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b658 DONE` theme fmtScheme fill color removal exact load mirror
+  - 범위: single-transform `fmtScheme fill color` fixture에서 `tint` child 제거 exact mutation load 회귀를 추가해서, empty transform-sequence case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b659 DONE` theme fmtScheme fill color second-transform attr-value exact load mirror
+  - 범위: `tint + satMod` sequence fixture에서 trailing `satMod@val` value drift exact mutation load 회귀를 추가해서, second-transform attr-map drift를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b660 DONE` theme fmtScheme fill color second-transform attr-removal exact load mirror
+  - 범위: `tint + satMod` sequence fixture에서 trailing `satMod@val` 제거 exact mutation load 회귀를 추가해서, empty second-transform attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b661 DONE` theme fmtScheme fill color second-transform name exact load mirror
+  - 범위: `tint + satMod` sequence fixture에서 trailing `satMod -> shade` exact mutation load 회귀를 추가해서, renamed second transform child를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b662 DONE` theme fmtScheme fill color second-transform removal exact load mirror
+  - 범위: `tint + satMod` sequence fixture에서 trailing `satMod` child 제거 exact mutation load 회귀를 추가해서, shrunk transform-sequence case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b663 DONE` theme fmtScheme fill color first-transform attr-value exact load mirror
+  - 범위: `tint + satMod` sequence fixture에서 leading `tint@val` value drift exact mutation load 회귀를 추가해서, sibling이 있는 first-transform attr-map drift를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b664 DONE` theme fmtScheme fill color first-transform attr-removal exact load mirror
+  - 범위: `tint + satMod` sequence fixture에서 leading `tint@val` 제거 exact mutation load 회귀를 추가해서, empty first-transform attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b665 DONE` theme fmtScheme fill color first-transform name exact load mirror
+  - 범위: `tint + satMod` sequence fixture에서 leading `tint -> shade` exact mutation load 회귀를 추가해서, renamed first transform child를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b666 DONE` theme fmtScheme fill color first-transform removal exact load mirror
+  - 범위: `tint + satMod` sequence fixture에서 leading `tint` child 제거 exact mutation load 회귀를 추가해서, shrunk transform-sequence case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b667 DONE` theme fmtScheme fill color extra-transform attr-value exact load mirror
+  - 범위: `tint + satMod + shade` sequence fixture에서 trailing `shade@val` value drift exact mutation load 회귀를 추가해서, extra-transform attr-map drift를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b668 DONE` theme fmtScheme fill color extra-transform attr-removal exact load mirror
+  - 범위: `tint + satMod + shade` sequence fixture에서 trailing `shade@val` 제거 exact mutation load 회귀를 추가해서, empty extra-transform attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b669 DONE` theme fmtScheme fill color extra-transform name exact load mirror
+  - 범위: `tint + satMod + shade` sequence fixture에서 trailing `shade -> lumMod` exact mutation load 회귀를 추가해서, renamed extra transform child를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b670 DONE` theme fmtScheme fill color extra-transform removal exact load mirror
+  - 범위: `tint + satMod + shade` sequence fixture에서 trailing `shade` child 제거 exact mutation load 회귀를 추가해서, shrunk extra-transform sequence case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b671 DONE` theme fmtScheme fill color duplicate-transform attr-value exact load mirror
+  - 범위: duplicate-transform fixture에서 trailing duplicate `satMod@val` value drift exact mutation load 회귀를 추가해서, duplicate branch attr-map drift를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b672 DONE` theme fmtScheme fill color duplicate-transform attr-removal exact load mirror
+  - 범위: duplicate-transform fixture에서 trailing duplicate `satMod@val` 제거 exact mutation load 회귀를 추가해서, empty duplicate attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b673 DONE` theme fmtScheme fill color duplicate-transform name exact load mirror
+  - 범위: duplicate-transform fixture에서 trailing duplicate `satMod -> shade` exact mutation load 회귀를 추가해서, renamed duplicate transform child를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b674 DONE` theme fmtScheme fill color duplicate-transform removal exact load mirror
+  - 범위: duplicate-transform fixture에서 trailing duplicate `satMod` child 제거 exact mutation load 회귀를 추가해서, shrunk duplicate-transform sequence case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b675 DONE` theme fmtScheme fill color front-transform attr-value exact load mirror
+  - 범위: front-inserted fixture에서 leading `shade@val` value drift exact mutation load 회귀를 추가해서, front-transform attr-map drift를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b676 DONE` theme fmtScheme fill color front-transform attr-removal exact load mirror
+  - 범위: front-inserted fixture에서 leading `shade@val` 제거 exact mutation load 회귀를 추가해서, empty front-transform attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b677 DONE` theme fmtScheme fill color front-transform name exact load mirror
+  - 범위: front-inserted fixture에서 leading `shade -> lumMod` exact mutation load 회귀를 추가해서, renamed front transform child를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b678 DONE` theme fmtScheme fill color front-transform removal exact load mirror
+  - 범위: front-inserted fixture에서 leading `shade` child 제거 exact mutation load 회귀를 추가해서, shrunk front-transform sequence case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b679 DONE` theme fmtScheme fill color front-transform order exact load mirror
+  - 범위: front-inserted fixture에서 leading `shade`를 middle position으로 reorder하는 exact mutation load 회귀를 추가해서, middle-sequence summary shape를 직접 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b680 DONE` theme fmtScheme fill color middle-transform order exact load mirror
+  - 범위: middle-inserted fixture에서 middle `shade`를 trailing position으로 reorder하는 exact mutation load 회귀를 추가해서, extra-sequence summary shape를 직접 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b681 DONE` theme fmtScheme fill color middle-transform attr-value exact load mirror
+  - 범위: middle-inserted fixture에서 middle `shade@val` value drift exact mutation load 회귀를 추가해서, middle-transform attr-map drift를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b682 DONE` theme fmtScheme fill color middle-transform attr-removal exact load mirror
+  - 범위: middle-inserted fixture에서 middle `shade@val` 제거 exact mutation load 회귀를 추가해서, empty middle-transform attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b683 DONE` theme fmtScheme fill color middle-transform name exact load mirror
+  - 범위: middle-inserted fixture에서 middle `shade -> lumMod` exact mutation load 회귀를 추가해서, renamed middle transform child를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b684 DONE` theme fmtScheme fill color middle-transform removal exact load mirror
+  - 범위: middle-inserted fixture에서 middle `shade` child 제거 exact mutation load 회귀를 추가해서, shrunk middle-transform sequence case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b685 DONE` theme fmtScheme fill color only-transform addition exact load mirror
+  - 범위: single-transform fixture에서 trailing `satMod` 추가 exact mutation load 회귀를 추가해서, `tint + satMod` shape를 explicit mutation load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b686 DONE` theme fmtScheme fill color only-transform duplicate exact load mirror
+  - 범위: single-transform fixture에서 `tint` sibling duplicate exact mutation load 회귀를 추가해서, duplicated single-transform sequence와 attr-map을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b687 DONE` theme fmtScheme fill color duplicate-transform order exact load mirror
+  - 범위: duplicate-transform fixture에서 trailing duplicate `satMod` 순서 교체 exact mutation load 회귀를 추가해서, reordered duplicate attr-map sequence를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b688 DONE` theme fmtScheme fill color extra-transform order exact load mirror
+  - 범위: extra-transform fixture에서 trailing `shade`를 middle position으로 reorder하는 exact mutation load 회귀를 추가해서, reordered extra sequence shape를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b689 DONE` theme fmtScheme effect great-grandchild attr-value exact load mirror
+  - 범위: `effect > effectLst > outerShdw` fixture에서 `blurRad` value drift exact mutation load 회귀를 추가해서, drifted attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b690 DONE` theme fmtScheme effect great-grandchild name exact load mirror
+  - 범위: `effect > effectLst > outerShdw` fixture에서 `outerShdw -> innerShdw` exact mutation load 회귀를 추가해서, renamed great-grandchild를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b691 DONE` theme fmtScheme effect great-grandchild removal exact load mirror
+  - 범위: `effect > effectLst > outerShdw` fixture에서 child removal exact mutation load 회귀를 추가해서, empty great-grandchild sequence case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b692 DONE` theme fmtScheme effect great-great-grandchild attr-value exact load mirror
+  - 범위: `effect > effectLst > outerShdw > schemeClr` fixture에서 `val` value drift exact mutation load 회귀를 추가해서, drifted attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b693 DONE` theme fmtScheme effect great-great-grandchild name exact load mirror
+  - 범위: `effect > effectLst > outerShdw > schemeClr` fixture에서 `schemeClr -> srgbClr` exact mutation load 회귀를 추가해서, renamed great-great-grandchild를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b694 DONE` theme fmtScheme effect great-great-grandchild removal exact load mirror
+  - 범위: `effect > effectLst > outerShdw > schemeClr` fixture에서 child removal exact mutation load 회귀를 추가해서, empty great-great-grandchild sequence case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b695 DONE` theme fmtScheme bgFill great-grandchild attr-value exact load mirror
+  - 범위: `bgFill > gsLst > gs` fixture에서 `pos` value drift exact mutation load 회귀를 추가해서, drifted attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b696 DONE` theme fmtScheme bgFill great-grandchild name exact load mirror
+  - 범위: `bgFill > gsLst > gs` fixture에서 `gs -> tileRect` exact mutation load 회귀를 추가해서, renamed great-grandchild를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b697 DONE` theme fmtScheme bgFill great-grandchild removal exact load mirror
+  - 범위: `bgFill > gsLst > gs` fixture에서 child removal exact mutation load 회귀를 추가해서, empty great-grandchild sequence case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b698 DONE` theme fmtScheme bgFill great-great-grandchild attr-value exact load mirror
+  - 범위: `bgFill > gsLst > gs > schemeClr` fixture에서 `val` value drift exact mutation load 회귀를 추가해서, drifted attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b699 DONE` theme fmtScheme bgFill great-great-grandchild name exact load mirror
+  - 범위: `bgFill > gsLst > gs > schemeClr` fixture에서 `schemeClr -> srgbClr` exact mutation load 회귀를 추가해서, renamed great-great-grandchild를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b700 DONE` theme fmtScheme bgFill great-great-grandchild removal exact load mirror
+  - 범위: `bgFill > gsLst > gs > schemeClr` fixture에서 child removal exact mutation load 회귀를 추가해서, empty great-great-grandchild sequence case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b701 DONE` theme clrScheme child removal exact load mirror
+  - 범위: `clrScheme` direct-child fixture에서 trailing `folHlink` child 제거 exact mutation load 회귀를 추가해서, shrunk child sequence를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b702 DONE` theme clrScheme child-name exact load mirror
+  - 범위: `clrScheme` direct-child fixture에서 `folHlink -> folHlinkAlt` exact mutation load 회귀를 추가해서, renamed child sequence를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b703 DONE` theme clrScheme nested-child attr-value exact load mirror
+  - 범위: `clrScheme > sysClr` fixture에서 `lastClr` value drift exact mutation load 회귀를 추가해서, drifted nested attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b704 DONE` theme clrScheme nested-child lastClr-removal exact load mirror
+  - 범위: `clrScheme > sysClr` fixture에서 `lastClr` attr 제거 exact mutation load 회귀를 추가해서, partial nested attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b705 DONE` theme clrScheme nested-child val-removal exact load mirror
+  - 범위: `clrScheme > sysClr` fixture에서 `val` attr 제거 exact mutation load 회귀를 추가해서, partial nested attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b706 DONE` theme clrScheme nested-srgb-child val-removal exact load mirror
+  - 범위: `clrScheme > srgbClr` fixture에서 `val` attr 제거 exact mutation load 회귀를 추가해서, empty nested attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b707 DONE` theme clrScheme nested-child name exact load mirror
+  - 범위: `clrScheme > sysClr` fixture에서 `sysClr -> srgbClr` exact mutation load 회귀를 추가해서, renamed nested child와 preserved attr-map을 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b708 DONE` theme clrScheme nested-child removal exact load mirror
+  - 범위: `clrScheme > sysClr` fixture에서 child 제거 exact mutation load 회귀를 추가해서, empty nested child sequence case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b709 DONE` theme clrScheme custom-name exact load mirror on child fixture
+  - 범위: `clrScheme` direct-child fixture에서 `name="Office" -> name="Custom"` exact mutation load 회귀를 추가해서, renamed scheme attr와 unchanged child sequence를 같은 fixture 기준으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b710 DONE` theme clrScheme name-removal exact load mirror on child fixture
+  - 범위: `clrScheme` direct-child fixture에서 `name` attr 제거 exact mutation load 회귀를 추가해서, missing scheme attr와 unchanged child sequence를 같은 fixture 기준으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b711 DONE` theme fontScheme custom-name exact load mirror on child fixture
+  - 범위: `fontScheme` direct-child fixture에서 `name="Office" -> name="Custom"` exact mutation load 회귀를 추가해서, renamed scheme attr와 unchanged child sequence를 같은 fixture 기준으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b712 DONE` theme fontScheme name-removal exact load mirror on child fixture
+  - 범위: `fontScheme` direct-child fixture에서 `name` attr 제거 exact mutation load 회귀를 추가해서, missing scheme attr와 unchanged child sequence를 같은 fixture 기준으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b713 DONE` theme fmtScheme nested-child w-attr-removal exact load mirror
+  - 범위: `fmtScheme > lnStyleLst > ln` fixture에서 `w` attr 제거 exact mutation load 회귀를 추가해서, empty nested attr-map case를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b714 DONE` theme custom-color-list instead of extension-list exact load mirror
+  - 범위: optional-root fixture에서 `extLst -> custClrLst` exact mutation load 회귀를 추가해서, renamed optional root child를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b715 DONE` theme extra-color-scheme-list instead of extension-list exact load mirror
+  - 범위: optional-root fixture에서 `extLst -> extraClrSchemeLst` exact mutation load 회귀를 추가해서, renamed optional root child를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b716 DONE` theme extension-list instead of extra-color-scheme-list exact load mirror
+  - 범위: optional-root fixture에서 `extraClrSchemeLst -> extLst` exact mutation load 회귀를 추가해서, renamed optional root child를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b717 DONE` theme custom-color-list instead of extra-color-scheme-list exact load mirror
+  - 범위: optional-root fixture에서 `extraClrSchemeLst -> custClrLst` exact mutation load 회귀를 추가해서, renamed optional root child를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b718 DONE` theme extension-list instead of custom-color-list exact load mirror
+  - 범위: optional-root fixture에서 `custClrLst -> extLst` exact mutation load 회귀를 추가해서, renamed optional root child를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b719 DONE` theme extra-color-scheme-list instead of custom-color-list exact load mirror
+  - 범위: optional-root fixture에서 `custClrLst -> extraClrSchemeLst` exact mutation load 회귀를 추가해서, renamed optional root child를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b720 DONE` theme duplicate objectDefaults reject via extension-list rename exact load mirror
+  - 범위: optional-root fixture에서 `extLst -> objectDefaults` exact mutation load 회귀를 추가해서, rename로 생긴 duplicate `objectDefaults` parser reject를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b721 DONE` theme duplicate objectDefaults reject via extra-color-scheme-list rename exact load mirror
+  - 범위: optional-root fixture에서 `extraClrSchemeLst -> objectDefaults` exact mutation load 회귀를 추가해서, rename로 생긴 duplicate `objectDefaults` parser reject를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b722 DONE` theme duplicate objectDefaults reject via custom-color-list rename exact load mirror
+  - 범위: optional-root fixture에서 `custClrLst -> objectDefaults` exact mutation load 회귀를 추가해서, rename로 생긴 duplicate `objectDefaults` parser reject를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b723 DONE` theme duplicate extra-color-scheme-list reject via extension-list rename exact load mirror
+  - 범위: pairwise optional-root fixture에서 `extLst -> extraClrSchemeLst` exact mutation load 회귀를 추가해서, rename로 생긴 duplicate `extraClrSchemeLst` parser reject를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b724 DONE` theme duplicate extra-color-scheme-list reject via custom-color-list rename exact load mirror
+  - 범위: pairwise optional-root fixture에서 `custClrLst -> extraClrSchemeLst` exact mutation load 회귀를 추가해서, rename로 생긴 duplicate `extraClrSchemeLst` parser reject를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b725 DONE` theme duplicate custom-color-list reject via extension-list rename exact load mirror
+  - 범위: pairwise optional-root fixture에서 `extLst -> custClrLst` exact mutation load 회귀를 추가해서, rename로 생긴 duplicate `custClrLst` parser reject를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b726 DONE` theme duplicate custom-color-list reject via extra-color-scheme-list rename exact load mirror
+  - 범위: pairwise optional-root fixture에서 `extraClrSchemeLst -> custClrLst` exact mutation load 회귀를 추가해서, rename로 생긴 duplicate `custClrLst` parser reject를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b727 DONE` theme duplicate extension-list reject via extra-color-scheme-list rename exact load mirror
+  - 범위: pairwise optional-root fixture에서 `extraClrSchemeLst -> extLst` exact mutation load 회귀를 추가해서, rename로 생긴 duplicate `extLst` parser reject를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b728 DONE` theme duplicate extension-list reject via custom-color-list rename exact load mirror
+  - 범위: pairwise optional-root fixture에서 `custClrLst -> extLst` exact mutation load 회귀를 추가해서, rename로 생긴 duplicate `extLst` parser reject를 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b729 DONE` theme objectDefaults instead of extension-list without existing objectDefaults exact load mirror
+  - 범위: no-objectDefaults single-optional fixture에서 `extLst -> objectDefaults` exact mutation load 회귀를 추가해서, renamed optional root child가 base objectDefaults shape로 수집되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b730 DONE` theme objectDefaults instead of extra-color-scheme-list without existing objectDefaults exact load mirror
+  - 범위: no-objectDefaults single-optional fixture에서 `extraClrSchemeLst -> objectDefaults` exact mutation load 회귀를 추가해서, renamed optional root child가 base objectDefaults shape로 수집되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b731 DONE` theme objectDefaults instead of custom-color-list without existing objectDefaults exact load mirror
+  - 범위: no-objectDefaults single-optional fixture에서 `custClrLst -> objectDefaults` exact mutation load 회귀를 추가해서, renamed optional root child가 base objectDefaults shape로 수집되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b732 DONE` theme objectDefaults and custom-color-list instead of extra-color-scheme-list without existing objectDefaults exact load mirror
+  - 범위: no-objectDefaults pairwise fixture에서 `extraClrSchemeLst -> objectDefaults` exact mutation load 회귀를 추가해서, objectDefaults+custClrLst mixed shape를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b733 DONE` theme extra-color-scheme-list and objectDefaults instead of custom-color-list without existing objectDefaults exact load mirror
+  - 범위: no-objectDefaults pairwise fixture에서 `custClrLst -> objectDefaults` exact mutation load 회귀를 추가해서, extraClrSchemeLst+objectDefaults mixed shape를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b734 DONE` theme objectDefaults and extension-list instead of extra-color-scheme-list without existing objectDefaults exact load mirror
+  - 범위: no-objectDefaults pairwise fixture에서 `extraClrSchemeLst -> objectDefaults` exact mutation load 회귀를 추가해서, objectDefaults+extLst mixed shape를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b735 DONE` theme extra-color-scheme-list and objectDefaults instead of extension-list without existing objectDefaults exact load mirror
+  - 범위: no-objectDefaults pairwise fixture에서 `extLst -> objectDefaults` exact mutation load 회귀를 추가해서, extraClrSchemeLst+objectDefaults mixed shape를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b736 DONE` theme objectDefaults and extension-list instead of custom-color-list without existing objectDefaults exact load mirror
+  - 범위: no-objectDefaults pairwise fixture에서 `custClrLst -> objectDefaults` exact mutation load 회귀를 추가해서, objectDefaults+extLst mixed shape를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b737 DONE` theme custom-color-list and objectDefaults instead of extension-list without existing objectDefaults exact load mirror
+  - 범위: no-objectDefaults pairwise fixture에서 `extLst -> objectDefaults` exact mutation load 회귀를 추가해서, custClrLst+objectDefaults mixed shape를 typed theme summary assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b738 DONE` theme without objectDefaults positive dirty-save mirror
+  - 범위: base theme fixture에서 `objectDefaults`를 제거한 accepted optional-root shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b739 DONE` theme extra-color-scheme-list without objectDefaults positive dirty-save mirror
+  - 범위: no-objectDefaults single-optional fixture의 `extraClrSchemeLst` variant를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b740 DONE` theme custom-color-list without objectDefaults positive dirty-save mirror
+  - 범위: no-objectDefaults single-optional fixture의 `custClrLst` variant를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b741 DONE` theme extension-list without objectDefaults positive dirty-save mirror
+  - 범위: no-objectDefaults single-optional fixture의 `extLst` variant를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b742 DONE` reordered theme root-child sequence positive dirty-save mirror
+  - 범위: accepted reordered root-child theme fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b743 DONE` theme custom-color-list instead of extension-list positive dirty-save mirror
+  - 범위: optional-root rename fixture의 `extLst -> custClrLst` accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b744 DONE` theme extension-list instead of extra-color-scheme-list positive dirty-save mirror
+  - 범위: optional-root rename fixture의 `extraClrSchemeLst -> extLst` accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b745 DONE` theme extra-color-scheme-list instead of extension-list positive dirty-save mirror
+  - 범위: optional-root rename fixture의 `extLst -> extraClrSchemeLst` accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b746 DONE` theme custom-color-list instead of extra-color-scheme-list positive dirty-save mirror
+  - 범위: optional-root rename fixture의 `extraClrSchemeLst -> custClrLst` accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b747 DONE` theme extension-list instead of custom-color-list positive dirty-save mirror
+  - 범위: optional-root rename fixture의 `custClrLst -> extLst` accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b748 DONE` theme extra-color-scheme-list instead of custom-color-list positive dirty-save mirror
+  - 범위: optional-root rename fixture의 `custClrLst -> extraClrSchemeLst` accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b749 DONE` theme optional root children without objectDefaults positive dirty-save mirror
+  - 범위: no-objectDefaults all-optional fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b750 DONE` theme extra and custom color lists without objectDefaults positive dirty-save mirror
+  - 범위: no-objectDefaults pairwise fixture의 `extraClrSchemeLst + custClrLst` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b751 DONE` theme extra-color-scheme and extension-list without objectDefaults positive dirty-save mirror
+  - 범위: no-objectDefaults pairwise fixture의 `extraClrSchemeLst + extLst` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b752 DONE` theme custom-color-list and extension-list without objectDefaults positive dirty-save mirror
+  - 범위: no-objectDefaults pairwise fixture의 `custClrLst + extLst` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b753 DONE` objectDefaults instead of extension-list without existing objectDefaults positive dirty-save mirror
+  - 범위: no-existing-objectDefaults single-optional fixture의 `extLst -> objectDefaults` accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b754 DONE` objectDefaults instead of extra-color-scheme-list without existing objectDefaults positive dirty-save mirror
+  - 범위: no-existing-objectDefaults single-optional fixture의 `extraClrSchemeLst -> objectDefaults` accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b755 DONE` objectDefaults instead of custom-color-list without existing objectDefaults positive dirty-save mirror
+  - 범위: no-existing-objectDefaults single-optional fixture의 `custClrLst -> objectDefaults` accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b756 DONE` objectDefaults and custom-color-list instead of extra-color-scheme-list without existing objectDefaults positive dirty-save mirror
+  - 범위: no-existing-objectDefaults pairwise fixture의 `extraClrSchemeLst -> objectDefaults` accepted mixed shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b757 DONE` extra-color-scheme-list and objectDefaults instead of custom-color-list without existing objectDefaults positive dirty-save mirror
+  - 범위: no-existing-objectDefaults pairwise fixture의 `custClrLst -> objectDefaults` accepted mixed shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b758 DONE` objectDefaults and extension-list instead of extra-color-scheme-list without existing objectDefaults positive dirty-save mirror
+  - 범위: no-existing-objectDefaults pairwise fixture의 `extraClrSchemeLst -> objectDefaults` accepted mixed shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b759 DONE` extra-color-scheme-list and objectDefaults instead of extension-list without existing objectDefaults positive dirty-save mirror
+  - 범위: no-existing-objectDefaults pairwise fixture의 `extLst -> objectDefaults` accepted mixed shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b760 DONE` objectDefaults and extension-list instead of custom-color-list without existing objectDefaults positive dirty-save mirror
+  - 범위: no-existing-objectDefaults pairwise fixture의 `custClrLst -> objectDefaults` accepted mixed shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b761 DONE` custom-color-list and objectDefaults instead of extension-list without existing objectDefaults positive dirty-save mirror
+  - 범위: no-existing-objectDefaults pairwise fixture의 `extLst -> objectDefaults` accepted mixed shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b762 DONE` theme extra and custom color lists positive dirty-save mirror
+  - 범위: objectDefaults가 유지된 `extraClrSchemeLst + custClrLst` accepted addition shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b763 DONE` theme extra-color-scheme and extension-list positive dirty-save mirror
+  - 범위: objectDefaults가 유지된 `extraClrSchemeLst + extLst` accepted addition shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b764 DONE` theme custom-color-list and extension-list positive dirty-save mirror
+  - 범위: objectDefaults가 유지된 `custClrLst + extLst` accepted addition shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b765 DONE` theme all optional root children positive dirty-save mirror
+  - 범위: objectDefaults가 유지된 `extraClrSchemeLst + custClrLst + extLst` accepted addition shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b766 DONE` theme without name attr positive dirty-save mirror
+  - 범위: theme root `name` attr 제거 accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b767 DONE` custom theme name positive dirty-save mirror
+  - 범위: theme root `name="Custom Theme"` accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b768 DONE` theme without color-scheme name positive dirty-save mirror
+  - 범위: `clrScheme@name` 제거 accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b769 DONE` custom color-scheme name positive dirty-save mirror
+  - 범위: `clrScheme@name="Custom"` accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b770 DONE` theme without font-scheme name positive dirty-save mirror
+  - 범위: `fontScheme@name` 제거 accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b771 DONE` custom font-scheme name positive dirty-save mirror
+  - 범위: `fontScheme@name="Custom"` accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b772 DONE` theme without format-scheme name positive dirty-save mirror
+  - 범위: `fmtScheme@name` 제거 accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b773 DONE` custom format-scheme name positive dirty-save mirror
+  - 범위: `fmtScheme@name="Custom"` accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b774 DONE` reordered themeElements child sequence positive dirty-save mirror
+  - 범위: accepted `themeElements` child order permutation을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b775 DONE` theme extension-list presence positive dirty-save mirror
+  - 범위: single optional-root `extLst` accepted addition shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b776 DONE` reordered theme extension-list positive dirty-save mirror
+  - 범위: single optional-root `extLst` reordered accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b777 DONE` theme extra-color-scheme-list presence positive dirty-save mirror
+  - 범위: single optional-root `extraClrSchemeLst` accepted addition shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b778 DONE` reordered theme extra-color-scheme-list positive dirty-save mirror
+  - 범위: single optional-root `extraClrSchemeLst` reordered accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b779 DONE` theme custom-color-list presence positive dirty-save mirror
+  - 범위: single optional-root `custClrLst` accepted addition shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b780 DONE` reordered theme custom-color-list positive dirty-save mirror
+  - 범위: single optional-root `custClrLst` reordered accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b781 DONE` color-scheme child sequence positive dirty-save mirror
+  - 범위: accepted `clrScheme` child sequence fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b782 DONE` added color-scheme child sequence positive dirty-save mirror
+  - 범위: accepted duplicate `folHlink` child sequence fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b783 DONE` reordered color-scheme child sequence positive dirty-save mirror
+  - 범위: accepted reordered `clrScheme` child sequence fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b784 DONE` color-scheme nested child before parent positive dirty-save mirror
+  - 범위: accepted `clrScheme` nested child-before-parent fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b785 DONE` font-scheme child sequence positive dirty-save mirror
+  - 범위: accepted `fontScheme` child sequence fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b786 DONE` added font-scheme child sequence positive dirty-save mirror
+  - 범위: accepted duplicate `minorFont` child sequence fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b787 DONE` reordered font-scheme child sequence positive dirty-save mirror
+  - 범위: accepted reordered `fontScheme` child sequence fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b788 DONE` font-scheme nested child before parent positive dirty-save mirror
+  - 범위: accepted `fontScheme` nested child-before-parent fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b789 DONE` format-scheme child sequence positive dirty-save mirror
+  - 범위: accepted `fmtScheme` child sequence fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b790 DONE` added format-scheme child sequence positive dirty-save mirror
+  - 범위: accepted duplicate `bgFillStyleLst` child sequence fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b791 DONE` reordered format-scheme child sequence positive dirty-save mirror
+  - 범위: accepted reordered `fmtScheme` child sequence fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b792 DONE` format-scheme nested child before parent positive dirty-save mirror
+  - 범위: accepted `fmtScheme` nested child-before-parent fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b793 DONE` color-scheme child name drift positive dirty-save mirror
+  - 범위: accepted `clrScheme` direct-child name drift fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b794 DONE` color-scheme nested child attr-value drift positive dirty-save mirror
+  - 범위: accepted `clrScheme` nested child attr-value drift fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b795 DONE` font-scheme child name drift positive dirty-save mirror
+  - 범위: accepted `fontScheme` direct-child name drift fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b796 DONE` font-scheme nested child attr-value drift positive dirty-save mirror
+  - 범위: accepted `fontScheme` nested child attr-value drift fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b797 DONE` format-scheme child name drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` direct-child name drift fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b798 DONE` format-scheme nested child attr-value drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` nested child attr-value drift fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b799 DONE` custom color-scheme name on child fixture positive dirty-save mirror
+  - 범위: accepted child-fixture `clrScheme@name="Custom"` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b800 DONE` color-scheme without name on child fixture positive dirty-save mirror
+  - 범위: accepted child-fixture `clrScheme@name` 제거 shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b801 DONE` color-scheme nested child attr-maps positive dirty-save mirror
+  - 범위: accepted child-fixture `clrScheme` value-child baseline shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b802 DONE` custom font-scheme name on child fixture positive dirty-save mirror
+  - 범위: accepted child-fixture `fontScheme@name="Custom"` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b803 DONE` font-scheme without name on child fixture positive dirty-save mirror
+  - 범위: accepted child-fixture `fontScheme@name` 제거 shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b804 DONE` font-scheme nested child attr-maps positive dirty-save mirror
+  - 범위: accepted child-fixture `fontScheme` value-child baseline shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b805 DONE` custom format-scheme name on child fixture positive dirty-save mirror
+  - 범위: accepted child-fixture `fmtScheme@name="Custom"` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b806 DONE` format-scheme without name on child fixture positive dirty-save mirror
+  - 범위: accepted child-fixture `fmtScheme@name` 제거 shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b807 DONE` format-scheme nested child attr-maps positive dirty-save mirror
+  - 범위: accepted child-fixture `fmtScheme` value-child baseline shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b808 DONE` color-scheme nested child lastClr attr removal positive dirty-save mirror
+  - 범위: accepted child-fixture `clrScheme` nested `sysClr@lastClr` 제거 shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b809 DONE` color-scheme nested child val attr removal positive dirty-save mirror
+  - 범위: accepted child-fixture `clrScheme` nested `sysClr@val` 제거 shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b810 DONE` color-scheme nested srgb child val attr removal positive dirty-save mirror
+  - 범위: accepted child-fixture `clrScheme` nested `srgbClr@val` 제거 shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b811 DONE` color-scheme nested child name drift positive dirty-save mirror
+  - 범위: accepted child-fixture `clrScheme` nested child `sysClr -> srgbClr` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b812 DONE` color-scheme nested child removal positive dirty-save mirror
+  - 범위: accepted child-fixture `clrScheme` nested child removal shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b813 DONE` added color-scheme nested child attr-maps positive dirty-save mirror
+  - 범위: accepted child-fixture `clrScheme` nested duplicate-child attr-map shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b814 DONE` font-scheme nested child name drift positive dirty-save mirror
+  - 범위: accepted child-fixture `fontScheme` nested child `font -> ea` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b815 DONE` font-scheme nested child typeface attr removal positive dirty-save mirror
+  - 범위: accepted child-fixture `fontScheme` nested `latin@typeface` 제거 shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b816 DONE` font-scheme nested script child typeface attr removal positive dirty-save mirror
+  - 범위: accepted child-fixture `fontScheme` nested `font@typeface` 제거 shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b817 DONE` font-scheme nested child script attr removal positive dirty-save mirror
+  - 범위: accepted child-fixture `fontScheme` nested `font@script` 제거 shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b818 DONE` font-scheme nested child removal positive dirty-save mirror
+  - 범위: accepted child-fixture `fontScheme` nested child removal shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b819 DONE` added font-scheme nested child attr-maps positive dirty-save mirror
+  - 범위: accepted child-fixture `fontScheme` nested duplicate-child attr-map shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b820 DONE` format-scheme nested child w attr removal positive dirty-save mirror
+  - 범위: accepted child-fixture `fmtScheme` nested `ln@w` 제거 shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b821 DONE` format-scheme nested child name drift positive dirty-save mirror
+  - 범위: accepted child-fixture `fmtScheme` nested child `effectStyle -> effectLst` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b822 DONE` format-scheme nested child removal positive dirty-save mirror
+  - 범위: accepted child-fixture `fmtScheme` nested child removal shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b823 DONE` added format-scheme nested child attr-maps positive dirty-save mirror
+  - 범위: accepted child-fixture `fmtScheme` nested duplicate-child attr-map shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b824 DONE` format-scheme fill grandchild attr-value drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme > fillStyleLst > solidFill > schemeClr@val` drift shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b825 DONE` format-scheme fill grandchild val attr removal positive dirty-save mirror
+  - 범위: accepted `fmtScheme > fillStyleLst > solidFill > schemeClr@val` 제거 shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b826 DONE` format-scheme fill grandchild name drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme > fillStyleLst > solidFill > schemeClr -> srgbClr` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b827 DONE` format-scheme fill grandchild removal positive dirty-save mirror
+  - 범위: accepted `fmtScheme > fillStyleLst > solidFill` grandchild removal shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b828 DONE` added format-scheme fill grandchild attr-maps positive dirty-save mirror
+  - 범위: accepted `fmtScheme > fillStyleLst > solidFill` duplicate grandchild attr-map shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b829 DONE` format-scheme fill grandchild baseline positive dirty-save mirror
+  - 범위: accepted `fmtScheme > fillStyleLst > solidFill > schemeClr` baseline fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b830 DONE` format-scheme fill-color great-grandchild baseline positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color great-grandchild baseline fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b831 DONE` format-scheme effect great-grandchild baseline positive dirty-save mirror
+  - 범위: accepted `fmtScheme` effect great-grandchild baseline fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b832 DONE` format-scheme bgFill great-grandchild baseline positive dirty-save mirror
+  - 범위: accepted `fmtScheme` bgFill great-grandchild baseline fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b833 DONE` fill-color great-grandchild attr-value drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color single-transform `tint@val` drift shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b834 DONE` fill-color great-grandchild val attr removal positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color single-transform `tint@val` 제거 shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b835 DONE` fill-color great-grandchild name drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color single-transform `tint -> shade` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b836 DONE` fill-color great-grandchild removal positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color single-transform removal shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b837 DONE` fill-color only-transform addition positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color single-transform 뒤 추가 transform shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b838 DONE` fill-color only-transform duplicate positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color single-transform duplicate shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b839 DONE` fill-color transform sequence baseline positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color `tint -> satMod` sequence baseline fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b840 DONE` fill-color transform sequence reorder positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color `satMod -> tint` reordered sequence shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b841 DONE` fill-color second-transform attr-value drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color second transform `satMod@val` drift shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b842 DONE` fill-color second-transform val attr removal positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color second transform `satMod@val` 제거 shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b843 DONE` fill-color second-transform name drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color second transform `satMod -> shade` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b844 DONE` fill-color second-transform removal positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color second transform removal shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b845 DONE` fill-color first-transform attr-value drift with siblings positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color sibling-preserving first transform `tint@val` drift shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b846 DONE` fill-color first-transform val attr removal with siblings positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color sibling-preserving first transform `tint@val` 제거 shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b847 DONE` fill-color first-transform name drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color sibling-preserving first transform `tint -> shade` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b848 DONE` fill-color first-transform removal positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color sibling-preserving first transform removal shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b849 DONE` fill-color duplicate-transform baseline positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color duplicate-transform baseline fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b850 DONE` fill-color duplicate-transform attr-value drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color trailing duplicate transform `satMod@val` drift shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b851 DONE` fill-color duplicate-transform val attr removal positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color trailing duplicate transform `satMod@val` 제거 shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b852 DONE` fill-color duplicate-transform name drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color trailing duplicate transform `satMod -> shade` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b853 DONE` fill-color duplicate-transform removal positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color trailing duplicate transform removal shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b854 DONE` fill-color duplicate-transform order drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color duplicate-transform order drift shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b855 DONE` fill-color extra-transform baseline positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color extra-transform baseline fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b856 DONE` fill-color extra-transform attr-value drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color extra transform `shade@val` drift shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b857 DONE` fill-color extra-transform val attr removal positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color extra transform `shade@val` 제거 shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b858 DONE` fill-color extra-transform name drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color extra transform `shade -> lumMod` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b859 DONE` fill-color extra-transform removal positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color extra transform removal shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b860 DONE` fill-color extra-transform order drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color extra-transform order drift shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b861 DONE` fill-color front-inserted transform baseline positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color front-inserted transform baseline fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b862 DONE` fill-color front-transform attr-value drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color front transform `shade@val` drift shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b863 DONE` fill-color front-transform val attr removal positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color front transform `shade@val` 제거 shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b864 DONE` fill-color front-transform name drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color front transform `shade -> lumMod` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b865 DONE` fill-color front-transform removal positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color front transform removal shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b866 DONE` fill-color front-transform order drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color front transform order drift shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b867 DONE` fill-color middle-inserted transform baseline positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color middle-inserted transform baseline fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b868 DONE` fill-color middle-transform attr-value drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color middle transform `shade@val` drift shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b869 DONE` fill-color middle-transform val attr removal positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color middle transform `shade@val` 제거 shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b870 DONE` fill-color middle-transform name drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color middle transform `shade -> lumMod` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b871 DONE` fill-color middle-transform removal positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color middle transform removal shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b872 DONE` fill-color middle-transform order drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` fill-color middle transform order drift shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b873 DONE` effect great-grandchild blurRad attr removal positive dirty-save mirror
+  - 범위: accepted `fmtScheme` effect great-grandchild `outerShdw@blurRad` 제거 shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b874 DONE` effect great-grandchild attr-value drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` effect great-grandchild `outerShdw@blurRad` drift shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b875 DONE` effect great-grandchild name drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` effect great-grandchild `outerShdw -> innerShdw` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b876 DONE` effect great-grandchild removal positive dirty-save mirror
+  - 범위: accepted `fmtScheme` effect great-grandchild removal shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b877 DONE` effect added great-grandchild sequence positive dirty-save mirror
+  - 범위: accepted `fmtScheme` effect duplicate `outerShdw` sequence shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b878 DONE` effect reordered great-grandchild sequence positive dirty-save mirror
+  - 범위: accepted `fmtScheme` effect reordered `outerShdw` sequence shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b879 DONE` bgFill great-grandchild pos attr removal positive dirty-save mirror
+  - 범위: accepted `fmtScheme` bgFill great-grandchild `gs@pos` 제거 shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b880 DONE` bgFill great-grandchild attr-value drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` bgFill great-grandchild `gs@pos` drift shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b881 DONE` bgFill great-grandchild name drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` bgFill great-grandchild `gs -> tileRect` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b882 DONE` bgFill great-grandchild removal positive dirty-save mirror
+  - 범위: accepted `fmtScheme` bgFill great-grandchild removal shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b883 DONE` bgFill added great-grandchild sequence positive dirty-save mirror
+  - 범위: accepted `fmtScheme` bgFill duplicate `gs` sequence shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b884 DONE` bgFill reordered great-grandchild sequence positive dirty-save mirror
+  - 범위: accepted `fmtScheme` bgFill reordered `gs` sequence shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b885 DONE` effect great-great-grandchild baseline positive dirty-save mirror
+  - 범위: accepted `fmtScheme` effect great-great-grandchild baseline attr-map shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b886 DONE` effect great-great-grandchild val attr removal positive dirty-save mirror
+  - 범위: accepted `fmtScheme` effect great-great-grandchild `schemeClr@val` 제거 shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b887 DONE` effect great-great-grandchild attr-value drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` effect great-great-grandchild `schemeClr@val` drift shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b888 DONE` effect great-great-grandchild name drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` effect great-great-grandchild `schemeClr -> srgbClr` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b889 DONE` effect great-great-grandchild removal positive dirty-save mirror
+  - 범위: accepted `fmtScheme` effect great-great-grandchild removal shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b890 DONE` effect added great-great-grandchild sequence positive dirty-save mirror
+  - 범위: accepted `fmtScheme` effect duplicate color child sequence shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b891 DONE` effect reordered great-great-grandchild sequence positive dirty-save mirror
+  - 범위: accepted `fmtScheme` effect reordered color child sequence shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b892 DONE` bgFill great-great-grandchild baseline positive dirty-save mirror
+  - 범위: accepted `fmtScheme` bgFill great-great-grandchild baseline attr-map shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b893 DONE` bgFill great-great-grandchild val attr removal positive dirty-save mirror
+  - 범위: accepted `fmtScheme` bgFill great-great-grandchild `schemeClr@val` 제거 shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b894 DONE` bgFill great-great-grandchild attr-value drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` bgFill great-great-grandchild `schemeClr@val` drift shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b895 DONE` bgFill great-great-grandchild name drift positive dirty-save mirror
+  - 범위: accepted `fmtScheme` bgFill great-great-grandchild `schemeClr -> srgbClr` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b896 DONE` bgFill great-great-grandchild removal positive dirty-save mirror
+  - 범위: accepted `fmtScheme` bgFill great-great-grandchild removal shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b897 DONE` bgFill added great-great-grandchild sequence positive dirty-save mirror
+  - 범위: accepted `fmtScheme` bgFill duplicate color child sequence shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b898 DONE` bgFill reordered great-great-grandchild sequence positive dirty-save mirror
+  - 범위: accepted `fmtScheme` bgFill reordered color child sequence shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b899 DONE` custom numFmt baseline positive dirty-save mirror
+  - 범위: accepted multi-entry custom `numFmt` fixture baseline을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b900 DONE` reordered custom numFmt positive dirty-save mirror
+  - 범위: accepted custom `numFmt` entry reorder shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b901 DONE` no-count custom numFmt positive dirty-save mirror
+  - 범위: accepted `numFmts` without `count` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b902 DONE` tableStyle attr-map baseline positive dirty-save mirror
+  - 범위: accepted `tableStyle` attr-map fixture baseline을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b903 DONE` added tableStyle attr positive dirty-save mirror
+  - 범위: accepted added `tableStyle@table` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b904 DONE` cellStyle attr-map baseline positive dirty-save mirror
+  - 범위: accepted `cellStyle` attr-map fixture baseline을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b905 DONE` added cellStyle iLevel positive dirty-save mirror
+  - 범위: accepted added `cellStyle@iLevel` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b906 DONE` explicit-false cellStyle flags positive dirty-save mirror
+  - 범위: accepted `cellStyle customBuiltin=\"0\" hidden=\"0\"` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b907 DONE` fill nested child attr-map baseline positive dirty-save mirror
+  - 범위: accepted fill nested child attr-map fixture baseline을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b908 DONE` added fill child attr-map positive dirty-save mirror
+  - 범위: accepted duplicate fill child shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b909 DONE` added fill nested child attr-map positive dirty-save mirror
+  - 범위: accepted added fill nested child shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b910 DONE` added font child attr-map positive dirty-save mirror
+  - 범위: accepted added font child attr-map shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b911 DONE` duplicated font child attr-map positive dirty-save mirror
+  - 범위: accepted duplicated font child attr-map shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b912 DONE` border child attr-map baseline positive dirty-save mirror
+  - 범위: accepted border child attr-map fixture baseline을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b913 DONE` added border child attr-map positive dirty-save mirror
+  - 범위: accepted added border child attr-map shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b914 DONE` duplicated border child attr-map positive dirty-save mirror
+  - 범위: accepted duplicated border child attr-map shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b915 DONE` border nested child attr-map baseline positive dirty-save mirror
+  - 범위: accepted border nested child attr-map fixture baseline을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b916 DONE` added border nested child attr-map positive dirty-save mirror
+  - 범위: accepted added border nested child attr-map shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b917 DONE` dxf child attr-map baseline positive dirty-save mirror
+  - 범위: accepted `dxf > numFmt` fixture baseline을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b918 DONE` added dxf child attr-map positive dirty-save mirror
+  - 범위: accepted added `dxf > font` child shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b919 DONE` duplicated dxf child attr-map positive dirty-save mirror
+  - 범위: accepted duplicated `dxf > numFmt` child shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b920 DONE` dxf nested child attr-map baseline positive dirty-save mirror
+  - 범위: accepted `dxf > font > color` fixture baseline을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b921 DONE` added dxf nested child attr-map positive dirty-save mirror
+  - 범위: accepted added `dxf > font > name` nested child shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b922 DONE` duplicated dxf nested child attr-map positive dirty-save mirror
+  - 범위: accepted duplicated `dxf > font > color` nested child shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b923 DONE` dxf multiple child sequence baseline positive dirty-save mirror
+  - 범위: accepted `dxf > numFmt + font` child-sequence baseline fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b924 DONE` reordered dxf multiple child sequence positive dirty-save mirror
+  - 범위: accepted reordered `dxf > font + numFmt` child sequence shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b925 DONE` dxf multiple nested child sequence baseline positive dirty-save mirror
+  - 범위: accepted `dxf > font > color + name` nested-sequence baseline fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b926 DONE` reordered dxf multiple nested child sequence positive dirty-save mirror
+  - 범위: accepted reordered `dxf > font > name + color` nested sequence shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b927 DONE` multiple dxf entries positive dirty-save mirror
+  - 범위: accepted 2-entry `dxfs@count` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b928 DONE` multiple dxf entries without count attr positive dirty-save mirror
+  - 범위: accepted 2-entry no-`count` `dxfs` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b929 DONE` empty and populated dxf entries positive dirty-save mirror
+  - 범위: accepted `dxfs` empty/populated 2-entry shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b930 DONE` populated and empty dxf entries positive dirty-save mirror
+  - 범위: accepted `dxfs` populated/empty 2-entry shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b931 DONE` empty and populated dxf entries without count attr positive dirty-save mirror
+  - 범위: accepted no-`count` `dxfs` empty/populated 2-entry shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b932 DONE` populated and empty dxf entries without count attr positive dirty-save mirror
+  - 범위: accepted no-`count` `dxfs` populated/empty 2-entry shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b933 DONE` empty-populated-empty dxf entries positive dirty-save mirror
+  - 범위: accepted `dxfs` empty/populated/empty 3-entry shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b934 DONE` empty-populated-empty dxf entries without count attr positive dirty-save mirror
+  - 범위: accepted no-`count` `dxfs` empty/populated/empty 3-entry shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b935 DONE` populated-empty-populated dxf entries positive dirty-save mirror
+  - 범위: accepted `dxfs` populated/empty/populated 3-entry shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b936 DONE` populated-empty-populated dxf entries without count attr positive dirty-save mirror
+  - 범위: accepted no-`count` `dxfs` populated/empty/populated 3-entry shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b937 DONE` tableStyles without defaultTableStyle positive dirty-save mirror
+  - 범위: accepted `tableStyles` without `defaultTableStyle` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b938 DONE` tableStyles without defaultPivotStyle positive dirty-save mirror
+  - 범위: accepted `tableStyles` without `defaultPivotStyle` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b939 DONE` custom defaultTableStyle positive dirty-save mirror
+  - 범위: accepted custom `defaultTableStyle` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b940 DONE` custom defaultPivotStyle positive dirty-save mirror
+  - 범위: accepted custom `defaultPivotStyle` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b941 DONE` tableStyles without default attrs positive dirty-save mirror
+  - 범위: accepted default-less `tableStyles` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b942 DONE` tableStyle explicit-zero flags positive dirty-save mirror
+  - 범위: accepted explicit-zero `tableStyle@table/pivot` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b943 DONE` tableStyle combined attr-map positive dirty-save mirror
+  - 범위: accepted combined `tableStyle@table+pivot` attr-map shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b944 DONE` cellStyle without builtinId positive dirty-save mirror
+  - 범위: accepted builtin-less `cellStyle` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b945 DONE` cellStyle hidden+customBuiltin positive dirty-save mirror
+  - 범위: accepted `cellStyle customBuiltin=\"1\" hidden=\"1\"` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b946 DONE` cellStyle hidden positive dirty-save mirror
+  - 범위: accepted `cellStyle hidden=\"1\"` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b947 DONE` cellStyle customBuiltin positive dirty-save mirror
+  - 범위: accepted `cellStyle customBuiltin=\"1\"` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b948 DONE` styles extension-list presence positive dirty-save mirror
+  - 범위: accepted root-level `<extLst/>` insertion shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b949 DONE` reordered tableStyles/extLst positive dirty-save mirror
+  - 범위: accepted reordered `tableStyles + extLst` root order shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b950 DONE` extension-list instead of tableStyles positive dirty-save mirror
+  - 범위: accepted `extLst`-for-`tableStyles` replacement shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b951 DONE` colors instead of extension-list positive dirty-save mirror
+  - 범위: accepted `colors`-for-`extLst` replacement shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b952 DONE` dxfs instead of extension-list positive dirty-save mirror
+  - 범위: accepted `dxfs`-for-`extLst` replacement shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b953 DONE` styles without tableStyles positive dirty-save mirror
+  - 범위: accepted root-level `tableStyles` removal shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b954 DONE` empty dxfs container positive dirty-save mirror
+  - 범위: accepted empty root-level `dxfs` insertion shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b955 DONE` reordered tableStyles/dxfs positive dirty-save mirror
+  - 범위: accepted reordered `tableStyles + dxfs` root order shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b956 DONE` dxfs instead of tableStyles positive dirty-save mirror
+  - 범위: accepted `dxfs`-for-`tableStyles` replacement shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b957 DONE` empty colors container positive dirty-save mirror
+  - 범위: accepted empty root-level `colors` insertion shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b958 DONE` reordered tableStyles/colors positive dirty-save mirror
+  - 범위: accepted reordered `tableStyles + colors` root order shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b959 DONE` colors instead of tableStyles positive dirty-save mirror
+  - 범위: accepted `colors`-for-`tableStyles` replacement shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b960 DONE` dxfs without count attr positive dirty-save mirror
+  - 범위: accepted root-level `<dxfs>` countless shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b961 DONE` extension-list instead of dxfs positive dirty-save mirror
+  - 범위: accepted `extLst`-for-`dxfs` replacement shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b962 DONE` colors instead of dxfs positive dirty-save mirror
+  - 범위: accepted `colors`-for-`dxfs` replacement shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b963 DONE` styles all optional root containers positive dirty-save mirror
+  - 범위: accepted `colors + dxfs + extLst + tableStyles` root shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b964 DONE` reordered all optional root containers positive dirty-save mirror
+  - 범위: accepted reordered `tableStyles + colors + dxfs + extLst` root shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b965 DONE` all optional root containers without dxfs count attr positive dirty-save mirror
+  - 범위: accepted all-optional root shape with countless `<dxfs/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b966 DONE` reordered all optional root containers without dxfs count attr positive dirty-save mirror
+  - 범위: accepted reordered all-optional root shape with countless `<dxfs/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b967 DONE` all optional root containers without tableStyles count attr positive dirty-save mirror
+  - 범위: accepted all-optional root shape with countless `<tableStyles .../>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b968 DONE` reordered all optional root containers without tableStyles count attr positive dirty-save mirror
+  - 범위: accepted reordered all-optional root shape with countless `<tableStyles .../>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b969 DONE` optional root containers without tableStyles positive dirty-save mirror
+  - 범위: accepted `colors + dxfs + extLst` no-`tableStyles` root shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b970 DONE` dxfs-only optional root without tableStyles and without count attr positive dirty-save mirror
+  - 범위: accepted countless `dxfs`-only no-`tableStyles` root shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b971 DONE` dxfs plus extension-list without tableStyles and without count attr positive dirty-save mirror
+  - 범위: accepted countless `dxfs + extLst` no-`tableStyles` root shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b972 DONE` extension-list instead of colors positive dirty-save mirror
+  - 범위: accepted `extLst`-for-`colors` replacement shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b973 DONE` dxfs instead of colors positive dirty-save mirror
+  - 범위: accepted `dxfs`-for-`colors` replacement shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b974 DONE` tableStyles instead of colors without existing tableStyles positive dirty-save mirror
+  - 범위: accepted no-existing-`tableStyles` root lattice에서 `tableStyles`-for-`colors` replacement shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b975 DONE` tableStyles instead of dxfs without existing tableStyles positive dirty-save mirror
+  - 범위: accepted no-existing-`tableStyles` root lattice에서 `tableStyles`-for-`dxfs` replacement shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b976 DONE` tableStyles instead of extension-list without existing tableStyles positive dirty-save mirror
+  - 범위: accepted no-existing-`tableStyles` root lattice에서 `tableStyles`-for-`extLst` replacement shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b977 DONE` xf alignment and protection positive dirty-save mirror
+  - 범위: baseline `xf` alignment/protection accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b978 DONE` xf alignment and protection without apply flags positive dirty-save mirror
+  - 범위: accepted no-`applyAlignment`/no-`applyProtection` `xf` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b979 DONE` cellXf without xfId with alignment and protection positive dirty-save mirror
+  - 범위: accepted no-`xfId` `cellXf` alignment+protection shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b980 DONE` cellXf without xfId alignment-only without apply flags positive dirty-save mirror
+  - 범위: accepted no-`xfId` no-flag `cellXf` alignment-only shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b981 DONE` cellXf without xfId protection-only without apply flags positive dirty-save mirror
+  - 범위: accepted no-`xfId` no-flag `cellXf` protection-only shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b982 DONE` colors child sequence positive dirty-save mirror
+  - 범위: baseline populated `<colors>` child sequence accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b983 DONE` reordered colors child sequence positive dirty-save mirror
+  - 범위: accepted reordered `<colors>` child sequence shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b984 DONE` colors with only indexedColors positive dirty-save mirror
+  - 범위: accepted indexed-only `<colors>` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b985 DONE` colors with only mruColors positive dirty-save mirror
+  - 범위: accepted mru-only `<colors>` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b986 DONE` cellStyleXf apply flags positive dirty-save mirror
+  - 범위: baseline `cellStyleXf applyNumberFormat/applyFill` accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b987 DONE` cellStyleXf explicit false number-format and fill flags positive dirty-save mirror
+  - 범위: accepted split explicit-false `cellStyleXf` flag shapes를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b988 DONE` cellStyleXf number-format only positive dirty-save mirror
+  - 범위: accepted `cellStyleXf` number-format-only shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b989 DONE` cellStyleXf fill only positive dirty-save mirror
+  - 범위: accepted `cellStyleXf` fill-only shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b990 DONE` cellStyleXf dual explicit false number-format and fill positive dirty-save mirror
+  - 범위: accepted dual-explicit-false `cellStyleXf` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b991 DONE` cellXf dual explicit false number-format and fill positive dirty-save mirror
+  - 범위: accepted dual-explicit-false `cellXf` number-format/fill shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b992 DONE` xf apply font and border flags positive dirty-save mirror
+  - 범위: baseline `applyFont/applyBorder` accepted shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b993 DONE` xf explicit false font and border flags positive dirty-save mirror
+  - 범위: accepted explicit-false `applyFont/applyBorder` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b994 DONE` xf font-only positive dirty-save mirror
+  - 범위: accepted `applyFont`-only shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b995 DONE` xf border-only positive dirty-save mirror
+  - 범위: accepted `applyBorder`-only shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b996 DONE` cellStyleXf explicit false font and border independence positive dirty-save mirror
+  - 범위: accepted split explicit-false independence `cellStyleXf` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b997 DONE` cellXf explicit false font and border independence positive dirty-save mirror
+  - 범위: accepted split explicit-false independence `cellXf` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b998 DONE` cellXf without xfId alignment and protection without apply flags positive dirty-save mirror
+  - 범위: accepted no-`xfId` no-flag `cellXf` alignment+protection shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b999 DONE` cellXf without xfId explicit false alignment and protection positive dirty-save mirror
+  - 범위: accepted no-`xfId` explicit-false alignment+protection shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1000 DONE` cellXf without xfId alignment false protection true positive dirty-save mirror
+  - 범위: accepted no-`xfId` `applyAlignment="0" applyProtection="1"` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1001 DONE` cellXf without xfId alignment true protection false positive dirty-save mirror
+  - 범위: accepted no-`xfId` `applyAlignment="1" applyProtection="0"` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1002 DONE` xf alignment without protection positive dirty-save mirror
+  - 범위: accepted `xf` alignment-only shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1003 DONE` xf protection without alignment positive dirty-save mirror
+  - 범위: accepted `xf` protection-only shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1004 DONE` xf alignment without protection and without apply flags positive dirty-save mirror
+  - 범위: accepted no-flag `xf` alignment-only shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1005 DONE` xf protection without alignment and without apply flags positive dirty-save mirror
+  - 범위: accepted no-flag `xf` protection-only shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1006 DONE` xf alignment-only mixed positive dirty-save mirror
+  - 범위: accepted mixed `cellStyleXf/cellXf` alignment-only shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1007 DONE` xf protection-only mixed positive dirty-save mirror
+  - 범위: accepted mixed `cellStyleXf/cellXf` protection-only shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1008 DONE` xf alignment-only false-flags positive dirty-save mirror
+  - 범위: accepted false-flag `xf` alignment-only shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1009 DONE` xf protection-only false-flags positive dirty-save mirror
+  - 범위: accepted false-flag `xf` protection-only shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1010 DONE` cellXf without xfId alignment-only positive dirty-save mirror
+  - 범위: accepted no-`xfId` `applyAlignment="1"` alignment-only `cellXf` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1011 DONE` cellXf without xfId protection-only positive dirty-save mirror
+  - 범위: accepted no-`xfId` `applyProtection="1"` protection-only `cellXf` shape를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1012 DONE` added numFmts container positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 added root `numFmts` container를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1013 DONE` reordered numFmts container positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered root `numFmts` container를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1014 DONE` three custom numFmt codes positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 3-entry custom `numFmt` container를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1015 DONE` three custom numFmt codes without count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 count-less 3-entry custom `numFmt` container를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1016 DONE` fonts without count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<fonts>` no-`count` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1017 DONE` fills without count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<fills>` no-`count` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1018 DONE` borders without count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<borders>` no-`count` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1019 DONE` cellStyleXfs without count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<cellStyleXfs>` no-`count` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1020 DONE` cellStyles without count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<cellStyles>` no-`count` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1021 DONE` cellXfs without count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<cellXfs>` no-`count` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1022 DONE` tableStyles without count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 populated `<tableStyles>` no-`count` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1023 DONE` empty tableStyles without count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 empty `<tableStyles>` no-`count` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1024 DONE` tableStyle name sequence positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 multi-entry `tableStyle` name sequence를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1025 DONE` reordered tableStyle name sequence positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered multi-entry `tableStyle` name sequence를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1026 DONE` fill child attr-map positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 baseline `fill` child attr-map branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1027 DONE` font child attr-map positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 baseline `font` child attr-map branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1028 DONE` empty numFmts container positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 empty `<numFmts count="0"/>` container를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1029 DONE` empty numFmts container without count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 empty `<numFmts/>` container를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1030 DONE` styles optional-root colors-only positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 populated `<colors>` only without `<tableStyles>` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1031 DONE` styles optional-root dxfs+extLst positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<dxfs count="0"/> + <extLst/>` without `<tableStyles>` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1032 DONE` styles optional-root colors+dxfs positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 populated `<colors> + <dxfs count="0"/>` without `<tableStyles>` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1033 DONE` styles optional-root colors+extLst positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 populated `<colors> + <extLst/>` without `<tableStyles>` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1034 DONE` styles optional-root colors+dxfs(no-count) positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 populated `<colors> + <dxfs/>` without `<tableStyles>` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1035 DONE` cellStyleXf alignment+protection no-apply-flags positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellStyleXf`의 alignment/protection child는 유지하되 `applyAlignment/applyProtection`가 없는 branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1036 DONE` cellStyleXf alignment-only positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellStyleXf` alignment-only branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1037 DONE` cellStyleXf protection-only positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellStyleXf` protection-only branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1038 DONE` cellStyleXf alignment-only no-apply-flags positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellStyleXf` alignment-only with falsey apply-flags branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1039 DONE` cellStyleXf protection-only no-apply-flags positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellStyleXf` protection-only with falsey apply-flags branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1040 DONE` cellStyleXf applyFont+applyBorder positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellStyleXf`의 `applyFont="1" applyBorder="1"` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1041 DONE` cellStyleXf explicit-false applyFont+applyBorder positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellStyleXf`의 `applyFont="0" applyBorder="0"` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1042 DONE` cellStyleXf applyFont-only positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellStyleXf`의 `applyFont="1"` only branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1043 DONE` cellStyleXf applyBorder-only positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellStyleXf`의 `applyBorder="1"` only branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1044 DONE` cellXf without-xfId font+border load mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellXf`의 `xfId` 제거 + `applyFont="1" applyBorder="1"` branch를 load assertion과 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1045 DONE` cellXf without-xfId explicit-false font+border load mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellXf`의 `xfId` 제거 + `applyFont="0" applyBorder="0"` branch를 load assertion과 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1046 DONE` cellXf without-xfId font-only load mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellXf`의 `xfId` 제거 + `applyFont="1"` only branch를 load assertion과 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1047 DONE` cellXf without-xfId border-only load mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellXf`의 `xfId` 제거 + `applyBorder="1"` only branch를 load assertion과 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1048 DONE` cellXf without-xfId number-only load mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellXf`의 `xfId` 제거 + number-format-only branch를 load assertion과 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1049 DONE` cellXf without-xfId fill-only load mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellXf`의 `xfId` 제거 + fill-only branch를 load assertion과 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1050 DONE` cellXf without-xfId explicit-false number/fill on number entry load mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellXf`의 `xfId` 제거 + number-entry `applyNumberFormat="0" applyFill="0"` branch를 load assertion과 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1051 DONE` cellXf without-xfId explicit-false number/fill on fill entry load mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellXf`의 `xfId` 제거 + fill-entry `applyNumberFormat="0" applyFill="0"` branch를 load assertion과 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1052 DONE` cellXf without-xfId mixed explicit-false number/fill flags load mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellXf`의 `xfId` 제거 + number-entry `applyNumberFormat="1" applyFill="0"`와 fill-entry `applyNumberFormat="0" applyFill="1"` branch를 load assertion과 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1053 DONE` cellXf without-xfId mixed explicit-false number/fill flags positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellXf`의 `xfId` 제거 + mixed explicit-false number/fill flags branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1054 DONE` cellXf true dual explicit-false number/fill flags positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellXf`의 number-entry/fill-entry 모두 `applyNumberFormat="0" applyFill="0"`인 true dual-false branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1055 DONE` cellXf without-xfId true dual explicit-false number/fill flags load mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellXf`의 `xfId` 제거 + number-entry/fill-entry true dual-false branch를 load assertion과 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1056 DONE` cellXf without-xfId true dual explicit-false number/fill flags positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellXf`의 `xfId` 제거 + number-entry/fill-entry 모두 `applyNumberFormat="0" applyFill="0"`인 true dual-false branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1057 DONE` cellXf without-xfId number-only+fill-only multi-entry load mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellXf`의 `xfId` 제거 + number-only entry와 fill-only entry를 같은 workbook에서 함께 유지하는 multi-entry branch를 load assertion과 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1058 DONE` cellXf without-xfId number-only+fill-only multi-entry positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellXf`의 `xfId` 제거 + number-only/fill-only multi-entry branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1059 DONE` cellXf without-xfId explicit-false font/border independence load mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellXf`의 `xfId` 제거 + first entry `applyFont="0" applyBorder="1"`와 second entry `applyFont="1" applyBorder="0"` branch를 load assertion과 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1060 DONE` cellXf without-xfId explicit-false font/border independence positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `cellXf`의 `xfId` 제거 + explicit-false font/border independence multi-entry branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1061 DONE` styles optional-root without colors with tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors>` omitted + `<dxfs count="0"/> <extLst/> <tableStyles .../>` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1062 DONE` styles optional-root without dxfs with tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<dxfs>` omitted + `<colors>... </colors> <extLst/> <tableStyles .../>` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1063 DONE` styles optional-root without extLst with tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<extLst>` omitted + `<colors>... </colors> <dxfs count="0"/> <tableStyles .../>` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1064 DONE` styles optional-root without colors and without tableStyles count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors>` omitted + `<dxfs count="0"/> <extLst/> <tableStyles .../>` with no `tableStyles@count` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1065 DONE` styles optional-root without dxfs and without tableStyles count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<dxfs>` omitted + `<colors>... </colors> <extLst/> <tableStyles .../>` with no `tableStyles@count` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1066 DONE` styles optional-root without extLst and without tableStyles count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<extLst>` omitted + `<colors>... </colors> <dxfs count="0"/> <tableStyles .../>` with no `tableStyles@count` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1067 DONE` styles dxfs instead of extension list with colors and tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors>... </colors> <extLst/> <tableStyles .../>`에서 `<extLst/> -> <dxfs count="0"/>` rename branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1068 DONE` styles extension list instead of dxfs with colors and tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors>... </colors> <dxfs count="0"/> <tableStyles .../>`에서 `<dxfs count="0"/> -> <extLst/>` rename branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1069 DONE` styles dxfs without count attr instead of extension list with colors and tableStyles and without tableStyles count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors>... </colors> <extLst/> <tableStyles .../>` with no `tableStyles@count`에서 `<extLst/> -> <dxfs/>` rename branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1070 DONE` styles extension list instead of dxfs without count attr with colors and tableStyles and without tableStyles count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors>... </colors> <dxfs/> <tableStyles .../>` with no `tableStyles@count`에서 `<dxfs/> -> <extLst/>` rename branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1071 DONE` styles optional-root without colors and without dxfs count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors>` omitted + `<dxfs/> <extLst/> <tableStyles .../>` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1072 DONE` styles dxfs without count attr instead of extension list with colors and tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors>... </colors> <extLst/> <tableStyles .../>`에서 `<extLst/> -> <dxfs/>` rename branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1073 DONE` styles optional-root without colors and without dxfs and tableStyles count attrs positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors>` omitted + `<dxfs/> <extLst/> <tableStyles .../>` with no `tableStyles@count` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1074 DONE` styles extension list instead of dxfs without count attr with colors and tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors>... </colors> <dxfs/> <tableStyles .../>`에서 `<dxfs/> -> <extLst/>` rename branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1075 DONE` styles optional-root without extension list and without dxfs count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<extLst>` omitted + `<colors>... </colors> <dxfs/> <tableStyles .../>` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1076 DONE` styles optional-root without extension list and without dxfs and tableStyles count attrs positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<extLst>` omitted + `<colors>... </colors> <dxfs/> <tableStyles .../>` with no `tableStyles@count` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1077 DONE` styles optional-root dxfs-only without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<dxfs count="0"/>` only without `<tableStyles>` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1078 DONE` styles extension list-only without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<extLst/>` only without `<tableStyles>` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1079 DONE` styles optional-root colors+extension list without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors>... </colors> + <extLst/>` without `<tableStyles>` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1080 DONE` styles optional-root colors+dxfs without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors>... </colors> + <dxfs count="0"/>` without `<tableStyles>` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1081 DONE` styles optional-root dxfs+extension list without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<dxfs count="0"/> + <extLst/>` without `<tableStyles>` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1082 DONE` styles optional-root colors+dxfs(no-count)+extension list without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors>... </colors> + <dxfs/> + <extLst/>` without `<tableStyles>` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1083 DONE` tableStyles instead of colors without existing tableStyles and without count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<colors>... </colors> -> <tableStyles .../>` replacement without existing `<tableStyles>` and without `tableStyles@count` branch를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1084 DONE` tableStyles instead of dxfs without existing tableStyles and without count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<dxfs count="0"/> -> <tableStyles .../>` replacement without existing `<tableStyles>` and without `tableStyles@count` branch를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1085 DONE` tableStyles instead of extension list without existing tableStyles and without count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<extLst/> -> <tableStyles .../>` replacement without existing `<tableStyles>` and without `tableStyles@count` branch를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1086 DONE` styles all-optional root without dxfs and tableStyles count attrs positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors>... </colors> + <dxfs/> + <extLst/> + <tableStyles .../>` with no `dxfs@count` and no `tableStyles@count` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1087 DONE` reordered styles all-optional root without dxfs and tableStyles count attrs positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered `<tableStyles .../> + <colors>... </colors> + <dxfs/> + <extLst/>` with no `dxfs@count` and no `tableStyles@count` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1088 DONE` tableStyles instead of colors without existing tableStyles and without count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors>... </colors> -> <tableStyles .../>` replacement without existing `<tableStyles>` and without `tableStyles@count` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1089 DONE` tableStyles instead of dxfs without existing tableStyles and without count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<dxfs count="0"/> -> <tableStyles .../>` replacement without existing `<tableStyles>` and without `tableStyles@count` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1090 DONE` tableStyles instead of extension list without existing tableStyles and without count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<extLst/> -> <tableStyles .../>` replacement without existing `<tableStyles>` and without `tableStyles@count` branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1091 DONE` reordered tableStyles without count attr and extension list root-order load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles .../> + <extLst/>` reordered root child branch with no `tableStyles@count`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1092 DONE` reordered tableStyles without count attr and extension list positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles .../> + <extLst/>` reordered root child branch with no `tableStyles@count`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1093 DONE` reordered tableStyles without count attr and dxfs root-order load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles .../> + <dxfs count="0"/>` reordered root child branch with no `tableStyles@count`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1094 DONE` reordered tableStyles without count attr and dxfs positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles .../> + <dxfs count="0"/>` reordered root child branch with no `tableStyles@count`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1095 DONE` reordered tableStyles without count attr and colors root-order load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles .../> + <colors><indexedColors/><mruColors/></colors>` reordered root child branch with no `tableStyles@count`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1096 DONE` reordered tableStyles without count attr and colors positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles .../> + <colors><indexedColors/><mruColors/></colors>` reordered root child branch with no `tableStyles@count`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1097 DONE` reordered tableStyles and empty colors root-order load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles ... count="0"/> + <colors/>` reordered root child branch를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1098 DONE` reordered tableStyles and empty colors positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles ... count="0"/> + <colors/>` reordered root child branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1099 DONE` reordered tableStyles without count attr and empty colors root-order load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles .../> + <colors/>` reordered root child branch with no `tableStyles@count`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1100 DONE` reordered tableStyles without count attr and empty colors positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles .../> + <colors/>` reordered root child branch with no `tableStyles@count`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1101 DONE` reordered styles optional-root containers without colors load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles ... count="0"/> + <dxfs count="0"/> + <extLst/>` reordered single-omission branch without `<colors>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1102 DONE` reordered styles optional-root containers without colors positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles ... count="0"/> + <dxfs count="0"/> + <extLst/>` reordered single-omission branch without `<colors>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1103 DONE` reordered styles optional-root containers without dxfs load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles ... count="0"/> + <colors>... </colors> + <extLst/>` reordered single-omission branch without `<dxfs>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1104 DONE` reordered styles optional-root containers without dxfs positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles ... count="0"/> + <colors>... </colors> + <extLst/>` reordered single-omission branch without `<dxfs>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1105 DONE` reordered styles optional-root containers without extension list load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles ... count="0"/> + <colors>... </colors> + <dxfs count="0"/>` reordered single-omission branch without `<extLst>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1106 DONE` reordered styles optional-root containers without extension list positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles ... count="0"/> + <colors>... </colors> + <dxfs count="0"/>` reordered single-omission branch without `<extLst>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1107 DONE` reordered styles optional-root containers without colors and without tableStyles count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles .../> + <dxfs count="0"/> + <extLst/>` reordered single-omission branch without `<colors>` and without `tableStyles@count`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1108 DONE` reordered styles optional-root containers without colors and without tableStyles count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles .../> + <dxfs count="0"/> + <extLst/>` reordered single-omission branch without `<colors>` and without `tableStyles@count`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1109 DONE` reordered styles optional-root containers without dxfs and without tableStyles count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles .../> + <colors>... </colors> + <extLst/>` reordered single-omission branch without `<dxfs>` and without `tableStyles@count`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1110 DONE` reordered styles optional-root containers without dxfs and without tableStyles count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles .../> + <colors>... </colors> + <extLst/>` reordered single-omission branch without `<dxfs>` and without `tableStyles@count`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1111 DONE` reordered styles optional-root containers without extension list and without tableStyles count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles .../> + <colors>... </colors> + <dxfs count="0"/>` reordered single-omission branch without `<extLst>` and without `tableStyles@count`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1112 DONE` reordered styles optional-root containers without extension list and without tableStyles count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles .../> + <colors>... </colors> + <dxfs count="0"/>` reordered single-omission branch without `<extLst>` and without `tableStyles@count`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1113 DONE` styles optional-root dxfs and extension list without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<dxfs count="0"/> + <extLst/>` canonical 2-child branch without `<tableStyles>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1114 DONE` styles optional-root colors and dxfs without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<colors>... </colors> + <dxfs count="0"/>` canonical 2-child branch without `<tableStyles>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1115 DONE` styles optional-root colors and extension list without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<colors>... </colors> + <extLst/>` canonical 2-child branch without `<tableStyles>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1116 DONE` reordered styles optional-root containers without tableStyles and without colors load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<extLst/> + <dxfs count="0"/>` reordered 2-child branch without `<tableStyles>` and without `<colors>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1117 DONE` reordered styles optional-root containers without tableStyles and without colors positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<extLst/> + <dxfs count="0"/>` reordered 2-child branch without `<tableStyles>` and without `<colors>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1124 DONE` reordered styles optional-root containers without colors and without dxfs count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles ... count="0"/> + <extLst/> + <dxfs/>` reordered single-omission branch without `<colors>` and without `dxfs@count`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1125 DONE` reordered styles optional-root containers without colors and without dxfs count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles ... count="0"/> + <extLst/> + <dxfs/>` reordered single-omission branch without `<colors>` and without `dxfs@count`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1126 DONE` reordered styles optional-root containers without colors and without dxfs and tableStyles count attrs load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles .../> + <extLst/> + <dxfs/>` reordered single-omission branch without `<colors>` and without `dxfs@count` and `tableStyles@count`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1127 DONE` reordered styles optional-root containers without colors and without dxfs and tableStyles count attrs positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles .../> + <extLst/> + <dxfs/>` reordered single-omission branch without `<colors>` and without `dxfs@count` and `tableStyles@count`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1128 DONE` reordered styles optional-root containers without extension list and without dxfs count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles ... count="0"/> + <dxfs/> + <colors>... </colors>` reordered single-omission branch without `<extLst>` and without `dxfs@count`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1129 DONE` reordered styles optional-root containers without extension list and without dxfs count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles ... count="0"/> + <dxfs/> + <colors>... </colors>` reordered single-omission branch without `<extLst>` and without `dxfs@count`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1130 DONE` reordered styles optional-root containers without extension list and without dxfs and tableStyles count attrs load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles .../> + <dxfs/> + <colors>... </colors>` reordered single-omission branch without `<extLst>` and without `dxfs@count` and `tableStyles@count`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1131 DONE` reordered styles optional-root containers without extension list and without dxfs and tableStyles count attrs positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<tableStyles .../> + <dxfs/> + <colors>... </colors>` reordered single-omission branch without `<extLst>` and without `dxfs@count` and `tableStyles@count`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1132 DONE` reordered styles optional-root containers without tableStyles and without dxfs load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<extLst/> + <colors>... </colors>` reordered 2-child branch without `<tableStyles>` and without `<dxfs>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1133 DONE` reordered styles optional-root containers without tableStyles and without dxfs positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<extLst/> + <colors>... </colors>` reordered 2-child branch without `<tableStyles>` and without `<dxfs>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1134 DONE` reordered styles optional-root containers without tableStyles and without extension list load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<dxfs count="0"/> + <colors>... </colors>` reordered 2-child branch without `<tableStyles>` and without `<extLst>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1135 DONE` reordered styles optional-root containers without tableStyles and without extension list positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<dxfs count="0"/> + <colors>... </colors>` reordered 2-child branch without `<tableStyles>` and without `<extLst>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1136 DONE` reordered styles optional-root dxfs and extension list without tableStyles and without count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<extLst/> + <dxfs/>` reordered 2-child branch without `<tableStyles>` and without `dxfs@count`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1137 DONE` reordered styles optional-root dxfs and extension list without tableStyles and without count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<extLst/> + <dxfs/>` reordered 2-child branch without `<tableStyles>` and without `dxfs@count`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1138 DONE` reordered styles optional-root containers without tableStyles and without extension list and without count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<dxfs/> + <colors>... </colors>` reordered 2-child branch without `<tableStyles>` and without `<extLst>` and without `dxfs@count`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1139 DONE` reordered styles optional-root containers without tableStyles and without extension list and without count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<dxfs/> + <colors>... </colors>` reordered 2-child branch without `<tableStyles>` and without `<extLst>` and without `dxfs@count`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1140 DONE` reordered styles optional-root containers without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<extLst/> + <colors>... </colors> + <dxfs count="0"/>` reordered 3-child branch without `<tableStyles>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1141 DONE` reordered styles optional-root containers without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<extLst/> + <colors>... </colors> + <dxfs count="0"/>` reordered 3-child branch without `<tableStyles>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1142 DONE` reordered styles optional-root containers without tableStyles and without dxfs count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<extLst/> + <colors>... </colors> + <dxfs/>` reordered 3-child branch without `<tableStyles>` and without `dxfs@count`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1143 DONE` reordered styles optional-root containers without tableStyles and without dxfs count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<extLst/> + <colors>... </colors> + <dxfs/>` reordered 3-child branch without `<tableStyles>` and without `dxfs@count`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1144 DONE` reordered styles optional-root dxfs and extension list without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<extLst/> + <dxfs count="0"/>` reordered 2-child branch without `<tableStyles>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1145 DONE` reordered styles optional-root dxfs and extension list without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<extLst/> + <dxfs count="0"/>` reordered 2-child branch without `<tableStyles>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1146 DONE` color scheme child removal positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `clrScheme` direct-child removal branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1147 DONE` font scheme child removal positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `fontScheme` direct-child removal branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1148 DONE` format scheme child removal positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `fmtScheme` direct-child removal branch를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1149 DONE` empty styles optional-root colors container without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 empty `<colors/>` only branch without `<tableStyles>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1150 DONE` empty styles optional-root colors container without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 empty `<colors/>` only branch without `<tableStyles>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1151 DONE` empty styles optional-root colors and extension list without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 empty `<colors/> + <extLst/>` canonical branch without `<tableStyles>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1152 DONE` empty styles optional-root colors and extension list without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 empty `<colors/> + <extLst/>` canonical branch without `<tableStyles>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1153 DONE` reordered empty styles optional-root containers without tableStyles and without dxfs load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered `<extLst/> + <colors/>` branch without `<tableStyles>` and without `<dxfs>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1154 DONE` reordered empty styles optional-root containers without tableStyles and without dxfs positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered `<extLst/> + <colors/>` branch without `<tableStyles>` and without `<dxfs>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1155 DONE` styles optional-root colors with only indexedColors without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<colors><indexedColors/></colors>` only branch without `<tableStyles>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1156 DONE` styles optional-root colors with only indexedColors without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors><indexedColors/></colors>` only branch without `<tableStyles>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1157 DONE` styles optional-root colors with only mruColors without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<colors><mruColors/></colors>` only branch without `<tableStyles>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1158 DONE` styles optional-root colors with only mruColors without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors><mruColors/></colors>` only branch without `<tableStyles>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1159 DONE` reordered styles optional-root colors child sequence without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered `<colors><mruColors/><indexedColors/></colors>` branch without `<tableStyles>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1160 DONE` reordered styles optional-root colors child sequence without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered `<colors><mruColors/><indexedColors/></colors>` branch without `<tableStyles>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1161 DONE` styles optional-root colors with only indexedColors and dxfs without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<colors><indexedColors/></colors> + <dxfs count="0"/>` branch without `<tableStyles>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1162 DONE` styles optional-root colors with only indexedColors and dxfs without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors><indexedColors/></colors> + <dxfs count="0"/>` branch without `<tableStyles>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1163 DONE` styles optional-root colors with only indexedColors and extension list without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<colors><indexedColors/></colors> + <extLst/>` branch without `<tableStyles>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1164 DONE` styles optional-root colors with only indexedColors and extension list without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors><indexedColors/></colors> + <extLst/>` branch without `<tableStyles>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1165 DONE` styles optional-root colors with only mruColors and dxfs without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<colors><mruColors/></colors> + <dxfs count="0"/>` branch without `<tableStyles>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1166 DONE` styles optional-root colors with only mruColors and dxfs without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors><mruColors/></colors> + <dxfs count="0"/>` branch without `<tableStyles>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1167 DONE` reordered styles optional-root colors child sequence and dxfs without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered `<colors><mruColors/><indexedColors/></colors> + <dxfs count="0"/>` branch without `<tableStyles>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1168 DONE` reordered styles optional-root colors child sequence and dxfs without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered `<colors><mruColors/><indexedColors/></colors> + <dxfs count="0"/>` branch without `<tableStyles>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1169 DONE` styles optional-root colors with only mruColors and extension list without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<colors><mruColors/></colors> + <extLst/>` branch without `<tableStyles>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1170 DONE` styles optional-root colors with only mruColors and extension list without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors><mruColors/></colors> + <extLst/>` branch without `<tableStyles>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1171 DONE` reordered styles optional-root colors child sequence and extension list without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered `<colors><mruColors/><indexedColors/></colors> + <extLst/>` branch without `<tableStyles>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1172 DONE` reordered styles optional-root colors child sequence and extension list without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered `<colors><mruColors/><indexedColors/></colors> + <extLst/>` branch without `<tableStyles>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1173 DONE` styles optional-root colors with only indexedColors and dxfs without tableStyles and without count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<colors><indexedColors/></colors> + <dxfs/>` branch without `<tableStyles>` and without `dxfs@count`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1174 DONE` styles optional-root colors with only indexedColors and dxfs without tableStyles and without count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors><indexedColors/></colors> + <dxfs/>` branch without `<tableStyles>` and without `dxfs@count`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1175 DONE` styles optional-root colors with only mruColors and dxfs without tableStyles and without count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<colors><mruColors/></colors> + <dxfs/>` branch without `<tableStyles>` and without `dxfs@count`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1176 DONE` styles optional-root colors with only mruColors and dxfs without tableStyles and without count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors><mruColors/></colors> + <dxfs/>` branch without `<tableStyles>` and without `dxfs@count`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1177 DONE` reordered styles optional-root colors child sequence and dxfs without tableStyles and without count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered `<colors><mruColors/><indexedColors/></colors> + <dxfs/>` branch without `<tableStyles>` and without `dxfs@count`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1178 DONE` reordered styles optional-root colors child sequence and dxfs without tableStyles and without count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered `<colors><mruColors/><indexedColors/></colors> + <dxfs/>` branch without `<tableStyles>` and without `dxfs@count`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1179 DONE` styles optional-root colors with only indexedColors and without dxfs count attr without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<colors><indexedColors/></colors> + <dxfs/> + <extLst/>` canonical 3-child branch without `<tableStyles>` and without `dxfs@count`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1180 DONE` styles optional-root colors with only indexedColors and without dxfs count attr without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors><indexedColors/></colors> + <dxfs/> + <extLst/>` canonical 3-child branch without `<tableStyles>` and without `dxfs@count`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1181 DONE` styles optional-root colors with only mruColors and without dxfs count attr without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 `<colors><mruColors/></colors> + <dxfs/> + <extLst/>` canonical 3-child branch without `<tableStyles>` and without `dxfs@count`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1182 DONE` styles optional-root colors with only mruColors and without dxfs count attr without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 `<colors><mruColors/></colors> + <dxfs/> + <extLst/>` canonical 3-child branch without `<tableStyles>` and without `dxfs@count`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1183 DONE` reordered styles optional-root colors child sequence and without dxfs count attr without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered `<colors><mruColors/><indexedColors/></colors> + <dxfs/> + <extLst/>` canonical-order root branch without `<tableStyles>` and without `dxfs@count`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1184 DONE` reordered styles optional-root colors child sequence and without dxfs count attr without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered `<colors><mruColors/><indexedColors/></colors> + <dxfs/> + <extLst/>` canonical-order root branch without `<tableStyles>` and without `dxfs@count`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1185 DONE` styles all-optional root containers with only indexedColors without dxfs count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 all-optional canonical branch `<colors><indexedColors/></colors> + <dxfs/> + <extLst/> + <tableStyles count="0".../>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1186 DONE` styles all-optional root containers with only indexedColors without dxfs count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 all-optional canonical branch `<colors><indexedColors/></colors> + <dxfs/> + <extLst/> + <tableStyles count="0".../>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1187 DONE` styles all-optional root containers with only mruColors without dxfs count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 all-optional canonical branch `<colors><mruColors/></colors> + <dxfs/> + <extLst/> + <tableStyles count="0".../>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1188 DONE` styles all-optional root containers with only mruColors without dxfs count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 all-optional canonical branch `<colors><mruColors/></colors> + <dxfs/> + <extLst/> + <tableStyles count="0".../>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1189 DONE` styles all-optional root containers with reordered colors child sequence without dxfs count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 all-optional canonical branch `<colors><mruColors/><indexedColors/></colors> + <dxfs/> + <extLst/> + <tableStyles count="0".../>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1190 DONE` styles all-optional root containers with reordered colors child sequence without dxfs count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 all-optional canonical branch `<colors><mruColors/><indexedColors/></colors> + <dxfs/> + <extLst/> + <tableStyles count="0".../>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1191 DONE` reordered styles all-optional root containers with only indexedColors without dxfs count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered all-optional branch `<tableStyles count="0".../> + <colors><indexedColors/></colors> + <dxfs/> + <extLst/>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1192 DONE` reordered styles all-optional root containers with only indexedColors without dxfs count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered all-optional branch `<tableStyles count="0".../> + <colors><indexedColors/></colors> + <dxfs/> + <extLst/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1193 DONE` reordered styles all-optional root containers with only mruColors without dxfs count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered all-optional branch `<tableStyles count="0".../> + <colors><mruColors/></colors> + <dxfs/> + <extLst/>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1194 DONE` reordered styles all-optional root containers with only mruColors without dxfs count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered all-optional branch `<tableStyles count="0".../> + <colors><mruColors/></colors> + <dxfs/> + <extLst/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1195 DONE` reordered styles all-optional root containers with reordered colors child sequence without dxfs count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered all-optional branch `<tableStyles count="0".../> + <colors><mruColors/><indexedColors/></colors> + <dxfs/> + <extLst/>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1196 DONE` reordered styles all-optional root containers with reordered colors child sequence without dxfs count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered all-optional branch `<tableStyles count="0".../> + <colors><mruColors/><indexedColors/></colors> + <dxfs/> + <extLst/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1197 DONE` styles all-optional root containers with only indexedColors without tableStyles count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 canonical all-optional branch `<colors><indexedColors/></colors> + <dxfs count="0"/> + <extLst/> + <tableStyles .../>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1198 DONE` styles all-optional root containers with only indexedColors without tableStyles count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 canonical all-optional branch `<colors><indexedColors/></colors> + <dxfs count="0"/> + <extLst/> + <tableStyles .../>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1199 DONE` styles all-optional root containers with only mruColors without tableStyles count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 canonical all-optional branch `<colors><mruColors/></colors> + <dxfs count="0"/> + <extLst/> + <tableStyles .../>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1200 DONE` styles all-optional root containers with only mruColors without tableStyles count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 canonical all-optional branch `<colors><mruColors/></colors> + <dxfs count="0"/> + <extLst/> + <tableStyles .../>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1201 DONE` styles all-optional root containers with reordered colors child sequence without tableStyles count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 canonical all-optional branch `<colors><mruColors/><indexedColors/></colors> + <dxfs count="0"/> + <extLst/> + <tableStyles .../>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1202 DONE` styles all-optional root containers with reordered colors child sequence without tableStyles count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 canonical all-optional branch `<colors><mruColors/><indexedColors/></colors> + <dxfs count="0"/> + <extLst/> + <tableStyles .../>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1203 DONE` styles all-optional root containers with only indexedColors without dxfs and tableStyles count attrs load preservation
+  - 범위: accepted dirty `styles.xml` shape인 canonical all-optional dual-no-count branch `<colors><indexedColors/></colors> + <dxfs/> + <extLst/> + <tableStyles .../>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1204 DONE` styles all-optional root containers with only indexedColors without dxfs and tableStyles count attrs positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 canonical all-optional dual-no-count branch `<colors><indexedColors/></colors> + <dxfs/> + <extLst/> + <tableStyles .../>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1205 DONE` styles all-optional root containers with only mruColors without dxfs and tableStyles count attrs load preservation
+  - 범위: accepted dirty `styles.xml` shape인 canonical all-optional dual-no-count branch `<colors><mruColors/></colors> + <dxfs/> + <extLst/> + <tableStyles .../>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1206 DONE` styles all-optional root containers with only mruColors without dxfs and tableStyles count attrs positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 canonical all-optional dual-no-count branch `<colors><mruColors/></colors> + <dxfs/> + <extLst/> + <tableStyles .../>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1207 DONE` styles all-optional root containers with reordered colors child sequence without dxfs and tableStyles count attrs load preservation
+  - 범위: accepted dirty `styles.xml` shape인 canonical all-optional dual-no-count branch `<colors><mruColors/><indexedColors/></colors> + <dxfs/> + <extLst/> + <tableStyles .../>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1208 DONE` styles all-optional root containers with reordered colors child sequence without dxfs and tableStyles count attrs positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 canonical all-optional dual-no-count branch `<colors><mruColors/><indexedColors/></colors> + <dxfs/> + <extLst/> + <tableStyles .../>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1209 DONE` reordered styles all-optional root containers with only indexedColors without tableStyles count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered all-optional branch `<tableStyles .../> + <colors><indexedColors/></colors> + <dxfs count="0"/> + <extLst/>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1210 DONE` reordered styles all-optional root containers with only indexedColors without tableStyles count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered all-optional branch `<tableStyles .../> + <colors><indexedColors/></colors> + <dxfs count="0"/> + <extLst/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1211 DONE` reordered styles all-optional root containers with only mruColors without tableStyles count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered all-optional branch `<tableStyles .../> + <colors><mruColors/></colors> + <dxfs count="0"/> + <extLst/>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1212 DONE` reordered styles all-optional root containers with only mruColors without tableStyles count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered all-optional branch `<tableStyles .../> + <colors><mruColors/></colors> + <dxfs count="0"/> + <extLst/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1213 DONE` reordered styles all-optional root containers with reordered colors child sequence without tableStyles count attr load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered all-optional branch `<tableStyles .../> + <colors><mruColors/><indexedColors/></colors> + <dxfs count="0"/> + <extLst/>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1214 DONE` reordered styles all-optional root containers with reordered colors child sequence without tableStyles count attr positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered all-optional branch `<tableStyles .../> + <colors><mruColors/><indexedColors/></colors> + <dxfs count="0"/> + <extLst/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1215 DONE` reordered styles all-optional root containers with only indexedColors without dxfs and tableStyles count attrs load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered dual-no-count branch `<tableStyles .../> + <colors><indexedColors/></colors> + <dxfs/> + <extLst/>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1216 DONE` reordered styles all-optional root containers with only indexedColors without dxfs and tableStyles count attrs positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered dual-no-count branch `<tableStyles .../> + <colors><indexedColors/></colors> + <dxfs/> + <extLst/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1217 DONE` reordered styles all-optional root containers with only mruColors without dxfs and tableStyles count attrs load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered dual-no-count branch `<tableStyles .../> + <colors><mruColors/></colors> + <dxfs/> + <extLst/>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1218 DONE` reordered styles all-optional root containers with only mruColors without dxfs and tableStyles count attrs positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered dual-no-count branch `<tableStyles .../> + <colors><mruColors/></colors> + <dxfs/> + <extLst/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1219 DONE` reordered styles all-optional root containers with reordered colors child sequence without dxfs and tableStyles count attrs load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered dual-no-count branch `<tableStyles .../> + <colors><mruColors/><indexedColors/></colors> + <dxfs/> + <extLst/>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1220 DONE` reordered styles all-optional root containers with reordered colors child sequence without dxfs and tableStyles count attrs positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered dual-no-count branch `<tableStyles .../> + <colors><mruColors/><indexedColors/></colors> + <dxfs/> + <extLst/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1221 DONE` reordered styles optional-root colors with only indexedColors and without dxfs count attr without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered optional-root branch `<extLst/> + <colors><indexedColors/></colors> + <dxfs/>` without `<tableStyles>` and without `dxfs@count`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1222 DONE` reordered styles optional-root colors with only indexedColors and without dxfs count attr without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered optional-root branch `<extLst/> + <colors><indexedColors/></colors> + <dxfs/>` without `<tableStyles>` and without `dxfs@count`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1223 DONE` reordered styles optional-root colors with only mruColors and without dxfs count attr without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered optional-root branch `<extLst/> + <colors><mruColors/></colors> + <dxfs/>` without `<tableStyles>` and without `dxfs@count`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1224 DONE` reordered styles optional-root colors with only mruColors and without dxfs count attr without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered optional-root branch `<extLst/> + <colors><mruColors/></colors> + <dxfs/>` without `<tableStyles>` and without `dxfs@count`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1225 DONE` reordered styles optional-root colors child sequence and without dxfs count attr without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered optional-root branch `<extLst/> + <colors><mruColors/><indexedColors/></colors> + <dxfs/>` without `<tableStyles>` and without `dxfs@count`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1226 DONE` reordered styles optional-root colors child sequence and without dxfs count attr without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered optional-root branch `<extLst/> + <colors><mruColors/><indexedColors/></colors> + <dxfs/>` without `<tableStyles>` and without `dxfs@count`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1227 DONE` reordered styles optional-root colors with only indexedColors and extension list without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered optional-root branch `<extLst/> + <colors><indexedColors/></colors>` without `<tableStyles>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1228 DONE` reordered styles optional-root colors with only indexedColors and extension list without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered optional-root branch `<extLst/> + <colors><indexedColors/></colors>` without `<tableStyles>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1229 DONE` reordered styles optional-root colors with only mruColors and extension list without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered optional-root branch `<extLst/> + <colors><mruColors/></colors>` without `<tableStyles>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1230 DONE` reordered styles optional-root colors with only mruColors and extension list without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered optional-root branch `<extLst/> + <colors><mruColors/></colors>` without `<tableStyles>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1231 DONE` reordered styles optional-root colors child sequence and extension list without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered optional-root branch `<extLst/> + <colors><mruColors/><indexedColors/></colors>` without `<tableStyles>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1232 DONE` reordered styles optional-root colors child sequence and extension list without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered optional-root branch `<extLst/> + <colors><mruColors/><indexedColors/></colors>` without `<tableStyles>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1233 DONE` reordered styles optional-root colors with only indexedColors and dxfs without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered optional-root branch `<dxfs count="0"/> + <colors><indexedColors/></colors>` without `<tableStyles>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1234 DONE` reordered styles optional-root colors with only indexedColors and dxfs without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered optional-root branch `<dxfs count="0"/> + <colors><indexedColors/></colors>` without `<tableStyles>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1235 DONE` reordered styles optional-root colors with only mruColors and dxfs without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered optional-root branch `<dxfs count="0"/> + <colors><mruColors/></colors>` without `<tableStyles>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1236 DONE` reordered styles optional-root colors with only mruColors and dxfs without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered optional-root branch `<dxfs count="0"/> + <colors><mruColors/></colors>` without `<tableStyles>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1237 DONE` reordered styles optional-root colors child sequence and dxfs without tableStyles load preservation
+  - 범위: accepted dirty `styles.xml` shape인 reordered optional-root branch `<dxfs count="0"/> + <colors><mruColors/><indexedColors/></colors>` without `<tableStyles>`를 typed load assertion으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1238 DONE` reordered styles optional-root colors child sequence and dxfs without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 reordered optional-root branch `<dxfs count="0"/> + <colors><mruColors/><indexedColors/></colors>` without `<tableStyles>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1239 DONE` styles optional-root containers with only colors and without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 canonical optional-root branch `<colors><indexedColors/><mruColors/></colors>` without `<tableStyles>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1240 DONE` styles optional-root containers with only dxfs and without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 canonical optional-root branch `<dxfs count="0"/>` without `<tableStyles>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1241 DONE` styles optional-root containers with only extension list and without tableStyles positive dirty-save mirror
+  - 범위: accepted dirty `styles.xml` shape인 canonical optional-root branch `<extLst/>` without `<tableStyles>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1242 DONE` theme extension list presence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `<a:objectDefaults/> + <a:extLst/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1243 DONE` theme extra color scheme list presence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `<a:objectDefaults/> + <a:extraClrSchemeLst/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1244 DONE` theme custom color list presence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `<a:objectDefaults/> + <a:custClrLst/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1245 DONE` reordered theme extension list exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `<a:extLst/> + <a:objectDefaults/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1246 DONE` reordered theme extra color scheme list exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `<a:extraClrSchemeLst/> + <a:objectDefaults/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1247 DONE` reordered theme custom color list exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `<a:custClrLst/> + <a:objectDefaults/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1248 DONE` theme extra and custom color lists exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `<a:objectDefaults/> + <a:extraClrSchemeLst/> + <a:custClrLst/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1249 DONE` theme extra color scheme and extension list exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `<a:objectDefaults/> + <a:extraClrSchemeLst/> + <a:extLst/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1250 DONE` theme custom color list and extension list exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `<a:objectDefaults/> + <a:custClrLst/> + <a:extLst/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1251 DONE` custom color list instead of extension list exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `<a:extLst/> -> <a:custClrLst/>` replacement를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1252 DONE` extra color scheme list instead of extension list exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `<a:extLst/> -> <a:extraClrSchemeLst/>` replacement를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1253 DONE` extension list instead of extra color scheme list exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `<a:extraClrSchemeLst/> -> <a:extLst/>` replacement를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1254 DONE` custom color list instead of extra color scheme list exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `<a:extraClrSchemeLst/> -> <a:custClrLst/>` replacement를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1255 DONE` extension list instead of custom color list exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `<a:custClrLst/> -> <a:extLst/>` replacement를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1256 DONE` extra color scheme list instead of custom color list exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `<a:custClrLst/> -> <a:extraClrSchemeLst/>` replacement를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1257 DONE` theme all optional root children exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `<a:objectDefaults/> + <a:extraClrSchemeLst/> + <a:custClrLst/> + <a:extLst/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1258 DONE` reordered theme root child sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `<a:objectDefaults/>`가 `<a:themeElements>` 앞에 오는 root child 순서를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1259 DONE` theme optional root children without objectDefaults exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 objectDefaults 없는 `<a:extraClrSchemeLst/> + <a:custClrLst/> + <a:extLst/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1260 DONE` theme extra color scheme list without objectDefaults exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 objectDefaults 없는 `<a:extraClrSchemeLst/>` 단독 optional root child를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1261 DONE` theme custom color list without objectDefaults exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 objectDefaults 없는 `<a:custClrLst/>` 단독 optional root child를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1262 DONE` theme extension list without objectDefaults exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 objectDefaults 없는 `<a:extLst/>` 단독 optional root child를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1263 DONE` theme extra and custom color lists without objectDefaults exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 objectDefaults 없는 `<a:extraClrSchemeLst/> + <a:custClrLst/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1264 DONE` theme extra color scheme and extension list without objectDefaults exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 objectDefaults 없는 `<a:extraClrSchemeLst/> + <a:extLst/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1265 DONE` theme custom color list and extension list without objectDefaults exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 objectDefaults 없는 `<a:custClrLst/> + <a:extLst/>`를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1266 DONE` objectDefaults instead of extension list without existing objectDefaults exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 objectDefaults 없는 `<a:extLst/> -> <a:objectDefaults/>` replacement를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1267 DONE` objectDefaults instead of extra color scheme list without existing objectDefaults exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 objectDefaults 없는 `<a:extraClrSchemeLst/> -> <a:objectDefaults/>` replacement를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1268 DONE` objectDefaults instead of custom color list without existing objectDefaults exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 objectDefaults 없는 `<a:custClrLst/> -> <a:objectDefaults/>` replacement를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1269 DONE` objectDefaults and custom color list instead of extra color scheme list exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 objectDefaults 없는 `<a:extraClrSchemeLst/> + <a:custClrLst/>`에서 extra list를 objectDefaults로 치환한 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1270 DONE` extra color scheme list and objectDefaults instead of custom color list exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 objectDefaults 없는 `<a:extraClrSchemeLst/> + <a:custClrLst/>`에서 custom list를 objectDefaults로 치환한 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1271 DONE` objectDefaults and extension list instead of extra color scheme list exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 objectDefaults 없는 `<a:extraClrSchemeLst/> + <a:extLst/>`에서 extra list를 objectDefaults로 치환한 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1272 DONE` extra color scheme list and objectDefaults instead of extension list exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 objectDefaults 없는 `<a:extraClrSchemeLst/> + <a:extLst/>`에서 extension list를 objectDefaults로 치환한 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1273 DONE` objectDefaults and extension list instead of custom color list exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 objectDefaults 없는 `<a:custClrLst/> + <a:extLst/>`에서 custom list를 objectDefaults로 치환한 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1274 DONE` custom color list and objectDefaults instead of extension list exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 objectDefaults 없는 `<a:custClrLst/> + <a:extLst/>`에서 extension list를 objectDefaults로 치환한 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1275 DONE` theme without objectDefaults exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 objectDefaults root child 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1276 DONE` theme without name attr exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 theme root `name` attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1277 DONE` custom theme name exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 theme root custom `name` attr 값을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1278 DONE` theme without color scheme name exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `clrScheme` name attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1279 DONE` custom color scheme name exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `clrScheme` custom name attr 값을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1280 DONE` theme without font scheme name exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `fontScheme` name attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1281 DONE` custom font scheme name exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `fontScheme` custom name attr 값을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1282 DONE` theme without format scheme name exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `fmtScheme` name attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1283 DONE` custom format scheme name exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 `fmtScheme` custom name attr 값을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1284 DONE` reordered themeElements child sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` shape인 themeElements의 clr/font/fmt child 순서 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1285 DONE` color scheme child sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` color scheme child sequence fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1286 DONE` added color scheme child sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` color scheme child 추가 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1287 DONE` reordered color scheme child sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` color scheme child 순서 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1288 DONE` color scheme child removal exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` color scheme child 제거 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1289 DONE` color scheme child name drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` color scheme child 이름 drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1290 DONE` custom color scheme name on child fixture exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` color scheme child fixture의 custom `clrScheme` name attr 값을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1291 DONE` color scheme without name on child fixture exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` color scheme child fixture의 `clrScheme` name attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1292 DONE` color scheme nested child attr maps exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` color scheme nested child attr-map fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1293 DONE` color scheme nested child attr value drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` color scheme nested child attr value drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1294 DONE` color scheme nested child without lastClr attr exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` color scheme nested child `lastClr` attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1295 DONE` color scheme nested child without val attr exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` color scheme nested child `val` attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1296 DONE` color scheme nested srgb child without val attr exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` color scheme nested `srgbClr` val attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1297 DONE` color scheme nested child name drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` color scheme nested child 이름 drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1298 DONE` color scheme nested child removal exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` color scheme nested child 제거 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1299 DONE` color scheme nested child before parent exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` color scheme nested child가 parent 앞에 위치하는 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1300 DONE` font scheme nested child before parent exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` font scheme nested child가 parent 앞에 위치하는 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1301 DONE` format scheme nested child before parent exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme nested child가 parent 앞에 위치하는 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1302 DONE` added color scheme nested child attr maps exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` color scheme nested child attr-map 추가 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1303 DONE` font scheme child sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` font scheme child sequence fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1304 DONE` added font scheme child sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` font scheme child 추가 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1305 DONE` reordered font scheme child sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` font scheme child 순서 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1306 DONE` font scheme child name drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` font scheme child 이름 drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1307 DONE` font scheme child removal exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` font scheme child 제거 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1308 DONE` custom font scheme name on child fixture exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` font scheme child fixture의 custom `fontScheme` name attr 값을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1309 DONE` font scheme without name on child fixture exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` font scheme child fixture의 `fontScheme` name attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1310 DONE` font scheme nested child attr maps exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` font scheme nested child attr-map fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1311 DONE` reordered font scheme nested child attr maps exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` font scheme nested child attr-map 순서 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1312 DONE` font scheme nested child attr value drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` font scheme nested child attr value drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1313 DONE` font scheme nested child name drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` font scheme nested child 이름 drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1314 DONE` font scheme nested child typeface attr removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` font scheme nested child `typeface` attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1315 DONE` font scheme nested script typeface attr removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` font scheme nested script child `typeface` attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1316 DONE` font scheme nested child script attr removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` font scheme nested child `script` attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1317 DONE` font scheme nested child removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` font scheme nested child 제거 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1318 DONE` added font scheme nested child attr maps exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` font scheme nested child attr-map 추가 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1319 DONE` format scheme child sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme child sequence fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1320 DONE` added format scheme child sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme child 추가 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1321 DONE` reordered format scheme child sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme child 순서 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1322 DONE` format scheme child removal exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme child 제거 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1323 DONE` format scheme child name drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme child 이름 drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1324 DONE` custom format scheme name on child fixture exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme child fixture의 custom `fmtScheme` name attr 값을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1325 DONE` format scheme without name on child fixture exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme child fixture의 `fmtScheme` name attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1326 DONE` format scheme nested child attr maps exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme nested child attr-map fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1327 DONE` format scheme nested child attr value drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme nested child attr value drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1328 DONE` format scheme nested child w attr removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme nested child `w` attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1329 DONE` format scheme nested child name drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme nested child 이름 drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1330 DONE` format scheme nested child removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme nested child 제거 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1331 DONE` added format scheme nested child attr maps exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme nested child attr-map 추가 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1332 DONE` format scheme fill grandchild attr maps exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill grandchild attr-map fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1333 DONE` format scheme fill grandchild attr value drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill grandchild attr value drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1334 DONE` format scheme fill grandchild val attr removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill grandchild `val` attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1335 DONE` format scheme fill grandchild name drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill grandchild 이름 drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1336 DONE` format scheme fill grandchild removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill grandchild 제거 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1337 DONE` added format scheme fill grandchild attr maps exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill grandchild attr-map 추가 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1338 DONE` format scheme fill color great-grandchild attr maps exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color great-grandchild attr-map fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1339 DONE` format scheme fill color great-grandchild attr value drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color great-grandchild attr value drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1340 DONE` format scheme fill color great-grandchild val attr removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color great-grandchild `val` attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1341 DONE` format scheme fill color great-grandchild name drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color great-grandchild 이름 drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1342 DONE` format scheme fill color great-grandchild removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color great-grandchild 제거 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1343 DONE` format scheme fill color second transform attr value drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color second transform attr value drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1344 DONE` format scheme fill color second transform val attr removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color second transform `val` attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1345 DONE` format scheme fill color second transform name drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color second transform 이름 drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1346 DONE` format scheme fill color second transform removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color second transform 제거 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1347 DONE` format scheme fill color only transform added exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color only-transform 추가 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1348 DONE` format scheme fill color only transform duplicated exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color only-transform duplicate 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1349 DONE` format scheme fill color great-grandchild sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color great-grandchild sequence fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1350 DONE` reordered format scheme fill color great-grandchild sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color great-grandchild 순서 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1351 DONE` format scheme fill color first transform attr value drift with siblings exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color first transform sibling 포함 attr value drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1352 DONE` format scheme fill color first transform val attr removed with siblings exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color first transform sibling 포함 `val` attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1353 DONE` format scheme fill color first transform name drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color first transform 이름 drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1354 DONE` format scheme fill color first transform removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color first transform 제거 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1355 DONE` format scheme fill color duplicate transform sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color duplicate transform sequence fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1356 DONE` format scheme fill color duplicate transform attr value drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color duplicate transform attr value drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1357 DONE` format scheme fill color duplicate transform val attr removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color duplicate transform `val` attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1358 DONE` format scheme fill color duplicate transform name drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color duplicate transform 이름 drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1359 DONE` format scheme fill color duplicate transform removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color duplicate transform 제거 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1360 DONE` format scheme fill color duplicate transform order drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color duplicate transform order drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1361 DONE` format scheme fill color extra transform sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color extra transform sequence fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1362 DONE` format scheme fill color extra transform attr value drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color extra transform attr value drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1363 DONE` format scheme fill color extra transform val attr removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color extra transform `val` attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1364 DONE` format scheme fill color extra transform name drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color extra transform 이름 drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1365 DONE` format scheme fill color extra transform removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color extra transform 제거 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1366 DONE` format scheme fill color extra transform order drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color extra transform order drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1367 DONE` format scheme fill color front inserted transform sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color front inserted transform sequence fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1368 DONE` format scheme fill color front transform attr value drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color front transform attr value drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1369 DONE` format scheme fill color front transform val attr removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color front transform `val` attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1370 DONE` format scheme fill color front transform name drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color front transform 이름 drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1371 DONE` format scheme fill color front transform removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color front transform 제거 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1372 DONE` format scheme fill color front transform order drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color front transform order drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1373 DONE` format scheme fill color middle inserted transform sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color middle inserted transform sequence fixture를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1374 DONE` format scheme fill color middle transform attr value drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color middle transform attr value drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1375 DONE` format scheme fill color middle transform val attr removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color middle transform `val` attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1376 DONE` format scheme fill color middle transform name drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color middle transform 이름 drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1377 DONE` format scheme fill color middle transform removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color middle transform 제거 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1378 DONE` format scheme fill color middle transform order drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme fill color middle transform order drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1379 DONE` format scheme effect great-grandchild attr maps exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme effect great-grandchild attr maps를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1380 DONE` format scheme bg fill great-grandchild attr maps exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme bg fill great-grandchild attr maps를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1381 DONE` format scheme effect great-grandchild blurRad attr removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme effect great-grandchild `blurRad` attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1382 DONE` format scheme effect great-grandchild attr value drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme effect great-grandchild attr value drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1383 DONE` format scheme effect great-grandchild name drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme effect great-grandchild 이름 drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1384 DONE` format scheme effect great-grandchild removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme effect great-grandchild 제거 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1385 DONE` format scheme effect added great-grandchild sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme effect added great-grandchild sequence를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1386 DONE` format scheme effect reordered great-grandchild sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme effect reordered great-grandchild sequence를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1387 DONE` format scheme bg fill great-grandchild pos attr removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme bg fill great-grandchild `pos` attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1388 DONE` format scheme bg fill great-grandchild attr value drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme bg fill great-grandchild attr value drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1389 DONE` format scheme bg fill great-grandchild name drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme bg fill great-grandchild 이름 drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1390 DONE` format scheme bg fill great-grandchild removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme bg fill great-grandchild 제거 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1391 DONE` format scheme bg fill added great-grandchild sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme bg fill added great-grandchild sequence를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1392 DONE` format scheme bg fill reordered great-grandchild sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme bg fill reordered great-grandchild sequence를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1393 DONE` format scheme effect great-great-grandchild attr maps exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme effect great-great-grandchild attr maps를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1394 DONE` format scheme effect great-great-grandchild val attr removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme effect great-great-grandchild `val` attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1395 DONE` format scheme effect great-great-grandchild attr value drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme effect great-great-grandchild attr value drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1396 DONE` format scheme effect great-great-grandchild name drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme effect great-great-grandchild 이름 drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1397 DONE` format scheme effect great-great-grandchild removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme effect great-great-grandchild 제거 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1398 DONE` format scheme effect added great-great-grandchild sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme effect added great-great-grandchild sequence를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1399 DONE` format scheme effect reordered great-great-grandchild sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme effect reordered great-great-grandchild sequence를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1400 DONE` format scheme bg fill great-great-grandchild attr maps exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme bg fill great-great-grandchild attr maps를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1401 DONE` format scheme bg fill great-great-grandchild val attr removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme bg fill great-great-grandchild `val` attr 삭제를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1402 DONE` format scheme bg fill great-great-grandchild attr value drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme bg fill great-great-grandchild attr value drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1403 DONE` format scheme bg fill great-great-grandchild name drift exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme bg fill great-great-grandchild 이름 drift를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1404 DONE` format scheme bg fill great-great-grandchild removed exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme bg fill great-great-grandchild 제거 변형을 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1405 DONE` format scheme bg fill added great-great-grandchild sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme bg fill added great-great-grandchild sequence를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1406 DONE` format scheme bg fill reordered great-great-grandchild sequence exact positive dirty-save mirror
+  - 범위: accepted dirty `theme1.xml` format scheme bg fill reordered great-great-grandchild sequence를 dirty-save exact-preserve 회귀로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1407 DONE` styles xf attr-map typed preservation
+  - 범위: accepted dirty `styles.xml` cellStyleXf/cellXf 자체 attr-map을 typed styles summary에 포함해서 `quotePrefix` 같은 보조 attr drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1408 DONE` theme scheme direct child attr-map typed preservation
+  - 범위: accepted dirty `theme1.xml` `clrScheme`/`fontScheme`/`fmtScheme` 직접 자식 attr-map을 typed theme summary에 포함해서 direct child attr drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1409 DONE` styles colors palette entry typed preservation
+  - 범위: accepted dirty `styles.xml` `colors` 아래 `indexedColors`/`mruColors` 직접 자식 attr-map과 nested color entry 이름/attr-map을 typed styles summary에 포함해서 palette entry drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1410 DONE` styles tableStyles container attr-map typed preservation
+  - 범위: accepted dirty `styles.xml` `tableStyles` 컨테이너 자체 attr-map을 typed styles summary에 포함해서 extra/default/count 계열 컨테이너 attr drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1411 DONE` styles cellStyles container attr-map typed preservation
+  - 범위: accepted dirty `styles.xml` `cellStyles` 컨테이너 자체 attr-map을 typed styles summary에 포함해서 container extra attr drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1412 DONE` styles numFmts container attr-map typed preservation
+  - 범위: accepted dirty `styles.xml` `numFmts` 컨테이너 자체 attr-map을 typed styles summary에 포함해서 container extra attr drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1413 DONE` styles colors container attr-map typed preservation
+  - 범위: accepted dirty `styles.xml` `colors` 컨테이너 자체 attr-map을 typed styles summary에 포함해서 container extra attr drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1414 DONE` remaining styles root container attr-map typed preservation
+  - 범위: accepted dirty `styles.xml` `fonts`/`fills`/`borders`/`cellStyleXfs`/`cellXfs`/`dxfs`/`extLst` 컨테이너 자체 attr-map을 typed styles summary에 포함해서 root container extra attr drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1415 DONE` theme root and scheme container attr-map typed preservation
+  - 범위: accepted dirty `theme1.xml` root, root child, 그리고 `themeElements` 직속 `clrScheme`/`fontScheme`/`fmtScheme` 컨테이너 자체 attr-map을 typed theme summary에 포함해서 theme container extra attr drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1416 DONE` custom numFmt entry attr-map typed preservation
+  - 범위: accepted dirty `styles.xml` 개별 `numFmt` entry 자체 attr-map을 typed styles summary에 포함해서 custom numFmt extra attr drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1417 DONE` styles root attr-map typed preservation
+  - 범위: accepted dirty `styles.xml` `styleSheet` root 자체 attr-map을 typed styles summary에 포함해서 namespace/custom root attr drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1418 DONE` tableStyle child attr-map typed preservation
+  - 범위: accepted dirty `styles.xml` `tableStyles` 아래 non-empty `tableStyle` 직접 자식 이름/attr-map을 typed styles summary에 포함해서 table style element drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1419 DONE` styles root child attr-map typed preservation
+  - 범위: accepted dirty `styles.xml` `styleSheet` direct root child별 attr-map을 typed styles summary에 포함해서 unknown root child extra attr drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1420 DONE` cellStyle child attr-map typed preservation
+  - 범위: accepted dirty `styles.xml` non-empty `cellStyle` 직접 자식 이름/attr-map을 typed styles summary에 포함해서 cell style extension child drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1421 DONE` xf child sequence and attr-map typed preservation
+  - 범위: accepted dirty `styles.xml` `cellStyleXfs`/`cellXfs`의 `xf` 직접 자식 sequence와 attr-map을 typed styles summary에 포함해서 alignment/protection order 및 unknown xf child drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1422 DONE` style entry attr-map typed preservation
+  - 범위: accepted dirty `styles.xml` `font`/`fill`/`border`/`dxf` entry 자체 attr-map을 typed styles summary와 회귀 테스트로 고정해서 entry-level extra attr drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1423 DONE` styles extLst child attr-map typed preservation
+  - 범위: accepted dirty `styles.xml` 루트 `extLst` direct child 이름/attr-map을 typed styles summary에 포함해서 ext child order/attr drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1424 DONE` styles extLst nested child attr-map typed preservation
+  - 범위: accepted dirty `styles.xml` 루트 `extLst` direct child 아래 한 단계 nested child 이름/attr-map을 typed styles summary에 포함해서 ext payload order/attr drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1425 DONE` theme extLst child attr-map typed preservation
+  - 범위: accepted dirty `theme1.xml` 루트 `extLst` direct child 이름/attr-map을 typed theme summary에 포함해서 theme extension child order/attr drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1426 DONE` styles extLst great-grandchild attr-map typed preservation
+  - 범위: accepted dirty `styles.xml` 루트 `extLst` payload leaf 한 단계 더 깊은 이름/attr-map을 typed styles summary에 포함해서 ext payload leaf order/attr drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1427 DONE` fill gradient stop color typed preservation
+  - 범위: accepted dirty `styles.xml` `fill > gradientFill > stop > color` 경로의 이름/attr-map을 typed styles summary에 포함해서 gradient stop color drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1428 DONE` styles extLst great-great-grandchild attr-map typed preservation
+  - 범위: accepted dirty `styles.xml` 루트 `extLst` payload leaf 아래 한 단계 더 깊은 이름/attr-map을 typed styles summary에 포함해서 ext payload branch leaf order/attr drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1429 DONE` styles extLst subtree text typed preservation
+  - 범위: accepted dirty `styles.xml` 루트 `extLst`의 direct child, nested child, great-grandchild text와 CDATA를 typed styles summary에 포함해서 subtree text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1430 DONE` styles extLst great-great-grandchild text typed preservation
+  - 범위: accepted dirty `styles.xml` 루트 `extLst` payload branch leaf 아래 한 단계 더 깊은 text와 CDATA를 typed styles summary에 포함해서 deepest tracked subtree text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1431 DONE` styles extLst container text typed preservation
+  - 범위: accepted dirty `styles.xml` 루트 `extLst` 컨테이너 자체의 plain text와 CDATA를 typed styles summary에 포함해서 container-level mixed text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1432 DONE` xf extLst child attr-map typed preservation
+  - 범위: accepted dirty `styles.xml`의 `cellStyleXfs/cellXfs > xf > extLst` direct child 이름/attr-map을 typed styles summary에 포함해서 xf extension child order/attr drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1433 DONE` xf extLst child text typed preservation
+  - 범위: accepted dirty `styles.xml`의 `cellStyleXfs/cellXfs > xf > extLst` direct child text와 CDATA를 typed styles summary에 포함해서 xf extension child text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1434 DONE` xf extLst nested child typed preservation
+  - 범위: accepted dirty `styles.xml`의 `cellStyleXfs/cellXfs > xf > extLst > * > *` nested child 이름/attr-map/text와 CDATA를 typed styles summary에 포함해서 xf extension nested child drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1435 DONE` xf extLst great-grandchild typed preservation
+  - 범위: accepted dirty `styles.xml`의 `cellStyleXfs/cellXfs > xf > extLst > * > * > *` great-grandchild 이름/attr-map/text와 CDATA를 typed styles summary에 포함해서 xf extension payload leaf drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1436 DONE` xf extLst great-great-grandchild typed preservation
+  - 범위: accepted dirty `styles.xml`의 `cellStyleXfs/cellXfs > xf > extLst > * > * > * > *` great-great-grandchild 이름/attr-map/text와 CDATA를 typed styles summary에 포함해서 xf extension deepest payload leaf drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1437 DONE` theme extLst child text typed preservation
+  - 범위: accepted dirty `theme1.xml` 루트 `extLst` direct child text와 CDATA를 typed theme summary에 포함해서 theme extension child text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1438 DONE` theme extLst nested child typed preservation
+  - 범위: accepted dirty `theme1.xml` 루트 `extLst > * > *` nested child 이름/attr-map/text와 CDATA를 typed theme summary에 포함해서 theme extension nested child drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1439 DONE` styles colors container text typed preservation
+  - 범위: accepted dirty `styles.xml`의 `styleSheet > colors` 컨테이너 plain text와 CDATA를 typed styles summary에 포함해서 colors mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1440 DONE` styles colors child text typed preservation
+  - 범위: accepted dirty `styles.xml`의 `styleSheet > colors > indexedColors|mruColors` direct child plain text와 CDATA를 typed styles summary에 포함해서 colors child mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1441 DONE` styles colors nested child text typed preservation
+  - 범위: accepted dirty `styles.xml`의 `styleSheet > colors > indexedColors > rgbColor` 와 `mruColors > color` nested child plain text와 CDATA를 typed styles summary에 포함해서 colors nested-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1442 DONE` fills child text typed preservation
+  - 범위: accepted dirty `styles.xml`의 `fills/fill > patternFill|gradientFill` direct child plain text와 CDATA를 typed styles summary에 포함해서 fill child mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1443 DONE` fills nested child text typed preservation
+  - 범위: accepted dirty `styles.xml`의 `fills/fill/patternFill > fgColor|bgColor` nested child plain text와 CDATA를 typed styles summary에 포함해서 fill nested child mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1444 DONE` fills gradient stop color text typed preservation
+  - 범위: accepted dirty `styles.xml`의 `fills/fill/gradientFill > stop > color` leaf plain text와 CDATA를 typed styles summary에 포함해서 fill gradient leaf mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1445 DONE` borders nested child text typed preservation
+  - 범위: accepted dirty `styles.xml`의 `borders/border/* > color` nested child plain text와 CDATA를 typed styles summary에 포함해서 border nested child mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1446 DONE` dxf nested child text typed preservation
+  - 범위: accepted dirty `styles.xml`의 `dxfs/dxf/* > color|name` nested child plain text와 CDATA를 typed styles summary에 포함해서 dxf nested child mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1447 DONE` theme clrScheme nested child text typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `clrScheme > * > sysClr|srgbClr` nested child plain text와 CDATA를 typed theme summary에 포함해서 clrScheme nested child mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1448 DONE` theme root text typed preservation
+  - 범위: accepted dirty `theme1.xml` 루트 `<theme>` mixed plain text와 CDATA를 typed theme summary에 포함해서 theme root mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1449 DONE` theme fontScheme nested child text typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `fontScheme > * > latin|font` nested child plain text와 CDATA를 typed theme summary에 포함해서 fontScheme nested child mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1450 DONE` theme fmtScheme nested child text typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `fmtScheme > * > solidFill|ln|effectStyle` nested child plain text와 CDATA를 typed theme summary에 포함해서 fmtScheme nested child mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1451 DONE` theme fmtScheme grandchild text typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `fmtScheme > fillStyleLst > solidFill > schemeClr` grandchild plain text와 CDATA를 typed theme summary에 포함해서 fmtScheme grandchild mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1452 DONE` theme fmtScheme great-grandchild text typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `fmtScheme > fillStyleLst > solidFill > schemeClr > tint` great-grandchild plain text와 CDATA를 typed theme summary에 포함해서 fmtScheme great-grandchild mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1453 DONE` theme fmtScheme fill color transform sequence text preservation
+  - 범위: accepted dirty `theme1.xml`의 `fmtScheme > fillStyleLst > solidFill > schemeClr > tint|satMod` great-grandchild sequence plain text와 CDATA를 typed theme summary에 포함해서 fill color sibling-transform text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1454 DONE` theme fmtScheme effect great-grandchild text typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `fmtScheme > effectStyleLst > effectStyle > effectLst > outerShdw` great-grandchild plain text와 CDATA를 typed theme summary에 포함해서 effect branch mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1455 DONE` theme fmtScheme bgFill great-grandchild text typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `fmtScheme > bgFillStyleLst > gradFill > gsLst > gs` great-grandchild plain text와 CDATA를 typed theme summary에 포함해서 bgFill branch mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1456 DONE` theme fmtScheme effect schemeClr text typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `fmtScheme > effectStyleLst > effectStyle > effectLst > outerShdw > schemeClr` great-great-grandchild plain text와 CDATA를 typed theme summary에 포함해서 effect color leaf mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1457 DONE` theme fmtScheme bgFill schemeClr text typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `fmtScheme > bgFillStyleLst > gradFill > gsLst > gs > schemeClr` great-great-grandchild plain text와 CDATA를 typed theme summary에 포함해서 bgFill color leaf mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1458 DONE` theme fmtScheme effect schemeClr name preservation
+  - 범위: accepted dirty `theme1.xml`의 `fmtScheme > effectStyleLst > effectStyle > effectLst > outerShdw > schemeClr` great-great-grandchild tag-name drift를 dirty save 회귀로 고정해서 `schemeClr -> srgbClr` 치환을 fail-fast로 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1459 DONE` theme fmtScheme effect schemeClr set preservation
+  - 범위: accepted dirty `theme1.xml`의 `fmtScheme > effectStyleLst > effectStyle > effectLst > outerShdw > schemeClr` great-great-grandchild set drift를 dirty save 회귀로 고정해서 color leaf 제거를 fail-fast로 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1460 DONE` theme fmtScheme bgFill schemeClr name preservation
+  - 범위: accepted dirty `theme1.xml`의 `fmtScheme > bgFillStyleLst > gradFill > gsLst > gs > schemeClr` great-great-grandchild tag-name drift를 dirty save 회귀로 고정해서 `schemeClr -> srgbClr` 치환을 fail-fast로 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1461 DONE` theme fmtScheme bgFill schemeClr set preservation
+  - 범위: accepted dirty `theme1.xml`의 `fmtScheme > bgFillStyleLst > gradFill > gsLst > gs > schemeClr` great-great-grandchild set drift를 dirty save 회귀로 고정해서 color leaf 제거를 fail-fast로 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1462 DONE` styles dxf entry attr-map drift regression
+  - 범위: accepted dirty `styles.xml`의 `dxfs > dxf` entry attr-map 일반 drift를 dirty save 회귀로 고정해서 direct `dxf` entry-level extra attr value 변경을 fail-fast로 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1463 DONE` styles fill entry attr-map drift regression
+  - 범위: accepted dirty `styles.xml`의 `fills > fill` entry attr-map 일반 drift를 dirty save 회귀로 고정해서 direct `fill` entry-level extra attr value 변경을 fail-fast로 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1464 DONE` styles border entry attr-map drift regression
+  - 범위: accepted dirty `styles.xml`의 `borders > border` entry attr-map 일반 drift를 dirty save 회귀로 고정해서 direct `border` entry-level extra attr value 변경을 fail-fast로 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1465 DONE` theme extraClrSchemeLst child typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extraClrSchemeLst > *` direct child 이름/attr-map/sequence를 typed theme summary에 포함해서 extra color scheme list child attr/name/set/order drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1466 DONE` theme custClrLst child typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `custClrLst > *` direct child 이름/attr-map/sequence를 typed theme summary에 포함해서 custom color list child attr/name/set/order drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1467 DONE` theme custClrLst nested child typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `custClrLst > custClr > *` nested child 이름/attr-map/sequence를 typed theme summary에 포함해서 custom color payload attr/name/set drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1468 DONE` theme extraClrSchemeLst nested child typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extraClrSchemeLst > extraClrScheme > clrScheme` nested child 이름/attr-map/sequence를 typed theme summary에 포함해서 extra color scheme payload attr/name/set drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1469 DONE` theme extraClrScheme clrScheme child typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extraClrSchemeLst > extraClrScheme > clrScheme > *` grandchild 이름/attr-map/sequence를 typed theme summary에 포함해서 extra color scheme leaf attr/name/set/order drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1470 DONE` theme extraClrScheme clrScheme nested child typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extraClrSchemeLst > extraClrScheme > clrScheme > * > *` nested child 이름/attr-map/text와 CDATA를 typed theme summary에 포함해서 extra color scheme value attr/name/set/text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1471 DONE` theme custom color nested value typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `custClrLst > custClr > * > *` grandchild 이름/attr-map/text와 CDATA를 typed theme summary에 포함해서 custom color payload attr/name/set/order/text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1472 DONE` theme custom color nested child text typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `custClrLst > custClr > srgbClr|sysClr` plain text와 CDATA를 typed theme summary에 포함해서 custom color nested child mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1473 DONE` theme custom color entry text typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `custClrLst > custClr` plain text와 CDATA를 typed theme summary에 포함해서 custom color entry mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1474 DONE` theme custom color container text typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `custClrLst` plain text와 CDATA를 typed theme summary에 포함해서 custom color list container mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1475 DONE` theme extra color scheme list container text typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extraClrSchemeLst` plain text와 CDATA를 typed theme summary에 포함해서 extra color scheme list container mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1476 DONE` theme extension list container text typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extLst` plain text와 CDATA를 typed theme summary에 포함해서 theme extension list container mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1477 DONE` theme extension list great-grandchild typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extLst > ext > * > *` great-grandchild 이름/attr-map/text와 CDATA를 typed theme summary에 포함해서 theme extension payload leaf drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1478 DONE` theme extension list great-great-grandchild typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extLst > ext > * > * > *` great-great-grandchild 이름/attr-map/text와 CDATA를 typed theme summary에 포함해서 theme extension payload leaf-below-leaf drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1479 DONE` theme extension list great-great-great-grandchild typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extLst > ext > * > * > * > *` great-great-great-grandchild 이름/attr-map/text와 CDATA를 typed theme summary에 포함해서 theme extension deeper payload drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1480 DONE` theme extension list great-great-great-great-grandchild typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extLst > ext > * > * > * > * > *` great-great-great-great-grandchild 이름/attr-map/text와 CDATA를 typed theme summary에 포함해서 theme extension deepest payload drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1481 DONE` theme extension list great-great-great-great-great-grandchild typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extLst > ext > * > * > * > * > * > *` great-great-great-great-great-grandchild 이름/attr-map/text와 CDATA를 typed theme summary에 포함해서 theme extension ultra-deep payload drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1482 DONE` theme extension list great-great-great-great-great-great-grandchild typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extLst > ext > * > * > * > * > * > * > *` great-great-great-great-great-great-grandchild 이름/attr-map/text와 CDATA를 typed theme summary에 포함해서 theme extension deeper-than-ultra payload drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1483 DONE` theme extension list great-great-great-great-great-great-great-grandchild typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extLst > ext > * > * > * > * > * > * > * > *` great-great-great-great-great-great-great-grandchild 이름/attr-map/text와 CDATA를 typed theme summary에 포함해서 theme extension depth-9 payload drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1484 DONE` theme extension list great-great-great-great-great-great-great-great-grandchild typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extLst > ext > * > * > * > * > * > * > * > * > *` great-great-great-great-great-great-great-great-grandchild 이름/attr-map/text와 CDATA를 typed theme summary에 포함해서 theme extension depth-10 payload drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1485 DONE` theme extension list great-great-great-great-great-great-great-great-great-grandchild typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extLst > ext > * > * > * > * > * > * > * > * > * > *` great-great-great-great-great-great-great-great-great-grandchild 이름/attr-map/text와 CDATA를 typed theme summary에 포함해서 theme extension depth-11 payload drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1486 DONE` theme extension list great-great-great-great-great-great-great-great-great-great-grandchild typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extLst > ext > * > * > * > * > * > * > * > * > * > * > *` great-great-great-great-great-great-great-great-great-great-grandchild 이름/attr-map/text와 CDATA를 typed theme summary에 포함해서 theme extension depth-12 payload drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1487 DONE` theme extension list great-great-great-great-great-great-great-great-great-great-great-grandchild typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extLst > ext > * > * > * > * > * > * > * > * > * > * > * > *` great-great-great-great-great-great-great-great-great-great-great-grandchild 이름/attr-map/text와 CDATA를 typed theme summary에 포함해서 theme extension depth-13 payload drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1488 DONE` theme extension list great-great-great-great-great-great-great-great-great-great-great-great-grandchild typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extLst > ext > * > * > * > * > * > * > * > * > * > * > * > * > *` great-great-great-great-great-great-great-great-great-great-great-great-grandchild 이름/attr-map/text와 CDATA를 typed theme summary에 포함해서 theme extension depth-14 payload drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1489 DONE` theme extension list great-great-great-great-great-great-great-great-great-great-great-great-great-grandchild typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extLst > ext > * > * > * > * > * > * > * > * > * > * > * > * > * > *` great-great-great-great-great-great-great-great-great-great-great-great-great-grandchild 이름/attr-map/text와 CDATA를 typed theme summary에 포함해서 theme extension depth-15 payload drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1490 DONE` theme extension list great-great-great-great-great-great-great-great-great-great-great-great-great-great-grandchild typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extLst > ext > * > * > * > * > * > * > * > * > * > * > * > * > * > * > *` great-great-great-great-great-great-great-great-great-great-great-great-great-great-grandchild 이름/attr-map/text와 CDATA를 typed theme summary에 포함해서 theme extension depth-16 payload drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1491 DONE` theme extension list great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-grandchild typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extLst > ext > * > * > * > * > * > * > * > * > * > * > * > * > * > * > * > *` great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-grandchild 이름/attr-map/text와 CDATA를 typed theme summary에 포함해서 theme extension depth-17 payload drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1492 DONE` theme extension list great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-grandchild typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extLst > ext > * > * > * > * > * > * > * > * > * > * > * > * > * > * > * > * > *` great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-grandchild 이름/attr-map/text와 CDATA를 typed theme summary에 포함해서 theme extension depth-18 payload drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1493 DONE` theme extension list great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-grandchild typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extLst > ext > * > * > * > * > * > * > * > * > * > * > * > * > * > * > * > * > * > *` great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-grandchild 이름/attr-map/text와 CDATA를 typed theme summary에 포함해서 theme extension depth-19 payload drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1494 DONE` theme extension list great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-grandchild typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extLst > ext > * > * > * > * > * > * > * > * > * > * > * > * > * > * > * > * > * > * > *` great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-grandchild 이름/attr-map/text와 CDATA를 typed theme summary에 포함해서 theme extension depth-20 payload drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1495 DONE` theme extension list great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-grandchild typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extLst > ext > * > * > * > * > * > * > * > * > * > * > * > * > * > * > * > * > * > * > * > *` great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-grandchild 이름/attr-map/text와 CDATA를 typed theme summary에 포함해서 theme extension depth-21 payload drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1496 DONE` theme extension list great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-grandchild typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `extLst > ext > * > * > * > * > * > * > * > * > * > * > * > * > * > * > * > * > * > * > * > * > *` great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-great-grandchild 이름/attr-map/text와 CDATA를 typed theme summary에 포함해서 theme extension depth-22 payload drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1497 DONE` themeElements container text typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `<themeElements>` container text와 CDATA를 typed theme summary에 포함해서 themeElements container text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1498 DONE` theme scheme container text typed preservation
+  - 범위: accepted dirty `theme1.xml`의 `<clrScheme>`, `<fontScheme>`, `<fmtScheme>` container text와 CDATA를 typed theme summary에 포함해서 scheme container text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1499 DONE` styles root text typed preservation
+  - 범위: accepted dirty `styles.xml` root `<styleSheet>` mixed plain text와 CDATA를 typed styles summary에 포함해서 root mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1500 DONE` styles fonts container text typed preservation
+  - 범위: accepted dirty `styles.xml`의 `<fonts>` container text와 CDATA를 typed styles summary에 포함해서 fonts container mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1501 DONE` themeElements container attr-map drift regression
+  - 범위: `theme1.xml` fixture의 `<a:themeElements custom="elements">` attr value가 drift할 때 dirty save가 fail-fast로 막히는지 회귀를 추가해서, 이미 수집 중인 root-child attr-map typed preservation이 themeElements sibling에도 대칭적으로 적용되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1502 DONE` styles numFmts container text typed preservation
+  - 범위: accepted dirty `styles.xml`의 `<numFmts>` container text와 CDATA를 typed styles summary에 포함해서 numFmts container mixed-text drift를 save 전에 차단
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1503 DONE` theme fontScheme container attr-map drift regression
+  - 범위: `theme1.xml` fixture의 `<a:fontScheme custom="font">` attr value가 drift할 때 dirty save가 fail-fast로 막히는지 회귀를 추가해서, 이미 수집 중인 themeElements child attr-map typed preservation이 fontScheme sibling에도 대칭적으로 적용되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1504 DONE` theme formatScheme container attr-map drift regression
+  - 범위: `theme1.xml` fixture의 `<a:fmtScheme custom="fmt">` attr value가 drift할 때 dirty save가 fail-fast로 막히는지 회귀를 추가해서, 이미 수집 중인 themeElements child attr-map typed preservation이 fmtScheme sibling에도 대칭적으로 적용되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1505 DONE` theme objectDefaults attr-map drift regression
+  - 범위: `theme1.xml` fixture의 `<a:objectDefaults custom="object"/>` attr value가 drift할 때 dirty save가 fail-fast로 막히는지 회귀를 추가해서, 이미 수집 중인 root-child attr-map typed preservation이 objectDefaults sibling에도 대칭적으로 적용되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1506 DONE` theme extraClrSchemeLst container attr-map drift regression
+  - 범위: optional root fixture의 `<a:extraClrSchemeLst custom="extra">` attr value가 drift할 때 dirty save가 fail-fast로 막히는지 회귀를 추가해서, optional root sibling attr-map typed preservation이 extraClrSchemeLst container에도 대칭적으로 적용되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1507 DONE` theme custClrLst container attr-map drift regression
+  - 범위: optional root fixture의 `<a:custClrLst custom="custom">` attr value가 drift할 때 dirty save가 fail-fast로 막히는지 회귀를 추가해서, optional root sibling attr-map typed preservation이 custClrLst container에도 대칭적으로 적용되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1508 DONE` theme extLst container attr-map drift regression
+  - 범위: optional root fixture의 `<a:extLst custom="themeExtLst">` attr value가 drift할 때 dirty save가 fail-fast로 막히는지 회귀를 추가해서, optional root sibling attr-map typed preservation이 extLst container에도 대칭적으로 적용되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1509 DONE` theme extLst container extra-attr removal regression
+  - 범위: optional root fixture의 `<a:extLst custom="themeExtLst">`에서 extra attr를 제거할 때 dirty save가 fail-fast로 막히는지 회귀를 추가해서, optional root sibling attr-map preservation의 key-deletion 대칭을 extLst container에도 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1510 DONE` theme custClrLst container extra-attr removal regression
+  - 범위: optional root fixture의 `<a:custClrLst custom="custom">`에서 extra attr를 제거할 때 dirty save가 fail-fast로 막히는지 회귀를 추가해서, optional root sibling attr-map preservation의 key-deletion 대칭을 custClrLst container에도 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1511 DONE` theme extraClrSchemeLst child extra-attr removal regression
+  - 범위: optional root fixture의 `<a:extraClrScheme name="Extra One"/>`에서 child attr를 제거할 때 dirty save가 fail-fast로 막히는지 회귀를 추가해서, extraClrSchemeLst child attr-map preservation의 key-deletion 대칭을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1512 DONE` theme custClrLst child extra-attr removal regression
+  - 범위: optional root fixture의 `<a:custClr name="Custom One"/>`에서 child attr를 제거할 때 dirty save가 fail-fast로 막히는지 회귀를 추가해서, custClrLst child attr-map preservation의 key-deletion 대칭을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1513 DONE` theme extraClrSchemeLst nested child extra-attr removal regression
+  - 범위: optional root fixture의 `<a:clrScheme name="Office"/>`에서 nested child attr를 제거할 때 dirty save가 fail-fast로 막히는지 회귀를 추가해서, extraClrSchemeLst nested child attr-map preservation의 key-deletion 대칭을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1514 DONE` theme custClrLst nested child extra-attr removal regression
+  - 범위: optional root fixture의 nested child `<a:sysClr val="windowText" lastClr="000000"/>`에서 extra attr를 제거할 때 dirty save가 fail-fast로 막히는지 회귀를 추가해서, custClrLst nested child attr-map preservation의 key-deletion 대칭을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1515 DONE` theme extraClrSchemeLst grandchild extra-attr removal regression
+  - 범위: optional root fixture의 grandchild `<a:dk1 phase="dark"/>`에서 extra attr를 제거할 때 dirty save가 fail-fast로 막히는지 회귀를 추가해서, extraClrSchemeLst grandchild attr-map preservation의 key-deletion 대칭을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1516 DONE` theme custClrLst grandchild extra-attr removal regression
+  - 범위: optional root fixture의 grandchild `<a:alpha val="50000"/>`에서 extra attr를 제거할 때 dirty save가 fail-fast로 막히는지 회귀를 추가해서, custClrLst grandchild attr-map preservation의 key-deletion 대칭을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1517 DONE` theme extraClrSchemeLst great-grandchild extra-attr removal regression
+  - 범위: optional root fixture의 great-grandchild `<a:sysClr val="windowText" lastClr="000000"/>`에서 extra attr를 제거할 때 dirty save가 fail-fast로 막히는지 회귀를 추가해서, extraClrSchemeLst great-grandchild attr-map preservation의 key-deletion 대칭을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1518 DONE` theme extraClrScheme grandchild without phase attr load mirror
+  - 범위: `extraClrSchemeLst` grandchild fixture의 `<a:dk1 phase="dark"/>`에서 `phase` attr를 제거한 입력을 load했을 때 theme summary가 빈 attr-map으로 그대로 수집하는지 회귀를 추가해서, 이미 닫힌 save key-deletion 회귀와 load mirror를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1519 DONE` theme custClr grandchild without val attr load mirror
+  - 범위: `custClrLst` grandchild fixture의 `<a:alpha val="50000"/>`에서 `val` attr를 제거한 입력을 load했을 때 theme summary가 빈 attr-map으로 그대로 수집하는지 회귀를 추가해서, 이미 닫힌 save key-deletion 회귀와 load mirror를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1520 DONE` theme extraClrScheme nested child without name attr load mirror
+  - 범위: `extraClrSchemeLst` nested child fixture의 `<a:clrScheme name="Office"/>`에서 `name` attr를 제거한 입력을 load했을 때 theme summary가 빈 attr-map으로 그대로 수집하는지 회귀를 추가해서, 이미 닫힌 save key-deletion 회귀와 load mirror를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1521 DONE` theme custClr nested child without lastClr attr load mirror
+  - 범위: `custClrLst` nested child fixture의 `<a:sysClr val="windowText" lastClr="000000"/>`에서 `lastClr` attr를 제거한 입력을 load했을 때 theme summary가 축소된 attr-map으로 그대로 수집하는지 회귀를 추가해서, 이미 닫힌 save key-deletion 회귀와 load mirror를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1522 DONE` theme extraClrScheme child without name attr load mirror
+  - 범위: `extraClrSchemeLst` child fixture의 `<a:extraClrScheme name="Extra One"/>`에서 `name` attr를 제거한 입력을 load했을 때 theme summary가 빈 attr-map으로 그대로 수집하는지 회귀를 추가해서, 이미 닫힌 save key-deletion 회귀와 load mirror를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1523 DONE` theme custClr child without name attr load mirror
+  - 범위: `custClrLst` child fixture의 `<a:custClr name="Custom One"/>`에서 `name` attr를 제거한 입력을 load했을 때 theme summary가 빈 attr-map으로 그대로 수집하는지 회귀를 추가해서, 이미 닫힌 save key-deletion 회귀와 load mirror를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1524 DONE` theme extraClrSchemeLst grandchild positive dirty-save mirror
+  - 범위: `extraClrSchemeLst` grandchild fixture를 dirty save해도 theme XML이 byte-for-byte 보존되는지 positive mirror를 추가해서, 같은 branch에서 이미 닫힌 save reject/load mirror 회귀와 preserve-path를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1525 DONE` theme custClrLst grandchild positive dirty-save mirror
+  - 범위: `custClrLst` grandchild fixture를 dirty save해도 theme XML이 byte-for-byte 보존되는지 positive mirror를 추가해서, 같은 branch에서 이미 닫힌 save reject/load mirror 회귀와 preserve-path를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1526 DONE` theme extraClrSchemeLst child positive dirty-save mirror
+  - 범위: `extraClrSchemeLst` child fixture를 dirty save해도 theme XML이 byte-for-byte 보존되는지 positive mirror를 추가해서, 같은 branch에서 이미 닫힌 save reject/load mirror 회귀와 preserve-path를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1527 DONE` theme custClrLst child positive dirty-save mirror
+  - 범위: `custClrLst` child fixture를 dirty save해도 theme XML이 byte-for-byte 보존되는지 positive mirror를 추가해서, 같은 branch에서 이미 닫힌 save reject/load mirror 회귀와 preserve-path를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1528 DONE` theme extraClrSchemeLst nested-child positive dirty-save mirror
+  - 범위: `extraClrSchemeLst` nested-child fixture를 dirty save해도 theme XML이 byte-for-byte 보존되는지 positive mirror를 추가해서, 같은 branch에서 이미 닫힌 save reject/load mirror 회귀와 preserve-path를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1529 DONE` theme custClrLst nested-child positive dirty-save mirror
+  - 범위: `custClrLst` nested-child fixture를 dirty save해도 theme XML이 byte-for-byte 보존되는지 positive mirror를 추가해서, 같은 branch에서 이미 닫힌 save reject/load mirror 회귀와 preserve-path를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1530 DONE` theme extraClrSchemeLst great-grandchild positive dirty-save mirror
+  - 범위: `extraClrSchemeLst` great-grandchild fixture를 dirty save해도 theme XML이 byte-for-byte 보존되는지 positive mirror를 추가해서, 같은 branch에서 이미 닫힌 save reject/load mirror 회귀와 preserve-path를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1531 DONE` theme extraClrSchemeLst great-grandchild without lastClr attr load mirror
+  - 범위: `extraClrSchemeLst` great-grandchild fixture의 `<a:sysClr val="windowText" lastClr="000000"/>`에서 `lastClr` attr를 제거한 입력을 load했을 때 theme summary가 축소된 attr-map으로 그대로 수집하는지 회귀를 추가해서, 이미 닫힌 save key-deletion 회귀와 load mirror를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1532 DONE` theme extLst childful no-custom attr load mirror
+  - 범위: child-bearing `extLst` fixture의 `<a:extLst custom="themeExtLst">`에서 `custom` attr를 제거한 입력을 load했을 때 root child attr-map이 빈 map으로 수집되고 child attr-map은 그대로 보존되는지 회귀를 추가해서, 이미 닫힌 save key-deletion 회귀와 load mirror를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1533 DONE` theme extLst childful no-custom positive dirty-save mirror
+  - 범위: child-bearing no-custom `extLst` fixture를 dirty save해도 theme XML이 byte-for-byte 보존되는지 positive mirror를 추가해서, 같은 branch에서 이미 닫힌 save reject/load mirror 회귀와 preserve-path를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1534 DONE` theme extraClrSchemeLst great-grandchild sysClr without val attr load mirror
+  - 범위: `extraClrSchemeLst` great-grandchild fixture의 `<a:sysClr val="windowText" lastClr="000000"/>`에서 `val` attr를 제거한 입력을 load했을 때 theme summary가 축소된 attr-map으로 그대로 수집하는지 회귀를 추가해서, 이미 닫힌 save key-deletion 회귀와 load mirror를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1535 DONE` theme extraClrSchemeLst great-grandchild srgbClr without val attr load mirror
+  - 범위: `extraClrSchemeLst` great-grandchild fixture의 `<a:srgbClr val="FFFFFF"/>`에서 `val` attr를 제거한 입력을 load했을 때 theme summary가 빈 attr-map으로 그대로 수집하는지 회귀를 추가해서, 같은 leaf-depth attr-map 축소 load mirror를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1536 DONE` theme extraClrSchemeLst great-grandchild without lastClr attr positive dirty-save mirror
+  - 범위: `extraClrSchemeLst` great-grandchild fixture의 `<a:sysClr val="windowText" lastClr="000000"/>`에서 `lastClr` attr를 제거한 입력을 dirty save해도 theme XML이 byte-for-byte 보존되는지 positive mirror를 추가해서, 이미 닫힌 load mirror와 save reject 회귀를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1537 DONE` theme extraClrSchemeLst great-grandchild sysClr without val attr positive dirty-save mirror
+  - 범위: `extraClrSchemeLst` great-grandchild fixture의 첫 `<a:sysClr>`에서 `val` attr를 제거한 입력을 dirty save해도 attr-less leaf가 byte-for-byte 보존되는지 positive mirror를 추가해서, 바로 직전에 닫힌 load mirror와 기존 save drift 회귀를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1538 DONE` theme extraClrSchemeLst great-grandchild srgbClr without val attr positive dirty-save mirror
+  - 범위: `extraClrSchemeLst` great-grandchild fixture의 `<a:srgbClr val="FFFFFF"/>`를 attr-less leaf로 줄인 입력을 dirty save해도 theme XML이 그대로 유지되는지 positive mirror를 추가해서, 1535 load mirror와 같은 leaf-depth preserve-path를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1539 DONE` theme custClrLst child without name attr positive dirty-save mirror
+  - 범위: `custClrLst` child fixture의 첫 `<a:custClr name="Custom One"/>`에서 `name` attr를 제거한 입력을 dirty save해도 theme XML이 byte-for-byte 보존되는지 positive mirror를 추가해서, 기존 load mirror와 save reject 회귀를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1540 DONE` theme custClrLst nested child without lastClr attr positive dirty-save mirror
+  - 범위: `custClrLst` nested child fixture의 `<a:sysClr val="windowText" lastClr="000000"/>`에서 `lastClr` attr를 제거한 입력을 dirty save해도 attr-map 축소 상태가 byte-for-byte 보존되는지 positive mirror를 추가해서, 이미 닫힌 load mirror와 save reject 회귀를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1541 DONE` theme custClrLst grandchild without val attr positive dirty-save mirror
+  - 범위: `custClrLst` grandchild fixture의 `<a:alpha val="50000"/>`를 attr-less leaf로 줄인 입력을 dirty save해도 theme XML이 그대로 유지되는지 positive mirror를 추가해서, 같은 depth의 load mirror와 save reject 회귀를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1542 DONE` styles tableStyle child without custom attr load mirror
+  - 범위: `tableStyle` child fixture의 `firstColumnStripe` child에서 `custom` attr를 제거한 입력을 load했을 때 styles summary가 축소된 child attr-map으로 그대로 수집되는지 회귀를 추가해서, 기존 save reject와 load mirror를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1543 DONE` styles tableStyle child without custom attr positive dirty-save mirror
+  - 범위: 같은 `tableStyle` child attr-less fixture를 dirty save해도 `styles.xml`이 byte-for-byte 보존되는지 positive mirror를 추가해서, 방금 닫은 load mirror와 기존 key-deletion save reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1544 DONE` styles cellStyle child without custom attr load mirror
+  - 범위: `cellStyle` child fixture의 `<extLst custom="cell"/>`에서 `custom` attr를 제거한 입력을 load했을 때 child attr-map이 빈 map으로 수집되는지 회귀를 추가해서, 기존 save reject와 load mirror를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1545 DONE` styles cellStyle child without custom attr positive dirty-save mirror
+  - 범위: 같은 attr-less `cellStyle` child fixture를 dirty save해도 `styles.xml`이 그대로 유지되는지 positive mirror를 추가해서, 1544 load mirror와 기존 extra-attr deletion save reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1546 DONE` styles extLst child without custom attr load mirror
+  - 범위: stylesheet `extLst` child fixture의 첫 `<ext ... custom="one"/>`에서 `custom` attr를 제거한 입력을 load했을 때 child attr-map이 축소된 형태로 그대로 수집되는지 회귀를 추가해서, 기존 save reject와 load mirror를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1547 DONE` styles extLst child without custom attr positive dirty-save mirror
+  - 범위: 같은 attr-less `extLst` child fixture를 dirty save해도 `styles.xml`이 byte-for-byte 보존되는지 positive mirror를 추가해서, 1546 load mirror와 existing deletion save reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1548 DONE` styles extLst nested child without preserved attr load mirror
+  - 범위: stylesheet `extLst` nested child fixture의 첫 `<payload preserved="yes"/>`에서 `preserved` attr를 제거한 입력을 load했을 때 nested child attr-map이 빈 map으로 수집되는지 회귀를 추가해서, 기존 save reject와 load mirror를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1549 DONE` styles extLst nested child without preserved attr positive dirty-save mirror
+  - 범위: 같은 attr-less nested-child fixture를 dirty save해도 `styles.xml`이 그대로 유지되는지 positive mirror를 추가해서, 1548 load mirror와 deletion save reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1550 DONE` styles extLst great-grandchild without custom attr load mirror
+  - 범위: stylesheet `extLst` great-grandchild fixture의 첫 `<leaf custom="x"/>`에서 `custom` attr를 제거한 입력을 load했을 때 great-grandchild attr-map이 빈 map으로 축소 수집되는지 회귀를 추가해서, 기존 save reject와 load mirror를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1551 DONE` styles extLst great-grandchild without custom attr positive dirty-save mirror
+  - 범위: 같은 attr-less great-grandchild fixture를 dirty save해도 `styles.xml`이 byte-for-byte 보존되는지 positive mirror를 추가해서, 1550 load mirror와 deletion save reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1552 DONE` styles extLst great-great-grandchild without code attr load mirror
+  - 범위: stylesheet `extLst` great-great-grandchild fixture의 첫 `<bud code="alpha"/>`에서 `code` attr를 제거한 입력을 load했을 때 deepest attr-map이 빈 map으로 수집되는지 회귀를 추가해서, 기존 save reject와 load mirror를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1553 DONE` styles extLst great-great-grandchild without code attr positive dirty-save mirror
+  - 범위: 같은 attr-less great-great-grandchild fixture를 dirty save해도 `styles.xml`이 그대로 유지되는지 positive mirror를 추가해서, 1552 load mirror와 deletion save reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1554 DONE` theme extLst great-grandchild without custom attr load mirror
+  - 범위: theme `extLst` great-grandchild fixture의 첫 `<a:leaf custom="x"/>`에서 `custom` attr를 제거한 입력을 load했을 때 great-grandchild attr-map이 빈 map으로 축소 수집되는지 회귀를 추가해서, 기존 save reject와 load detail coverage를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1555 DONE` theme extLst great-grandchild without custom attr positive dirty-save mirror
+  - 범위: 같은 attr-less great-grandchild fixture를 dirty save해도 `theme1.xml`이 byte-for-byte 보존되는지 positive mirror를 추가해서, 1554 load mirror와 existing attr-map drift reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1556 DONE` theme extLst great-great-grandchild without code attr load mirror
+  - 범위: theme `extLst` great-great-grandchild fixture의 첫 `<a:bud code="alpha"/>`에서 `code` attr를 제거한 입력을 load했을 때 deepest attr-map이 빈 map으로 수집되는지 회귀를 추가해서, 기존 save reject와 load detail coverage를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1557 DONE` theme extLst great-great-grandchild without code attr positive dirty-save mirror
+  - 범위: 같은 attr-less great-great-grandchild fixture를 dirty save해도 `theme1.xml`이 그대로 유지되는지 positive mirror를 추가해서, 1556 load mirror와 existing attr-map drift reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1558 DONE` xf extLst child extra-attr removal regression
+  - 범위: `xf` extension-list child fixture의 첫 `<ext uri="urn:style1" custom="styleOne"/>`에서 `custom` attr를 제거한 입력을 save했을 때 typed styles summary drift를 fail-fast로 잡는 reject 회귀를 추가해서, 기존 attr-map drift/order/text 회귀와 key-deletion 축을 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1559 DONE` xf extLst child without custom attr load mirror
+  - 범위: 같은 attr-less `xf` extension-list child fixture를 load했을 때 첫 child attr-map이 `{ uri }`로 축소 수집되는지 회귀를 추가해서, 방금 닫은 save reject와 load detail coverage를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1560 DONE` xf extLst child without custom attr positive dirty-save mirror
+  - 범위: 같은 attr-less `xf` extension-list child fixture를 dirty save해도 `styles.xml`이 byte-for-byte 보존되는지 positive mirror를 추가해서, 1559 load mirror와 1558 reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1561 DONE` xf extLst nested child extra-attr removal regression
+  - 범위: `xf` extension-list nested child fixture의 첫 `<payload preserved="yes">...`에서 `preserved` attr를 제거한 입력을 save했을 때 typed styles summary drift를 잡는 reject 회귀를 추가해서, 기존 nested attr/name/text 회귀와 key-deletion 축을 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1562 DONE` xf extLst nested child without preserved attr load mirror
+  - 범위: 같은 attr-less nested-child fixture를 load했을 때 첫 nested child attr-map이 빈 map으로 수집되는지 회귀를 추가해서, 1561 reject와 load detail coverage를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1563 DONE` xf extLst nested child without preserved attr positive dirty-save mirror
+  - 범위: 같은 attr-less nested-child fixture를 dirty save해도 `styles.xml`이 그대로 유지되는지 positive mirror를 추가해서, 1562 load mirror와 1561 reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1564 DONE` fill nested child without rgb attr load mirror
+  - 범위: fill nested-child fixture의 `<fgColor rgb="FFFF0000"/>`에서 `rgb` attr를 제거한 입력을 load했을 때 nested child attr-map이 빈 map으로 수집되는지 회귀를 추가해서, 기존 rgb-removal save reject와 load detail coverage를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1565 DONE` fill nested child without rgb attr positive dirty-save mirror
+  - 범위: 같은 attr-less fill nested-child fixture를 dirty save해도 `styles.xml`이 byte-for-byte 보존되는지 positive mirror를 추가해서, 1564 load mirror와 existing rgb-removal reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1566 DONE` border nested child without rgb attr load mirror
+  - 범위: border nested-child fixture의 `<color rgb="FFFF0000"/>`에서 `rgb` attr를 제거한 입력을 load했을 때 first nested color attr-map이 빈 map으로 수집되는지 회귀를 추가해서, 기존 rgb-removal save reject와 load detail coverage를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1567 DONE` border nested child without rgb attr positive dirty-save mirror
+  - 범위: 같은 attr-less border nested-child fixture를 dirty save해도 `styles.xml`이 그대로 유지되는지 positive mirror를 추가해서, 1566 load mirror와 existing rgb-removal reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1568 DONE` dxf nested child without rgb attr load mirror
+  - 범위: dxf nested-child fixture의 `<color rgb="FFFF0000"/>`에서 `rgb` attr를 제거한 입력을 load했을 때 nested child attr-map이 빈 map으로 수집되는지 회귀를 추가해서, 기존 rgb-removal save reject와 load detail coverage를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1569 DONE` dxf nested child without rgb attr positive dirty-save mirror
+  - 범위: 같은 attr-less dxf nested-child fixture를 dirty save해도 `styles.xml`이 그대로 유지되는지 positive mirror를 추가해서, 1568 load mirror와 existing rgb-removal reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1570 DONE` fill gradient stop color without rgb attr load mirror
+  - 범위: gradient fill stop fixture의 `<color rgb="FFFF0000"/>`에서 `rgb` attr를 제거한 입력을 load했을 때 stop grandchild attr-map이 빈 map으로 수집되는지 회귀를 추가해서, 기존 rgb-removal save reject와 load detail coverage를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1571 DONE` fill gradient stop color without rgb attr positive dirty-save mirror
+  - 범위: 같은 attr-less gradient stop color fixture를 dirty save해도 `styles.xml`이 그대로 유지되는지 positive mirror를 추가해서, 1570 load mirror와 existing rgb-removal reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1572 DONE` fill gradient stop position attr removal regression
+  - 범위: gradient fill stop fixture의 `<stop position="0">`에서 `position` attr를 제거한 채 dirty save를 시도하면 typed styles summary drift를 감지하고 저장을 거부하는 회귀를 추가해서, stop nested-child attr-set 변경도 fail-fast로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1573 DONE` fill gradient stop without position attr load mirror
+  - 범위: 같은 attr-less gradient stop fixture를 load했을 때 stop nested child attr-map이 빈 map으로 수집되는지 회귀를 추가해서, 1572 reject와 load detail coverage를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1574 DONE` fill gradient stop without position attr positive dirty-save mirror
+  - 범위: 같은 attr-less gradient stop fixture를 dirty save해도 `styles.xml`이 그대로 유지되는지 positive mirror를 추가해서, 1573 load mirror와 1572 reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1575 DONE` fill gradient stop color baseline positive dirty-save mirror
+  - 범위: canonical gradient stop color fixture를 dirty save해도 `styles.xml`이 그대로 유지되는지 baseline preserve 회귀를 추가해서, 34860 load attr-map coverage와 existing attrs-drift reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1576 DONE` tableStyle child attr-map baseline positive dirty-save mirror
+  - 범위: tableStyle child entry fixture를 dirty save해도 `styles.xml`이 그대로 유지되는 baseline preserve 회귀를 추가해서, existing child attr-map load/reject 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1577 DONE` style entry attr-map baseline positive dirty-save mirror
+  - 범위: style entry attr-map fixture를 dirty save해도 `styles.xml`이 그대로 유지되는 baseline preserve 회귀를 추가해서, existing font/fill/border/dxf entry attr-map load/reject 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1578 DONE` font child without val attr load mirror
+  - 범위: `workbook_with_styles_and_theme_bytes()`의 `<name val="Calibri"/>`에서 `val` attr를 제거한 입력을 load했을 때 두 번째 font child attr-map이 빈 map으로 수집되는지 회귀를 추가해서, existing val-removal reject와 load detail coverage를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1579 DONE` font child without val attr positive dirty-save mirror
+  - 범위: 같은 attr-less font child fixture를 dirty save해도 `styles.xml`이 그대로 유지되는지 positive mirror를 추가해서, 1578 load mirror와 existing val-removal reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1580 DONE` fill child without patternType attr load mirror
+  - 범위: `workbook_with_styles_and_theme_bytes()`의 두 번째 `<patternFill patternType="gray125"/>`에서 `patternType` attr를 제거한 입력을 load했을 때 두 번째 fill child attr-map이 빈 map으로 수집되는지 회귀를 추가해서, existing patternType-removal reject와 load detail coverage를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1581 DONE` fill child without patternType attr positive dirty-save mirror
+  - 범위: 같은 attr-less fill child fixture를 dirty save해도 `styles.xml`이 그대로 유지되는지 positive mirror를 추가해서, 1580 load mirror와 existing patternType-removal reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1582 DONE` border child without style attr load mirror
+  - 범위: `workbook_with_border_children_bytes()`의 `<left style="thin"/>`에서 `style` attr를 제거한 입력을 load했을 때 첫 번째 border child attr-map이 빈 map으로 수집되는지 회귀를 추가해서, existing style-removal reject와 load detail coverage를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1583 DONE` border child without style attr positive dirty-save mirror
+  - 범위: 같은 attr-less border child fixture를 dirty save해도 `styles.xml`이 그대로 유지되는지 positive mirror를 추가해서, 1582 load mirror와 existing style-removal reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1584 DONE` cellStyle child attr-map baseline positive dirty-save mirror
+  - 범위: `workbook_with_cell_style_child_bytes()` baseline fixture를 dirty save해도 `styles.xml`이 그대로 유지되는 preserve 회귀를 추가해서, existing cellStyle child attr-map load/reject 축을 positive path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1585 DONE` themeElements container without custom attr load mirror
+  - 범위: `workbook_with_theme_container_attrs_bytes()`의 `<a:themeElements custom="elements">`에서 `custom` attr를 제거한 입력을 load했을 때 첫 번째 root child attr-map만 빈 map으로 수집되는지 회귀를 추가해서, existing themeElements container attr-drift reject와 load detail coverage를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1586 DONE` themeElements container without custom attr positive dirty-save mirror
+  - 범위: 같은 attr-less `themeElements` container fixture를 dirty save해도 `theme1.xml`이 그대로 유지되는지 positive mirror를 추가해서, 1585 load mirror와 existing container-attr reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1587 DONE` xf child without custom attr load mirror
+  - 범위: `workbook_with_xf_child_sequence_bytes()`의 `cellStyleXfs` 쪽 `<extLst custom="styleXf"/>`에서 `custom` attr를 제거한 입력을 load했을 때 해당 child attr-map만 빈 map으로 수집되는지 회귀를 추가해서, existing attr-removal reject와 load detail coverage를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1588 DONE` xf child without custom attr positive dirty-save mirror
+  - 범위: 같은 attr-less `xf` child fixture를 dirty save해도 `styles.xml`이 그대로 유지되는지 positive mirror를 추가해서, 1587 load mirror와 existing attr-removal reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1589 DONE` clrScheme container without custom attr load mirror
+  - 범위: `workbook_with_theme_container_attrs_bytes()`의 `<a:clrScheme name="Office" custom="clr"/>`에서 `custom` attr를 제거한 입력을 load했을 때 첫 번째 `themeElements` child attr-map이 `name`만 남는지 회귀를 추가해서, existing color-scheme container attr-drift reject와 load detail coverage를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1590 DONE` clrScheme container without custom attr positive dirty-save mirror
+  - 범위: 같은 attr-less `clrScheme` container fixture를 dirty save해도 `theme1.xml`이 그대로 유지되는지 positive mirror를 추가해서, 1589 load mirror와 existing container-attr reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1591 DONE` fontScheme container without custom attr load mirror
+  - 범위: `workbook_with_theme_container_attrs_bytes()`의 `<a:fontScheme name="Office" custom="font"/>`에서 `custom` attr를 제거한 입력을 load했을 때 두 번째 `themeElements` child attr-map이 `name`만 남는지 회귀를 추가해서, existing font-scheme container attr-drift reject와 load detail coverage를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1592 DONE` fontScheme container without custom attr positive dirty-save mirror
+  - 범위: 같은 attr-less `fontScheme` container fixture를 dirty save해도 `theme1.xml`이 그대로 유지되는지 positive mirror를 추가해서, 1591 load mirror와 existing container-attr reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1593 DONE` fmtScheme container without custom attr load mirror
+  - 범위: `workbook_with_theme_container_attrs_bytes()`의 `<a:fmtScheme name="Office" custom="fmt"/>`에서 `custom` attr를 제거한 입력을 load했을 때 세 번째 `themeElements` child attr-map이 `name`만 남는지 회귀를 추가해서, existing format-scheme container attr-drift reject와 load detail coverage를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1594 DONE` fmtScheme container without custom attr positive dirty-save mirror
+  - 범위: 같은 attr-less `fmtScheme` container fixture를 dirty save해도 `theme1.xml`이 그대로 유지되는지 positive mirror를 추가해서, 1593 load mirror와 existing container-attr reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1595 DONE` objectDefaults container without custom attr load mirror
+  - 범위: `workbook_with_theme_container_attrs_bytes()`의 `<a:objectDefaults custom="object"/>`에서 `custom` attr를 제거한 입력을 load했을 때 두 번째 root child attr-map만 빈 map으로 수집되는지 회귀를 추가해서, existing objectDefaults attr-removal reject와 load detail coverage를 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1596 DONE` objectDefaults container without custom attr positive dirty-save mirror
+  - 범위: 같은 attr-less `objectDefaults` fixture를 dirty save해도 `theme1.xml`이 그대로 유지되는지 positive mirror를 추가해서, 1595 load mirror와 existing objectDefaults attr-removal reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1597 DONE` theme root without custom attr load mirror
+  - 범위: `workbook_with_theme_container_attrs_bytes()`의 root `<a:theme ... custom="theme">`에서 `custom` attr를 제거한 입력을 load했을 때 `root_attr_map`의 `custom`만 사라지고 child attr-maps는 그대로 유지되는지 회귀를 추가해서, root-level optional attr omission의 load detail을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1598 DONE` theme root extra attr removal regression
+  - 범위: 같은 root attr-less fixture로 dirty save를 시도했을 때 typed theme summary drift를 감지하고 저장을 거부하는 회귀를 추가해서, root-level optional attr omission도 fail-fast로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1599 DONE` theme root without custom attr positive dirty-save mirror
+  - 범위: 같은 attr-less theme root fixture를 dirty save해도 `theme1.xml`이 그대로 유지되는지 positive mirror를 추가해서, 1597 load mirror와 1598 reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1600 DONE` themeElements container extra attr removal regression
+  - 범위: `workbook_with_theme_container_attrs_bytes()`의 `<a:themeElements custom="elements">`에서 `custom` attr를 제거한 dirty input을 저장할 때 typed theme summary drift로 fail-fast하는 회귀를 추가해서, existing attr-map drift reject와 1585/1586 attr-less symmetry 사이의 reject gap을 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1601 DONE` clrScheme container extra attr removal regression
+  - 범위: 같은 fixture의 `<a:clrScheme name="Office" custom="clr">`에서 `custom` attr를 제거한 dirty input 저장을 거부하는 회귀를 추가해서, existing attr-map drift reject와 1589/1590 attr-less symmetry 사이의 reject gap을 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1602 DONE` fontScheme container extra attr removal regression
+  - 범위: 같은 fixture의 `<a:fontScheme name="Office" custom="font">`에서 `custom` attr를 제거한 dirty input 저장을 거부하는 회귀를 추가해서, existing attr-map drift reject와 1591/1592 attr-less symmetry 사이의 reject gap을 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1603 DONE` fmtScheme container extra attr removal regression
+  - 범위: 같은 fixture의 `<a:fmtScheme name="Office" custom="fmt">`에서 `custom` attr를 제거한 dirty input 저장을 거부하는 회귀를 추가해서, existing attr-map drift reject와 1593/1594 attr-less symmetry 사이의 reject gap을 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1604 DONE` extraClrScheme child without name attr positive dirty-save mirror
+  - 범위: `workbook_with_theme_extra_color_scheme_list_children_bytes()`의 첫 `<a:extraClrScheme name="Extra One">`에서 `name` attr를 제거한 입력을 dirty save해도 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load omission mirror를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1605 DONE` extraClrScheme nested child without name attr positive dirty-save mirror
+  - 범위: `workbook_with_theme_extra_color_scheme_list_nested_children_bytes()`의 첫 `<a:clrScheme name="Office">`에서 `name` attr를 제거한 입력을 dirty save해도 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing nested-child load omission mirror를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1606 DONE` theme extLst great-grandchild extra attr removal regression
+  - 범위: `workbook_with_theme_extension_list_great_grandchildren_bytes()`의 `<a:node custom="x">`에서 `custom` attr를 제거한 dirty input 저장을 거부하는 회귀를 추가해서, existing attr-map/name/text drift 군과 load omission mirror 사이의 reject gap을 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1607 DONE` theme extLst great-great-grandchild extra attr removal regression
+  - 범위: `workbook_with_theme_extension_list_great_great_grandchildren_bytes()`의 `<a:leaf code="alpha">`에서 `code` attr를 제거한 dirty input 저장을 거부하는 회귀를 추가해서, existing attr-map/name/text drift 군과 load omission mirror 사이의 reject gap을 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1608 DONE` theme extLst great-great-great-grandchild extra attr removal regression
+  - 범위: `workbook_with_theme_extension_list_great_great_great_grandchildren_bytes()`의 `<a:bud note="i">`에서 `note` attr를 제거한 dirty input 저장을 거부하는 회귀를 추가해서, deeper theme extLst descendant omission도 같은 fail-fast 규칙으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1609 DONE` styles fonts container extra attr removal regression
+  - 범위: `workbook_with_stylesheet_root_container_attrs_bytes()`의 `<fonts custom="fonts">`에서 `custom` attr를 제거한 dirty input 저장을 거부하는 회귀를 추가해서, existing attr-map/text drift 군과 root-container symmetry를 맞춤
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1610 DONE` styles dxfs container extra attr removal regression
+  - 범위: 같은 helper의 `<dxfs count="0" custom="dxfs">`에서 `custom` attr를 제거한 dirty input 저장을 거부하는 회귀를 추가해서, existing attr-map/name/order drift 군과 root-container symmetry를 맞춤
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1611 DONE` styles extLst container extra attr removal regression
+  - 범위: 같은 helper의 `<extLst custom="extLst">`에서 `custom` attr를 제거한 dirty input 저장을 거부하는 회귀를 추가해서, existing attr-map/name/text/order drift 군과 root-container symmetry를 맞춤
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1612 DONE` theme root text positive dirty-save mirror
+  - 범위: `workbook_with_theme_root_text_bytes()` fixture를 dirty save해도 root plain-text+CDATA가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1613 DONE` themeElements text positive dirty-save mirror
+  - 범위: `workbook_with_theme_elements_text_bytes()` fixture를 dirty save해도 `themeElements` container text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1614 DONE` theme scheme container text positive dirty-save mirror
+  - 범위: `workbook_with_theme_scheme_container_text_bytes()` fixture를 dirty save해도 `clrScheme`/`fontScheme`/`fmtScheme` container text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1615 DONE` theme name omission positive dirty-save mirror
+  - 범위: base `theme1.xml` fixture의 root `name="Office Theme"`를 제거한 입력을 dirty save해도 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load omission과 reject를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1616 DONE` extraClrScheme grandchild attr omission positive dirty-save mirror
+  - 범위: `workbook_with_theme_extra_color_scheme_list_grandchildren_bytes()`의 첫 grandchild `phase="dark"`를 제거한 입력을 dirty save해도 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load omission과 reject 사이의 preserve gap을 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1617 DONE` theme extLst great-great-great-grandchild attr omission load mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_grandchildren_bytes()`의 첫 descendant `note="i"`를 제거한 입력을 load했을 때 typed attr-map에서 첫 항목만 비어 있게 수집되는지 회귀를 추가해서, deeper extLst descendant omission도 load-path에서 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1618 DONE` theme extLst great-great-great-grandchild attr omission positive dirty-save mirror
+  - 범위: 같은 `note="i"` omission fixture를 dirty save해도 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing reject와 1617 load mirror를 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1619 DONE` styles root text positive dirty-save mirror
+  - 범위: `workbook_with_stylesheet_root_text_bytes()` fixture를 dirty save해도 root plain-text+CDATA가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1620 DONE` styles fonts container text positive dirty-save mirror
+  - 범위: `workbook_with_stylesheet_fonts_text_bytes()` fixture를 dirty save해도 `fonts` container text가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1621 DONE` styles numFmts container text positive dirty-save mirror
+  - 범위: `workbook_with_stylesheet_num_fmts_text_bytes()` fixture를 dirty save해도 `numFmts` container text가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1622 DONE` styles colors container text positive dirty-save mirror
+  - 범위: `workbook_with_stylesheet_colors_text_bytes()` fixture를 dirty save해도 `colors` container text가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1623 DONE` styles extLst container text positive dirty-save mirror
+  - 범위: `workbook_with_stylesheet_extension_list_container_text_bytes()` fixture를 dirty save해도 `extLst` container text가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1624 DONE` styles colors child and nested-child text positive dirty-save mirror
+  - 범위: `workbook_with_stylesheet_color_entries_text_bytes()` fixture를 dirty save해도 `colors` child/nested child plain-text+CDATA가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1625 DONE` styles extLst child and nested text positive dirty-save mirror
+  - 범위: `workbook_with_stylesheet_extension_list_text_bytes()` fixture를 dirty save해도 `extLst` child/nested descendant text가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1626 DONE` styles extLst great-great-grandchild text positive dirty-save mirror
+  - 범위: `workbook_with_stylesheet_extension_list_great_great_grandchild_text_bytes()` fixture를 dirty save해도 deeper `extLst` great-great-grandchild text가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1627 DONE` theme extLst container text positive dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_container_text_bytes()` fixture를 dirty save해도 `theme1.xml`의 `extLst` container text가 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1628 DONE` theme extraClrSchemeLst container text positive dirty-save mirror
+  - 범위: `workbook_with_theme_extra_color_scheme_list_container_text_bytes()` fixture를 dirty save해도 `extraClrSchemeLst` container text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1629 DONE` theme custClrLst container text positive dirty-save mirror
+  - 범위: `workbook_with_theme_custom_color_list_container_text_bytes()` fixture를 dirty save해도 `custClrLst` container text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1630 DONE` theme extLst child text positive dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_child_text_bytes()` fixture를 dirty save해도 `extLst` child text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1631 DONE` theme custClrLst child text positive dirty-save mirror
+  - 범위: `workbook_with_theme_custom_color_list_child_text_bytes()` fixture를 dirty save해도 `custClrLst` child text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1632 DONE` theme custClrLst nested-child text positive dirty-save mirror
+  - 범위: `workbook_with_theme_custom_color_list_nested_child_text_bytes()` fixture를 dirty save해도 `custClrLst` nested child text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1633 DONE` theme custClrLst grandchild text positive dirty-save mirror
+  - 범위: `workbook_with_theme_custom_color_list_grandchild_text_bytes()` fixture를 dirty save해도 `custClrLst` grandchild text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1634 DONE` theme extraClrSchemeLst deeper text positive dirty-save mirror
+  - 범위: `workbook_with_theme_extra_color_scheme_list_nested_child_text_bytes()` fixture를 dirty save해도 deeper `extraClrSchemeLst` text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1635 DONE` theme extLst great-grandchild text positive dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_grandchild_text_bytes()` fixture를 dirty save해도 `extLst` great-grandchild text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1636 DONE` theme extLst great-great-grandchild text positive dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_grandchild_text_bytes()` fixture를 dirty save해도 `extLst` great-great-grandchild text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1637 DONE` theme extLst great-great-great-grandchild text positive dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_grandchild_text_bytes()` fixture를 dirty save해도 deeper `extLst` great-great-great-grandchild text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1638 DONE` theme extLst fourth-depth text positive dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_grandchild_text_bytes()` fixture를 dirty save해도 fourth-depth `extLst` text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1639 DONE` theme extLst fifth-depth text positive dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_grandchild_text_bytes()` fixture를 dirty save해도 fifth-depth `extLst` text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1640 DONE` theme extLst sixth-depth text positive dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_grandchild_text_bytes()` fixture를 dirty save해도 sixth-depth `extLst` text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1641 DONE` theme extLst seventh-depth text positive dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_grandchild_text_bytes()` fixture를 dirty save해도 seventh-depth `extLst` text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1642 DONE` theme extLst eighth-depth text positive dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_grandchild_text_bytes()` fixture를 dirty save해도 eighth-depth `extLst` text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1643 DONE` theme extLst ninth-depth text positive dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_grandchild_text_bytes()` fixture를 dirty save해도 ninth-depth `extLst` text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1644 DONE` theme extLst tenth-depth text positive dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_grandchild_text_bytes()` fixture를 dirty save해도 tenth-depth `extLst` text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1645 DONE` theme extLst eleventh-depth text positive dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_grandchild_text_bytes()` fixture를 dirty save해도 eleventh-depth `extLst` text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1646 DONE` theme extLst twelfth-depth text positive dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_grandchild_text_bytes()` fixture를 dirty save해도 twelfth-depth `extLst` text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1647 DONE` theme extLst thirteenth-depth text positive dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_great_grandchild_text_bytes()` fixture를 dirty save해도 thirteenth-depth `extLst` text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1648 DONE` theme extLst fourteenth-depth text positive dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_great_great_grandchild_text_bytes()` fixture를 dirty save해도 fourteenth-depth `extLst` text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1649 DONE` theme extLst fifteenth-depth text positive dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_grandchild_text_bytes()` fixture를 dirty save해도 fifteenth-depth `extLst` text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1650 DONE` theme extLst sixteenth-depth text positive dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_grandchild_text_bytes()` fixture를 dirty save해도 sixteenth-depth `extLst` text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1651 DONE` theme extLst seventeenth-depth text positive dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_grandchild_text_bytes()` fixture를 dirty save해도 seventeenth-depth `extLst` text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1652 DONE` theme extLst eighteenth-depth text positive dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_grandchild_text_bytes()` fixture를 dirty save해도 eighteenth-depth `extLst` text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1653 DONE` theme extLst nineteenth-depth text positive dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_grandchild_text_bytes()` fixture를 dirty save해도 nineteenth-depth `extLst` text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1654 DONE` theme clrScheme nested-child text positive dirty-save mirror
+  - 범위: `workbook_with_theme_color_scheme_nested_child_text_bytes()` fixture를 dirty save해도 `clrScheme` nested child text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1655 DONE` theme fontScheme nested-child text positive dirty-save mirror
+  - 범위: `workbook_with_theme_font_scheme_nested_child_text_bytes()` fixture를 dirty save해도 `fontScheme` nested child text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1656 DONE` theme fmtScheme nested-child text positive dirty-save mirror
+  - 범위: `workbook_with_theme_format_scheme_nested_child_text_bytes()` fixture를 dirty save해도 `fmtScheme` nested child text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1657 DONE` theme fmtScheme fill grandchild text positive dirty-save mirror
+  - 범위: `workbook_with_theme_format_scheme_fill_grandchild_text_bytes()` fixture를 dirty save해도 `fmtScheme` fill grandchild text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1658 DONE` theme fmtScheme fill-color great-grandchild text positive dirty-save mirror
+  - 범위: `workbook_with_theme_format_scheme_fill_color_great_grandchild_text_bytes()` fixture를 dirty save해도 deeper `fmtScheme` fill-color text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1659 DONE` styles fill child text positive dirty-save mirror
+  - 범위: `workbook_with_fill_child_text_bytes()` fixture를 dirty save해도 fill child text가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1660 DONE` styles fill nested-child text positive dirty-save mirror
+  - 범위: `workbook_with_fill_nested_child_text_bytes()` fixture를 dirty save해도 fill nested child text가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1661 DONE` styles fill gradient-stop color text positive dirty-save mirror
+  - 범위: `workbook_with_fill_gradient_stop_color_text_bytes()` fixture를 dirty save해도 fill gradient-stop color text가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1662 DONE` styles border nested-child text positive dirty-save mirror
+  - 범위: `workbook_with_border_color_text_bytes()` fixture를 dirty save해도 border nested child text가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1663 DONE` styles dxf nested-child text positive dirty-save mirror
+  - 범위: `workbook_with_dxf_font_color_text_bytes()` fixture를 dirty save해도 dxf nested child text가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1664 DONE` styles xf extLst child text positive dirty-save mirror
+  - 범위: `workbook_with_xf_extension_list_child_text_bytes()` fixture를 dirty save해도 xf extLst child text가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1665 DONE` styles xf extLst great-grandchild text positive dirty-save mirror
+  - 범위: `workbook_with_xf_extension_list_great_grandchildren_bytes()` fixture를 dirty save해도 xf extLst great-grandchild text가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1666 DONE` styles xf extLst great-great-grandchild text positive dirty-save mirror
+  - 범위: `workbook_with_xf_extension_list_great_great_grandchildren_bytes()` fixture를 dirty save해도 xf extLst great-great-grandchild text가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1667 DONE` theme fmtScheme effect great-grandchild text positive dirty-save mirror
+  - 범위: `workbook_with_theme_format_scheme_effect_great_grandchild_text_bytes()` fixture를 dirty save해도 `fmtScheme` effect great-grandchild text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1668 DONE` theme fmtScheme effect great-great-grandchild text positive dirty-save mirror
+  - 범위: `workbook_with_theme_format_scheme_effect_great_great_grandchild_text_bytes()` fixture를 dirty save해도 `fmtScheme` effect great-great-grandchild text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1669 DONE` theme fmtScheme bgFill great-grandchild text positive dirty-save mirror
+  - 범위: `workbook_with_theme_format_scheme_bg_fill_great_grandchild_text_bytes()` fixture를 dirty save해도 `fmtScheme` bgFill great-grandchild text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1670 DONE` theme fmtScheme bgFill great-great-grandchild text positive dirty-save mirror
+  - 범위: `workbook_with_theme_format_scheme_bg_fill_great_great_grandchild_text_bytes()` fixture를 dirty save해도 `fmtScheme` bgFill great-great-grandchild text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1671 DONE` styles xf extLst nested-child text positive dirty-save mirror
+  - 범위: `workbook_with_xf_extension_list_nested_children_bytes()` fixture를 dirty save해도 xf extLst nested child text가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군과 existing attr-omission preserve 사이의 direct text preserve gap을 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1672 DONE` theme fmtScheme fill-color text sequence positive dirty-save mirror
+  - 범위: `workbook_with_theme_format_scheme_fill_color_great_grandchild_sequence_text_bytes()` fixture를 dirty save해도 second transform text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject 군과 sequence preserve 사이의 direct text preserve gap을 닫음
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1673 DONE` theme fmtScheme fill-color text sequence positive dirty-save mirror in theme xml
+  - 범위: 같은 text-sequence fixture를 `_in_theme_xml` naming 계열로도 고정해서, 같은 preserve family 안에서 base sequence와 text-sequence가 대칭적으로 존재하도록 맞춤
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1674 DONE` styles colors child text direct dirty-save mirror
+  - 범위: `workbook_with_stylesheet_color_entries_text_bytes()` fixture를 dirty save해도 colors child text가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, 기존 combined preserve에서 direct child preserve로 세분화된 대칭을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1675 DONE` styles colors nested-child text direct dirty-save mirror
+  - 범위: 같은 fixture를 dirty save해도 colors nested child text가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, combined preserve에 가려져 있던 nested-child direct mirror도 분리 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1676 DONE` styles extLst child text direct dirty-save mirror
+  - 범위: `workbook_with_stylesheet_extension_list_text_bytes()` fixture를 dirty save해도 extLst child text가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, 기존 combined preserve에서 direct child preserve로 세분화된 대칭을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1677 DONE` styles extLst nested-child text direct dirty-save mirror
+  - 범위: 같은 fixture를 dirty save해도 extLst nested child text가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, combined preserve에 가려져 있던 nested-child direct mirror도 분리 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1678 DONE` styles extLst great-grandchild text direct dirty-save mirror
+  - 범위: 같은 fixture를 dirty save해도 extLst great-grandchild text가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, combined preserve에 가려져 있던 great-grandchild direct mirror도 분리 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1679 DONE` styles root attr-map direct dirty-save mirror
+  - 범위: `workbook_with_stylesheet_root_attrs_bytes()` fixture를 dirty save해도 root attr-map이 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject root attr-map 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1680 DONE` styles root-child attr-map direct dirty-save mirror
+  - 범위: `workbook_with_stylesheet_unknown_root_child_attrs_bytes()` fixture를 dirty save해도 unknown root child attr-map이 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject root-child attr-map 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1681 DONE` styles root-container attr-map direct dirty-save mirror
+  - 범위: `workbook_with_stylesheet_root_container_attrs_bytes()` fixture를 dirty save해도 root container attr-map들이 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, fonts/fills/borders/cellXfs/dxfs/extLst container attr-map reject 군을 하나의 preserve fixture로 묶어 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1682 DONE` styles extLst child attr-map direct dirty-save mirror
+  - 범위: `workbook_with_stylesheet_extension_list_children_bytes()` fixture를 dirty save해도 extLst child attr-map이 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject extLst child attr-map 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1683 DONE` styles extLst nested-child attr-map direct dirty-save mirror
+  - 범위: `workbook_with_stylesheet_extension_list_nested_children_bytes()` fixture를 dirty save해도 extLst nested-child attr-map이 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject extLst nested-child attr-map 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1684 DONE` styles extLst great-grandchild attr-map direct dirty-save mirror
+  - 범위: `workbook_with_stylesheet_extension_list_great_grandchildren_bytes()` fixture를 dirty save해도 extLst great-grandchild attr-map이 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject extLst great-grandchild attr-map 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1685 DONE` styles extLst great-great-grandchild attr-map direct dirty-save mirror
+  - 범위: `workbook_with_stylesheet_extension_list_great_great_grandchildren_bytes()` fixture를 dirty save해도 extLst great-great-grandchild attr-map이 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject extLst great-great-grandchild attr-map 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1686 DONE` theme container attr-map direct dirty-save mirror
+  - 범위: `workbook_with_theme_container_attrs_bytes()` fixture를 dirty save해도 root/themeElements/clrScheme/fontScheme/fmtScheme/objectDefaults attr-map이 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject theme container attr-map 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1687 DONE` theme extLst child attr-map direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_children_bytes()` fixture를 dirty save해도 extLst child attr-map이 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject theme extLst child attr-map 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1688 DONE` styles custom numFmt attr-map direct dirty-save mirror
+  - 범위: `workbook_with_multiple_custom_num_fmt_bytes()` fixture에 custom attr를 주입한 `numFmt` entries를 dirty save해도 각 custom numFmt attr-map이 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject custom numFmt attr-map 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1689 DONE` styles numFmts container attr-map direct dirty-save mirror
+  - 범위: `workbook_with_custom_num_fmt_bytes()` fixture의 `<numFmts>` container에 custom attr를 주입해 dirty save해도 container attr-map이 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject numFmts container attr-map 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1690 DONE` styles colors container attr-map direct dirty-save mirror
+  - 범위: `workbook_with_stylesheet_colors_children_bytes()` fixture의 `<colors>` container에 custom attr를 주입해 dirty save해도 colors container attr-map이 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject colors container attr-map 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1691 DONE` styles cellStyles container attr-map direct dirty-save mirror
+  - 범위: `workbook_with_styles_and_theme_bytes()` fixture의 `<cellStyles>` container에 custom attr를 주입해 dirty save해도 cellStyles container attr-map이 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject cellStyles container attr-map 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1692 DONE` styles tableStyles container attr-map direct dirty-save mirror
+  - 범위: `workbook_with_styles_and_theme_bytes()` fixture의 `<tableStyles>` container에 custom attr를 주입해 dirty save해도 tableStyles container attr-map이 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject tableStyles container attr-map 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1693 DONE` styles cellStyleXf attr-map direct dirty-save mirror
+  - 범위: `workbook_with_cell_style_xf_apply_flags_bytes()` fixture의 top-level cellStyleXf에 extra attr를 주입해 dirty save해도 xf attr-map이 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject cellStyleXf attr-map 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1694 DONE` styles cellXf attr-map direct dirty-save mirror
+  - 범위: `workbook_with_styles_and_theme_bytes()` fixture의 top-level cellXf에 extra attr를 주입해 dirty save해도 xf attr-map이 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject cellXf attr-map 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1695 DONE` theme extLst nested-children base fixture direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_nested_children_bytes()` fixture를 dirty save해도 nested-child name/attr-map/text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject theme extLst nested-child 축을 base fixture preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1696 DONE` theme extLst great-grandchildren base fixture direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_grandchildren_bytes()` fixture를 dirty save해도 great-grandchild name/attr-map/text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject theme extLst great-grandchild 축을 base fixture preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1697 DONE` theme extLst great-great-grandchildren base fixture direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_grandchildren_bytes()` fixture를 dirty save해도 great-great-grandchild name/attr-map/text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject theme extLst great-great-grandchild 축을 base fixture preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1698 DONE` theme extLst great-great-great-grandchildren base fixture direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 deeper descendant name/attr-map/text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject theme extLst deeper descendant 축을 base fixture preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1699 DONE` theme extLst great-great-great-great-grandchildren base fixture direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 deeper descendant name/attr-map/text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject theme extLst deeper descendant 축을 base fixture preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1700 DONE` styles xf child attr-map direct dirty-save mirror
+  - 범위: `workbook_with_xf_child_sequence_bytes()` fixture를 dirty save해도 xf child attr-map이 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject xf child attr-map 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1701 DONE` styles xf extLst child attr-map direct dirty-save mirror
+  - 범위: `workbook_with_xf_extension_list_children_bytes()` fixture를 dirty save해도 xf extLst child attr-map이 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject xf extLst child attr-map 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1702 DONE` styles xf extLst nested-child attr-map direct dirty-save mirror
+  - 범위: `workbook_with_xf_extension_list_nested_children_bytes()` fixture를 dirty save해도 xf extLst nested-child attr-map이 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject xf extLst nested-child attr-map 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1703 DONE` styles xf extLst great-grandchild attr-map direct dirty-save mirror
+  - 범위: `workbook_with_xf_extension_list_great_grandchildren_bytes()` fixture를 dirty save해도 xf extLst great-grandchild attr-map이 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject xf extLst great-grandchild attr-map 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1704 DONE` styles xf extLst great-great-grandchild attr-map direct dirty-save mirror
+  - 범위: `workbook_with_xf_extension_list_great_great_grandchildren_bytes()` fixture를 dirty save해도 xf extLst great-great-grandchild attr-map이 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject xf extLst great-great-grandchild attr-map 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1705 DONE` theme extLst depth5 base fixture direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth5 descendant name/attr-map/text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth5 extLst 축을 base fixture preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1706 DONE` theme extLst depth6 base fixture direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth6 descendant name/attr-map/text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth6 extLst 축을 base fixture preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1707 DONE` theme extLst depth7 base fixture direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth7 descendant name/attr-map/text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth7 extLst 축을 base fixture preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1708 DONE` theme extLst depth8 base fixture direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth8 descendant name/attr-map/text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth8 extLst 축을 base fixture preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1709 DONE` theme extLst depth9 base fixture direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth9 descendant name/attr-map/text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth9 extLst 축을 base fixture preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1710 DONE` styles xf extLst nested-child name direct dirty-save mirror
+  - 범위: `workbook_with_xf_extension_list_nested_child_names_bytes()` fixture를 dirty save해도 xf extLst nested-child name이 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject nested-child name 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1711 DONE` styles xf extLst great-grandchild name direct dirty-save mirror
+  - 범위: `workbook_with_xf_extension_list_great_grandchild_names_bytes()` fixture를 dirty save해도 xf extLst great-grandchild name이 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject great-grandchild name 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1712 DONE` styles xf extLst great-great-grandchild name direct dirty-save mirror
+  - 범위: `workbook_with_xf_extension_list_great_great_grandchild_names_bytes()` fixture를 dirty save해도 xf extLst great-great-grandchild name이 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject great-great-grandchild name 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1713 DONE` theme extLst depth10 base fixture direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth10 descendant name/attr-map/text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth10 extLst 축을 base fixture preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1714 DONE` theme extLst depth11 base fixture direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth11 descendant name/attr-map/text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth11 extLst 축을 base fixture preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1715 DONE` theme extLst depth12 base fixture direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth12 descendant name/attr-map/text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth12 extLst 축을 base fixture preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1716 DONE` theme extLst depth13 base fixture direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth13 descendant name/attr-map/text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth13 extLst 축을 base fixture preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1717 DONE` theme extLst depth14 base fixture direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth14 descendant name/attr-map/text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth14 extLst 축을 base fixture preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1718 DONE` theme extLst depth15 base fixture direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth15 descendant name/attr-map/text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth15 extLst 축을 base fixture preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1719 DONE` theme extLst depth16 base fixture direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth16 descendant name/attr-map/text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth16 extLst 축을 base fixture preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1720 DONE` theme extLst depth17 base fixture direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth17 descendant name/attr-map/text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth17 extLst 축을 base fixture preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1721 DONE` theme extLst depth18 base fixture direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth18 descendant name/attr-map/text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth18 extLst 축을 base fixture preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1722 DONE` theme extLst depth19 base fixture direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth19 descendant name/attr-map/text가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth19 extLst 축을 base fixture preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1723 DONE` theme extLst nested-child name direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_nested_children_bytes()` fixture를 dirty save해도 nested-child name이 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject nested-child name 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1724 DONE` theme extLst great-grandchild name direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_grandchildren_bytes()` fixture를 dirty save해도 great-grandchild name이 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject great-grandchild name 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1725 DONE` theme extLst great-great-grandchild name direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_grandchildren_bytes()` fixture를 dirty save해도 great-great-grandchild name이 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject great-great-grandchild name 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1726 DONE` theme extLst great-great-great-grandchild name direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 deeper descendant name이 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject deeper descendant name 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1727 DONE` theme extLst great-great-great-great-grandchild name direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 deeper descendant name이 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject deeper descendant name 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1728 DONE` theme extLst depth5 name direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth5 descendant name이 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth5 name 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1729 DONE` theme extLst depth6 name direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth6 descendant name이 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth6 name 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1730 DONE` theme extLst depth7 name direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth7 descendant name이 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth7 name 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1731 DONE` theme extLst depth8 name direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth8 descendant name이 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth8 name 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1732 DONE` theme extLst depth9 name direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth9 descendant name이 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth9 name 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1733 DONE` theme extLst depth10 name direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth10 descendant name이 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth10 name 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1734 DONE` theme extLst depth11 name direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth11 descendant name이 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth11 name 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1735 DONE` theme extLst depth12 name direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth12 descendant name이 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth12 name 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1736 DONE` theme extLst depth13 name direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth13 descendant name이 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth13 name 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1737 DONE` theme extLst depth14 name direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth14 descendant name이 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth14 name 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1738 DONE` theme extLst depth15 name direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth15 descendant name이 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth15 name 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1739 DONE` theme extLst depth16 name direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth16 descendant name이 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth16 name 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1740 DONE` theme extLst depth17 name direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth17 descendant name이 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth17 name 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1741 DONE` theme extLst depth18 name direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth18 descendant name이 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth18 name 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1742 DONE` theme extLst depth19 name direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_great_grandchildren_bytes()` fixture를 dirty save해도 depth19 descendant name이 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject depth19 name 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1743 DONE` stylesheet extLst child shape direct dirty-save mirror
+  - 범위: `workbook_with_stylesheet_extension_list_children_bytes()` fixture를 dirty save해도 child-level `extLst` subtree shape/order가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject child order drift 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1744 DONE` stylesheet extLst nested-child shape direct dirty-save mirror
+  - 범위: `workbook_with_stylesheet_extension_list_nested_children_bytes()` fixture를 dirty save해도 nested-child `extLst` subtree shape/order가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject nested-child order drift 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1745 DONE` stylesheet extLst great-grandchild shape direct dirty-save mirror
+  - 범위: `workbook_with_stylesheet_extension_list_great_grandchildren_bytes()` fixture를 dirty save해도 great-grandchild `extLst` subtree shape/order가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject great-grandchild order drift 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1746 DONE` stylesheet extLst great-great-grandchild shape direct dirty-save mirror
+  - 범위: `workbook_with_stylesheet_extension_list_great_great_grandchildren_bytes()` fixture를 dirty save해도 great-great-grandchild `extLst` subtree shape/order가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, existing load/reject great-great-grandchild order drift 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1747 DONE` xf extLst child shape direct dirty-save mirror
+  - 범위: `workbook_with_xf_extension_list_children_bytes()` fixture를 dirty save해도 xf child-level `extLst` subtree shape/order가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, xf extLst typed child summary를 preserve-path까지 직접 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1748 DONE` xf extLst nested-child shape direct dirty-save mirror
+  - 범위: `workbook_with_xf_extension_list_nested_children_bytes()` fixture를 dirty save해도 xf nested-child `extLst` subtree shape/order가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, xf extLst typed nested-child summary를 preserve-path까지 직접 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1749 DONE` xf extLst great-grandchild shape direct dirty-save mirror
+  - 범위: `workbook_with_xf_extension_list_great_grandchildren_bytes()` fixture를 dirty save해도 xf great-grandchild `extLst` subtree shape/order가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, xf extLst typed great-grandchild summary를 preserve-path까지 직접 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1750 DONE` xf extLst great-great-grandchild shape direct dirty-save mirror
+  - 범위: `workbook_with_xf_extension_list_great_great_grandchildren_bytes()` fixture를 dirty save해도 xf great-great-grandchild `extLst` subtree shape/order가 포함된 `styles.xml`이 그대로 유지되는지 회귀를 추가해서, xf extLst typed great-great-grandchild summary를 preserve-path까지 직접 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1751 DONE` theme extLst child shape direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_children_bytes()` fixture를 dirty save해도 child-level `extLst` subtree shape/order가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing child order drift 축을 preserve-path까지 직접 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1752 DONE` theme extLst child omitted-custom-attr dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_children_bytes()` fixture에서 child `custom` extra attr를 제거한 변형을 dirty save해도 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing child extra-attr removal 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1753 DONE` theme extLst nested-child omitted-code-attr dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_nested_children_bytes()` fixture에서 nested-child `code` extra attr를 제거한 변형을 dirty save해도 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing nested-child extra-attr removal 축을 preserve-path까지 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1754 DONE` theme extLst nested-child text direct dirty-save mirror
+  - 범위: `workbook_with_theme_extension_list_nested_children_bytes()` fixture를 dirty save해도 nested-child text/cdata가 포함된 `theme1.xml`이 그대로 유지되는지 회귀를 추가해서, existing nested-child text drift 축을 preserve-path까지 직접 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1755 DONE` styles fills container attr-drift reject parity
+  - 범위: `workbook_with_stylesheet_root_container_attrs_bytes()` 기반 save-reject 회귀에 fills container attr drift 축을 추가해서, root container typed styles parity를 fonts/dxfs 수준으로 맞춤
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1756 DONE` styles fills container extra-attr reject parity
+  - 범위: `workbook_with_stylesheet_root_container_attrs_bytes()` 기반 save-reject 회귀에 fills container extra-attr removal 축을 추가해서, root container typed styles parity를 fonts/dxfs 수준으로 맞춤
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1757 DONE` styles borders container attr-drift reject parity
+  - 범위: `workbook_with_stylesheet_root_container_attrs_bytes()` 기반 save-reject 회귀에 borders container attr drift 축을 추가해서, root container typed styles parity를 fonts/dxfs 수준으로 맞춤
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1758 DONE` styles borders container extra-attr reject parity
+  - 범위: `workbook_with_stylesheet_root_container_attrs_bytes()` 기반 save-reject 회귀에 borders container extra-attr removal 축을 추가해서, root container typed styles parity를 fonts/dxfs 수준으로 맞춤
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1759 DONE` styles cellStyleXfs container attr-drift reject parity
+  - 범위: `workbook_with_stylesheet_root_container_attrs_bytes()` 기반 save-reject 회귀에 cellStyleXfs container attr drift 축을 추가해서, root container typed styles parity를 cellXfs/dxfs 수준으로 맞춤
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1760 DONE` styles cellStyleXfs container extra-attr reject parity
+  - 범위: `workbook_with_stylesheet_root_container_attrs_bytes()` 기반 save-reject 회귀에 cellStyleXfs container extra-attr removal 축을 추가해서, root container typed styles parity를 cellXfs/dxfs 수준으로 맞춤
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1761 DONE` styles cellXfs container extra-attr reject parity
+  - 범위: `workbook_with_stylesheet_root_container_attrs_bytes()` 기반 save-reject 회귀에 cellXfs container extra-attr removal 축을 추가해서, existing attr-drift 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1762 DONE` styles font entry extra-attr reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 font entry extra-attr removal 축을 추가해서, existing attr-drift 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1763 DONE` styles fill entry extra-attr reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 fill entry extra-attr removal 축을 추가해서, existing attr-drift 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1764 DONE` styles border entry extra-attr reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 border entry extra-attr removal 축을 추가해서, existing attr-drift 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1765 DONE` cellStyle child name reject parity
+  - 범위: `workbook_with_cell_style_child_bytes()` 기반 save-reject 회귀에 child element name drift 축을 추가해서, existing attr/extra-attr 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1766 DONE` cellStyle child set reject parity
+  - 범위: `workbook_with_cell_style_child_bytes()` 기반 save-reject 회귀에 child set drift 축을 추가해서, existing attr/extra-attr 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1767 DONE` theme fmtScheme effect great-grandchild order reject parity
+  - 범위: `workbook_with_theme_format_scheme_effect_great_grandchild_bytes()` 기반 save-reject 회귀에 reordered great-grandchild sequence 축을 추가해서, existing set/add 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1768 DONE` theme fmtScheme bgFill great-grandchild order reject parity
+  - 범위: `workbook_with_theme_format_scheme_bg_fill_great_grandchild_bytes()` 기반 save-reject 회귀에 reordered great-grandchild sequence 축을 추가해서, existing set/add 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1769 DONE` cellStyleXfs container name reject parity
+  - 범위: base stylesheet 기반 save-reject 회귀에 `cellStyleXfs` container name drift 축을 추가해서, existing duplicate/remove 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1770 DONE` cellStyleXfs container order reject parity
+  - 범위: base stylesheet 기반 save-reject 회귀에 `cellStyleXfs` container sibling order drift 축을 추가해서, existing duplicate/remove 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1771 DONE` cellXfs container name reject parity
+  - 범위: base stylesheet 기반 save-reject 회귀에 `cellXfs` container name drift 축을 추가해서, existing duplicate/remove 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1772 DONE` cellXfs container order reject parity
+  - 범위: base stylesheet 기반 save-reject 회귀에 `cellXfs` container sibling order drift 축을 추가해서, existing duplicate/remove 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1773 DONE` cellStyles container name reject parity
+  - 범위: base stylesheet 기반 save-reject 회귀에 `cellStyles` container name drift 축을 추가해서, existing attr/duplicate 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1774 DONE` cellStyles container order reject parity
+  - 범위: base stylesheet 기반 save-reject 회귀에 `cellStyles` container sibling order drift 축을 추가해서, existing attr/duplicate 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1775 DONE` cellStyles container remove reject parity
+  - 범위: base stylesheet 기반 save-reject 회귀에 `cellStyles` container removal 축을 추가해서, existing attr/duplicate/name/order 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1776 DONE` cellStyles container add reject parity
+  - 범위: base stylesheet 기반 save-reject 회귀에 `cellStyles` container re-addition 축을 추가해서, existing attr/duplicate/name/order/remove 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1777 DONE` fonts container name reject parity
+  - 범위: base stylesheet 기반 save-reject 회귀에 top-level `fonts` container name drift 축을 추가해서, existing attr/duplicate/remove 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1778 DONE` fonts container order reject parity
+  - 범위: base stylesheet 기반 save-reject 회귀에 top-level `fonts` container sibling order drift 축을 추가해서, existing attr/duplicate/remove 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1779 DONE` fills container name reject parity
+  - 범위: base stylesheet 기반 save-reject 회귀에 top-level `fills` container name drift 축을 추가해서, existing attr/duplicate/remove 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1780 DONE` fills container order reject parity
+  - 범위: base stylesheet 기반 save-reject 회귀에 top-level `fills` container sibling order drift 축을 추가해서, existing attr/duplicate/remove 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1781 DONE` borders container name reject parity
+  - 범위: base stylesheet 기반 save-reject 회귀에 top-level `borders` container name drift 축을 추가해서, existing attr/duplicate/remove 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1782 DONE` borders container order reject parity
+  - 범위: base stylesheet 기반 save-reject 회귀에 top-level `borders` container sibling order drift 축을 추가해서, existing attr/duplicate/remove 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1783 DONE` tableStyle child name reject parity
+  - 범위: `workbook_with_table_style_child_entries_bytes()` 기반 save-reject 회귀에 `tableStyleElement` child name drift 축을 추가해서, existing attr/extra-attr 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1784 DONE` tableStyle child set reject parity
+  - 범위: `workbook_with_table_style_child_entries_bytes()` 기반 save-reject 회귀에 `tableStyleElement` child set drift 축을 추가해서, existing attr/extra-attr 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1785 DONE` tableStyle child order reject parity
+  - 범위: `workbook_with_table_style_child_entries_bytes()` 기반 save-reject 회귀에 `tableStyleElement` sibling order drift 축을 추가해서, existing attr/extra-attr 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1786 DONE` indexedColors child extra-attr reject parity
+  - 범위: `workbook_with_stylesheet_color_entries_bytes()` 기반 save-reject 회귀에 `indexedColors` child extra-attr removal 축을 추가해서, existing attr-drift 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1787 DONE` extLst child name reject parity
+  - 범위: `workbook_with_stylesheet_extension_list_children_bytes()` 기반 save-reject 회귀에 `extLst` direct child name drift 축을 추가해서, existing attr/extra-attr/order 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1788 DONE` extLst child set reject parity
+  - 범위: `workbook_with_stylesheet_extension_list_children_bytes()` 기반 save-reject 회귀에 `extLst` direct child set drift 축을 추가해서, existing attr/extra-attr/order 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1789 DONE` extLst nested child name reject parity
+  - 범위: `workbook_with_stylesheet_extension_list_nested_children_bytes()` 기반 save-reject 회귀에 `extLst` nested child name drift 축을 추가해서, existing attr/extra-attr/order 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1790 DONE` extLst nested child set reject parity
+  - 범위: `workbook_with_stylesheet_extension_list_nested_children_bytes()` 기반 save-reject 회귀에 `extLst` nested child set drift 축을 추가해서, existing attr/extra-attr/order 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1791 DONE` extLst great-grandchild name reject parity
+  - 범위: `workbook_with_stylesheet_extension_list_great_grandchildren_bytes()` 기반 save-reject 회귀에 `extLst` great-grandchild name drift 축을 추가해서, existing attr/extra-attr/order 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1792 DONE` extLst great-grandchild set reject parity
+  - 범위: `workbook_with_stylesheet_extension_list_great_grandchildren_bytes()` 기반 save-reject 회귀에 `extLst` great-grandchild set drift 축을 추가해서, existing attr/extra-attr/order 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1793 DONE` extLst great-great-grandchild name reject parity
+  - 범위: `workbook_with_stylesheet_extension_list_great_great_grandchildren_bytes()` 기반 save-reject 회귀에 `extLst` great-great-grandchild name drift 축을 추가해서, existing attr/extra-attr/order 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1794 DONE` extLst great-great-grandchild set reject parity
+  - 범위: `workbook_with_stylesheet_extension_list_great_great_grandchildren_bytes()` 기반 save-reject 회귀에 `extLst` great-great-grandchild set drift 축을 추가해서, existing attr/extra-attr/order 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1795 DONE` mruColors child extra-attr reject parity
+  - 범위: `workbook_with_stylesheet_color_entries_bytes()` 기반 save-reject 회귀에 `mruColors` child extra-attr removal 축을 추가해서, existing `indexedColors` child extra-attr 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1796 DONE` mruColors entry attr reject parity
+  - 범위: `workbook_with_stylesheet_color_entries_bytes()` 기반 save-reject 회귀에 `mruColors` nested `color` entry attr drift 축을 추가해서, existing `indexedColors` nested entry attr 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1797 DONE` mruColors entry name reject parity
+  - 범위: `workbook_with_stylesheet_color_entries_bytes()` 기반 save-reject 회귀에 `mruColors` nested `color` entry name drift 축을 추가해서, existing colors nested child name 축을 `mruColors` 브랜치까지 좁혀 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1798 DONE` mruColors child set reject parity
+  - 범위: `workbook_with_stylesheet_color_entries_bytes()` 기반 save-reject 회귀에 `mruColors` child set drift 축을 추가해서, existing `indexedColors`/root child set 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1799 DONE` mruColors nested child set reject parity
+  - 범위: `workbook_with_stylesheet_color_entries_bytes()` 기반 save-reject 회귀에 `mruColors` nested child removal에 따른 set drift 축을 추가해서, existing nested child/name 축을 removal 방향까지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1800 DONE` mruColors child attr reject parity
+  - 범위: `workbook_with_stylesheet_color_entries_bytes()` 기반 save-reject 회귀에 `mruColors` child attr drift 축을 추가해서, existing `indexedColors` child attr 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1801 DONE` indexedColors child set reject parity
+  - 범위: `workbook_with_stylesheet_color_entries_bytes()` 기반 save-reject 회귀에 `indexedColors` child set drift 축을 추가해서, existing child attr/extra-attr 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1802 DONE` indexedColors nested child set reject parity
+  - 범위: `workbook_with_stylesheet_color_entries_bytes()` 기반 save-reject 회귀에 `indexedColors` nested child removal에 따른 set drift 축을 추가해서, existing `mruColors` nested child set 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1803 DONE` colors child name reject parity
+  - 범위: `workbook_with_stylesheet_colors_children_bytes()` 기반 save-reject 회귀에 `colors` direct child name drift 축을 추가해서, existing child order/set 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1804 DONE` mruColors child name reject parity
+  - 범위: `workbook_with_stylesheet_color_entries_bytes()` 기반 save-reject 회귀에 `mruColors` child name drift 축을 추가해서, existing `mruColors` child attr/set 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1805 DONE` indexedColors child name reject parity
+  - 범위: `workbook_with_stylesheet_color_entries_bytes()` 기반 save-reject 회귀에 `indexedColors` child name drift 축을 추가해서, existing `indexedColors` child attr/set 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1806 DONE` indexedColor entry name reject parity
+  - 범위: `workbook_with_stylesheet_color_entries_bytes()` 기반 save-reject 회귀에 `indexedColors` nested `rgbColor` entry name drift 축을 추가해서, existing `indexedColor` entry attr 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1807 DONE` tableStyle entry name reject parity
+  - 범위: `workbook_with_table_style_entries_bytes()` 기반 save-reject 회귀에 `tableStyle` entry name drift 축을 추가해서, existing tableStyle entry attr/set/order 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1808 DONE` fill entry order reject parity
+  - 범위: `workbook_with_styles_and_theme_bytes()` 기반 save-reject 회귀에 sibling `<fill>` entry order drift 축을 추가해서, existing font/border/dxf/tableStyle entry order 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1809 DONE` fill entry name reject parity
+  - 범위: `workbook_with_styles_and_theme_bytes()` 기반 save-reject 회귀에 direct `<fill>` entry name drift 축을 추가해서, existing fill entry order 및 sibling entry name 계열과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1810 DONE` font entry name reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 direct `<font>` entry name drift 축을 추가해서, existing font entry attr/extra-attr 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1811 DONE` dxf entry name reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 direct `<dxf>` entry name drift 축을 추가해서, existing dxf entry attr/extra-attr 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1812 DONE` border entry name reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 direct `<border>` entry name drift 축을 추가해서, existing border entry attr/extra-attr 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1813 DONE` dxf entry numFmt name reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<dxf>/<numFmt>` child name drift 축을 추가해서, existing dxf entry attr/name 및 nested numFmt attr 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1814 DONE` fill entry patternFill name reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<fill>/<patternFill>` child name drift 축을 추가해서, existing fill entry attr/extra-attr 및 nested fill child attr 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1815 DONE` font entry child name reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<font>/<name>` child name drift 축을 추가해서, existing font entry attr/name 및 nested font child attr/order 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1816 DONE` fill entry patternFill attr reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<fill>/<patternFill>` child attr drift 축을 추가해서, existing fill entry attr/extra-attr 및 nested fill child name 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1817 DONE` font entry child attr reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<font>/<name>` child attr drift 축을 추가해서, existing font entry attr/name 및 nested font child name/order 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1818 DONE` font entry child order reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<font>` child order drift 축을 추가해서, existing font entry attr/name 및 nested font child attr 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1819 DONE` font entry child set reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<font>` child set drift 축을 추가해서, existing font entry attr/name 및 nested font child attr/order 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1820 DONE` fill entry patternFill set reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<fill>/<patternFill>` child set drift 축을 추가해서, existing fill entry attr/extra-attr 및 nested fill child name/attr 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1821 DONE` fill entry patternFill extra-attr reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<fill>/<patternFill>` child extra-attr removal 축을 추가해서, existing fill entry attr/extra-attr 및 nested fill child name/attr/set 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1822 DONE` font entry child extra-attr reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<font>/<name>` child extra-attr removal 축을 추가해서, existing font entry attr/name 및 nested font child attr/order/set 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1823 DONE` dxf entry numFmt formatCode missing reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<dxf>/<numFmt>` child의 `formatCode` missing 축을 추가해서, existing dxf entry attr/name 및 nested numFmt name 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1824 DONE` dxf entry numFmt formatCode empty reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<dxf>/<numFmt>` child의 `formatCode=""` 축을 추가해서, existing dxf entry attr/name 및 nested numFmt required-attr missing 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1825 DONE` dxf entry numFmtId missing reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<dxf>/<numFmt>` child의 `numFmtId` missing 축을 추가해서, existing dxf entry attr/name 및 nested numFmt required-attr validation 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1826 DONE` dxf entry numFmtId non-numeric reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<dxf>/<numFmt>` child의 `numFmtId` parse-failure 축을 추가해서, existing dxf entry attr/name 및 nested numFmt required-attr validation 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1827 DONE` dxf entry numFmt attr reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<dxf>/<numFmt>` child attr drift 축을 추가해서, existing dxf entry attr/name 및 nested numFmt required-attr validation 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1828 DONE` dxf entry numFmt set reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<dxf>/<numFmt>` child set drift 축을 추가해서, existing dxf entry attr/name 및 nested numFmt attr/name 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1829 DONE` fill entry patternFill duplicate reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<fill>/<patternFill>` child duplication 축을 추가해서, existing fill entry attr/extra-attr 및 nested fill child name/attr/set 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1830 DONE` font entry name child duplicate reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<font>/<name>` child duplication 축을 추가해서, existing font entry attr/name 및 nested font child attr/order/set 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1831 DONE` dxf entry numFmt duplicate reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<dxf>/<numFmt>` child duplication 축을 추가해서, existing dxf entry attr/name 및 nested numFmt attr/set 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1832 DONE` border entry child added reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<border>` child addition 축을 추가해서, existing border entry attr/name 및 empty-entry 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1833 DONE` border entry left child duplicate reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<border>/<left>` child duplication 축을 추가해서, existing border entry attr/name 및 child-added 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1834 DONE` dxf entry child added reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<dxf>` child addition 축을 추가해서, existing dxf entry attr/name 및 numFmt child validation 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1835 DONE` font entry child added reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<font>` child addition 축을 추가해서, existing font entry attr/name 및 child duplicate/order/set 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1836 DONE` dxf entry child order reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<dxf>` child order drift 축을 추가해서, existing dxf entry attr/name 및 child-added 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1837 DONE` fill entry patternFill text reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<fill>/<patternFill>` child text drift 축을 추가해서, existing fill entry attr/extra-attr 및 nested fill child name/attr/duplicate 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1838 DONE` fill entry patternFill cdata reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<fill>/<patternFill>` child CDATA text drift 축을 추가해서, existing fill entry attr/extra-attr 및 nested fill child plain-text 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1839 DONE` dxf entry numFmt nested child added reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<dxf>/<numFmt>/<extLst>` child-added 축을 추가해서, existing dxf entry attr/name 및 nested descendant preservation gap을 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1840 DONE` fill entry patternFill grandchild added reject parity
+  - 범위: `workbook_with_style_entry_attr_maps_bytes()` 기반 save-reject 회귀에 nested `<fill>/<patternFill>/<fgColor>` grandchild-added 축을 추가해서, existing fill entry attr/child/text 축과 grandchild preservation gap을 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1841 DONE` xf extLst nested child text reject parity
+  - 범위: `workbook_with_xf_extension_list_nested_children_bytes()` 기반 save-reject 회귀에 `<xf>/<extLst>/<ext>/<payload>` plain-text drift 축을 추가해서, existing nested child attr/name 및 cdata 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1842 DONE` xf extLst great-grandchild text reject parity
+  - 범위: `workbook_with_xf_extension_list_great_grandchildren_bytes()` 기반 save-reject 회귀에 `<xf>/<extLst>/<ext>/<payload>/<leaf>` plain-text drift 축을 추가해서, existing great-grandchild attr/name 및 cdata 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1843 DONE` xf extLst great-great-grandchild text reject parity
+  - 범위: `workbook_with_xf_extension_list_great_great_grandchildren_bytes()` 기반 save-reject 회귀에 `<xf>/<extLst>/<ext>/<payload>/<leaf>/<node>` plain-text drift 축을 추가해서, existing great-great-grandchild attr/name 및 cdata 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1844 DONE` stylesheet extLst great-grandchild text reject parity
+  - 범위: `workbook_with_stylesheet_extension_list_text_bytes()` 기반 save-reject 회귀에 root `<extLst>/<ext>/<payload>/<leaf>` plain-text drift 축을 추가해서, existing nested child / great-grandchild cdata / great-great-grandchild plain-text 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1845 DONE` stylesheet extLst child cdata reject parity
+  - 범위: `workbook_with_stylesheet_extension_list_text_bytes()` 기반 save-reject 회귀에 root `<extLst>/<ext>` child CDATA text drift 축을 추가해서, existing child plain-text 및 container text 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1846 DONE` stylesheet extLst nested child cdata reject parity
+  - 범위: `workbook_with_stylesheet_extension_list_text_bytes()` 기반 save-reject 회귀에 root `<extLst>/<ext>/<payload>` nested child CDATA text drift 축을 추가해서, existing nested child plain-text 및 great-grandchild text 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1847 DONE` theme extLst child name reject parity
+  - 범위: `workbook_with_theme_extension_list_children_bytes()` 기반 save-reject 회귀에 theme `<a:extLst>/<a:ext>` child name drift 축을 추가해서, existing child attr/order/text 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1848 DONE` theme extLst child set reject parity
+  - 범위: `workbook_with_theme_extension_list_children_bytes()` 기반 save-reject 회귀에 theme `<a:extLst>` child set drift 축을 추가해서, existing child attr/order/text 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1849 DONE` theme clrScheme srgb child text reject parity
+  - 범위: `workbook_with_theme_color_scheme_nested_child_text_bytes()` 기반 save-reject 회귀에 `<a:clrScheme>` 두 번째 nested `<a:srgbClr>` plain-text drift 축을 추가해서, existing nested child text/cdata 및 srgb attr 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1850 DONE` theme fontScheme font child text reject parity
+  - 범위: `workbook_with_theme_font_scheme_nested_child_text_bytes()` 기반 save-reject 회귀에 `<a:fontScheme>` 두 번째 nested `<a:font>` plain-text drift 축을 추가해서, existing nested child text/cdata 및 child attr 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1851 DONE` theme fmtScheme effectStyle child text reject parity
+  - 범위: `workbook_with_theme_format_scheme_nested_child_text_bytes()` 기반 save-reject 회귀에 `<a:fmtScheme>` 두 번째 nested `<a:effectStyle>` plain-text drift 축을 추가해서, existing nested child text/cdata 및 child attr 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1852 DONE` theme custClrLst nested sysClr child text reject parity
+  - 범위: `workbook_with_theme_custom_color_list_nested_child_text_bytes()` 기반 save-reject 회귀에 `<a:custClrLst>` 두 번째 nested `<a:sysClr>` plain-text drift 축을 추가해서, existing nested child text/cdata 및 nested attr 축과 대칭적으로 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1853 DONE` theme extraClrSchemeLst lt1 srgb child text reject parity
+  - 범위: `workbook_with_theme_extra_color_scheme_list_nested_child_text_bytes()` 기반 save-reject 회귀에 첫 번째 extraClrScheme의 `<a:lt1>/<a:srgbClr>` plain-text drift 축을 추가해서, existing sysClr plain-text 및 srgb CDATA 축 사이의 비대칭을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1854 DONE` theme extraClrSchemeLst accent1 srgb child text reject parity
+  - 범위: `workbook_with_theme_extra_color_scheme_list_nested_child_text_bytes()` 기반 save-reject 회귀에 두 번째 extraClrScheme의 `<a:accent1>/<a:srgbClr>` plain-text drift 축을 추가해서, existing first-scheme plain-text/cdata 축 밖에 남아 있던 별도 leaf 보존 공백을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1855 DONE` theme extraClrSchemeLst sysClr cdata reject parity
+  - 범위: `workbook_with_theme_extra_color_scheme_list_nested_child_text_bytes()` 기반 save-reject 회귀에 첫 번째 extraClrScheme의 `<a:dk1>/<a:sysClr>` CDATA drift 축을 추가해서, existing plain-text 축과 middle-leaf CDATA 축 사이의 비대칭을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1856 DONE` theme extraClrSchemeLst accent1 srgb cdata reject parity
+  - 범위: `workbook_with_theme_extra_color_scheme_list_nested_child_text_bytes()` 기반 save-reject 회귀에 두 번째 extraClrScheme의 `<a:accent1>/<a:srgbClr>` CDATA drift 축을 추가해서, existing middle-leaf CDATA 축 밖에 남아 있던 별도 leaf 보존 공백을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1857 DONE` theme custClrLst shade grandchild text reject parity
+  - 범위: `workbook_with_theme_custom_color_list_grandchild_text_bytes()` 기반 save-reject 회귀에 첫 번째 custom color의 `<a:shade>` plain-text drift 축을 추가해서, existing first-leaf plain-text 및 middle-leaf CDATA 축 사이의 비대칭을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1858 DONE` theme custClrLst satMod grandchild text reject parity
+  - 범위: `workbook_with_theme_custom_color_list_grandchild_text_bytes()` 기반 save-reject 회귀에 두 번째 custom color의 `<a:satMod>` plain-text drift 축을 추가해서, existing earlier-leaf 축 밖에 남아 있던 별도 leaf 보존 공백을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1859 DONE` theme custClrLst alpha grandchild cdata reject parity
+  - 범위: `workbook_with_theme_custom_color_list_grandchild_text_bytes()` 기반 save-reject 회귀에 첫 번째 custom color의 `<a:alpha>` CDATA drift 축을 추가해서, existing middle-leaf CDATA 축과 분리된 first-leaf CDATA 보존 공백을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1860 DONE` theme custClrLst satMod grandchild cdata reject parity
+  - 범위: `workbook_with_theme_custom_color_list_grandchild_text_bytes()` 기반 save-reject 회귀에 두 번째 custom color의 `<a:satMod>` CDATA drift 축을 추가해서, existing middle-leaf CDATA 축 밖에 남아 있던 tail-leaf CDATA 보존 공백을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1861 DONE` theme custClrLst second child text reject parity
+  - 범위: `workbook_with_theme_custom_color_list_child_text_bytes()` 기반 save-reject 회귀에 두 번째 custom color child plain-text drift 축을 추가해서, existing first-child plain-text 및 second-child CDATA 축 사이의 비대칭을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1862 DONE` theme custClrLst first child cdata reject parity
+  - 범위: `workbook_with_theme_custom_color_list_child_text_bytes()` 기반 save-reject 회귀에 첫 번째 custom color child CDATA drift 축을 추가해서, existing first-child plain-text 및 second-child CDATA 축 사이에 남아 있던 first-child CDATA 보존 공백을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1863 DONE` stylesheet colors second child text reject parity
+  - 범위: `workbook_with_stylesheet_color_entries_text_bytes()` 기반 save-reject 회귀에 `<mruColors>` own plain-text drift 축을 추가해서, existing indexedColors child text/cdata 및 nested color text/cdata 축 사이에 남아 있던 second child plain-text 보존 공백을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1864 DONE` theme clrScheme nested child attr-map dirty-save parity
+  - 범위: `workbook_with_theme_color_scheme_value_children_bytes()` 기반 dirty-save 회귀에 `<a:clrScheme>` nested `<a:sysClr>/<a:srgbClr>` attr-map 보존 축을 추가해서, existing nested child text dirty-save 및 load/save-reject attr 검증 사이에 남아 있던 attr-map round-trip 공백을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1865 DONE` styles/theme no-op untouched-part preservation
+  - 범위: `workbook_with_styles_and_theme_bytes()` 기반 no-op save 회귀에 `styles.xml`, `theme1.xml`, `workbook.xml.rels` untouched-part byte preservation 축을 추가해서, existing dirty-save untouched-part 보존 회귀와 대칭적인 no-op save 계약을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1866 DONE` stylesheet colors child attr-map dirty-save parity
+  - 범위: `workbook_with_stylesheet_color_entries_bytes()` 기반 dirty-save 회귀에 `<colors>/<indexedColors>`와 seeded `<mruColors>` direct child attr-map 보존 축을 추가해서, existing load/save-reject attr 검증과 text-only dirty-save 회귀 사이에 남아 있던 direct child attr-map round-trip 공백을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1867 DONE` stylesheet colors nested child attr-map dirty-save parity
+  - 범위: `workbook_with_stylesheet_color_entries_bytes()` 기반 dirty-save 회귀에 `<colors>/<indexedColors>/<rgbColor>`와 `<mruColors>/<color>` nested child attr-map 보존 축을 추가해서, existing load/save-reject nested attr 검증과 text-only dirty-save 회귀 사이에 남아 있던 nested child attr round-trip 공백을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1868 DONE` theme clrScheme child attr-map dirty-save parity
+  - 범위: `workbook_with_theme_color_scheme_children_bytes()` 기반 dirty-save 회귀에 `<a:clrScheme>/<a:dk1>` direct child attr-map 보존 축을 추가해서, existing load/save-reject child attr 검증과 nested attr-only dirty-save 회귀 사이에 남아 있던 direct child attr round-trip 공백을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1869 DONE` theme fontScheme child attr-map dirty-save parity
+  - 범위: `workbook_with_theme_font_scheme_children_bytes()` 기반 dirty-save 회귀에 `<a:fontScheme>/<a:majorFont>` direct child attr-map 보존 축을 추가해서, existing load/save-reject child attr 검증과 nested attr-only dirty-save 회귀 사이에 남아 있던 direct child attr round-trip 공백을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1870 DONE` theme fmtScheme child attr-map dirty-save parity
+  - 범위: `workbook_with_theme_format_scheme_children_bytes()` 기반 dirty-save 회귀에 `<a:fmtScheme>/<a:fillStyleLst>` direct child attr-map 보존 축을 추가해서, existing load/save-reject child attr 검증과 nested attr-only dirty-save 회귀 사이에 남아 있던 direct child attr round-trip 공백을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1871 DONE` theme objectDefaults subtree tracking
+  - 범위: `ThemePartSummary`가 `objectDefaults` 직계 child names/attr maps를 추적하도록 확장하고, `workbook_with_theme_object_defaults_child_bytes()` 기반 load/dirty-save/save-reject 회귀로 `<a:objectDefaults>` subtree 추가가 summary drift로 잡히지 않던 실제 구현 공백을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1872 DONE` stylesheet cellStyle child text tracking
+  - 범위: `CellStyleSummary`가 child text를 추적하도록 확장하고, `workbook_with_cell_style_child_text_bytes()` 기반 load/dirty-save/save-reject(text+cdata) 회귀로 `<cellStyle>` child text drift가 summary drift로 잡히지 않던 실제 구현 공백을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1873 DONE` stylesheet cellStyle name dirty-save mirror
+  - 범위: `workbook_with_styles_and_theme_bytes()` 기반 accepted-dirty 회귀에 `<cellStyle name="Normal"> -> <cellStyle name="Accent">` mirror 축을 추가해서, existing load/save-reject와 sibling dirty-save mirrors 사이의 `cellStyle@name` accepted-shape 보존 공백을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1874 DONE` stylesheet font child text tracking
+  - 범위: `FontSummary`가 child text를 추적하도록 확장하고, `workbook_with_font_child_text_bytes()` 기반 load/dirty-save/save-reject(text+cdata) 회귀로 `<font>` child text drift가 summary drift로 잡히지 않던 실제 구현 공백을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1875 DONE` stylesheet tableStyle child text tracking
+  - 범위: `TableStylesSummary`가 `tableStyle` child text를 추적하도록 확장하고, `workbook_with_table_style_child_text_bytes()` 기반 load/dirty-save/save-reject(text+cdata) 회귀로 `<tableStyleElement>` text drift가 summary drift로 잡히지 않던 실제 구현 공백을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1876 DONE` theme fontScheme child text tracking
+  - 범위: `ThemePartSummary`가 `fontScheme` direct child text를 추적하도록 확장하고, `workbook_with_theme_font_scheme_child_text_bytes()` 기반 load/dirty-save/save-reject(text+cdata) 회귀로 `<a:majorFont>/<a:minorFont>` direct text drift가 summary drift로 잡히지 않던 실제 구현 공백을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1877 DONE` worksheet VML shape attr-map tracking
+  - 범위: `VmlDrawingPartSummary`가 shape attr-map을 추적하도록 확장하고, `workbook_with_vml_shape_attrs_bytes()` 기반 load/dirty-save/save-reject 회귀로 explicit worksheet VML shape attr drift가 support-part semantics 비교에서 빠지던 실제 구현 공백을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1878 DONE` worksheet VML shape subtree tracking
+  - 범위: `VmlDrawingPartSummary`가 top-level `<v:shape>` inner XML을 추적하도록 확장하고, `workbook_with_vml_shape_child_subtree_bytes()` 기반 load/dirty-save/save-reject 회귀로 `ClientData` 등 shape subtree drift가 support-part semantics 비교에서 빠지던 실제 구현 공백을 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b PENDING` broader style/theme typed preservation
+  - 범위: custom `numFmt` entry order, tableStyle attr-map, cellStyle attr-map, fill child attr-map, font child attr-map, border child attr-map, dxf child attr-map, fill nested descendant typed preservation, border nested descendant typed preservation, dxf nested descendant typed preservation, theme clrScheme nested descendant typed preservation, theme fontScheme nested descendant typed preservation, theme fmtScheme nested descendant typed preservation, theme fmtScheme fill grandchild typed preservation, theme fmtScheme effect great-grandchild typed preservation, theme fmtScheme bgFill great-grandchild typed preservation, theme fmtScheme fill color great-grandchild typed preservation, theme fmtScheme fill color transform sequence typed preservation, theme fmtScheme fill color transform set preservation, theme fmtScheme fill color second-transform attr preservation, theme fmtScheme fill color second-transform name preservation, theme fmtScheme fill color first-transform name preservation, theme fmtScheme fill color first-transform set preservation, theme fmtScheme fill color first-transform attr-with-siblings preservation, theme fmtScheme fill color extra-transform preservation, theme fmtScheme fill color duplicate-transform preservation, theme fmtScheme fill color duplicate-transform load coverage, theme fmtScheme fill color extra-transform load coverage 외의 남은 style/theme artifact를 더 높은 수준의 typed preservation 대상으로 승격하고, style/theme cross-artifact 무결성을 더 엄격히 검증
+  - `Step 6.6a DONE` worksheet hyperlink-ref integrity regression
+  - 범위: worksheet support가 추적한 hyperlink `ref` 목록을 load assertion과 dirty save 회귀로 고정하고, hyperlink `ref` drift/삭제를 fail-fast로 막음
+  - `Step 6.6b1 DONE` worksheet-local relationship binding integrity
+  - 범위: worksheet XML의 hyperlink `ref + r:id`, `legacyDrawing r:id`, 그리고 `sheet rels`의 hyperlink/comment/VML normalized target binding을 load assertion과 dirty save 회귀로 고정
+  - `Step 6.6b2a DONE` worksheet hyperlink semantic typed preservation
+  - 범위: worksheet hyperlink의 `location`/`display`/`tooltip` semantic field를 typed summary로 보존하고, internal/external hyperlink drift를 dirty save 회귀로 고정
+  - `Step 6.6b2b1 DONE` hyperlink/comment anchor-aware dimension preservation
+  - 범위: blank-only hyperlink/comment anchor cell이 raw `<c>` 없이 존재해도 dirty save의 `dimension` 계산에 anchor 좌표를 포함해서 worksheet extent drift를 막음
+  - `Step 6.6b2b2a DONE` comments.xml semantic typed preservation
+  - 범위: `comments.xml`의 authors와 comment `ref/authorId/text`를 typed summary로 보존하고, comment text/author drift를 dirty save 회귀로 고정
+  - `Step 6.6b2b2b1 DONE` VML drawing semantic typed preservation
+  - 범위: `vmlDrawing` part의 root/shape id summary를 typed하게 보존하고, shape identity drift를 dirty save 회귀로 고정
+  - `Step 6.6b2b2b2a DONE` blank-anchor placeholder materialization regression
+  - 범위: blank-only hyperlink/comment anchor cell을 한 번 dirty mutation으로 만들었다가 다시 비웠을 때, dirty save가 anchor 좌표에 placeholder `<c>`를 실제로 materialize하는 경로를 회귀로 고정
+  - `Step 6.6b2b2b2b1 DONE` anchored placeholder attr-preserving rewrite
+  - 범위: hyperlink/comment anchor cell이 dirty blank placeholder로 내려갈 때 원래 cell template의 non-value attr를 함께 materialize해서 worksheet rewrite가 cell-level metadata를 덜 잃게 함
+  - `Step 6.6b2b2b2b2a DONE` anchored placeholder opaque-child preserving rewrite
+  - 범위: hyperlink/comment anchor cell이 dirty blank placeholder로 내려갈 때 원래 cell-level opaque child payload(`<extLst>` 등)를 함께 materialize해서 worksheet rewrite가 cell child metadata도 덜 잃게 함
+  - `Step 6.6b2b2b2b2b1 DONE` rewrite path consumes typed anchor summaries
+  - 범위: worksheet rewrite가 legacy `hyperlink_refs`/`comment_anchor_refs` 없이도 typed hyperlink/comment summaries만으로 dimension/placeholder 경로를 유지하도록 고정
+  - `Step 6.6b2b2b2b2b2a DONE` anchored placeholder segment-order preserving rewrite
+  - 범위: hyperlink/comment anchor placeholder `<c>`를 dirty row에 materialize할 때, original segment order를 따라 다음 existing cell과 trailing row opaque payload 앞에 배치해서 row-level XML 순서 drift를 막음
+  - `Step 6.6b2b2b2b2b2b DONE` absolute hyperlink ref anchor normalization
+  - 범위: worksheet hyperlink의 absolute A1 ref(`$A$1`, `$A$1:$B$2`)를 canonical anchor/range 좌표로 normalize해서 typed hyperlink summary와 dirty save placeholder/dimension rewrite가 absolute ref anchor도 일반 ref와 동일하게 처리하도록 회귀로 고정
+  - `Step 6.6b2b2b2b2b2c DONE` comment-only typed anchor rewrite regression
+  - 범위: hyperlink summary가 전혀 없어도 `comments.xml` typed summary만으로 blank comment anchor의 dimension/placeholder rewrite 경로가 유지되도록 dirty save 회귀로 고정
+  - `Step 6.6b2b2b2b2b2d DONE` internal hyperlink blank-anchor rewrite regression
+  - 범위: worksheet `sheet rels`가 없어도 internal hyperlink(`location=...`, no `r:id`) typed summary를 수집하고, blank anchor의 dimension/placeholder rewrite 경로를 dirty save 회귀로 고정
+  - `Step 6.6b2b2b2b2b2e DONE` absolute comment ref anchor normalization
+  - 범위: comments.xml의 absolute A1 ref(`$C$3`)를 typed comment summary와 dirty save placeholder/dimension rewrite에서 일반 ref와 동일하게 처리하도록 dirty save 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f1 DONE` anchored dirty hyperlink drift recovery
+  - 범위: support anchor placeholder를 실제로 materialize해야 하는 dirty worksheet에서는 pre-save worksheet hyperlink semantic drift를 rewrite 뒤 검증으로 넘겨서, package worksheet XML의 internal hyperlink display/location drift를 source-based rewrite로 복구할 수 있게 함
+  - `Step 6.6b2b2b2b2b2f2a DONE` anchored dirty hyperlink relationship target recovery
+  - 범위: support anchor placeholder를 실제로 materialize해야 하는 dirty worksheet에서는 tracked external hyperlink binding의 `sheet rels` target drift를 save 전에 source binding으로 복구해서, anchored dirty save가 worksheet placeholder rewrite와 함께 hyperlink relationship target도 복원하도록 고정
+  - `Step 6.6b2b2b2b2b2f2b1 DONE` anchored dirty comments relationship recovery
+  - 범위: support anchor placeholder를 실제로 materialize해야 하는 dirty worksheet에서는 tracked comments binding의 `sheet rels` type/target drift를 save 전에 source binding으로 복구해서, comment-only anchored dirty save가 worksheet placeholder rewrite와 함께 comments relationship binding도 복원하도록 고정
+  - `Step 6.6b2b2b2b2b2f2b2a DONE` anchored dirty comments.xml ref recovery
+  - 범위: support anchor placeholder를 실제로 materialize해야 하는 dirty worksheet에서는 tracked `comments.xml` comment `ref` drift를 save 전에 typed comment summary 기준으로 복구해서, comment-only anchored dirty save가 worksheet placeholder rewrite와 함께 comments part anchor ref도 복원하도록 고정
+  - `Step 6.6b2b2b2b2b2f2b2b DONE` anchored dirty VML relationship recovery
+  - 범위: support anchor placeholder를 실제로 materialize해야 하는 dirty worksheet에서는 tracked `vmlDrawing` binding의 `sheet rels` type/target drift를 save 전에 source binding으로 복구해서, comment-only anchored dirty save가 worksheet placeholder rewrite와 함께 VML relationship binding도 복원하도록 고정
+  - `Step 6.6b2b2b2b2b2f2b2c DONE` hyperlink/comment mutation-aware rewrite
+  - 범위: support anchor placeholder를 실제로 materialize해야 하는 dirty worksheet에서는 tracked `comments.xml` / `vmlDrawing` part source bytes를 save 전에 그대로 복구해서, comment text/author drift와 typed summary 밖의 VML body drift도 worksheet placeholder rewrite와 함께 원본 artifact로 되돌리도록 고정
+  - `Step 6.6b2b2b2b2b2f2b2d DONE` comments rich-text structure tracking
+  - 범위: `comments.xml` typed summary에 comment attr map과 `<text>` inner XML을 추가로 추적해서 rich-text run/property drift를 clean save validator로 fail-fast시키고, blank comment anchor 기반 anchored dirty save에서도 comments part를 원본 rich-text 구조로 복원하도록 회귀를 고정
+  - `Step 6.6b2b2b2b2b2f2b2e DONE` VML root/non-shape tracking
+  - 범위: `vmlDrawing` typed summary에 root attr map, top-level child order, root-level non-shape outer XML을 추가로 추적해서 `o:shapelayout`/`v:shapetype` 같은 shape 바깥 payload drift와 root attr drift를 clean save validator로 fail-fast시키고, dirty save에서도 해당 VML artifact를 원본 그대로 복원하도록 회귀를 고정
+  - `Step 6.6b2b2b2b2b2f2b2f DONE` comments root/container tracking
+  - 범위: `comments.xml` typed summary에 root name/attr map, top-level child order, `authors`/`commentList` container attr map, root-level extra child outer XML을 추가로 추적해서 container/root drift와 `<extLst>` 같은 comment 바깥 payload drift를 clean save validator로 fail-fast시키고, blank comment anchor 기반 anchored dirty save에서도 comments artifact를 원본 그대로 복원하도록 회귀를 고정
+  - `Step 6.6b2b2b2b2b2f2b2g DONE` external hyperlink relationship attr recovery
+  - 범위: external hyperlink `sheet rels` binding에 `TargetMode`를 함께 추적하고, anchored dirty save의 hyperlink relationship rewrite가 `Target`뿐 아니라 `Type`과 `TargetMode`도 원본 binding으로 복구하도록 해서, blank external hyperlink anchor recovery가 relationship attr drift까지 comments/VML parity로 복원되게 고정
+  - `Step 6.6b2b2b2b2b2f2b2h DONE` worksheet rels structural fidelity
+  - 범위: worksheet `sheet rels` support에 원본 relationships part source bytes와 typed summary(root attr map, ordered relationship entry attr maps, canonical internal target, TargetMode, extra attr)를 함께 추적해서 root attr drift, relationship order drift, tracked/opaque relationship attr drift를 clean save validator로 fail-fast시키고, blank comment anchor 기반 anchored dirty save에서는 `sheet rels` 전체를 원본 artifact로 복구하도록 회귀를 고정
+  - `Step 6.6b2b2b2b2b2f2b2i DONE` worksheet hyperlinks structural fidelity
+  - 범위: worksheet support에 `<hyperlinks>` container typed summary(root attr map, child order, non-hyperlink child outer XML, per-`<hyperlink>` attr map/inner XML)를 추가로 추적해서 container attr drift와 hyperlink extra attr drift를 clean save validator로 fail-fast시키고, blank external hyperlink anchor 기반 anchored dirty save에서는 rewritten worksheet XML이 hyperlink container 구조까지 원본과 일치하도록 회귀를 고정
+  - `Step 6.6b2b2b2b2b2f2b2j DONE` worksheet legacyDrawing structural fidelity
+  - 범위: worksheet support에 `<legacyDrawing>` element typed summary(attr map, inner XML)를 추가로 추적해서 element extra attr drift를 clean save validator로 fail-fast시키고, blank comment anchor 기반 anchored dirty save에서는 rewritten worksheet XML이 `legacyDrawing` element attr map까지 원본과 일치하도록 회귀를 고정
+  - `Step 6.6b2b2b2b2b2f2b2k DONE` worksheet combined blank hyperlink/comment anchor dirty-save preservation
+  - 범위: `workbook_with_blank_hyperlink_comment_anchor_bytes()`와 legacy ref list를 비운 fallback path를 재사용해서 blank `C3` placeholder materialization이 실제 dirty save를 만들도록 고정하고, 그 과정에서도 `comments1.xml`, `vmlDrawing1.vml`, `sheet1.xml.rels`가 원본 bytes와 정확히 일치하는지 회귀로 검증
+  - `Step 6.6b2b2b2b2b2f2b2l DONE` worksheet absolute-ref hyperlink rels byte preservation
+  - 범위: `workbook_with_absolute_ref_hyperlink_anchor_bytes()`와 hyperlink ref list를 비운 fallback path를 재사용해서 absolute-ref hyperlink anchor의 blank `C3` placeholder materialization이 dirty save를 실제로 타도록 고정하고, 그 와중에도 `xl/worksheets/_rels/sheet1.xml.rels`가 원본 bytes와 정확히 일치하는지 회귀로 검증
+  - `Step 6.6b2b2b2b2b2f2b2m DONE` worksheet absolute-ref anchor reopen regressions
+  - 범위: absolute-ref comment/hyperlink anchor dirty save 회귀에 reopen 검증을 추가해서 `B2` dirty mutation이 실제 저장 결과로 남아 있는지, blank `C3` anchor가 reopen 후에도 materialize되지 않는지, absolute-ref comment anchor fallback은 `worksheet_support_parts.comment_anchor_refs`에서 `$C$3`를 계속 유지하는지까지 함께 고정
+  - `Step 6.6b2b2b2b2b2f2b2n DONE` worksheet combined blank anchor legacyDrawing attr recovery
+  - 범위: `workbook_with_blank_hyperlink_comment_anchor_bytes()`와 legacy ref list를 비운 combined fallback path에서 worksheet XML의 `<legacyDrawing>` attr drift를 주입한 뒤, dirty save가 `legacy_drawing_summaries`와 serialized `legacyDrawing` element를 원본 형태로 복구하는지 회귀로 검증
+  - `Step 6.6b2b2b2b2b2f2b2o DONE` worksheet absolute-ref comment artifact byte preservation
+  - 범위: `workbook_with_absolute_ref_comment_anchor_bytes()`와 `comment_anchor_refs`를 비운 fallback path를 재사용해서 absolute-ref comment anchor dirty save 후에도 `comments1.xml`, `vmlDrawing1.vml`, `sheet1.xml.rels`가 원본 bytes와 정확히 일치하는지 회귀로 검증
+  - `Step 6.6b2b2b2b2b2f2b2p DONE` worksheet internal hyperlink anchor reopen regression
+  - 범위: `workbook_with_blank_internal_hyperlink_anchor_bytes()`의 fallback path에서 dirty save 후 reopen 검증을 추가해서 `B2` 변경값이 저장 결과로 유지되고, internal hyperlink blank anchor `C3`는 reopen 후에도 실제 셀로 materialize되지 않는지 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2q DONE` worksheet hyperlink anchor reopen support refs regressions
+  - 범위: internal/absolute hyperlink anchor fallback placeholder 테스트에 reopen 후 `worksheet_support_parts.hyperlink_refs` 검증을 추가해서 cleared legacy ref list가 dirty save 이후 `C3` 또는 `$C$3` anchor ref로 다시 복구되는지 round-trip 기준으로 고정
+  - `Step 6.6b2b2b2b2b2f2b2r DONE` worksheet hyperlink r:id drift recovery
+  - 범위: `workbook_with_blank_external_hyperlink_anchor_and_hyperlinks_container_attrs_bytes()` fallback path에서 worksheet XML의 `<hyperlink>` `r:id` binding drift를 주입한 뒤, dirty save가 `hyperlinks_part_summary`와 serialized hyperlink attr map을 기준으로 원래 `rId1` binding을 복구하는지 회귀로 검증
+  - `Step 6.6b2b2b2b2b2f2b2s DONE` worksheet internal hyperlink location drift recovery
+  - 범위: `workbook_with_blank_internal_hyperlink_anchor_bytes()` fallback path에서 internal hyperlink `location` attr drift를 주입한 뒤, dirty save가 `location="Sheet1!A1"`를 원본대로 복구하고 blank anchor `C3`는 reopen 후에도 비물질화 상태를 유지하는지 회귀로 검증
+- 목표
+  - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
+  - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
+- 산출물
+  - lossless preservation slice별 구현
+  - synthetic workbook regression fixture 확대
+- 선행 의존성
+  - 없음
+  - 다만 Step 5와 충돌하지 않게 write scope를 분리한다.
+- 병렬화 가능
+  - `Step 6.5` style/theme typed preservation
+  - `Step 6.6` hyperlink/comment mutation-aware rewrite
+  - synthetic workbook regression fixture 확대
+
+### Step 7. Windows Oracle And Corpus Validation
+
+- 목표
+  - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
+  - pinned OM dataset과 runtime facade를 corpus로 검증한다.
+- 산출물
+  - oracle harness
+  - corpus manifest/import path
+  - differential regression report
+- 선행 의존성
+  - 최소 Step 3
+  - facade behavior 검증은 Step 5 이후가 더 효율적이다.
+- 병렬화 가능
+  - corpus ingestion
+  - oracle capture harness
+  - diff/report generator
+
+## Parallelization Notes
+
+1. 절대적인 크리티컬 패스는 `Step 1 -> Step 2 -> Step 3 -> Step 4 -> Step 5`다.
+2. `Step 6`은 OM facade 작업과 별개라 write scope만 분리하면 병렬 진행 가능하다.
+3. `Step 7`은 capture/harness 자체는 `Step 3` 이후 시작할 수 있지만, facade behavior diff의 가치는 `Step 5` 이후에 커진다.
+4. 서브에이전트는 `Step 6`의 fidelity slice들과 `Step 4`의 metadata table 분할 작업에 가장 효율적이다.
+
+## This Turn Scope
+
+이번 작업에서는 아래의 초기 foundation을 구현했다.
+
+1. `office-idl`과 `office-codegen`의 build-time contract 최소 경로
+2. `office-common`의 shared primitive/model 정의
+3. `office-opc`의 ZIP package preserve/load/save 경로
+4. `excel-model`의 workbook/sheet/cell state와 range read/write
+5. `excel-xlsx`의 minimal sniff/load/save 경로, metadata extraction, worksheet cell IO
+6. `excel-runtime`의 open/save/session lookup/range get-set 경로
+7. no-op 및 dirty `.xlsx` save 경로와 package preservation 테스트
+
+`excel-calc`, `excel-render`, `office-wasm`, 실제 Excel oracle runner는 이번 범위에서 제외한다.
+
+## Acceptance Criteria
+
+- `cargo test`가 통과한다.
+- `excel-xlsx`가 ZIP 기반 `.xlsx`를 식별할 수 있다.
+- workbook metadata와 worksheet 이름을 추출할 수 있다.
+- worksheet cell 값과 shared string을 model로 읽을 수 있다.
+- save 시 unknown/opaque part를 그대로 다시 내보내고 dirty worksheet value 변경을 반영할 수 있다.
+- `excel-runtime`에서 open/save/session lookup/range get-set 경로가 동작한다.
+
+## Deferred Work
+
+- formula parser / calc engine
+- dynamic array / `Formula2` dialect
+- style/theme/drawing typed model
+- macro-preserving `.xlsm` specifics
+- validator/oracle Windows automation
+- WASM/TS binding
+
+## Notes
+
+현재 문서 번들은 “office-idl / codegen 먼저, 그 다음 lossless xlsx” 순서를 권장한다. 따라서 첫 구현도 이 순서를 유지하되, 실제로 사용 가능한 결과물을 빨리 얻기 위해 `excel-runtime`까지 얇게 연결하는 세로 슬라이스로 진행한다.
