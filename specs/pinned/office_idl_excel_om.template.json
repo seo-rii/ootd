@@ -1361,6 +1361,42 @@
               ]
             }
           }
+        },
+        {
+          "name": "Copy",
+          "memberKind": "method",
+          "params": [
+            {
+              "name": "Before",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "After",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "Copy"
+                }
+              ]
+            }
+          }
         }
       ]
     },
