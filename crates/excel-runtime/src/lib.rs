@@ -29,6 +29,13 @@ struct RuntimeWorkbook {
 }
 
 #[derive(Debug, Clone, Copy)]
+enum RangeProjection {
+    Cells,
+    Rows,
+    Columns,
+}
+
+#[derive(Debug, Clone, Copy)]
 enum RuntimeObjectKind {
     Application,
     WorkbooksCollection,
@@ -46,6 +53,7 @@ enum RuntimeObjectKind {
         workbook: WorkbookHandle,
         sheet_id: SheetId,
         rect: Rect,
+        projection: RangeProjection,
     },
 }
 
@@ -320,7 +328,8 @@ impl ExcelRuntime {
                 workbook,
                 sheet_id,
                 rect,
-            } => self.dispatch_get_range(workbook, sheet_id, rect, member, args),
+                projection,
+            } => self.dispatch_get_range(workbook, sheet_id, rect, projection, member, args),
         }
     }
 
@@ -429,7 +438,8 @@ impl ExcelRuntime {
                 workbook,
                 sheet_id,
                 rect,
-            } => self.dispatch_set_range(workbook, sheet_id, rect, member, value, args),
+                projection,
+            } => self.dispatch_set_range(workbook, sheet_id, rect, projection, member, value, args),
             RuntimeObjectKind::Application
             | RuntimeObjectKind::WorkbooksCollection
             | RuntimeObjectKind::WorksheetsCollection { .. } => Err(OmError::unsupported(format!(
@@ -807,6 +817,7 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         sheet_id: SheetId,
         rect: Rect,
+        projection: RangeProjection,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -842,7 +853,29 @@ impl ExcelRuntime {
             )),
             "Row" => Ok(OmValue::Number(rect.row_first as f64)),
             "Column" => Ok(OmValue::Number(rect.col_first as f64)),
-            "Count" => Ok(OmValue::Number((rect.width() * rect.height()) as f64)),
+            "Rows" => Ok(OmValue::Object(
+                self.register_projected_range_handle(
+                    workbook,
+                    sheet_id,
+                    rect,
+                    RangeProjection::Rows,
+                )
+                .0,
+            )),
+            "Columns" => Ok(OmValue::Object(
+                self.register_projected_range_handle(
+                    workbook,
+                    sheet_id,
+                    rect,
+                    RangeProjection::Columns,
+                )
+                .0,
+            )),
+            "Count" => Ok(OmValue::Number(match projection {
+                RangeProjection::Cells => rect.width() * rect.height(),
+                RangeProjection::Rows => rect.height(),
+                RangeProjection::Columns => rect.width(),
+            } as f64)),
             _ => Err(OmError::unsupported(format!(
                 "Range.{member} is not implemented"
             ))),
@@ -854,6 +887,7 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         sheet_id: SheetId,
         rect: Rect,
+        _projection: RangeProjection,
         member: &str,
         value: OmValue,
         args: &[OmValue],
@@ -1214,10 +1248,21 @@ impl ExcelRuntime {
         sheet_id: SheetId,
         rect: Rect,
     ) -> RangeHandle {
+        self.register_projected_range_handle(workbook, sheet_id, rect, RangeProjection::Cells)
+    }
+
+    fn register_projected_range_handle(
+        &mut self,
+        workbook: WorkbookHandle,
+        sheet_id: SheetId,
+        rect: Rect,
+        projection: RangeProjection,
+    ) -> RangeHandle {
         RangeHandle(self.register_object(RuntimeObjectKind::Range {
             workbook,
             sheet_id,
             rect,
+            projection,
         }))
     }
 
@@ -2098,6 +2143,123 @@ mod tests {
         assert_eq!(
             expect_number(runtime.dispatch_get(range, "Column", &[]).expect("Column")),
             1.0
+        );
+    }
+
+    #[test]
+    fn range_dispatch_rows_and_columns_project_count_over_same_rect() {
+        let mut runtime = ExcelRuntime::new();
+        let _workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B2".to_string())])
+                .expect("Range(A1:B2)"),
+        );
+        let rows = expect_object_handle(
+            runtime
+                .dispatch_get(range, "Rows", &[])
+                .expect("Range.Rows"),
+        );
+        let columns = expect_object_handle(
+            runtime
+                .dispatch_get(range, "Columns", &[])
+                .expect("Range.Columns"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(rows, "Address", &[])
+                    .expect("Rows.Address")
+            ),
+            "$A$1:$B$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(columns, "Address", &[])
+                    .expect("Columns.Address")
+            ),
+            "$A$1:$B$2"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(range, "Count", &[])
+                    .expect("Range.Count")
+            ),
+            4.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(rows, "Count", &[])
+                    .expect("Rows.Count")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(columns, "Count", &[])
+                    .expect("Columns.Count")
+            ),
+            2.0
+        );
+        let rows_columns = expect_object_handle(
+            runtime
+                .dispatch_get(rows, "Columns", &[])
+                .expect("Rows.Columns"),
+        );
+        let columns_rows = expect_object_handle(
+            runtime
+                .dispatch_get(columns, "Rows", &[])
+                .expect("Columns.Rows"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(rows_columns, "Count", &[])
+                    .expect("Rows.Columns.Count")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(columns_rows, "Count", &[])
+                    .expect("Columns.Rows.Count")
+            ),
+            2.0
+        );
+        let rows_parent = expect_object_handle(
+            runtime
+                .dispatch_get(rows, "Parent", &[])
+                .expect("Rows.Parent"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(rows_parent, "Name", &[])
+                    .expect("Rows.Parent.Name")
+            ),
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("ActiveSheet.Name")
+            )
         );
     }
 
