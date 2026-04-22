@@ -729,6 +729,23 @@ impl ExcelRuntime {
                         self.set_selection(workbook, sheet_id, rect);
                         Ok(OmValue::Empty)
                     }
+                    "ClearContents" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "Range.ClearContents does not accept arguments",
+                            ));
+                        }
+                        let range = self.range_ref(workbook, sheet_id, rect)?;
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        runtime.loaded.state.clear_range_contents(&range)?;
+                        Ok(OmValue::Empty)
+                    }
                     _ => Err(OmError::unsupported(format!(
                         "Range.{member} is not implemented as a method"
                     ))),
@@ -5517,6 +5534,111 @@ mod tests {
         assert_eq!(reopened_formula.value, CellValue::Blank);
 
         fs::remove_dir_all(&base_dir).expect("cleanup formula fixture");
+    }
+
+    #[test]
+    fn range_clear_contents_clears_values_and_formulas_without_changing_selection() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:C1".to_string())])
+                .expect("Range(A1:C1)"),
+        );
+        let formula_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(range, "Item", &[OmValue::Number(1.0), OmValue::Number(2.0)])
+                .expect("Range(A1:C1).Item(1, 2)"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(range, "ClearContents", &[])
+                .expect("Range.ClearContents"),
+            OmValue::Empty
+        ));
+
+        let selection = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after ClearContents"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection, "Address", &[])
+                    .expect("Selection address after ClearContents")
+            ),
+            "$A$1:$C$1"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(range, "Text", &[])
+                .expect("Range(A1:C1).Text after ClearContents"),
+            OmValue::Text(String::new())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(formula_cell, "Value", &[])
+                .expect("B1 Value after ClearContents"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(formula_cell, "Formula", &[])
+                .expect("B1 Formula after ClearContents"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(formula_cell, "HasFormula", &[])
+                .expect("B1 HasFormula after ClearContents"),
+            OmValue::Bool(false)
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after ClearContents")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(range, "ClearContents", &[OmValue::Bool(true)])
+                .expect_err("Range.ClearContents args should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after ClearContents");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reload cleared workbook");
+        let sheet_id = reopened.state.worksheets[0].id;
+        assert!(reopened.state.cell(sheet_id, 1, 1).is_none());
+        assert!(reopened.state.cell(sheet_id, 1, 2).is_none());
+        assert!(reopened.state.cell(sheet_id, 1, 3).is_none());
     }
 
     #[test]

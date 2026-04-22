@@ -1615,6 +1615,21 @@
               ]
             }
           }
+        },
+        {
+          "name": "ClearContents",
+          "memberKind": "method",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Range",
+                  "sourceMember": "ClearContents"
+                }
+              ]
+            }
+          }
         }
       ]
     }

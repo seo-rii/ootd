@@ -1552,6 +1552,22 @@
               ]
             }
           }
+        },
+        {
+          "name": "ClearContents",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Range",
+                  "sourceMember": "ClearContents"
+                }
+              ]
+            }
+          }
         }
       ]
     }

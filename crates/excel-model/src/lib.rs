@@ -244,6 +244,39 @@ impl WorkbookState {
         Ok(())
     }
 
+    pub fn clear_range_contents(&mut self, range: &RangeRef) -> OmResult<()> {
+        let (sheet_id, rect) = self.single_sheet_rect(range)?;
+        let worksheet = self.worksheet_data_for_sheet_mut(sheet_id)?;
+        for row in rect.row_first..=rect.row_last {
+            for col in rect.col_first..=rect.col_last {
+                let key = (row, col);
+                let mut changed = false;
+                let mut remove = false;
+
+                if let Some(existing) = worksheet.cells.get_mut(&key) {
+                    if matches!(existing.value, CellValue::Blank) && existing.formula.is_none() {
+                        continue;
+                    }
+
+                    existing.value = CellValue::Blank;
+                    existing.formula = None;
+                    remove = existing.style_id.is_none();
+                    changed = true;
+                }
+
+                if changed {
+                    if remove {
+                        worksheet.cells.remove(&key);
+                    }
+                    worksheet.dirty = true;
+                    worksheet.dirty_cells.insert(key);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn worksheet_data(&mut self, sheet_id: SheetId) -> &mut WorksheetData {
         self.worksheet_data.entry(sheet_id).or_default()
     }
@@ -795,5 +828,52 @@ mod tests {
         assert_eq!(cell.style_id, Some(StyleId(9)));
         assert!(worksheet.dirty);
         assert!(worksheet.dirty_cells.contains(&(2, 2)));
+    }
+
+    #[test]
+    fn clear_range_contents_removes_unstyled_cells_and_preserves_styled_shells() {
+        let mut state = sample_state();
+        let worksheet = state
+            .worksheet_data_for_sheet_mut(SheetId(3))
+            .expect("worksheet data");
+        worksheet.cells.insert(
+            (1, 2),
+            CellData {
+                value: CellValue::Blank,
+                formula: Some(FormulaSource {
+                    text: "SUM(A1:A2)".to_string(),
+                    is_r1c1: false,
+                }),
+                style_id: None,
+            },
+        );
+
+        state
+            .clear_range_contents(&RangeRef::single_rect(
+                WorkbookId(7),
+                SheetId(3),
+                Rect {
+                    row_first: 1,
+                    row_last: 2,
+                    col_first: 1,
+                    col_last: 2,
+                },
+            ))
+            .expect("clear contents");
+
+        let worksheet = state
+            .worksheet_data_for_sheet(SheetId(3))
+            .expect("worksheet data");
+        assert!(worksheet.dirty);
+        assert_eq!(
+            worksheet.dirty_cells,
+            BTreeSet::from([(1, 1), (1, 2), (2, 2)])
+        );
+        assert!(worksheet.cells.get(&(1, 1)).is_none());
+        assert!(worksheet.cells.get(&(1, 2)).is_none());
+        let styled_cell = worksheet.cells.get(&(2, 2)).expect("B2");
+        assert_eq!(styled_cell.value, CellValue::Blank);
+        assert!(styled_cell.formula.is_none());
+        assert_eq!(styled_cell.style_id, Some(StyleId(9)));
     }
 }

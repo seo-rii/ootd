@@ -76,8 +76,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 52);
-    assert_eq!(summary.stub_member_count, 52);
+    assert_eq!(summary.member_count, 53);
+    assert_eq!(summary.stub_member_count, 53);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -120,7 +120,7 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 52);
+    assert_eq!(summary.member_count, 53);
 
     let application = document
         .interfaces
@@ -327,6 +327,14 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
     assert_eq!(range_select.access, AccessMode::Read);
     assert_eq!(range_select.params.len(), 0);
     assert!(range_select.return_type.is_none());
+    let range_clear_contents = range
+        .members
+        .iter()
+        .find(|member| member.name == "ClearContents")
+        .expect("Range.ClearContents");
+    assert_eq!(range_clear_contents.access, AccessMode::Read);
+    assert_eq!(range_clear_contents.params.len(), 0);
+    assert!(range_clear_contents.return_type.is_none());
     assert_eq!(
         range
             .members
@@ -1055,7 +1063,7 @@ fn writes_canonical_office_idl_json_from_bundle_inputs() {
     assert_eq!(round_trip_summary.enum_count, 1);
     assert_eq!(round_trip_summary.interface_count, 6);
     assert_eq!(round_trip_summary.class_count, 3);
-    assert_eq!(round_trip_summary.member_count, 52);
+    assert_eq!(round_trip_summary.member_count, 53);
     assert_eq!(generation.summary.library, "Excel");
     assert_eq!(generation.summary.version, "16.0");
     assert_eq!(
@@ -1124,7 +1132,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(application.member_count, 6);
     assert_eq!(workbook.member_count, 10);
     assert_eq!(worksheet.member_count, 9);
-    assert_eq!(range.member_count, 20);
+    assert_eq!(range.member_count, 21);
     assert_eq!(
         application.default_coclasses,
         vec!["Application".to_string()]
@@ -1503,6 +1511,14 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(range_select.access, AccessMode::Read);
     assert_eq!(range_select.params.len(), 0);
     assert!(range_select.return_type.is_none());
+    let range_clear_contents = range
+        .members
+        .iter()
+        .find(|member| member.name == "ClearContents")
+        .expect("Range.ClearContents");
+    assert_eq!(range_clear_contents.access, AccessMode::Read);
+    assert_eq!(range_clear_contents.params.len(), 0);
+    assert!(range_clear_contents.return_type.is_none());
     let range_row = range
         .members
         .iter()
@@ -1531,8 +1547,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 52);
-    assert_eq!(coverage.support_counts.stub, 52);
+    assert_eq!(coverage.member_count, 53);
+    assert_eq!(coverage.support_counts.stub, 53);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -1605,8 +1621,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(range_coverage.member_count, 20);
-    assert_eq!(range_coverage.support_counts.stub, 20);
+    assert_eq!(range_coverage.member_count, 21);
+    assert_eq!(range_coverage.support_counts.stub, 21);
     assert_eq!(
         range_coverage.stub_members,
         vec![
@@ -1629,7 +1645,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Item".to_string(),
             "Offset".to_string(),
             "Resize".to_string(),
-            "Select".to_string()
+            "Select".to_string(),
+            "ClearContents".to_string()
         ]
     );
 }
