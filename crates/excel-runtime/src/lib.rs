@@ -720,6 +720,15 @@ impl ExcelRuntime {
                             .0,
                         ))
                     }
+                    "Select" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "Range.Select does not accept arguments",
+                            ));
+                        }
+                        self.set_selection(workbook, sheet_id, rect);
+                        Ok(OmValue::Empty)
+                    }
                     _ => Err(OmError::unsupported(format!(
                         "Range.{member} is not implemented as a method"
                     ))),
@@ -1822,6 +1831,22 @@ impl ExcelRuntime {
                     self.register_range_handle(workbook, sheet_id, rect).0,
                 ))
             }
+            "Activate" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Worksheet.Activate does not accept arguments",
+                    ));
+                }
+                let rect = self
+                    .selection
+                    .filter(|selection| {
+                        selection.workbook == workbook && selection.sheet_id == sheet_id
+                    })
+                    .map(|selection| selection.rect)
+                    .unwrap_or(Rect::single_cell(1, 1));
+                self.set_selection(workbook, sheet_id, rect);
+                Ok(OmValue::Empty)
+            }
             "Cells" => {
                 let (row, col) = parse_cells_args(args)?;
                 let rect = Rect::single_cell(row, col);
@@ -2013,13 +2038,18 @@ impl ExcelRuntime {
             .unwrap_or(self.default_selection(workbook)?.sheet_id))
     }
 
+    fn set_selection(&mut self, workbook: WorkbookHandle, sheet_id: SheetId, rect: Rect) {
+        self.active_workbook = Some(workbook);
+        self.selection = Some(RuntimeSelection {
+            workbook,
+            sheet_id,
+            rect,
+        });
+    }
+
     fn remember_selection(&mut self, workbook: WorkbookHandle, sheet_id: SheetId, rect: Rect) {
         if self.active_workbook == Some(workbook) {
-            self.selection = Some(RuntimeSelection {
-                workbook,
-                sheet_id,
-                rect,
-            });
+            self.set_selection(workbook, sheet_id, rect);
         }
     }
 
@@ -3030,6 +3060,295 @@ mod tests {
             runtime
                 .dispatch_invoke(application, "CalculateFullRebuild", &[OmValue::Bool(true)],)
                 .expect_err("CalculateFullRebuild arguments should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn worksheet_activate_switches_active_workbook_and_selection() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook1 = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook1");
+        let workbook2 = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook2");
+        let worksheets1 = expect_object_handle(
+            runtime
+                .dispatch_get(workbook1.0, "Worksheets", &[])
+                .expect("Workbook1.Worksheets"),
+        );
+        let worksheet1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets1, "Item", &[OmValue::Number(1.0)])
+                .expect("Workbook1.Worksheets.Item(1)"),
+        );
+        let worksheets2 = expect_object_handle(
+            runtime
+                .dispatch_get(workbook2.0, "Worksheets", &[])
+                .expect("Workbook2.Worksheets"),
+        );
+        let worksheet2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets2, "Item", &[OmValue::Number(1.0)])
+                .expect("Workbook2.Worksheets.Item(1)"),
+        );
+
+        runtime
+            .dispatch_set(
+                worksheet1,
+                "Name",
+                OmValue::Text("FirstSheet".to_string()),
+                &[],
+            )
+            .expect("rename workbook1 sheet");
+        runtime
+            .dispatch_set(
+                worksheet2,
+                "Name",
+                OmValue::Text("SecondSheet".to_string()),
+                &[],
+            )
+            .expect("rename workbook2 sheet");
+
+        assert_eq!(
+            expect_object_handle(
+                runtime
+                    .dispatch_get(runtime.root_application(), "ActiveWorkbook", &[])
+                    .expect("ActiveWorkbook before Activate")
+            ),
+            workbook2.0
+        );
+        let active_sheet_before_activate = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet before Activate"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet_before_activate, "Name", &[])
+                    .expect("ActiveSheet before Activate name")
+            ),
+            "SecondSheet"
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(worksheet1, "Activate", &[])
+                .expect("Worksheet.Activate"),
+            OmValue::Empty
+        ));
+
+        let application = runtime.root_application();
+        let active_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after Activate"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after Activate"),
+        );
+        let selection = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after Activate"),
+        );
+        let active_cell = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveCell", &[])
+                .expect("ActiveCell after Activate"),
+        );
+
+        assert_eq!(active_workbook, workbook1.0);
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("ActiveSheet after Activate name")
+            ),
+            "FirstSheet"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection, "Address", &[])
+                    .expect("Selection after Activate address")
+            ),
+            "$A$1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_cell, "Address", &[])
+                    .expect("ActiveCell after Activate address")
+            ),
+            "$A$1"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(worksheet1, "Activate", &[OmValue::Bool(true)])
+                .expect_err("Worksheet.Activate args should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn range_select_switches_active_workbook_and_selection() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook1 = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook1");
+        let workbook2 = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook2");
+        let worksheets1 = expect_object_handle(
+            runtime
+                .dispatch_get(workbook1.0, "Worksheets", &[])
+                .expect("Workbook1.Worksheets"),
+        );
+        let worksheet1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets1, "Item", &[OmValue::Number(1.0)])
+                .expect("Workbook1.Worksheets.Item(1)"),
+        );
+        let worksheets2 = expect_object_handle(
+            runtime
+                .dispatch_get(workbook2.0, "Worksheets", &[])
+                .expect("Workbook2.Worksheets"),
+        );
+        let worksheet2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets2, "Item", &[OmValue::Number(1.0)])
+                .expect("Workbook2.Worksheets.Item(1)"),
+        );
+
+        runtime
+            .dispatch_set(
+                worksheet1,
+                "Name",
+                OmValue::Text("FirstSheet".to_string()),
+                &[],
+            )
+            .expect("rename workbook1 sheet");
+        runtime
+            .dispatch_set(
+                worksheet2,
+                "Name",
+                OmValue::Text("SecondSheet".to_string()),
+                &[],
+            )
+            .expect("rename workbook2 sheet");
+
+        let range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet1, "Range", &[OmValue::Text("B1:C1".to_string())])
+                .expect("Workbook1.Range(B1:C1)"),
+        );
+        assert_eq!(
+            expect_object_handle(
+                runtime
+                    .dispatch_get(runtime.root_application(), "ActiveWorkbook", &[])
+                    .expect("ActiveWorkbook before Select")
+            ),
+            workbook2.0
+        );
+        let active_sheet_before_select = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet before Select"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet_before_select, "Name", &[])
+                    .expect("ActiveSheet before Select name")
+            ),
+            "SecondSheet"
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(range, "Select", &[])
+                .expect("Range.Select"),
+            OmValue::Empty
+        ));
+
+        let application = runtime.root_application();
+        let active_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after Select"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after Select"),
+        );
+        let selection = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after Select"),
+        );
+        let active_cell = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveCell", &[])
+                .expect("ActiveCell after Select"),
+        );
+
+        assert_eq!(active_workbook, workbook1.0);
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("ActiveSheet after Select name")
+            ),
+            "FirstSheet"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection, "Address", &[])
+                    .expect("Selection after Select address")
+            ),
+            "$B$1:$C$1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_cell, "Address", &[])
+                    .expect("ActiveCell after Select address")
+            ),
+            "$B$1"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(range, "Select", &[OmValue::Bool(true)])
+                .expect_err("Range.Select args should be rejected")
                 .code,
             OmErrorCode::InvalidArgument
         );

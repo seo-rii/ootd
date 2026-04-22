@@ -931,6 +931,21 @@
               }
             }
           }
+        },
+        {
+          "name": "Activate",
+          "memberKind": "method",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "Activate"
+                }
+              ]
+            }
+          }
         }
       ]
     },
@@ -1583,6 +1598,21 @@
                 "name": "Range",
                 "aliasOf": "Excel.Range"
               }
+            }
+          }
+        },
+        {
+          "name": "Select",
+          "memberKind": "method",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Select"
+                }
+              ]
             }
           }
         }

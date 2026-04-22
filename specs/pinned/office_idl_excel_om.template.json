@@ -918,6 +918,22 @@
               }
             }
           }
+        },
+        {
+          "name": "Activate",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "Activate"
+                }
+              ]
+            }
+          }
         }
       ]
     },
@@ -1518,6 +1534,22 @@
                 "name": "Range",
                 "aliasOf": "Excel.Range"
               }
+            }
+          }
+        },
+        {
+          "name": "Select",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Select"
+                }
+              ]
             }
           }
         }
