@@ -261,6 +261,13 @@ impl ExcelRuntime {
             .get_range_values(&spec.range)
     }
 
+    pub fn get_range_formulas(&self, spec: GetRangeValuesSpec) -> OmResult<office_common::OmArray> {
+        self.runtime_workbook(spec.workbook)?
+            .loaded
+            .state
+            .get_range_formulas(&spec.range)
+    }
+
     pub fn set_range_values(&mut self, spec: SetRangeValuesSpec) -> OmResult<()> {
         let runtime = self.runtime_workbook_mut(spec.workbook)?;
         if runtime.read_only {
@@ -274,6 +281,21 @@ impl ExcelRuntime {
             .loaded
             .state
             .set_range_values(&spec.range, &spec.values)
+    }
+
+    pub fn set_range_formulas(&mut self, spec: SetRangeValuesSpec) -> OmResult<()> {
+        let runtime = self.runtime_workbook_mut(spec.workbook)?;
+        if runtime.read_only {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                "cannot modify a read-only workbook",
+            ));
+        }
+
+        runtime
+            .loaded
+            .state
+            .set_range_formulas(&spec.range, &spec.values)
     }
 
     pub fn dispatch_get(
@@ -758,11 +780,18 @@ impl ExcelRuntime {
         }
 
         match member {
-            "Value" | "Value2" => {
-                let array = self.get_range_values(GetRangeValuesSpec {
-                    workbook,
-                    range: self.range_ref(workbook, sheet_id, rect)?,
-                })?;
+            "Value" | "Value2" | "Formula" => {
+                let array = if member == "Formula" {
+                    self.get_range_formulas(GetRangeValuesSpec {
+                        workbook,
+                        range: self.range_ref(workbook, sheet_id, rect)?,
+                    })?
+                } else {
+                    self.get_range_values(GetRangeValuesSpec {
+                        workbook,
+                        range: self.range_ref(workbook, sheet_id, rect)?,
+                    })?
+                };
                 if array.rows == 1 && array.cols == 1 {
                     Ok(array.values.into_iter().next().unwrap_or(OmValue::Empty))
                 } else {
@@ -799,7 +828,7 @@ impl ExcelRuntime {
         }
 
         match member {
-            "Value" | "Value2" => {
+            "Value" | "Value2" | "Formula" => {
                 let values = match value {
                     OmValue::Array(array) => array,
                     scalar => OmArray::new(
@@ -808,11 +837,19 @@ impl ExcelRuntime {
                         vec![scalar; rect.height() as usize * rect.width() as usize],
                     )?,
                 };
-                self.set_range_values(SetRangeValuesSpec {
-                    workbook,
-                    range: self.range_ref(workbook, sheet_id, rect)?,
-                    values,
-                })?;
+                if member == "Formula" {
+                    self.set_range_formulas(SetRangeValuesSpec {
+                        workbook,
+                        range: self.range_ref(workbook, sheet_id, rect)?,
+                        values,
+                    })?;
+                } else {
+                    self.set_range_values(SetRangeValuesSpec {
+                        workbook,
+                        range: self.range_ref(workbook, sheet_id, rect)?,
+                        values,
+                    })?;
+                }
                 Ok(())
             }
             _ => Err(OmError::unsupported(format!(
@@ -2561,6 +2598,128 @@ mod tests {
             ),
             "updated"
         );
+    }
+
+    #[test]
+    fn range_dispatch_formula_reads_formula_text_and_persists_formula_sets() {
+        let mut runtime = ExcelRuntime::new();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let base_dir = std::env::temp_dir().join(format!("ootd-range-formula-{unique}"));
+        fs::create_dir_all(&base_dir).expect("create formula fixture dir");
+        let source_path = base_dir.join("source.xlsx");
+        let target_path = base_dir.join("formula-target.xlsx");
+        fs::write(&source_path, synthetic_workbook_bytes()).expect("write source workbook");
+
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+        let workbook = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[OmValue::Text(source_path.to_string_lossy().into_owned())],
+                )
+                .expect("Workbooks.Open"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formula_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Range(B1)"),
+        );
+        let constant_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        let new_formula_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C2".to_string())])
+                .expect("Range(C2)"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(formula_cell, "Formula", &[])
+                    .expect("B1 Formula")
+            ),
+            r#"=UPPER("shared")"#
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(constant_cell, "Formula", &[])
+                    .expect("A1 Formula")
+            ),
+            42.0
+        );
+
+        runtime
+            .dispatch_set(
+                new_formula_cell,
+                "Formula",
+                OmValue::Text("=SUM(A1:B1)".to_string()),
+                &[],
+            )
+            .expect("set C2 Formula");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(new_formula_cell, "Formula", &[])
+                    .expect("C2 Formula")
+            ),
+            "=SUM(A1:B1)"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(new_formula_cell, "Value", &[])
+                .expect("C2 Value after Formula"),
+            OmValue::Empty
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("Workbook.Saved after Formula set")
+        ));
+
+        runtime
+            .dispatch_invoke(
+                workbook,
+                "SaveAs",
+                &[OmValue::Text(target_path.to_string_lossy().into_owned())],
+            )
+            .expect("Workbook.SaveAs");
+
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(
+                &fs::read(&target_path).expect("read formula workbook"),
+                LoadOptions::default(),
+            )
+            .expect("reload formula workbook");
+        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_formula = reopened
+            .state
+            .cell(reopened_sheet_id, 2, 3)
+            .expect("C2 reopened");
+        assert_eq!(
+            reopened_formula.formula.as_ref().expect("C2 formula").text,
+            "SUM(A1:B1)"
+        );
+        assert_eq!(reopened_formula.value, CellValue::Blank);
+
+        fs::remove_dir_all(&base_dir).expect("cleanup formula fixture");
     }
 
     #[test]

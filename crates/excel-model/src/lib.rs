@@ -93,6 +93,27 @@ impl WorkbookState {
         OmArray::new(rect.height() as usize, rect.width() as usize, values)
     }
 
+    pub fn get_range_formulas(&self, range: &RangeRef) -> OmResult<OmArray> {
+        let (sheet_id, rect) = self.single_sheet_rect(range)?;
+        let worksheet = self.worksheet_data_for_sheet(sheet_id)?;
+        let mut values = Vec::with_capacity((rect.height() * rect.width()) as usize);
+
+        for row in rect.row_first..=rect.row_last {
+            for col in rect.col_first..=rect.col_last {
+                let value = match worksheet.cells.get(&(row, col)) {
+                    Some(cell) => match &cell.formula {
+                        Some(formula) => OmValue::Text(format!("={}", formula.text)),
+                        None => OmValue::from(cell.value.clone()),
+                    },
+                    None => OmValue::Empty,
+                };
+                values.push(value);
+            }
+        }
+
+        OmArray::new(rect.height() as usize, rect.width() as usize, values)
+    }
+
     pub fn set_range_values(&mut self, range: &RangeRef, values: &OmArray) -> OmResult<()> {
         let (sheet_id, rect) = self.single_sheet_rect(range)?;
         if values.rows != rect.height() as usize || values.cols != rect.width() as usize {
@@ -142,6 +163,81 @@ impl WorkbookState {
                     worksheet.dirty = true;
                     worksheet.dirty_cells.insert(key);
                 }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn set_range_formulas(&mut self, range: &RangeRef, values: &OmArray) -> OmResult<()> {
+        let (sheet_id, rect) = self.single_sheet_rect(range)?;
+        if values.rows != rect.height() as usize || values.cols != rect.width() as usize {
+            return Err(OmError::invalid_argument(format!(
+                "range dimensions {}x{} do not match formula matrix {}x{}",
+                rect.height(),
+                rect.width(),
+                values.rows,
+                values.cols,
+            )));
+        }
+
+        let mut updates = Vec::with_capacity(values.values.len());
+        for row_offset in 0..values.rows {
+            for col_offset in 0..values.cols {
+                let row = rect.row_first + row_offset as u32;
+                let col = rect.col_first + col_offset as u32;
+                let value = values.values[row_offset * values.cols + col_offset].clone();
+                let (cell_value, formula) = match value {
+                    OmValue::Text(text) => {
+                        if let Some(formula_text) = text.strip_prefix('=') {
+                            (
+                                CellValue::Blank,
+                                Some(FormulaSource {
+                                    text: formula_text.to_string(),
+                                    is_r1c1: false,
+                                }),
+                            )
+                        } else {
+                            (CellValue::Text(text), None)
+                        }
+                    }
+                    other => (CellValue::try_from(other)?, None),
+                };
+                updates.push(((row, col), cell_value, formula));
+            }
+        }
+
+        let worksheet = self.worksheet_data_for_sheet_mut(sheet_id)?;
+        for (key, cell_value, formula) in updates {
+            if let Some(existing) = worksheet.cells.get_mut(&key) {
+                if existing.value == cell_value && existing.formula == formula {
+                    continue;
+                }
+
+                existing.value = cell_value;
+                existing.formula = formula;
+                if matches!(existing.value, CellValue::Blank)
+                    && existing.style_id.is_none()
+                    && existing.formula.is_none()
+                {
+                    worksheet.cells.remove(&key);
+                }
+                worksheet.dirty = true;
+                worksheet.dirty_cells.insert(key);
+                continue;
+            }
+
+            if !matches!(cell_value, CellValue::Blank) || formula.is_some() {
+                worksheet.cells.insert(
+                    key,
+                    CellData {
+                        value: cell_value,
+                        formula,
+                        style_id: None,
+                    },
+                );
+                worksheet.dirty = true;
+                worksheet.dirty_cells.insert(key);
             }
         }
 
@@ -403,6 +499,46 @@ mod tests {
     }
 
     #[test]
+    fn get_range_formulas_returns_formula_text_and_constant_values() {
+        let mut state = sample_state();
+        let worksheet = state
+            .worksheet_data_for_sheet_mut(SheetId(3))
+            .expect("worksheet data");
+        worksheet.cells.get_mut(&(1, 1)).expect("A1").formula = Some(FormulaSource {
+            text: "SUM(B1:B2)".to_string(),
+            is_r1c1: false,
+        });
+
+        let formulas = state
+            .get_range_formulas(&RangeRef::single_rect(
+                WorkbookId(7),
+                SheetId(3),
+                Rect {
+                    row_first: 1,
+                    row_last: 2,
+                    col_first: 1,
+                    col_last: 2,
+                },
+            ))
+            .expect("range formulas");
+
+        assert_eq!(
+            formulas,
+            OmArray::new(
+                2,
+                2,
+                vec![
+                    OmValue::Text("=SUM(B1:B2)".to_string()),
+                    OmValue::Empty,
+                    OmValue::Empty,
+                    OmValue::Text("hello".to_string()),
+                ],
+            )
+            .expect("array"),
+        );
+    }
+
+    #[test]
     fn set_range_values_rejects_foreign_workbook_id() {
         let mut state = sample_state();
         let result = state.set_range_values(
@@ -593,6 +729,52 @@ mod tests {
             worksheet.cells.get(&(1, 1)).expect("A1").value,
             CellValue::Number(42.0)
         );
+    }
+
+    #[test]
+    fn set_range_formulas_updates_formula_cells_and_plain_text_constants() {
+        let mut state = sample_state();
+        state
+            .set_range_formulas(
+                &RangeRef::single_rect(
+                    WorkbookId(7),
+                    SheetId(3),
+                    Rect {
+                        row_first: 1,
+                        row_last: 1,
+                        col_first: 1,
+                        col_last: 2,
+                    },
+                ),
+                &OmArray::new(
+                    1,
+                    2,
+                    vec![
+                        OmValue::Text("=SUM(B1:B2)".to_string()),
+                        OmValue::Text("literal".to_string()),
+                    ],
+                )
+                .expect("array"),
+            )
+            .expect("set formulas");
+
+        let worksheet = state
+            .worksheet_data_for_sheet(SheetId(3))
+            .expect("worksheet data");
+        assert!(worksheet.dirty);
+        assert_eq!(worksheet.dirty_cells, BTreeSet::from([(1, 1), (1, 2)]));
+        let a1 = worksheet.cells.get(&(1, 1)).expect("A1");
+        assert_eq!(a1.value, CellValue::Blank);
+        assert_eq!(
+            a1.formula,
+            Some(FormulaSource {
+                text: "SUM(B1:B2)".to_string(),
+                is_r1c1: false,
+            })
+        );
+        let b1 = worksheet.cells.get(&(1, 2)).expect("B1");
+        assert_eq!(b1.value, CellValue::Text("literal".to_string()));
+        assert!(b1.formula.is_none());
     }
 
     #[test]
