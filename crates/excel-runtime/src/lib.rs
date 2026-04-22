@@ -2021,62 +2021,94 @@ impl ExcelRuntime {
             )));
         }
         if let Some(value) = before.filter(|value| !om_value_is_omitted(value)) {
-            let OmValue::Object(handle) = value else {
-                return Err(OmError::type_mismatch(format!(
-                    "{operation} Before expects a Worksheet object when provided"
-                )));
+            let worksheet_index = match value {
+                OmValue::Object(handle) => {
+                    let RuntimeObjectKind::Worksheet {
+                        workbook: target_workbook,
+                        sheet_id,
+                    } = self.runtime_object(*handle)?
+                    else {
+                        return Err(OmError::type_mismatch(format!(
+                            "{operation} Before expects a Worksheet object, numeric index, or worksheet name when provided"
+                        )));
+                    };
+                    if target_workbook != workbook {
+                        return Err(OmError::invalid_argument(format!(
+                            "{operation} Before worksheet must belong to the same workbook"
+                        )));
+                    }
+                    self.runtime_workbook(workbook)?
+                        .loaded
+                        .state
+                        .worksheets
+                        .iter()
+                        .position(|worksheet| worksheet.id == sheet_id)
+                }
+                OmValue::Number(index) => {
+                    let label = format!("{operation} Before index");
+                    let index = coerce_positive_index(*index, &label)?;
+                    Some(index as usize - 1)
+                }
+                OmValue::Text(name) => self
+                    .runtime_workbook(workbook)?
+                    .loaded
+                    .state
+                    .worksheets
+                    .iter()
+                    .position(|worksheet| worksheet.name == *name),
+                _ => {
+                    return Err(OmError::type_mismatch(format!(
+                        "{operation} Before expects a Worksheet object, numeric index, or worksheet name when provided"
+                    )));
+                }
             };
-            let RuntimeObjectKind::Worksheet {
-                workbook: target_workbook,
-                sheet_id,
-            } = self.runtime_object(*handle)?
-            else {
-                return Err(OmError::type_mismatch(format!(
-                    "{operation} Before expects a Worksheet object when provided"
-                )));
-            };
-            if target_workbook != workbook {
-                return Err(OmError::invalid_argument(format!(
-                    "{operation} Before worksheet must belong to the same workbook"
-                )));
-            }
-            return self
-                .runtime_workbook(workbook)?
-                .loaded
-                .state
-                .worksheets
-                .iter()
-                .position(|worksheet| worksheet.id == sheet_id)
+            return worksheet_index
                 .map(Some)
                 .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"));
         }
         if let Some(value) = after.filter(|value| !om_value_is_omitted(value)) {
-            let OmValue::Object(handle) = value else {
-                return Err(OmError::type_mismatch(format!(
-                    "{operation} After expects a Worksheet object when provided"
-                )));
+            let worksheet_index = match value {
+                OmValue::Object(handle) => {
+                    let RuntimeObjectKind::Worksheet {
+                        workbook: target_workbook,
+                        sheet_id,
+                    } = self.runtime_object(*handle)?
+                    else {
+                        return Err(OmError::type_mismatch(format!(
+                            "{operation} After expects a Worksheet object, numeric index, or worksheet name when provided"
+                        )));
+                    };
+                    if target_workbook != workbook {
+                        return Err(OmError::invalid_argument(format!(
+                            "{operation} After worksheet must belong to the same workbook"
+                        )));
+                    }
+                    self.runtime_workbook(workbook)?
+                        .loaded
+                        .state
+                        .worksheets
+                        .iter()
+                        .position(|worksheet| worksheet.id == sheet_id)
+                }
+                OmValue::Number(index) => {
+                    let label = format!("{operation} After index");
+                    let index = coerce_positive_index(*index, &label)?;
+                    Some(index as usize - 1)
+                }
+                OmValue::Text(name) => self
+                    .runtime_workbook(workbook)?
+                    .loaded
+                    .state
+                    .worksheets
+                    .iter()
+                    .position(|worksheet| worksheet.name == *name),
+                _ => {
+                    return Err(OmError::type_mismatch(format!(
+                        "{operation} After expects a Worksheet object, numeric index, or worksheet name when provided"
+                    )));
+                }
             };
-            let RuntimeObjectKind::Worksheet {
-                workbook: target_workbook,
-                sheet_id,
-            } = self.runtime_object(*handle)?
-            else {
-                return Err(OmError::type_mismatch(format!(
-                    "{operation} After expects a Worksheet object when provided"
-                )));
-            };
-            if target_workbook != workbook {
-                return Err(OmError::invalid_argument(format!(
-                    "{operation} After worksheet must belong to the same workbook"
-                )));
-            }
-            return self
-                .runtime_workbook(workbook)?
-                .loaded
-                .state
-                .worksheets
-                .iter()
-                .position(|worksheet| worksheet.id == sheet_id)
+            return worksheet_index
                 .map(|index| Some(index + 1))
                 .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"));
         }
@@ -8874,7 +8906,7 @@ mod tests {
     }
 
     #[test]
-    fn worksheets_add_supports_before_and_after_worksheet_targets() {
+    fn worksheets_add_supports_name_and_index_placement_targets() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -8902,17 +8934,13 @@ mod tests {
         );
         let sheet3 = expect_object_handle(
             runtime
-                .dispatch_invoke(worksheets, "Add", &[OmValue::Object(sheet1)])
-                .expect("Worksheets.Add Before:=Sheet1"),
+                .dispatch_invoke(worksheets, "Add", &[OmValue::Text("Sheet1".to_string())])
+                .expect("Worksheets.Add Before:=\"Sheet1\""),
         );
         let sheet4 = expect_object_handle(
             runtime
-                .dispatch_invoke(
-                    worksheets,
-                    "Add",
-                    &[OmValue::Missing, OmValue::Object(sheet2)],
-                )
-                .expect("Worksheets.Add After:=Sheet2"),
+                .dispatch_invoke(worksheets, "Add", &[OmValue::Missing, OmValue::Number(1.0)])
+                .expect("Worksheets.Add After:=1"),
         );
 
         assert_eq!(
@@ -9041,10 +9069,10 @@ mod tests {
         );
 
         let before_error = runtime
-            .dispatch_invoke(worksheets, "Add", &[OmValue::Text("Sheet1".to_string())])
-            .expect_err("Worksheets.Add should reject non-object Before");
+            .dispatch_invoke(worksheets, "Add", &[OmValue::Bool(true)])
+            .expect_err("Worksheets.Add should reject unsupported Before coercions");
         assert_eq!(before_error.code, OmErrorCode::TypeMismatch);
-        assert!(before_error.message.contains("Worksheet object"));
+        assert!(before_error.message.contains("worksheet name"));
 
         let conflicting_error = runtime
             .dispatch_invoke(
@@ -9304,8 +9332,8 @@ mod tests {
 
         assert!(matches!(
             runtime
-                .dispatch_invoke(sheet1, "Move", &[OmValue::Object(sheet3)])
-                .expect("Worksheet.Move Before:=Sheet3"),
+                .dispatch_invoke(sheet1, "Move", &[OmValue::Text("Sheet3".to_string())])
+                .expect("Worksheet.Move Before:=\"Sheet3\""),
             OmValue::Empty
         ));
         assert_eq!(
@@ -9405,8 +9433,8 @@ mod tests {
 
         assert!(matches!(
             runtime
-                .dispatch_invoke(sheet2, "Move", &[OmValue::Missing, OmValue::Object(sheet1)],)
-                .expect("Worksheet.Move After:=Sheet1"),
+                .dispatch_invoke(sheet2, "Move", &[OmValue::Missing, OmValue::Number(2.0)],)
+                .expect("Worksheet.Move After:=2"),
             OmValue::Empty
         ));
         assert_eq!(
@@ -9441,8 +9469,8 @@ mod tests {
         assert_eq!(conflicting_error.code, OmErrorCode::InvalidArgument);
 
         let type_error = runtime
-            .dispatch_invoke(sheet1, "Move", &[OmValue::Text("Sheet2".to_string())])
-            .expect_err("Worksheet.Move should reject non-object Before");
+            .dispatch_invoke(sheet1, "Move", &[OmValue::Bool(true)])
+            .expect_err("Worksheet.Move should reject unsupported Before coercions");
         assert_eq!(type_error.code, OmErrorCode::TypeMismatch);
 
         let foreign_workbook = runtime
