@@ -74,10 +74,10 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
         Some("Microsoft.Office.Interop.Excel")
     );
     assert_eq!(summary.enum_count, 1);
-    assert_eq!(summary.interface_count, 5);
+    assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 12);
-    assert_eq!(summary.stub_member_count, 12);
+    assert_eq!(summary.member_count, 17);
+    assert_eq!(summary.stub_member_count, 17);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -118,9 +118,9 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
     assert_eq!(document.library, "Excel");
     assert_eq!(document.version, "16.0");
     assert_eq!(summary.enum_count, 1);
-    assert_eq!(summary.interface_count, 5);
+    assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 12);
+    assert_eq!(summary.member_count, 17);
 
     let worksheet = document
         .interfaces
@@ -171,11 +171,11 @@ fn validates_capture_bundle_against_raw_typelib_identity_template() {
         summary.type_library_guid,
         "{00020813-0000-0000-C000-000000000046}"
     );
-    assert_eq!(summary.interface_iid_count, 5);
+    assert_eq!(summary.interface_iid_count, 6);
     assert_eq!(summary.coclass_clsid_count, 3);
     assert!(summary.missing_pia_interfaces.is_empty());
     assert!(summary.missing_pia_classes.is_empty());
-    assert_eq!(document.interfaces.len(), 5);
+    assert_eq!(document.interfaces.len(), 6);
     assert_eq!(
         document
             .metadata
@@ -733,16 +733,16 @@ fn writes_canonical_office_idl_json_from_bundle_inputs() {
         snapshots_dir.join("excel_pia_public_surface.json")
     );
     assert_eq!(round_trip_summary.enum_count, 1);
-    assert_eq!(round_trip_summary.interface_count, 5);
+    assert_eq!(round_trip_summary.interface_count, 6);
     assert_eq!(round_trip_summary.class_count, 3);
-    assert_eq!(round_trip_summary.member_count, 12);
+    assert_eq!(round_trip_summary.member_count, 17);
     assert_eq!(generation.summary.library, "Excel");
     assert_eq!(generation.summary.version, "16.0");
     assert_eq!(
         generation.summary.type_library_guid,
         "{00020813-0000-0000-C000-000000000046}"
     );
-    assert_eq!(generation.summary.interface_iid_count, 5);
+    assert_eq!(generation.summary.interface_iid_count, 6);
     assert_eq!(generation.summary.coclass_clsid_count, 3);
     assert!(generation.summary.missing_pia_interfaces.is_empty());
     assert!(generation.summary.missing_pia_classes.is_empty());
@@ -777,8 +777,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(registry.library, "Excel");
     assert_eq!(registry.version, "16.0");
-    assert_eq!(registry.focus_surfaces.len(), 3);
-    assert_eq!(registry.missing_focus_surfaces, vec!["Range".to_string()]);
+    assert_eq!(registry.focus_surfaces.len(), 4);
+    assert!(registry.missing_focus_surfaces.is_empty());
 
     let application = registry
         .focus_surfaces
@@ -795,10 +795,16 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "Worksheet")
         .expect("Worksheet");
+    let range = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Range")
+        .expect("Range");
 
     assert_eq!(application.member_count, 3);
-    assert_eq!(workbook.member_count, 3);
-    assert_eq!(worksheet.member_count, 4);
+    assert_eq!(workbook.member_count, 4);
+    assert_eq!(worksheet.member_count, 5);
+    assert_eq!(range.member_count, 3);
     assert_eq!(
         application.default_coclasses,
         vec!["Application".to_string()]
@@ -847,23 +853,57 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             .and_then(|type_ref| type_ref.alias_of.as_deref()),
         Some("Excel.Range")
     );
+    let workbook_name = workbook
+        .members
+        .iter()
+        .find(|member| member.name == "Name")
+        .expect("Workbook.Name");
+    assert_eq!(workbook_name.access, AccessMode::Read);
+    let worksheet_index = worksheet
+        .members
+        .iter()
+        .find(|member| member.name == "Index")
+        .expect("Worksheet.Index");
+    assert_eq!(worksheet_index.access, AccessMode::Read);
+    let range_value2 = range
+        .members
+        .iter()
+        .find(|member| member.name == "Value2")
+        .expect("Range.Value2");
+    assert_eq!(range_value2.access, AccessMode::Readwrite);
+    let range_count = range
+        .members
+        .iter()
+        .find(|member| member.name == "Count")
+        .expect("Range.Count");
+    assert_eq!(range_count.access, AccessMode::Read);
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 12);
-    assert_eq!(coverage.support_counts.stub, 12);
-    assert_eq!(coverage.missing_focus_surfaces, vec!["Range".to_string()]);
+    assert_eq!(coverage.member_count, 17);
+    assert_eq!(coverage.support_counts.stub, 17);
+    assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
         .focus_surfaces
         .iter()
         .find(|entry| entry.name == "Application")
         .expect("Application coverage");
+    let workbook_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Workbook")
+        .expect("Workbook coverage");
     let worksheet_coverage = coverage
         .focus_surfaces
         .iter()
         .find(|entry| entry.name == "Worksheet")
         .expect("Worksheet coverage");
+    let range_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Range")
+        .expect("Range coverage");
 
     assert_eq!(application_coverage.member_count, 3);
     assert_eq!(application_coverage.support_counts.stub, 3);
@@ -876,15 +916,39 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(worksheet_coverage.member_count, 4);
-    assert_eq!(worksheet_coverage.support_counts.stub, 4);
+    assert_eq!(workbook_coverage.member_count, 4);
+    assert_eq!(workbook_coverage.support_counts.stub, 4);
+    assert_eq!(
+        workbook_coverage.stub_members,
+        vec![
+            "Worksheets".to_string(),
+            "Name".to_string(),
+            "Save".to_string(),
+            "Close".to_string()
+        ]
+    );
+
+    assert_eq!(worksheet_coverage.member_count, 5);
+    assert_eq!(worksheet_coverage.support_counts.stub, 5);
     assert_eq!(
         worksheet_coverage.stub_members,
         vec![
             "Name".to_string(),
+            "Index".to_string(),
             "Range".to_string(),
             "UsedRange".to_string(),
             "Cells".to_string()
+        ]
+    );
+
+    assert_eq!(range_coverage.member_count, 3);
+    assert_eq!(range_coverage.support_counts.stub, 3);
+    assert_eq!(
+        range_coverage.stub_members,
+        vec![
+            "Value2".to_string(),
+            "Address".to_string(),
+            "Count".to_string()
         ]
     );
 }

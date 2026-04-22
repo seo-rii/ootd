@@ -192,6 +192,31 @@
           }
         },
         {
+          "name": "Name",
+          "memberKind": "property_get",
+          "returnType": {
+            "kind": "primitive",
+            "name": "string",
+            "aliasOf": "BSTR"
+          },
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "Name"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "string",
+                "aliasOf": "BSTR"
+              }
+            }
+          }
+        },
+        {
           "name": "Save",
           "memberKind": "method",
           "metadata": {
@@ -337,6 +362,31 @@
           }
         },
         {
+          "name": "Index",
+          "memberKind": "property_get",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "Index"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          }
+        },
+        {
           "name": "Range",
           "memberKind": "method",
           "returnType": {
@@ -429,6 +479,121 @@
                 "kind": "interface",
                 "name": "Range",
                 "aliasOf": "Excel.Range"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Range",
+      "kind": "dispatch",
+      "metadata": {
+        "iid": "{00020846-0000-0000-C000-000000000046}",
+        "sourceInherits": ["IDispatch"]
+      },
+      "members": [
+        {
+          "name": "Value2",
+          "memberKind": "property_get",
+          "returnType": {
+            "kind": "variant",
+            "name": "Variant",
+            "aliasOf": "VARIANT"
+          },
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Value2"
+                }
+              ],
+              "typeInfo": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          }
+        },
+        {
+          "name": "Value2",
+          "memberKind": "property_set",
+          "params": [
+            {
+              "name": "RHS",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_set",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Value2"
+                }
+              ],
+              "typeInfo": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          }
+        },
+        {
+          "name": "Address",
+          "memberKind": "property_get",
+          "returnType": {
+            "kind": "primitive",
+            "name": "string",
+            "aliasOf": "BSTR"
+          },
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Address"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "string",
+                "aliasOf": "BSTR"
+              }
+            }
+          }
+        },
+        {
+          "name": "Count",
+          "memberKind": "property_get",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Count"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
               }
             }
           }

@@ -201,6 +201,32 @@
           }
         },
         {
+          "name": "Name",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "primitive",
+            "name": "string",
+            "aliasOf": "BSTR"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "Name"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "string",
+                "aliasOf": "BSTR"
+              }
+            }
+          }
+        },
+        {
           "name": "Save",
           "memberKind": "method",
           "support": "stub",
@@ -326,6 +352,32 @@
           }
         },
         {
+          "name": "Index",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "Index"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          }
+        },
+        {
           "name": "Range",
           "memberKind": "method",
           "returnType": {
@@ -421,6 +473,99 @@
                 "kind": "interface",
                 "name": "Range",
                 "aliasOf": "Excel.Range"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Range",
+      "kind": "dispatch",
+      "metadata": {
+        "sourceInherits": ["IDispatch"]
+      },
+      "members": [
+        {
+          "name": "Value2",
+          "memberKind": "property",
+          "access": "readwrite",
+          "returnType": {
+            "kind": "variant",
+            "name": "Variant",
+            "aliasOf": "VARIANT"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Value2"
+                },
+                {
+                  "kind": "property_set",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Value2"
+                }
+              ],
+              "typeInfo": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          }
+        },
+        {
+          "name": "Address",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "primitive",
+            "name": "string",
+            "aliasOf": "BSTR"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Address"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "string",
+                "aliasOf": "BSTR"
+              }
+            }
+          }
+        },
+        {
+          "name": "Count",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Count"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
               }
             }
           }

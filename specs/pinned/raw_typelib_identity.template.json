@@ -33,6 +33,12 @@
       "iid": "{000208D8-0000-0000-C000-000000000046}",
       "kind": "dispatch",
       "inherits": ["IDispatch", "Excel._Worksheet"]
+    },
+    {
+      "name": "Range",
+      "iid": "{00020846-0000-0000-C000-000000000046}",
+      "kind": "dispatch",
+      "inherits": ["IDispatch"]
     }
   ],
   "coclasses": [

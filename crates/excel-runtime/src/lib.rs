@@ -524,6 +524,9 @@ impl ExcelRuntime {
         }
 
         match member {
+            "Name" => Ok(OmValue::Text(
+                self.workbook_model(workbook)?.display_name.clone(),
+            )),
             "Worksheets" => Ok(OmValue::Object(
                 self.register_object(RuntimeObjectKind::WorksheetsCollection { workbook }),
             )),
@@ -575,6 +578,22 @@ impl ExcelRuntime {
                 let worksheet = self.worksheet_model(workbook, sheet_id)?;
                 Ok(OmValue::Text(worksheet.name.clone()))
             }
+            "Index" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Worksheet.Index does not accept arguments",
+                    ));
+                }
+                let index = self
+                    .runtime_workbook(workbook)?
+                    .loaded
+                    .state
+                    .worksheets
+                    .iter()
+                    .position(|worksheet| worksheet.id == sheet_id)
+                    .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?;
+                Ok(OmValue::Number((index + 1) as f64))
+            }
             "UsedRange" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(
@@ -607,6 +626,7 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        self.focus_member_supported("Range", member, false)?;
         if !args.is_empty() {
             return Err(OmError::invalid_argument(format!(
                 "Range.{member} does not accept arguments"
@@ -626,6 +646,7 @@ impl ExcelRuntime {
                 }
             }
             "Address" => Ok(OmValue::Text(format_rect_address(rect))),
+            "Count" => Ok(OmValue::Number((rect.width() * rect.height()) as f64)),
             _ => Err(OmError::unsupported(format!(
                 "Range.{member} is not implemented"
             ))),
@@ -641,6 +662,7 @@ impl ExcelRuntime {
         value: OmValue,
         args: &[OmValue],
     ) -> OmResult<()> {
+        self.focus_member_supported("Range", member, true)?;
         if !args.is_empty() {
             return Err(OmError::invalid_argument(format!(
                 "Range.{member} does not accept index arguments"
@@ -1615,6 +1637,10 @@ mod tests {
             expect_text(runtime.dispatch_get(range, "Address", &[]).expect("Address")),
             "$A$1:$B$2"
         );
+        assert_eq!(
+            expect_number(runtime.dispatch_get(range, "Count", &[]).expect("Count")),
+            4.0
+        );
     }
 
     #[test]
@@ -2372,6 +2398,48 @@ mod tests {
         assert_eq!(invalid_name.code, OmErrorCode::InvalidArgument);
 
         runtime.close_workbook(writable).expect("close writable workbook");
+    }
+
+    #[test]
+    fn workbook_name_and_worksheet_index_dispatch_report_runtime_metadata() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let active_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+
+        assert_eq!(workbook.0, active_workbook);
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_workbook, "Name", &[])
+                    .expect("Workbook.Name")
+            ),
+            "Workbook"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(active_sheet, "Index", &[])
+                    .expect("Worksheet.Index")
+            ),
+            1.0
+        );
     }
 
     fn synthetic_workbook_bytes() -> Vec<u8> {
