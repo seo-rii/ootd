@@ -580,6 +580,143 @@ impl ExcelRuntime {
                             self.register_range_handle(workbook, sheet_id, item_rect).0,
                         ))
                     }
+                    "Offset" => {
+                        let coerce_offset = |value: &OmValue, label: &str| -> OmResult<i32> {
+                            match value {
+                                OmValue::Missing | OmValue::Empty | OmValue::Null => Ok(0),
+                                OmValue::Number(number) => {
+                                    if !number.is_finite()
+                                        || number.fract() != 0.0
+                                        || *number < i32::MIN as f64
+                                        || *number > i32::MAX as f64
+                                    {
+                                        return Err(OmError::invalid_argument(format!(
+                                            "{label} must be a whole number"
+                                        )));
+                                    }
+                                    Ok(*number as i32)
+                                }
+                                _ => Err(OmError::type_mismatch(format!(
+                                    "{label} must be numeric when provided"
+                                ))),
+                            }
+                        };
+                        let translate_axis =
+                            |value: u32, offset: i32, label: &str| -> OmResult<u32> {
+                                let translated = i64::from(value) + i64::from(offset);
+                                if !(1..=i64::from(u32::MAX)).contains(&translated) {
+                                    return Err(OmError::invalid_argument(format!(
+                                        "{label} moves the range outside worksheet bounds"
+                                    )));
+                                }
+                                Ok(translated as u32)
+                            };
+
+                        let (row_offset, column_offset) = match args {
+                            [] => (0, 0),
+                            [row_offset] => {
+                                (coerce_offset(row_offset, "Range.Offset row offset")?, 0)
+                            }
+                            [row_offset, column_offset] => (
+                                coerce_offset(row_offset, "Range.Offset row offset")?,
+                                coerce_offset(column_offset, "Range.Offset column offset")?,
+                            ),
+                            _ => {
+                                return Err(OmError::invalid_argument(
+                                    "Range.Offset expects optional row and column offsets",
+                                ));
+                            }
+                        };
+                        let offset_rect = Rect {
+                            row_first: translate_axis(
+                                rect.row_first,
+                                row_offset,
+                                "Range.Offset row offset",
+                            )?,
+                            row_last: translate_axis(
+                                rect.row_last,
+                                row_offset,
+                                "Range.Offset row offset",
+                            )?,
+                            col_first: translate_axis(
+                                rect.col_first,
+                                column_offset,
+                                "Range.Offset column offset",
+                            )?,
+                            col_last: translate_axis(
+                                rect.col_last,
+                                column_offset,
+                                "Range.Offset column offset",
+                            )?,
+                        };
+                        Ok(OmValue::Object(
+                            self.register_projected_range_handle(
+                                workbook,
+                                sheet_id,
+                                offset_rect,
+                                projection,
+                            )
+                            .0,
+                        ))
+                    }
+                    "Resize" => {
+                        let coerce_size = |value: &OmValue,
+                                           default: u32,
+                                           label: &str|
+                         -> OmResult<u32> {
+                            match value {
+                                OmValue::Missing | OmValue::Empty | OmValue::Null => Ok(default),
+                                OmValue::Number(number) => coerce_positive_index(*number, label),
+                                _ => Err(OmError::type_mismatch(format!(
+                                    "{label} must be numeric when provided"
+                                ))),
+                            }
+                        };
+
+                        let (row_size, column_size) = match args {
+                            [] => (rect.height(), rect.width()),
+                            [row_size] => (
+                                coerce_size(row_size, rect.height(), "Range.Resize row size")?,
+                                rect.width(),
+                            ),
+                            [row_size, column_size] => (
+                                coerce_size(row_size, rect.height(), "Range.Resize row size")?,
+                                coerce_size(column_size, rect.width(), "Range.Resize column size")?,
+                            ),
+                            _ => {
+                                return Err(OmError::invalid_argument(
+                                    "Range.Resize expects optional row and column sizes",
+                                ));
+                            }
+                        };
+                        let resized_rect = Rect {
+                            row_first: rect.row_first,
+                            row_last: rect.row_first.checked_add(row_size - 1).ok_or_else(
+                                || {
+                                    OmError::invalid_argument(
+                                        "Range.Resize row size overflows worksheet bounds",
+                                    )
+                                },
+                            )?,
+                            col_first: rect.col_first,
+                            col_last: rect.col_first.checked_add(column_size - 1).ok_or_else(
+                                || {
+                                    OmError::invalid_argument(
+                                        "Range.Resize column size overflows worksheet bounds",
+                                    )
+                                },
+                            )?,
+                        };
+                        Ok(OmValue::Object(
+                            self.register_projected_range_handle(
+                                workbook,
+                                sheet_id,
+                                resized_rect,
+                                projection,
+                            )
+                            .0,
+                        ))
+                    }
                     _ => Err(OmError::unsupported(format!(
                         "Range.{member} is not implemented as a method"
                     ))),
@@ -2984,6 +3121,168 @@ mod tests {
                     .expect("Rows.Cells.Item(3).Address")
             ),
             "$A$2"
+        );
+    }
+
+    #[test]
+    fn range_offset_and_resize_dispatch_transform_rects_and_preserve_projection_views() {
+        let mut runtime = ExcelRuntime::new();
+        let _workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B2:C3".to_string())])
+                .expect("Range(B2:C3)"),
+        );
+        let rows = expect_object_handle(
+            runtime
+                .dispatch_get(range, "Rows", &[])
+                .expect("Range.Rows"),
+        );
+        let unchanged = expect_object_handle(
+            runtime
+                .dispatch_invoke(range, "Offset", &[])
+                .expect("Range.Offset()"),
+        );
+        let shifted = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    range,
+                    "Offset",
+                    &[OmValue::Number(-1.0), OmValue::Number(-1.0)],
+                )
+                .expect("Range.Offset(-1, -1)"),
+        );
+        let column_shifted = expect_object_handle(
+            runtime
+                .dispatch_invoke(range, "Offset", &[OmValue::Missing, OmValue::Number(1.0)])
+                .expect("Range.Offset(, 1)"),
+        );
+        let rows_shifted = expect_object_handle(
+            runtime
+                .dispatch_invoke(rows, "Offset", &[OmValue::Number(1.0)])
+                .expect("Rows.Offset(1)"),
+        );
+        let resized = expect_object_handle(
+            runtime
+                .dispatch_invoke(range, "Resize", &[OmValue::Number(3.0)])
+                .expect("Range.Resize(3)"),
+        );
+        let narrowed = expect_object_handle(
+            runtime
+                .dispatch_invoke(range, "Resize", &[OmValue::Missing, OmValue::Number(1.0)])
+                .expect("Range.Resize(, 1)"),
+        );
+        let rows_resized = expect_object_handle(
+            runtime
+                .dispatch_invoke(rows, "Resize", &[OmValue::Number(3.0)])
+                .expect("Rows.Resize(3)"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(unchanged, "Address", &[])
+                    .expect("Range.Offset().Address")
+            ),
+            "$B$2:$C$3"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(shifted, "Address", &[])
+                    .expect("Range.Offset(-1, -1).Address")
+            ),
+            "$A$1:$B$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(column_shifted, "Address", &[])
+                    .expect("Range.Offset(, 1).Address")
+            ),
+            "$C$2:$D$3"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(rows_shifted, "Address", &[])
+                    .expect("Rows.Offset(1).Address")
+            ),
+            "$B$3:$C$4"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(resized, "Address", &[])
+                    .expect("Range.Resize(3).Address")
+            ),
+            "$B$2:$C$4"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(narrowed, "Address", &[])
+                    .expect("Range.Resize(, 1).Address")
+            ),
+            "$B$2:$B$3"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(rows_resized, "Address", &[])
+                    .expect("Rows.Resize(3).Address")
+            ),
+            "$B$2:$C$4"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(rows_shifted, "Count", &[])
+                    .expect("Rows.Offset(1).Count")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(resized, "Count", &[])
+                    .expect("Range.Resize(3).Count")
+            ),
+            6.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(rows_resized, "Count", &[])
+                    .expect("Rows.Resize(3).Count")
+            ),
+            3.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(range, "Offset", &[OmValue::Number(-2.0)])
+                .expect_err("Range.Offset(-2) should be out of bounds")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(range, "Resize", &[OmValue::Number(0.0)])
+                .expect_err("Range.Resize(0) should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 
