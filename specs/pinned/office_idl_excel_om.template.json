@@ -253,6 +253,32 @@
           }
         },
         {
+          "name": "Parent",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          }
+        },
+        {
           "name": "Save",
           "memberKind": "method",
           "support": "stub",
@@ -425,6 +451,32 @@
                 "kind": "primitive",
                 "name": "string",
                 "aliasOf": "BSTR"
+              }
+            }
+          }
+        },
+        {
+          "name": "Parent",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Workbook",
+            "aliasOf": "Excel.Workbook"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Workbook",
+                "aliasOf": "Excel.Workbook"
               }
             }
           }
@@ -618,6 +670,32 @@
                 "kind": "primitive",
                 "name": "string",
                 "aliasOf": "BSTR"
+              }
+            }
+          }
+        },
+        {
+          "name": "Parent",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Worksheet",
+            "aliasOf": "Excel.Worksheet"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Worksheet",
+                "aliasOf": "Excel.Worksheet"
               }
             }
           }

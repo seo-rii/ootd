@@ -527,6 +527,7 @@ impl ExcelRuntime {
             "Name" => Ok(OmValue::Text(
                 self.workbook_model(workbook)?.display_name.clone(),
             )),
+            "Parent" => Ok(OmValue::Object(self.root_application())),
             "Worksheets" => Ok(OmValue::Object(
                 self.register_object(RuntimeObjectKind::WorksheetsCollection { workbook }),
             )),
@@ -600,6 +601,14 @@ impl ExcelRuntime {
                 let worksheet = self.worksheet_model(workbook, sheet_id)?;
                 Ok(OmValue::Text(worksheet.name.clone()))
             }
+            "Parent" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Worksheet.Parent does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Object(workbook.0))
+            }
             "Index" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(
@@ -668,6 +677,9 @@ impl ExcelRuntime {
                 }
             }
             "Address" => Ok(OmValue::Text(format_rect_address(rect))),
+            "Parent" => Ok(OmValue::Object(
+                self.register_worksheet_handle(workbook, sheet_id).0,
+            )),
             "Row" => Ok(OmValue::Number(rect.row_first as f64)),
             "Column" => Ok(OmValue::Number(rect.col_first as f64)),
             "Count" => Ok(OmValue::Number((rect.width() * rect.height()) as f64)),
@@ -2559,6 +2571,72 @@ mod tests {
                     .expect("Worksheet.Index")
             ),
             1.0
+        );
+    }
+
+    #[test]
+    fn parent_dispatch_walks_back_up_object_graph() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B2".to_string())])
+                .expect("Range(B2)"),
+        );
+
+        assert_eq!(
+            expect_object_handle(
+                runtime
+                    .dispatch_get(workbook.0, "Parent", &[])
+                    .expect("Workbook.Parent")
+            ),
+            application
+        );
+        assert_eq!(
+            expect_object_handle(
+                runtime
+                    .dispatch_get(active_sheet, "Parent", &[])
+                    .expect("Worksheet.Parent")
+            ),
+            workbook.0
+        );
+        let range_parent = expect_object_handle(
+            runtime
+                .dispatch_get(range, "Parent", &[])
+                .expect("Range.Parent"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(range_parent, "Name", &[])
+                    .expect("Range.Parent.Name")
+            ),
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("ActiveSheet.Name")
+            )
+        );
+        assert_eq!(
+            expect_object_handle(
+                runtime
+                    .dispatch_get(range_parent, "Parent", &[])
+                    .expect("Range.Parent.Parent")
+            ),
+            workbook.0
         );
     }
 
