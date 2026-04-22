@@ -538,6 +538,14 @@ impl ExcelRuntime {
 
     fn dispatch_get_workbooks(&mut self, member: &str, args: &[OmValue]) -> OmResult<OmValue> {
         match member {
+            "Count" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Workbooks.Count does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Number(self.workbooks.len() as f64))
+            }
             "Item" => self.resolve_workbook_item(args),
             _ => Err(OmError::unsupported(format!(
                 "Workbooks.{member} is not implemented"
@@ -552,6 +560,20 @@ impl ExcelRuntime {
         args: &[OmValue],
     ) -> OmResult<OmValue> {
         match member {
+            "Count" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Worksheets.Count does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Number(
+                    self.runtime_workbook(workbook)?
+                        .loaded
+                        .state
+                        .worksheets
+                        .len() as f64,
+                ))
+            }
             "Item" => self.resolve_worksheet_item(workbook, args),
             _ => Err(OmError::unsupported(format!(
                 "Worksheets.{member} is not implemented"
@@ -2748,6 +2770,67 @@ mod tests {
         assert_eq!(reopened.state.worksheets[0].name, "Sheet1");
 
         fs::remove_file(&source_path).expect("cleanup source fixture");
+    }
+
+    #[test]
+    fn workbooks_and_worksheets_count_dispatch_report_collection_sizes() {
+        let mut runtime = ExcelRuntime::new();
+        let first = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open first workbook");
+        let second = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open second workbook");
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(first.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbooks, "Count", &[])
+                    .expect("Workbooks.Count")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(worksheets, "Count", &[])
+                    .expect("Worksheets.Count")
+            ),
+            1.0
+        );
+
+        runtime
+            .close_workbook(second)
+            .expect("close second workbook");
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbooks, "Count", &[])
+                    .expect("Workbooks.Count after close")
+            ),
+            1.0
+        );
     }
 
     fn synthetic_workbook_bytes() -> Vec<u8> {

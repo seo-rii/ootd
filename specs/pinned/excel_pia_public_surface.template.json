@@ -120,6 +120,31 @@
       },
       "members": [
         {
+          "name": "Count",
+          "memberKind": "property_get",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Workbooks",
+                  "sourceMember": "Count"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          }
+        },
+        {
           "name": "Open",
           "memberKind": "method",
           "returnType": {
@@ -283,6 +308,31 @@
         "sourceInherits": ["IDispatch"]
       },
       "members": [
+        {
+          "name": "Count",
+          "memberKind": "property_get",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Worksheets",
+                  "sourceMember": "Count"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          }
+        },
         {
           "name": "Item",
           "memberKind": "method",

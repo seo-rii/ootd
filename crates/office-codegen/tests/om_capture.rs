@@ -76,8 +76,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 18);
-    assert_eq!(summary.stub_member_count, 18);
+    assert_eq!(summary.member_count, 20);
+    assert_eq!(summary.stub_member_count, 20);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -120,7 +120,7 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 18);
+    assert_eq!(summary.member_count, 20);
 
     let worksheet = document
         .interfaces
@@ -741,7 +741,7 @@ fn writes_canonical_office_idl_json_from_bundle_inputs() {
     assert_eq!(round_trip_summary.enum_count, 1);
     assert_eq!(round_trip_summary.interface_count, 6);
     assert_eq!(round_trip_summary.class_count, 3);
-    assert_eq!(round_trip_summary.member_count, 18);
+    assert_eq!(round_trip_summary.member_count, 20);
     assert_eq!(generation.summary.library, "Excel");
     assert_eq!(generation.summary.version, "16.0");
     assert_eq!(
@@ -886,8 +886,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 18);
-    assert_eq!(coverage.support_counts.stub, 18);
+    assert_eq!(coverage.member_count, 20);
+    assert_eq!(coverage.support_counts.stub, 20);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
