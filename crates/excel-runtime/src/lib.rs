@@ -2126,14 +2126,17 @@ impl ExcelRuntime {
                 "Worksheets.Add accepts at most Before, After, Count, and Type arguments",
             ));
         }
-        if let Some(value) = args.get(2) {
-            match value {
-                OmValue::Missing | OmValue::Empty | OmValue::Null => {}
-                OmValue::Number(count) if *count == 1.0 => {}
-                OmValue::Number(count) if count.fract() == 0.0 && *count > 1.0 => {
-                    return Err(OmError::unsupported(
-                        "Worksheets.Add currently only supports Count := 1",
-                    ));
+        let count = match args.get(2) {
+            None => 1usize,
+            Some(value) => match value {
+                OmValue::Missing | OmValue::Empty | OmValue::Null => 1usize,
+                OmValue::Number(count)
+                    if count.is_finite()
+                        && count.fract() == 0.0
+                        && *count >= 1.0
+                        && *count <= usize::MAX as f64 =>
+                {
+                    *count as usize
                 }
                 OmValue::Number(_) => {
                     return Err(OmError::invalid_argument(
@@ -2145,15 +2148,15 @@ impl ExcelRuntime {
                         "Worksheets.Add Count expects a numeric value when provided",
                     ));
                 }
-            }
-        }
+            },
+        };
         if matches!(args.get(3), Some(value) if !om_value_is_omitted(value)) {
             return Err(OmError::unsupported(
                 "Worksheets.Add currently only supports omitted Type arguments",
             ));
         }
 
-        let insertion_index = self
+        let base_insertion_index = self
             .worksheet_placement_index(workbook, args.first(), args.get(1), "Worksheets.Add")?
             .unwrap_or_else(|| {
                 self.selection
@@ -2169,62 +2172,68 @@ impl ExcelRuntime {
                     })
                     .unwrap_or(0)
             });
-        let sheet_id = {
-            let runtime = self.runtime_workbook_mut(workbook)?;
-            if runtime.read_only {
-                return Err(OmError::new(
-                    OmErrorCode::InvalidState,
-                    "cannot modify a read-only workbook",
-                ));
-            }
+        let mut last_sheet_id = None;
+        for offset in 0..count {
+            let insertion_index = base_insertion_index
+                .checked_add(offset)
+                .ok_or_else(|| OmError::invalid_argument("Worksheets.Add Count is too large"))?;
+            let sheet_id = {
+                let runtime = self.runtime_workbook_mut(workbook)?;
+                if runtime.read_only {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        "cannot modify a read-only workbook",
+                    ));
+                }
 
-            let workbook_xml = runtime
-                .loaded
-                .package
-                .part(WORKBOOK_PART_NAME)
-                .ok_or_else(|| {
-                    OmError::new(
-                        OmErrorCode::Parse,
-                        format!("workbook package is missing {WORKBOOK_PART_NAME}"),
-                    )
-                })?
-                .bytes
-                .clone();
-            let content_types_xml = runtime
-                .loaded
-                .package
-                .part(CONTENT_TYPES_PART_NAME)
-                .ok_or_else(|| {
-                    OmError::new(
-                        OmErrorCode::Parse,
-                        format!("workbook package is missing {CONTENT_TYPES_PART_NAME}"),
-                    )
-                })?
-                .bytes
-                .clone();
-            let workbook_rels_part = runtime.loaded.package.part(WORKBOOK_RELS_PART_NAME);
-            let workbook_rels_xml = workbook_rels_part
-                .map(|part| part.bytes.clone())
-                .unwrap_or_else(|| {
-                    br#"<?xml version="1.0" encoding="UTF-8"?>
+                let workbook_xml = runtime
+                    .loaded
+                    .package
+                    .part(WORKBOOK_PART_NAME)
+                    .ok_or_else(|| {
+                        OmError::new(
+                            OmErrorCode::Parse,
+                            format!("workbook package is missing {WORKBOOK_PART_NAME}"),
+                        )
+                    })?
+                    .bytes
+                    .clone();
+                let content_types_xml = runtime
+                    .loaded
+                    .package
+                    .part(CONTENT_TYPES_PART_NAME)
+                    .ok_or_else(|| {
+                        OmError::new(
+                            OmErrorCode::Parse,
+                            format!("workbook package is missing {CONTENT_TYPES_PART_NAME}"),
+                        )
+                    })?
+                    .bytes
+                    .clone();
+                let workbook_rels_part = runtime.loaded.package.part(WORKBOOK_RELS_PART_NAME);
+                let workbook_rels_xml = workbook_rels_part
+                    .map(|part| part.bytes.clone())
+                    .unwrap_or_else(|| {
+                        br#"<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 </Relationships>"#
-                        .to_vec()
-                });
-            let workbook_rels_compression = workbook_rels_part
-                .map(|part| part.compression)
-                .unwrap_or(CompressionMethod::Stored);
-            let worksheet_compression = runtime
-                .loaded
-                .package
-                .parts()
-                .iter()
-                .find(|part| part.name.starts_with("xl/worksheets/") && part.name.ends_with(".xml"))
-                .map(|part| part.compression)
-                .unwrap_or(CompressionMethod::Stored);
+                            .to_vec()
+                    });
+                let workbook_rels_compression = workbook_rels_part
+                    .map(|part| part.compression)
+                    .unwrap_or(CompressionMethod::Stored);
+                let worksheet_compression = runtime
+                    .loaded
+                    .package
+                    .parts()
+                    .iter()
+                    .find(|part| {
+                        part.name.starts_with("xl/worksheets/") && part.name.ends_with(".xml")
+                    })
+                    .map(|part| part.compression)
+                    .unwrap_or(CompressionMethod::Stored);
 
-            let worksheet_name_index =
-                (1..)
+                let worksheet_name_index = (1..)
                     .find(|index| {
                         let candidate = format!("Sheet{index}");
                         !runtime.loaded.state.worksheets.iter().any(|worksheet| {
@@ -2232,166 +2241,171 @@ impl ExcelRuntime {
                         })
                     })
                     .expect("worksheet name index");
-            let worksheet_name = format!("Sheet{worksheet_name_index}");
-            let sheet_id = SheetId(
-                runtime
-                    .loaded
-                    .state
-                    .worksheets
-                    .iter()
-                    .map(|worksheet| worksheet.id.0)
-                    .max()
-                    .unwrap_or(0)
-                    + 1,
-            );
-            let worksheet_part_index = (1..)
-                .find(|index| {
-                    let part_uri = format!("xl/worksheets/sheet{index}.xml");
-                    !runtime.loaded.package.contains(part_uri.as_str())
-                })
-                .expect("worksheet part index");
-            let part_uri = format!("xl/worksheets/sheet{worksheet_part_index}.xml");
-            let relationship_target = format!("worksheets/sheet{worksheet_part_index}.xml");
+                let worksheet_name = format!("Sheet{worksheet_name_index}");
+                let sheet_id = SheetId(
+                    runtime
+                        .loaded
+                        .state
+                        .worksheets
+                        .iter()
+                        .map(|worksheet| worksheet.id.0)
+                        .max()
+                        .unwrap_or(0)
+                        + 1,
+                );
+                let worksheet_part_index = (1..)
+                    .find(|index| {
+                        let part_uri = format!("xl/worksheets/sheet{index}.xml");
+                        !runtime.loaded.package.contains(part_uri.as_str())
+                    })
+                    .expect("worksheet part index");
+                let part_uri = format!("xl/worksheets/sheet{worksheet_part_index}.xml");
+                let relationship_target = format!("worksheets/sheet{worksheet_part_index}.xml");
 
-            let mut used_relationship_ids = BTreeSet::new();
-            let mut reader = Reader::from_reader(Cursor::new(workbook_rels_xml.as_slice()));
-            reader.config_mut().trim_text(true);
-            let mut buffer = Vec::new();
-            loop {
-                match reader.read_event_into(&mut buffer) {
-                    Ok(Event::Start(element)) | Ok(Event::Empty(element))
-                        if xml_local_name(element.name().as_ref()) == b"Relationship" =>
-                    {
-                        for attr in element.attributes() {
-                            let attr = attr.map_err(runtime_xml_error)?;
-                            if attr.key.as_ref() != b"Id" {
-                                continue;
+                let mut used_relationship_ids = BTreeSet::new();
+                let mut reader = Reader::from_reader(Cursor::new(workbook_rels_xml.as_slice()));
+                reader.config_mut().trim_text(true);
+                let mut buffer = Vec::new();
+                loop {
+                    match reader.read_event_into(&mut buffer) {
+                        Ok(Event::Start(element)) | Ok(Event::Empty(element))
+                            if xml_local_name(element.name().as_ref()) == b"Relationship" =>
+                        {
+                            for attr in element.attributes() {
+                                let attr = attr.map_err(runtime_xml_error)?;
+                                if attr.key.as_ref() != b"Id" {
+                                    continue;
+                                }
+                                used_relationship_ids.insert(
+                                    attr.decode_and_unescape_value(reader.decoder())
+                                        .map_err(runtime_xml_error)?
+                                        .into_owned(),
+                                );
                             }
-                            used_relationship_ids.insert(
-                                attr.decode_and_unescape_value(reader.decoder())
-                                    .map_err(runtime_xml_error)?
-                                    .into_owned(),
-                            );
                         }
+                        Ok(Event::Eof) => break,
+                        Ok(_) => {}
+                        Err(error) => return Err(runtime_xml_error(error)),
                     }
-                    Ok(Event::Eof) => break,
-                    Ok(_) => {}
-                    Err(error) => return Err(runtime_xml_error(error)),
+                    buffer.clear();
                 }
-                buffer.clear();
-            }
-            let relationship_id = (1..)
-                .map(|index| format!("rId{index}"))
-                .find(|candidate| !used_relationship_ids.contains(candidate))
-                .expect("workbook relationship id");
-            let worksheet_xml = blank_worksheet_xml_bytes();
 
-            runtime.loaded.package.replace_part_bytes(
-                CONTENT_TYPES_PART_NAME,
-                append_empty_xml_child_before_container_end(
-                    content_types_xml.as_slice(),
-                    b"Types",
+                let relationship_id = (1..)
+                    .map(|index| format!("rId{index}"))
+                    .find(|candidate| !used_relationship_ids.contains(candidate))
+                    .expect("workbook relationship id");
+                let worksheet_xml = blank_worksheet_xml_bytes();
+
+                runtime.loaded.package.replace_part_bytes(
+                    CONTENT_TYPES_PART_NAME,
+                    append_empty_xml_child_before_container_end(
+                        content_types_xml.as_slice(),
+                        b"Types",
+                        {
+                            let mut element = BytesStart::new("Override");
+                            element.push_attribute(("PartName", format!("/{part_uri}").as_str()));
+                            element.push_attribute(("ContentType", WORKSHEET_PART_CONTENT_TYPE));
+                            element
+                        },
+                    )?,
+                )?;
+                runtime.loaded.package.replace_part_bytes(
+                    WORKBOOK_PART_NAME,
+                    insert_sheet_into_workbook_xml(
+                        workbook_xml.as_slice(),
+                        insertion_index,
+                        worksheet_name.as_str(),
+                        sheet_id,
+                        relationship_id.as_str(),
+                    )?,
+                )?;
+                let updated_workbook_rels = append_empty_xml_child_before_container_end(
+                    workbook_rels_xml.as_slice(),
+                    b"Relationships",
                     {
-                        let mut element = BytesStart::new("Override");
-                        element.push_attribute(("PartName", format!("/{part_uri}").as_str()));
-                        element.push_attribute(("ContentType", WORKSHEET_PART_CONTENT_TYPE));
+                        let mut element = BytesStart::new("Relationship");
+                        element.push_attribute(("Id", relationship_id.as_str()));
+                        element.push_attribute((
+                            "Type",
+                            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet",
+                        ));
+                        element.push_attribute(("Target", relationship_target.as_str()));
                         element
                     },
-                )?,
-            )?;
-            runtime.loaded.package.replace_part_bytes(
-                WORKBOOK_PART_NAME,
-                insert_sheet_into_workbook_xml(
-                    workbook_xml.as_slice(),
-                    insertion_index,
-                    worksheet_name.as_str(),
-                    sheet_id,
-                    relationship_id.as_str(),
-                )?,
-            )?;
-            let updated_workbook_rels = append_empty_xml_child_before_container_end(
-                workbook_rels_xml.as_slice(),
-                b"Relationships",
-                {
-                    let mut element = BytesStart::new("Relationship");
-                    element.push_attribute(("Id", relationship_id.as_str()));
-                    element.push_attribute((
-                        "Type",
-                        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet",
-                    ));
-                    element.push_attribute(("Target", relationship_target.as_str()));
-                    element
-                },
-            )?;
-            if runtime.loaded.package.contains(WORKBOOK_RELS_PART_NAME) {
-                runtime
-                    .loaded
-                    .package
-                    .replace_part_bytes(WORKBOOK_RELS_PART_NAME, updated_workbook_rels)?;
-            } else {
+                )?;
+                if runtime.loaded.package.contains(WORKBOOK_RELS_PART_NAME) {
+                    runtime
+                        .loaded
+                        .package
+                        .replace_part_bytes(WORKBOOK_RELS_PART_NAME, updated_workbook_rels)?;
+                } else {
+                    runtime.loaded.package.add_part(OpcPart {
+                        name: WORKBOOK_RELS_PART_NAME.to_string(),
+                        content_type: Some(
+                            "application/vnd.openxmlformats-package.relationships+xml".to_string(),
+                        ),
+                        compression: workbook_rels_compression,
+                        bytes: updated_workbook_rels,
+                    })?;
+                }
                 runtime.loaded.package.add_part(OpcPart {
-                    name: WORKBOOK_RELS_PART_NAME.to_string(),
-                    content_type: Some(
-                        "application/vnd.openxmlformats-package.relationships+xml".to_string(),
-                    ),
-                    compression: workbook_rels_compression,
-                    bytes: updated_workbook_rels,
+                    name: part_uri.clone(),
+                    content_type: Some(WORKSHEET_PART_CONTENT_TYPE.to_string()),
+                    compression: worksheet_compression,
+                    bytes: worksheet_xml.clone(),
                 })?;
-            }
-            runtime.loaded.package.add_part(OpcPart {
-                name: part_uri.clone(),
-                content_type: Some(WORKSHEET_PART_CONTENT_TYPE.to_string()),
-                compression: worksheet_compression,
-                bytes: worksheet_xml.clone(),
-            })?;
 
-            runtime.loaded.state.worksheets.insert(
-                insertion_index.min(runtime.loaded.state.worksheets.len()),
-                WorksheetModel {
-                    id: sheet_id,
-                    workbook_id: runtime.loaded.state.model.id,
-                    name: worksheet_name,
-                    relationship_id: Some(relationship_id),
-                    part_uri: Some(part_uri.clone()),
-                },
-            );
-            runtime.loaded.state.worksheet_data.insert(
-                sheet_id,
-                WorksheetData {
-                    source_xml: worksheet_xml,
-                    ..WorksheetData::default()
-                },
-            );
-            runtime.loaded.worksheet_support_parts.insert(
-                sheet_id,
-                WorksheetSupportParts {
-                    worksheet_part_uri: Some(part_uri),
-                    relationships_part_uri: None,
-                    relationships_part_source_bytes: None,
-                    relationships_summary: None,
-                    hyperlinks_part_summary: None,
-                    comment_part_uris: Vec::new(),
-                    comment_anchor_refs: BTreeMap::new(),
-                    comment_part_source_bytes: BTreeMap::new(),
-                    comment_summaries: BTreeMap::new(),
-                    vml_drawing_part_uris: Vec::new(),
-                    vml_drawing_part_source_bytes: BTreeMap::new(),
-                    vml_drawing_summaries: BTreeMap::new(),
-                    hyperlink_summaries: Vec::new(),
-                    hyperlink_refs: Vec::new(),
-                    hyperlink_bindings: Vec::new(),
-                    hyperlink_relationship_ids: Vec::new(),
-                    legacy_drawing_relationships: Vec::new(),
-                    legacy_drawing_relationship_ids: Vec::new(),
-                    legacy_drawing_summaries: Vec::new(),
-                    comment_relationships: Vec::new(),
-                    comment_relationship_ids: Vec::new(),
-                },
-            );
-            runtime.dirty = true;
+                runtime.loaded.state.worksheets.insert(
+                    insertion_index.min(runtime.loaded.state.worksheets.len()),
+                    WorksheetModel {
+                        id: sheet_id,
+                        workbook_id: runtime.loaded.state.model.id,
+                        name: worksheet_name,
+                        relationship_id: Some(relationship_id),
+                        part_uri: Some(part_uri.clone()),
+                    },
+                );
+                runtime.loaded.state.worksheet_data.insert(
+                    sheet_id,
+                    WorksheetData {
+                        source_xml: worksheet_xml,
+                        ..WorksheetData::default()
+                    },
+                );
+                runtime.loaded.worksheet_support_parts.insert(
+                    sheet_id,
+                    WorksheetSupportParts {
+                        worksheet_part_uri: Some(part_uri),
+                        relationships_part_uri: None,
+                        relationships_part_source_bytes: None,
+                        relationships_summary: None,
+                        hyperlinks_part_summary: None,
+                        comment_part_uris: Vec::new(),
+                        comment_anchor_refs: BTreeMap::new(),
+                        comment_part_source_bytes: BTreeMap::new(),
+                        comment_summaries: BTreeMap::new(),
+                        vml_drawing_part_uris: Vec::new(),
+                        vml_drawing_part_source_bytes: BTreeMap::new(),
+                        vml_drawing_summaries: BTreeMap::new(),
+                        hyperlink_summaries: Vec::new(),
+                        hyperlink_refs: Vec::new(),
+                        hyperlink_bindings: Vec::new(),
+                        hyperlink_relationship_ids: Vec::new(),
+                        legacy_drawing_relationships: Vec::new(),
+                        legacy_drawing_relationship_ids: Vec::new(),
+                        legacy_drawing_summaries: Vec::new(),
+                        comment_relationships: Vec::new(),
+                        comment_relationship_ids: Vec::new(),
+                    },
+                );
+                runtime.dirty = true;
 
-            sheet_id
-        };
+                sheet_id
+            };
+            last_sheet_id = Some(sheet_id);
+        }
+
+        let sheet_id = last_sheet_id.expect("Worksheets.Add count should be positive");
 
         self.set_selection(workbook, sheet_id, Rect::single_cell(1, 1));
         Ok(self.register_worksheet_handle(workbook, sheet_id))
@@ -9029,6 +9043,106 @@ mod tests {
     }
 
     #[test]
+    fn worksheets_add_supports_count_blocks_and_persists_on_save() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let added = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheets,
+                    "Add",
+                    &[OmValue::Missing, OmValue::Number(1.0), OmValue::Number(3.0)],
+                )
+                .expect("Worksheets.Add After:=1, Count:=3"),
+        );
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(worksheets, "Count", &[])
+                    .expect("Worksheets.Count after multi-add")
+            ),
+            4.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(added, "Name", &[])
+                    .expect("returned sheet name after multi-add")
+            ),
+            "Sheet4"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(added, "Index", &[])
+                    .expect("returned sheet index after multi-add")
+            ),
+            4.0
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after multi-add"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("active sheet name after multi-add")
+            ),
+            "Sheet4"
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved workbook package");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen saved workbook");
+
+        assert!(saved_package.contains("xl/worksheets/sheet2.xml"));
+        assert!(saved_package.contains("xl/worksheets/sheet3.xml"));
+        assert!(saved_package.contains("xl/worksheets/sheet4.xml"));
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .map(|worksheet| worksheet.name.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                "Sheet1".to_string(),
+                "Sheet2".to_string(),
+                "Sheet3".to_string(),
+                "Sheet4".to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn worksheets_add_rejects_invalid_placement_arguments_and_read_only_workbooks() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -9094,11 +9208,35 @@ mod tests {
             .dispatch_invoke(
                 worksheets,
                 "Add",
-                &[OmValue::Missing, OmValue::Missing, OmValue::Number(2.0)],
+                &[OmValue::Missing, OmValue::Missing, OmValue::Number(0.0)],
             )
-            .expect_err("Worksheets.Add should reject Count > 1");
-        assert_eq!(count_error.code, OmErrorCode::Unsupported);
-        assert!(count_error.message.contains("Count := 1"));
+            .expect_err("Worksheets.Add should reject zero Count");
+        assert_eq!(count_error.code, OmErrorCode::InvalidArgument);
+        assert!(count_error.message.contains("positive integer"));
+
+        let fractional_count_error = runtime
+            .dispatch_invoke(
+                worksheets,
+                "Add",
+                &[OmValue::Missing, OmValue::Missing, OmValue::Number(1.5)],
+            )
+            .expect_err("Worksheets.Add should reject fractional Count");
+        assert_eq!(fractional_count_error.code, OmErrorCode::InvalidArgument);
+        assert!(fractional_count_error.message.contains("positive integer"));
+
+        let count_type_error = runtime
+            .dispatch_invoke(
+                worksheets,
+                "Add",
+                &[
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Text("2".to_string()),
+                ],
+            )
+            .expect_err("Worksheets.Add should reject non-numeric Count");
+        assert_eq!(count_type_error.code, OmErrorCode::TypeMismatch);
+        assert!(count_type_error.message.contains("numeric value"));
 
         let mut read_only_runtime = ExcelRuntime::new();
         let read_only_workbook = read_only_runtime
