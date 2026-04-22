@@ -536,6 +536,16 @@ impl ExcelRuntime {
                     .map(|path| path.to_string_lossy().into_owned())
                     .unwrap_or_default(),
             )),
+            "FullName" => {
+                let runtime = self.runtime_workbook(workbook)?;
+                Ok(OmValue::Text(
+                    runtime
+                        .source_path
+                        .as_ref()
+                        .map(|path| path.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| runtime.loaded.state.model.display_name.clone()),
+                ))
+            }
             "ReadOnly" => Ok(OmValue::Bool(self.runtime_workbook(workbook)?.read_only)),
             "Worksheets" => Ok(OmValue::Object(
                 self.register_object(RuntimeObjectKind::WorksheetsCollection { workbook }),
@@ -2656,6 +2666,14 @@ mod tests {
             ),
             ""
         );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_workbook, "FullName", &[])
+                    .expect("Workbook.FullName")
+            ),
+            "Workbook"
+        );
         assert!(!expect_bool(
             runtime
                 .dispatch_get(active_workbook, "ReadOnly", &[])
@@ -2775,6 +2793,14 @@ mod tests {
             ),
             source_dir.to_string_lossy()
         );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(workbook, "FullName", &[])
+                    .expect("Workbook.FullName after Open")
+            ),
+            source_path.to_string_lossy()
+        );
         let active_sheet = expect_object_handle(
             runtime
                 .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
@@ -2815,6 +2841,14 @@ mod tests {
                     .expect("Workbook.Path after SaveAs")
             ),
             target_dir.to_string_lossy()
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(workbook, "FullName", &[])
+                    .expect("Workbook.FullName after SaveAs")
+            ),
+            target_path.to_string_lossy()
         );
 
         let reopened_after_save_as = ExcelRuntime::new()

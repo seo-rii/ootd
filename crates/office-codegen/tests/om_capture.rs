@@ -76,8 +76,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 30);
-    assert_eq!(summary.stub_member_count, 30);
+    assert_eq!(summary.member_count, 31);
+    assert_eq!(summary.stub_member_count, 31);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -120,7 +120,7 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 30);
+    assert_eq!(summary.member_count, 31);
 
     let worksheet = document
         .interfaces
@@ -194,6 +194,15 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
             .members
             .iter()
             .find(|member| member.name == "Path")
+            .and_then(|member| member.return_type.as_ref())
+            .and_then(|type_ref| type_ref.alias_of.as_deref()),
+        Some("BSTR")
+    );
+    assert_eq!(
+        workbook
+            .members
+            .iter()
+            .find(|member| member.name == "FullName")
             .and_then(|member| member.return_type.as_ref())
             .and_then(|type_ref| type_ref.alias_of.as_deref()),
         Some("BSTR")
@@ -810,7 +819,7 @@ fn writes_canonical_office_idl_json_from_bundle_inputs() {
     assert_eq!(round_trip_summary.enum_count, 1);
     assert_eq!(round_trip_summary.interface_count, 6);
     assert_eq!(round_trip_summary.class_count, 3);
-    assert_eq!(round_trip_summary.member_count, 30);
+    assert_eq!(round_trip_summary.member_count, 31);
     assert_eq!(generation.summary.library, "Excel");
     assert_eq!(generation.summary.version, "16.0");
     assert_eq!(
@@ -877,7 +886,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .expect("Range");
 
     assert_eq!(application.member_count, 3);
-    assert_eq!(workbook.member_count, 8);
+    assert_eq!(workbook.member_count, 9);
     assert_eq!(worksheet.member_count, 6);
     assert_eq!(range.member_count, 7);
     assert_eq!(
@@ -953,6 +962,12 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|member| member.name == "Path")
         .expect("Workbook.Path");
     assert_eq!(workbook_path.access, AccessMode::Read);
+    let workbook_full_name = workbook
+        .members
+        .iter()
+        .find(|member| member.name == "FullName")
+        .expect("Workbook.FullName");
+    assert_eq!(workbook_full_name.access, AccessMode::Read);
     let workbook_read_only = workbook
         .members
         .iter()
@@ -1024,8 +1039,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 30);
-    assert_eq!(coverage.support_counts.stub, 30);
+    assert_eq!(coverage.member_count, 31);
+    assert_eq!(coverage.support_counts.stub, 31);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -1060,8 +1075,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(workbook_coverage.member_count, 8);
-    assert_eq!(workbook_coverage.support_counts.stub, 8);
+    assert_eq!(workbook_coverage.member_count, 9);
+    assert_eq!(workbook_coverage.support_counts.stub, 9);
     assert_eq!(
         workbook_coverage.stub_members,
         vec![
@@ -1069,6 +1084,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Name".to_string(),
             "Parent".to_string(),
             "Path".to_string(),
+            "FullName".to_string(),
             "ReadOnly".to_string(),
             "Save".to_string(),
             "SaveAs".to_string(),
