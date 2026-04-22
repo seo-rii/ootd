@@ -76,8 +76,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 25);
-    assert_eq!(summary.stub_member_count, 25);
+    assert_eq!(summary.member_count, 27);
+    assert_eq!(summary.stub_member_count, 27);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -120,13 +120,23 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 25);
+    assert_eq!(summary.member_count, 27);
 
     let worksheet = document
         .interfaces
         .iter()
         .find(|interface| interface.name == "Worksheet")
         .expect("Worksheet");
+    let workbooks = document
+        .interfaces
+        .iter()
+        .find(|interface| interface.name == "Workbooks")
+        .expect("Workbooks");
+    let worksheets = document
+        .interfaces
+        .iter()
+        .find(|interface| interface.name == "Worksheets")
+        .expect("Worksheets");
     let name_member = worksheet
         .members
         .iter()
@@ -150,6 +160,24 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
             .and_then(|capture| capture.type_info.as_ref())
             .and_then(|type_ref| type_ref.alias_of.as_deref()),
         Some("BSTR")
+    );
+    assert_eq!(
+        workbooks
+            .members
+            .iter()
+            .find(|member| member.name == "Parent")
+            .and_then(|member| member.return_type.as_ref())
+            .and_then(|type_ref| type_ref.alias_of.as_deref()),
+        Some("Excel.Application")
+    );
+    assert_eq!(
+        worksheets
+            .members
+            .iter()
+            .find(|member| member.name == "Parent")
+            .and_then(|member| member.return_type.as_ref())
+            .and_then(|type_ref| type_ref.alias_of.as_deref()),
+        Some("Excel.Workbook")
     );
 }
 
@@ -741,7 +769,7 @@ fn writes_canonical_office_idl_json_from_bundle_inputs() {
     assert_eq!(round_trip_summary.enum_count, 1);
     assert_eq!(round_trip_summary.interface_count, 6);
     assert_eq!(round_trip_summary.class_count, 3);
-    assert_eq!(round_trip_summary.member_count, 25);
+    assert_eq!(round_trip_summary.member_count, 27);
     assert_eq!(generation.summary.library, "Excel");
     assert_eq!(generation.summary.version, "16.0");
     assert_eq!(
@@ -937,8 +965,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 25);
-    assert_eq!(coverage.support_counts.stub, 25);
+    assert_eq!(coverage.member_count, 27);
+    assert_eq!(coverage.support_counts.stub, 27);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage

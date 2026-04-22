@@ -547,6 +547,14 @@ impl ExcelRuntime {
                 }
                 Ok(OmValue::Number(self.workbooks.len() as f64))
             }
+            "Parent" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Workbooks.Parent does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Object(self.root_application()))
+            }
             "Item" => self.resolve_workbook_item(args),
             _ => Err(OmError::unsupported(format!(
                 "Workbooks.{member} is not implemented"
@@ -574,6 +582,14 @@ impl ExcelRuntime {
                         .worksheets
                         .len() as f64,
                 ))
+            }
+            "Parent" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Worksheets.Parent does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Object(workbook.0))
             }
             "Item" => self.resolve_worksheet_item(workbook, args),
             _ => Err(OmError::unsupported(format!(
@@ -2918,6 +2934,47 @@ mod tests {
                     .expect("Workbooks.Count after close")
             ),
             1.0
+        );
+    }
+
+    #[test]
+    fn collection_parent_dispatch_returns_owning_objects() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+
+        assert_eq!(
+            expect_object_handle(
+                runtime
+                    .dispatch_get(workbooks, "Parent", &[])
+                    .expect("Workbooks.Parent")
+            ),
+            application
+        );
+        assert_eq!(
+            expect_object_handle(
+                runtime
+                    .dispatch_get(worksheets, "Parent", &[])
+                    .expect("Worksheets.Parent")
+            ),
+            workbook.0
         );
     }
 

@@ -145,6 +145,31 @@
           }
         },
         {
+          "name": "Parent",
+          "memberKind": "property_get",
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Workbooks",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          }
+        },
+        {
           "name": "Open",
           "memberKind": "method",
           "returnType": {
@@ -354,6 +379,31 @@
                 "kind": "primitive",
                 "name": "i32",
                 "aliasOf": "Int32"
+              }
+            }
+          }
+        },
+        {
+          "name": "Parent",
+          "memberKind": "property_get",
+          "returnType": {
+            "kind": "interface",
+            "name": "Workbook",
+            "aliasOf": "Excel.Workbook"
+          },
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Worksheets",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Workbook",
+                "aliasOf": "Excel.Workbook"
               }
             }
           }
