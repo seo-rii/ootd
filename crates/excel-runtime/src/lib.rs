@@ -2,13 +2,15 @@ use excel_model::WorkbookState;
 use excel_xlsx::{LoadedXlsxWorkbook, XlsxCodec};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
 use office_common::{
-    FileFormat, GetRangeValuesSpec, LoadOptions, ObjectHandle, OmArray, OmError, OmErrorCode,
-    OmResult, OmValue, OpaquePart, OpenWorkbookSpec, RangeHandle, RangeRef, Rect, SaveOptions,
-    SaveWorkbookSpec, SetRangeValuesSpec, SheetId, WorkbookHandle, WorkbookId, WorkbookModel,
-    WorksheetHandle, WorksheetModel,
+    ExcelProfile, FileFormat, GetRangeValuesSpec, LoadOptions, ObjectHandle, OmArray, OmError,
+    OmErrorCode, OmResult, OmValue, OpaquePart, OpenWorkbookSpec, RangeHandle, RangeRef, Rect,
+    SaveOptions, SaveWorkbookSpec, SetRangeValuesSpec, SheetId, WorkbookHandle, WorkbookId,
+    WorkbookModel, WorksheetHandle, WorksheetModel,
 };
 use office_idl::{AccessMode, SupportState};
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 const ROOT_APPLICATION_HANDLE_VALUE: u64 = 0;
 const FIRST_DYNAMIC_OBJECT_HANDLE_VALUE: u64 = 1_000_000;
@@ -21,6 +23,7 @@ const PINNED_OM_TEMPLATE_JSON: &str = include_str!(concat!(
 struct RuntimeWorkbook {
     loaded: LoadedXlsxWorkbook,
     read_only: bool,
+    source_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -88,6 +91,15 @@ impl ExcelRuntime {
     }
 
     pub fn open_workbook(&mut self, spec: OpenWorkbookSpec) -> OmResult<WorkbookHandle> {
+        self.open_workbook_with_display_name(spec, None, None)
+    }
+
+    fn open_workbook_with_display_name(
+        &mut self,
+        spec: OpenWorkbookSpec,
+        display_name: Option<String>,
+        source_path: Option<PathBuf>,
+    ) -> OmResult<WorkbookHandle> {
         let mut loaded = self.codec.load(
             &spec.bytes,
             LoadOptions {
@@ -109,6 +121,10 @@ impl ExcelRuntime {
             ));
         }
 
+        if let Some(display_name) = display_name.filter(|value| !value.is_empty()) {
+            loaded.state.model.display_name = display_name;
+        }
+
         let handle_value = self.next_handle;
         self.next_handle += 1;
         let workbook_id = WorkbookId(handle_value);
@@ -120,6 +136,7 @@ impl ExcelRuntime {
             RuntimeWorkbook {
                 loaded,
                 read_only: spec.read_only,
+                source_path,
             },
         );
         self.objects.insert(
@@ -273,6 +290,70 @@ impl ExcelRuntime {
         args: &[OmValue],
     ) -> OmResult<()> {
         match self.runtime_object(handle)? {
+            RuntimeObjectKind::Worksheet { workbook, sheet_id } => {
+                self.focus_member_supported("Worksheet", member, true)?;
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "Worksheet.{member} does not accept index arguments"
+                    )));
+                }
+                match member {
+                    "Name" => {
+                        let OmValue::Text(new_name) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Worksheet.Name expects a string value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        if new_name.trim().is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "Worksheet.Name cannot be empty",
+                            ));
+                        }
+                        if new_name.chars().count() > 31 {
+                            return Err(OmError::invalid_argument(
+                                "Worksheet.Name cannot exceed 31 characters",
+                            ));
+                        }
+                        if new_name.chars().any(|ch| {
+                            matches!(ch, ':' | '\\' | '/' | '?' | '*' | '[' | ']')
+                                || ch.is_control()
+                        }) {
+                            return Err(OmError::invalid_argument(
+                                "Worksheet.Name contains invalid characters",
+                            ));
+                        }
+                        if runtime.loaded.state.worksheets.iter().any(|worksheet| {
+                            worksheet.id != sheet_id
+                                && worksheet.name.eq_ignore_ascii_case(new_name.as_str())
+                        }) {
+                            return Err(OmError::invalid_argument(format!(
+                                "worksheet name {new_name:?} is already in use"
+                            )));
+                        }
+                        let worksheet = runtime
+                            .loaded
+                            .state
+                            .worksheets
+                            .iter_mut()
+                            .find(|worksheet| worksheet.id == sheet_id)
+                            .ok_or_else(|| {
+                                OmError::new(OmErrorCode::NotFound, "unknown worksheet")
+                            })?;
+                        worksheet.name = new_name;
+                        Ok(())
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "Worksheet.{member} is not writable"
+                    ))),
+                }
+            }
             RuntimeObjectKind::Range {
                 workbook,
                 sheet_id,
@@ -281,8 +362,7 @@ impl ExcelRuntime {
             RuntimeObjectKind::Application
             | RuntimeObjectKind::WorkbooksCollection
             | RuntimeObjectKind::Workbook { .. }
-            | RuntimeObjectKind::WorksheetsCollection { .. }
-            | RuntimeObjectKind::Worksheet { .. } => Err(OmError::unsupported(format!(
+            | RuntimeObjectKind::WorksheetsCollection { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
             ))),
         }
@@ -605,14 +685,22 @@ impl ExcelRuntime {
                     ));
                 }
                 let format = self.workbook_model(workbook)?.format;
-                let _ = self.save_workbook(
+                let bytes = self.save_workbook(
                     workbook,
                     SaveWorkbookSpec {
                         format,
-                        profile: office_common::ExcelProfile::Excel365,
+                        profile: ExcelProfile::Excel365,
                         lossless: true,
                     },
                 )?;
+                if let Some(path) = self.runtime_workbook(workbook)?.source_path.as_ref() {
+                    fs::write(path, &bytes).map_err(|error| {
+                        OmError::new(
+                            OmErrorCode::Io,
+                            format!("failed to write workbook {}: {error}", path.display()),
+                        )
+                    })?;
+                }
                 Ok(OmValue::Empty)
             }
             "Close" => {
@@ -632,6 +720,44 @@ impl ExcelRuntime {
 
     fn dispatch_invoke_workbooks(&mut self, member: &str, args: &[OmValue]) -> OmResult<OmValue> {
         match member {
+            "Open" => {
+                if args.len() != 1 {
+                    return Err(OmError::invalid_argument(
+                        "Workbooks.Open expects a single filename argument",
+                    ));
+                }
+                let path = match &args[0] {
+                    OmValue::Text(path) => path,
+                    _ => {
+                        return Err(OmError::type_mismatch(
+                            "Workbooks.Open expects a string filename",
+                        ));
+                    }
+                };
+                let bytes = fs::read(path).map_err(|error| {
+                    OmError::new(
+                        OmErrorCode::Io,
+                        format!("failed to read workbook {path}: {error}"),
+                    )
+                })?;
+                let display_name = Path::new(path)
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .map(str::to_owned);
+                Ok(OmValue::Object(
+                    self.open_workbook_with_display_name(
+                        OpenWorkbookSpec {
+                            bytes,
+                            format_hint: None,
+                            profile: ExcelProfile::Excel365,
+                            read_only: false,
+                        },
+                        display_name,
+                        Some(PathBuf::from(path)),
+                    )?
+                    .0,
+                ))
+            }
             "Item" => self.resolve_workbook_item(args),
             _ => Err(OmError::unsupported(format!(
                 "Workbooks.{member} is not implemented as a method"
@@ -985,6 +1111,9 @@ fn column_to_letters(mut col: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::{ExcelRuntime, supports_format};
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use office_common::{
         ExcelProfile, FileFormat, GetRangeValuesSpec, ObjectHandle, OmArray, OmErrorCode, OmValue,
         OpenWorkbookSpec, RangeRef, Rect, SaveWorkbookSpec, SetRangeValuesSpec, WorkbookId,
@@ -1998,6 +2127,251 @@ mod tests {
             missing.expect_err("missing member should fail").code,
             OmErrorCode::NotFound
         );
+    }
+
+    #[test]
+    fn workbooks_open_dispatch_reads_workbook_from_filesystem() {
+        let mut runtime = ExcelRuntime::new();
+        let path = std::env::temp_dir().join(format!(
+            "ootd-runtime-open-{}-{}.xlsx",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        fs::write(&path, synthetic_workbook_bytes()).expect("write workbook fixture");
+
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+        let opened = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[OmValue::Text(path.to_string_lossy().into_owned())],
+                )
+                .expect("Workbooks.Open"),
+        );
+
+        let active_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook"),
+        );
+        let workbook_item = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Item",
+                    &[OmValue::Text(
+                        path.file_name()
+                            .and_then(|value| value.to_str())
+                            .expect("filename")
+                            .to_string(),
+                    )],
+                )
+                .expect("Workbooks.Item(filename)"),
+        );
+
+        assert_eq!(opened, active_workbook);
+        assert_eq!(opened, workbook_item);
+
+        fs::remove_file(path).expect("cleanup fixture");
+    }
+
+    #[test]
+    fn workbook_save_dispatch_persists_changes_back_to_opened_path() {
+        let mut runtime = ExcelRuntime::new();
+        let path = std::env::temp_dir().join(format!(
+            "ootd-runtime-save-{}-{}.xlsx",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        fs::write(&path, synthetic_workbook_bytes()).expect("write workbook fixture");
+
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+        let workbook = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[OmValue::Text(path.to_string_lossy().into_owned())],
+                )
+                .expect("Workbooks.Open"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+
+        runtime
+            .dispatch_set(
+                active_sheet,
+                "Name",
+                OmValue::Text("SavedName".to_string()),
+                &[],
+            )
+            .expect("rename worksheet");
+        runtime
+            .dispatch_invoke(workbook, "Save", &[])
+            .expect("Workbook.Save");
+
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(
+                &fs::read(&path).expect("read saved workbook"),
+                office_common::LoadOptions::default(),
+            )
+            .expect("reload saved workbook");
+        assert_eq!(reopened.state.worksheets[0].name, "SavedName");
+
+        fs::remove_file(path).expect("cleanup fixture");
+    }
+
+    #[test]
+    fn worksheet_name_dispatch_renames_sheet_and_persists_on_save() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+
+        runtime
+            .dispatch_set(
+                active_sheet,
+                "Name",
+                OmValue::Text("Renamed".to_string()),
+                &[],
+            )
+            .expect("rename worksheet");
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("renamed sheet name")
+            ),
+            "Renamed"
+        );
+
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Worksheets"),
+        );
+        let renamed_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheets,
+                    "Item",
+                    &[OmValue::Text("Renamed".to_string())],
+                )
+                .expect("Worksheets.Item(Renamed)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(renamed_sheet, "Name", &[])
+                    .expect("renamed sheet lookup")
+            ),
+            "Renamed"
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, office_common::LoadOptions::default())
+            .expect("reopen saved workbook");
+
+        assert_eq!(reopened.state.worksheets[0].name, "Renamed");
+    }
+
+    #[test]
+    fn worksheet_name_dispatch_rejects_invalid_names_and_read_only_workbooks() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+
+        let read_only_error = runtime
+            .dispatch_set(
+                active_sheet,
+                "Name",
+                OmValue::Text("Blocked".to_string()),
+                &[],
+            )
+            .expect_err("read-only rename should fail");
+        assert_eq!(read_only_error.code, OmErrorCode::InvalidState);
+
+        runtime.close_workbook(workbook).expect("close read-only workbook");
+
+        let writable = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open writable workbook");
+        let writable_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+
+        let invalid_name = runtime
+            .dispatch_set(
+                writable_sheet,
+                "Name",
+                OmValue::Text("Bad/Name".to_string()),
+                &[],
+            )
+            .expect_err("invalid rename should fail");
+        assert_eq!(invalid_name.code, OmErrorCode::InvalidArgument);
+
+        runtime.close_workbook(writable).expect("close writable workbook");
     }
 
     fn synthetic_workbook_bytes() -> Vec<u8> {

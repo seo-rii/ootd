@@ -656,6 +656,97 @@ impl XlsxCodec {
         let mut package = workbook.package.clone();
         ensure_support_parts_present(&package, &workbook.support_parts)?;
         ensure_workbook_style_ids_are_valid(&workbook.state, &workbook.support_parts)?;
+        let workbook_xml = package
+            .part("xl/workbook.xml")
+            .ok_or_else(|| {
+                OmError::new(
+                    OmErrorCode::Parse,
+                    "workbook package is missing xl/workbook.xml",
+                )
+            })?
+            .bytes
+            .clone();
+        let saved_worksheets = parse_workbook(workbook_xml.as_slice(), &BTreeMap::new())?;
+        if saved_worksheets.len() != workbook.state.worksheets.len()
+            || saved_worksheets
+                .iter()
+                .zip(&workbook.state.worksheets)
+                .any(|(saved, current)| saved.id != current.id || saved.name != current.name)
+        {
+            let mut reader = Reader::from_reader(Cursor::new(workbook_xml.as_slice()));
+            reader.config_mut().trim_text(false);
+            let mut writer = Writer::new(Cursor::new(Vec::new()));
+            let mut buffer = Vec::new();
+            let rewrite_sheet_element =
+                |element: &BytesStart<'_>,
+                 decoder: quick_xml::encoding::Decoder|
+                 -> OmResult<BytesStart<'static>> {
+                    let mut sheet_id = None::<u64>;
+                    let mut relationship_id = None::<String>;
+                    let mut attrs = Vec::<(String, String)>::new();
+                    for attr in element.attributes() {
+                        let attr = attr.map_err(xml_error)?;
+                        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+                        let value = attr
+                            .decode_and_unescape_value(decoder)
+                            .map_err(xml_error)?
+                            .into_owned();
+                        if attr.key.as_ref() == b"sheetId" {
+                            sheet_id = value.parse::<u64>().ok();
+                        } else if attr.key.as_ref() == b"r:id" {
+                            relationship_id = Some(value.clone());
+                        }
+                        attrs.push((key, value));
+                    }
+                    let Some(worksheet) = workbook.state.worksheets.iter().find(|worksheet| {
+                        sheet_id == Some(worksheet.id.0)
+                            || relationship_id.as_deref() == worksheet.relationship_id.as_deref()
+                    }) else {
+                        return Ok(element.to_owned());
+                    };
+                    let mut rewritten = BytesStart::new(
+                        String::from_utf8_lossy(element.name().as_ref()).into_owned(),
+                    );
+                    let mut has_name_attr = false;
+                    for (key, value) in attrs {
+                        if key == "name" {
+                            rewritten.push_attribute(("name", worksheet.name.as_str()));
+                            has_name_attr = true;
+                            continue;
+                        }
+                        rewritten.push_attribute((key.as_str(), value.as_str()));
+                    }
+                    if !has_name_attr {
+                        rewritten.push_attribute(("name", worksheet.name.as_str()));
+                    }
+                    Ok(rewritten)
+                };
+
+            loop {
+                match reader.read_event_into(&mut buffer) {
+                    Ok(Event::Start(element)) if element.name().as_ref() == b"sheet" => writer
+                        .write_event(Event::Start(rewrite_sheet_element(
+                            &element,
+                            reader.decoder(),
+                        )?))
+                        .map_err(xml_error)?,
+                    Ok(Event::Empty(element)) if element.name().as_ref() == b"sheet" => writer
+                        .write_event(Event::Empty(rewrite_sheet_element(
+                            &element,
+                            reader.decoder(),
+                        )?))
+                        .map_err(xml_error)?,
+                    Ok(Event::Eof) => break,
+                    Ok(event) => writer
+                        .write_event(event.into_owned())
+                        .map_err(xml_error)?,
+                    Err(error) => return Err(xml_error(error)),
+                }
+                buffer.clear();
+            }
+
+            package.replace_part_bytes("xl/workbook.xml", writer.into_inner().into_inner())?;
+        }
         let mut dirty_worksheet_ids = BTreeSet::new();
         let mut worksheet_xml_rewrite_recovery_ids = BTreeSet::new();
         let mut worksheet_relationship_part_rewrite_recovery_ids = BTreeSet::new();
