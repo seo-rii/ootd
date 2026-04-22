@@ -162,6 +162,21 @@
               }
             }
           }
+        },
+        {
+          "name": "CalculateFullRebuild",
+          "memberKind": "method",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Application",
+                  "sourceMember": "CalculateFullRebuild"
+                }
+              ]
+            }
+          }
         }
       ]
     },

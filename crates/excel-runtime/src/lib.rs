@@ -484,9 +484,7 @@ impl ExcelRuntime {
         args: &[OmValue],
     ) -> OmResult<OmValue> {
         match self.runtime_object(handle)? {
-            RuntimeObjectKind::Application => Err(OmError::unsupported(format!(
-                "member {member} cannot be invoked on Application"
-            ))),
+            RuntimeObjectKind::Application => self.dispatch_invoke_application(member, args),
             RuntimeObjectKind::WorkbooksCollection => self.dispatch_invoke_workbooks(member, args),
             RuntimeObjectKind::Workbook { workbook } => {
                 self.dispatch_invoke_workbook(workbook, member, args)
@@ -1497,6 +1495,24 @@ impl ExcelRuntime {
             }
             _ => Err(OmError::unsupported(format!(
                 "Workbook.{member} is not implemented as a method"
+            ))),
+        }
+    }
+
+    fn dispatch_invoke_application(&mut self, member: &str, args: &[OmValue]) -> OmResult<OmValue> {
+        self.focus_member_supported("Application", member, false)?;
+
+        match member {
+            "CalculateFullRebuild" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.CalculateFullRebuild does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Empty)
+            }
+            _ => Err(OmError::unsupported(format!(
+                "Application.{member} is not implemented as a method"
             ))),
         }
     }
@@ -2782,6 +2798,57 @@ mod tests {
                     .expect("Selection after Cells address")
             ),
             "$B$2"
+        );
+    }
+
+    #[test]
+    fn application_calculate_full_rebuild_dispatch_is_a_noop_entrypoint() {
+        let mut runtime = ExcelRuntime::new();
+        let _workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let selection_before = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection before rebuild"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(application, "CalculateFullRebuild", &[])
+                .expect("Application.CalculateFullRebuild"),
+            OmValue::Empty
+        ));
+
+        let selection_after = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after rebuild"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection_before, "Address", &[])
+                    .expect("Selection before rebuild address")
+            ),
+            expect_text(
+                runtime
+                    .dispatch_get(selection_after, "Address", &[])
+                    .expect("Selection after rebuild address")
+            )
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(application, "CalculateFullRebuild", &[OmValue::Bool(true)],)
+                .expect_err("CalculateFullRebuild arguments should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 
