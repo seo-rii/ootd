@@ -1042,6 +1042,120 @@ impl ExcelRuntime {
                         .0,
                 ))
             }
+            "Rows" => {
+                let rect = match args {
+                    [] | [OmValue::Missing] | [OmValue::Empty] | [OmValue::Null] => Rect {
+                        row_first: 1,
+                        row_last: EXCEL_MAX_ROW_INDEX,
+                        col_first: 1,
+                        col_last: EXCEL_MAX_COLUMN_INDEX,
+                    },
+                    [index] => {
+                        let index = coerce_u32_arg(index, "Worksheet.Rows index")?;
+                        if index > EXCEL_MAX_ROW_INDEX {
+                            return Err(OmError::invalid_argument(
+                                "Worksheet.Rows index is out of bounds",
+                            ));
+                        }
+                        Rect {
+                            row_first: index,
+                            row_last: index,
+                            col_first: 1,
+                            col_last: EXCEL_MAX_COLUMN_INDEX,
+                        }
+                    }
+                    _ => {
+                        return Err(OmError::invalid_argument(
+                            "Worksheet.Rows expects an optional row index",
+                        ));
+                    }
+                };
+                Ok(OmValue::Object(
+                    self.register_projected_range_handle(
+                        workbook,
+                        sheet_id,
+                        rect,
+                        RangeProjection::Rows,
+                    )
+                    .0,
+                ))
+            }
+            "Columns" => {
+                let rect = match args {
+                    [] | [OmValue::Missing] | [OmValue::Empty] | [OmValue::Null] => Rect {
+                        row_first: 1,
+                        row_last: EXCEL_MAX_ROW_INDEX,
+                        col_first: 1,
+                        col_last: EXCEL_MAX_COLUMN_INDEX,
+                    },
+                    [OmValue::Number(number)] => {
+                        let index = coerce_positive_index(*number, "Worksheet.Columns index")?;
+                        if index > EXCEL_MAX_COLUMN_INDEX {
+                            return Err(OmError::invalid_argument(
+                                "Worksheet.Columns index is out of bounds",
+                            ));
+                        }
+                        Rect {
+                            row_first: 1,
+                            row_last: EXCEL_MAX_ROW_INDEX,
+                            col_first: index,
+                            col_last: index,
+                        }
+                    }
+                    [OmValue::Text(reference)] => {
+                        let reference = reference.trim().replace('$', "").to_ascii_uppercase();
+                        if reference.is_empty()
+                            || !reference.chars().all(|ch| ch.is_ascii_alphabetic())
+                        {
+                            return Err(OmError::invalid_argument(
+                                "Worksheet.Columns text selector must be a column label like \"B\"",
+                            ));
+                        }
+
+                        let mut index = 0u32;
+                        for ch in reference.bytes() {
+                            index = index
+                                .checked_mul(26)
+                                .and_then(|value| value.checked_add((ch - b'A' + 1) as u32))
+                                .ok_or_else(|| {
+                                    OmError::invalid_argument(
+                                        "Worksheet.Columns text selector overflows column bounds",
+                                    )
+                                })?;
+                        }
+                        if index > EXCEL_MAX_COLUMN_INDEX {
+                            return Err(OmError::invalid_argument(
+                                "Worksheet.Columns text selector is out of bounds",
+                            ));
+                        }
+                        Rect {
+                            row_first: 1,
+                            row_last: EXCEL_MAX_ROW_INDEX,
+                            col_first: index,
+                            col_last: index,
+                        }
+                    }
+                    [_] => {
+                        return Err(OmError::type_mismatch(
+                            "Worksheet.Columns expects a numeric index or column label string",
+                        ));
+                    }
+                    _ => {
+                        return Err(OmError::invalid_argument(
+                            "Worksheet.Columns expects an optional column index or label",
+                        ));
+                    }
+                };
+                Ok(OmValue::Object(
+                    self.register_projected_range_handle(
+                        workbook,
+                        sheet_id,
+                        rect,
+                        RangeProjection::Columns,
+                    )
+                    .0,
+                ))
+            }
             _ => Err(OmError::unsupported(format!(
                 "Worksheet.{member} is not implemented as a property"
             ))),
@@ -3483,6 +3597,130 @@ mod tests {
                     .expect("EntireColumn.Columns.Count")
             ),
             2.0
+        );
+    }
+
+    #[test]
+    fn worksheet_rows_and_columns_dispatch_expose_lazy_axis_handles() {
+        let mut runtime = ExcelRuntime::new();
+        let _workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let rows = expect_object_handle(
+            runtime
+                .dispatch_get(active_sheet, "Rows", &[])
+                .expect("Rows"),
+        );
+        let second_row = expect_object_handle(
+            runtime
+                .dispatch_get(active_sheet, "Rows", &[OmValue::Number(2.0)])
+                .expect("Rows(2)"),
+        );
+        let rows_item = expect_object_handle(
+            runtime
+                .dispatch_invoke(rows, "Item", &[OmValue::Number(2.0)])
+                .expect("Rows.Item(2)"),
+        );
+        let columns = expect_object_handle(
+            runtime
+                .dispatch_get(active_sheet, "Columns", &[])
+                .expect("Columns"),
+        );
+        let second_column = expect_object_handle(
+            runtime
+                .dispatch_get(active_sheet, "Columns", &[OmValue::Number(2.0)])
+                .expect("Columns(2)"),
+        );
+        let text_column = expect_object_handle(
+            runtime
+                .dispatch_get(active_sheet, "Columns", &[OmValue::Text("B".to_string())])
+                .expect("Columns(\"B\")"),
+        );
+        let columns_item = expect_object_handle(
+            runtime
+                .dispatch_invoke(columns, "Item", &[OmValue::Number(2.0)])
+                .expect("Columns.Item(2)"),
+        );
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(rows, "Count", &[])
+                    .expect("Rows.Count")
+            ),
+            1048576.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(columns, "Count", &[])
+                    .expect("Columns.Count")
+            ),
+            16384.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(second_row, "Address", &[])
+                    .expect("Rows(2).Address")
+            ),
+            "$A$2:$XFD$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(rows_item, "Address", &[])
+                    .expect("Rows.Item(2).Address")
+            ),
+            "$A$2:$XFD$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(second_column, "Address", &[])
+                    .expect("Columns(2).Address")
+            ),
+            "$B$1:$B$1048576"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(text_column, "Address", &[])
+                    .expect("Columns(\"B\").Address")
+            ),
+            "$B$1:$B$1048576"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(columns_item, "Address", &[])
+                    .expect("Columns.Item(2).Address")
+            ),
+            "$B$1:$B$1048576"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(active_sheet, "Rows", &[OmValue::Number(0.0)])
+                .expect_err("Rows(0) should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(active_sheet, "Columns", &[OmValue::Text("XFE".to_string())])
+                .expect_err("Columns(\"XFE\") should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 
