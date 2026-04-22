@@ -128,18 +128,18 @@ impl ExcelRuntime {
     }
 
     pub fn create_workbook(&mut self) -> OmResult<WorkbookHandle> {
+        self.create_detached_workbook(OpenWorkbookSpec {
+            bytes: blank_workbook_bytes(),
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+    }
+
+    fn create_detached_workbook(&mut self, spec: OpenWorkbookSpec) -> OmResult<WorkbookHandle> {
         let workbook_name = format!("Book{}", self.next_created_workbook_index);
         self.next_created_workbook_index += 1;
-        self.open_workbook_with_display_name(
-            OpenWorkbookSpec {
-                bytes: blank_workbook_bytes(),
-                format_hint: Some(FileFormat::Xlsx),
-                profile: ExcelProfile::Excel365,
-                read_only: false,
-            },
-            Some(workbook_name),
-            None,
-        )
+        self.open_workbook_with_display_name(spec, Some(workbook_name), None)
     }
 
     fn open_workbook_with_display_name(
@@ -1954,29 +1954,41 @@ impl ExcelRuntime {
                         "Workbooks.Add accepts at most a single Template argument",
                     ));
                 }
-                if let Some(value) = args.first() {
-                    match value {
-                        OmValue::Missing | OmValue::Empty | OmValue::Null => {}
-                        OmValue::Number(template)
-                            if *template == f64::from(XL_WBA_TEMPLATE_WORKSHEET) => {}
-                        OmValue::Number(_) => {
-                            return Err(OmError::unsupported(
-                                "Workbooks.Add currently only supports Template := xlWBATWorksheet",
-                            ));
-                        }
-                        OmValue::Text(_) => {
-                            return Err(OmError::unsupported(
-                                "Workbooks.Add template file arguments are not implemented",
-                            ));
-                        }
-                        _ => {
-                            return Err(OmError::type_mismatch(
-                                "Workbooks.Add Template expects an XlWBATemplate numeric value or template path when provided",
-                            ));
-                        }
+                let workbook = match args.first() {
+                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => {
+                        self.create_workbook()?
                     }
-                }
-                Ok(OmValue::Object(self.create_workbook()?.0))
+                    Some(OmValue::Number(template))
+                        if *template == f64::from(XL_WBA_TEMPLATE_WORKSHEET) =>
+                    {
+                        self.create_workbook()?
+                    }
+                    Some(OmValue::Number(_)) => {
+                        return Err(OmError::unsupported(
+                            "Workbooks.Add currently only supports Template := xlWBATWorksheet for numeric XlWBATemplate values",
+                        ));
+                    }
+                    Some(OmValue::Text(path)) => {
+                        let bytes = fs::read(path).map_err(|error| {
+                            OmError::new(
+                                OmErrorCode::Io,
+                                format!("failed to read workbook template {path}: {error}"),
+                            )
+                        })?;
+                        self.create_detached_workbook(OpenWorkbookSpec {
+                            bytes,
+                            format_hint: None,
+                            profile: ExcelProfile::Excel365,
+                            read_only: false,
+                        })?
+                    }
+                    Some(_) => {
+                        return Err(OmError::type_mismatch(
+                            "Workbooks.Add Template expects an XlWBATemplate numeric value or template path when provided",
+                        ));
+                    }
+                };
+                Ok(OmValue::Object(workbook.0))
             }
             "Open" => {
                 if args.len() != 1 {
@@ -7163,6 +7175,212 @@ mod tests {
     }
 
     #[test]
+    fn workbooks_add_supports_template_file_clones_with_detached_book_identity() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let fixture_dir =
+            std::env::temp_dir().join(format!("ootd-workbooks-add-template-{unique}"));
+        fs::create_dir_all(&fixture_dir).expect("create template fixture dir");
+        let template_path = fixture_dir.join("template.xlsx");
+
+        let mut template_runtime = ExcelRuntime::new();
+        let template_workbook = template_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open template workbook");
+        let template_sheet = expect_object_handle(
+            template_runtime
+                .dispatch_get(template_runtime.root_application(), "ActiveSheet", &[])
+                .expect("template ActiveSheet"),
+        );
+        template_runtime
+            .dispatch_set(
+                template_sheet,
+                "Name",
+                OmValue::Text("TemplateSheet".to_string()),
+                &[],
+            )
+            .expect("rename template sheet");
+        let template_marker = expect_object_handle(
+            template_runtime
+                .dispatch_invoke(template_sheet, "Range", &[OmValue::Text("C3".to_string())])
+                .expect("template Range(C3)"),
+        );
+        template_runtime
+            .dispatch_set(
+                template_marker,
+                "Value2",
+                OmValue::Text("from template".to_string()),
+                &[],
+            )
+            .expect("set template marker");
+        let template_bytes = template_runtime
+            .save_workbook(
+                template_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save template workbook");
+        fs::write(&template_path, template_bytes).expect("write template workbook");
+
+        let mut runtime = ExcelRuntime::new();
+        let application = runtime.root_application();
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Workbooks", &[])
+                .expect("Application.Workbooks"),
+        );
+        let cloned_workbook = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Add",
+                    &[OmValue::Text(template_path.to_string_lossy().into_owned())],
+                )
+                .expect("Workbooks.Add template path"),
+        );
+        let active_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let copied_marker = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C3".to_string())])
+                .expect("Range(C3)"),
+        );
+
+        assert_eq!(cloned_workbook, active_workbook);
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(cloned_workbook, "Name", &[])
+                    .expect("Workbook.Name")
+            ),
+            "Book1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(cloned_workbook, "FullName", &[])
+                    .expect("Workbook.FullName")
+            ),
+            "Book1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(cloned_workbook, "Path", &[])
+                    .expect("Workbook.Path")
+            ),
+            ""
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("ActiveSheet.Name")
+            ),
+            "TemplateSheet"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(copied_marker, "Value2", &[])
+                    .expect("C3 Value2")
+            ),
+            "from template"
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(cloned_workbook, "Saved", &[])
+                .expect("Workbook.Saved")
+        ));
+
+        runtime
+            .dispatch_set(
+                active_sheet,
+                "Name",
+                OmValue::Text("ClonedSheet".to_string()),
+                &[],
+            )
+            .expect("rename cloned sheet");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(cloned_workbook, "Saved", &[])
+                .expect("Workbook.Saved after mutation")
+        ));
+        runtime
+            .dispatch_invoke(cloned_workbook, "Close", &[OmValue::Bool(true)])
+            .expect("Close cloned workbook");
+
+        let mut inspect_runtime = ExcelRuntime::new();
+        let inspected_workbooks = expect_object_handle(
+            inspect_runtime
+                .dispatch_get(inspect_runtime.root_application(), "Workbooks", &[])
+                .expect("inspect Workbooks"),
+        );
+        let inspected_template = expect_object_handle(
+            inspect_runtime
+                .dispatch_invoke(
+                    inspected_workbooks,
+                    "Open",
+                    &[OmValue::Text(template_path.to_string_lossy().into_owned())],
+                )
+                .expect("reopen template workbook"),
+        );
+        let inspected_sheet = expect_object_handle(
+            inspect_runtime
+                .dispatch_get(inspect_runtime.root_application(), "ActiveSheet", &[])
+                .expect("inspected ActiveSheet"),
+        );
+        let inspected_marker = expect_object_handle(
+            inspect_runtime
+                .dispatch_invoke(inspected_sheet, "Range", &[OmValue::Text("C3".to_string())])
+                .expect("inspected Range(C3)"),
+        );
+
+        assert_eq!(
+            expect_text(
+                inspect_runtime
+                    .dispatch_get(inspected_sheet, "Name", &[])
+                    .expect("template sheet name after clone close")
+            ),
+            "TemplateSheet"
+        );
+        assert_eq!(
+            expect_text(
+                inspect_runtime
+                    .dispatch_get(inspected_marker, "Value2", &[])
+                    .expect("template marker value after clone close")
+            ),
+            "from template"
+        );
+        assert_eq!(
+            expect_text(
+                inspect_runtime
+                    .dispatch_get(inspected_template, "Name", &[])
+                    .expect("template workbook name after clone close")
+            ),
+            "template.xlsx"
+        );
+    }
+
+    #[test]
     fn workbooks_add_rejects_unsupported_template_variants() {
         let mut runtime = ExcelRuntime::new();
         let workbooks = expect_object_handle(
@@ -7181,11 +7399,13 @@ mod tests {
             .dispatch_invoke(
                 workbooks,
                 "Add",
-                &[OmValue::Text("template.xlsx".to_string())],
+                &[OmValue::Text(
+                    "/definitely/missing/template.xlsx".to_string(),
+                )],
             )
-            .expect_err("Workbooks.Add should reject template files for now");
-        assert_eq!(template_file_error.code, OmErrorCode::Unsupported);
-        assert!(template_file_error.message.contains("template file"));
+            .expect_err("Workbooks.Add should surface missing template files");
+        assert_eq!(template_file_error.code, OmErrorCode::Io);
+        assert!(template_file_error.message.contains("workbook template"));
 
         let type_mismatch_error = runtime
             .dispatch_invoke(workbooks, "Add", &[OmValue::Bool(true)])
