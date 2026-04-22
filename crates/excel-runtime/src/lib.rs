@@ -537,15 +537,18 @@ impl ExcelRuntime {
                                         }
                                     }
                                     RangeProjection::Cells => {
-                                        let cell_count = rect.width() * rect.height();
-                                        if index > cell_count {
+                                        let cell_count =
+                                            u64::from(rect.width()) * u64::from(rect.height());
+                                        if u64::from(index) > cell_count {
                                             return Err(OmError::invalid_argument(
                                                 "Range.Item index is out of bounds",
                                             ));
                                         }
-                                        let zero_based = index - 1;
-                                        let row_offset = zero_based / rect.width();
-                                        let col_offset = zero_based % rect.width();
+                                        let zero_based = u64::from(index - 1);
+                                        let row_offset =
+                                            (zero_based / u64::from(rect.width())) as u32;
+                                        let col_offset =
+                                            (zero_based % u64::from(rect.width())) as u32;
                                         Rect::single_cell(
                                             rect.row_first + row_offset,
                                             rect.col_first + col_offset,
@@ -1036,10 +1039,20 @@ impl ExcelRuntime {
                 ))
             }
             "Cells" => {
-                let (row, col) = parse_cells_args(args)?;
+                let rect = match args {
+                    [] | [OmValue::Missing] | [OmValue::Empty] | [OmValue::Null] => Rect {
+                        row_first: 1,
+                        row_last: EXCEL_MAX_ROW_INDEX,
+                        col_first: 1,
+                        col_last: EXCEL_MAX_COLUMN_INDEX,
+                    },
+                    _ => {
+                        let (row, col) = parse_cells_args(args)?;
+                        Rect::single_cell(row, col)
+                    }
+                };
                 Ok(OmValue::Object(
-                    self.register_range_handle(workbook, sheet_id, Rect::single_cell(row, col))
-                        .0,
+                    self.register_range_handle(workbook, sheet_id, rect).0,
                 ))
             }
             "Rows" => {
@@ -1295,9 +1308,9 @@ impl ExcelRuntime {
                 .0,
             )),
             "Count" => Ok(OmValue::Number(match projection {
-                RangeProjection::Cells => rect.width() * rect.height(),
-                RangeProjection::Rows => rect.height(),
-                RangeProjection::Columns => rect.width(),
+                RangeProjection::Cells => u64::from(rect.width()) * u64::from(rect.height()),
+                RangeProjection::Rows => u64::from(rect.height()),
+                RangeProjection::Columns => u64::from(rect.width()),
             } as f64)),
             _ => Err(OmError::unsupported(format!(
                 "Range.{member} is not implemented"
@@ -3721,6 +3734,94 @@ mod tests {
                 .expect_err("Columns(\"XFE\") should be rejected")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn worksheet_cells_dispatch_supports_full_sheet_cell_view_and_indexed_cells() {
+        let mut runtime = ExcelRuntime::new();
+        let _workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let full_cells = expect_object_handle(
+            runtime
+                .dispatch_get(active_sheet, "Cells", &[])
+                .expect("Cells"),
+        );
+        let indexed_cell = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    active_sheet,
+                    "Cells",
+                    &[OmValue::Number(2.0), OmValue::Number(2.0)],
+                )
+                .expect("Cells(2, 2)"),
+        );
+        let full_cells_item = expect_object_handle(
+            runtime
+                .dispatch_invoke(full_cells, "Item", &[OmValue::Number(2.0)])
+                .expect("Cells.Item(2)"),
+        );
+        let full_cells_rows = expect_object_handle(
+            runtime
+                .dispatch_get(full_cells, "Rows", &[])
+                .expect("Cells.Rows"),
+        );
+        let full_cells_columns = expect_object_handle(
+            runtime
+                .dispatch_get(full_cells, "Columns", &[])
+                .expect("Cells.Columns"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(full_cells, "Address", &[])
+                    .expect("Cells.Address")
+            ),
+            "$A$1:$XFD$1048576"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(full_cells_item, "Address", &[])
+                    .expect("Cells.Item(2).Address")
+            ),
+            "$B$1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(indexed_cell, "Address", &[])
+                    .expect("Cells(2, 2).Address")
+            ),
+            "$B$2"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(full_cells_rows, "Count", &[])
+                    .expect("Cells.Rows.Count")
+            ),
+            1048576.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(full_cells_columns, "Count", &[])
+                    .expect("Cells.Columns.Count")
+            ),
+            16384.0
         );
     }
 
