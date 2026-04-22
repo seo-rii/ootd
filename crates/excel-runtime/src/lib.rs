@@ -832,7 +832,7 @@ impl ExcelRuntime {
 
     fn dispatch_get_application(&mut self, member: &str, args: &[OmValue]) -> OmResult<OmValue> {
         self.focus_member_supported("Application", member, false)?;
-        if !args.is_empty() && !matches!(member, "Cells" | "Workbooks") {
+        if !args.is_empty() && !matches!(member, "Cells" | "Rows" | "Columns" | "Workbooks") {
             return Err(OmError::invalid_argument(format!(
                 "Application.{member} does not accept index arguments"
             )));
@@ -900,6 +900,13 @@ impl ExcelRuntime {
                 } else {
                     self.dispatch_invoke_worksheet(active_workbook, sheet_id, "Cells", args)
                 }
+            }
+            "Rows" | "Columns" => {
+                let Some(active_workbook) = self.active_workbook else {
+                    return Ok(OmValue::Empty);
+                };
+                let sheet_id = self.active_sheet_id(active_workbook)?;
+                self.dispatch_get_worksheet(active_workbook, sheet_id, member, args)
             }
             _ => Err(OmError::unsupported(format!(
                 "Application.{member} is not implemented"
@@ -6597,6 +6604,219 @@ mod tests {
             empty_runtime
                 .dispatch_get(empty_application, "Cells", &[])
                 .expect("Application.Cells without active workbook"),
+            OmValue::Empty
+        );
+    }
+
+    #[test]
+    fn application_rows_and_columns_dispatch_target_the_active_sheet_without_changing_selection() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook1 = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook1");
+        let workbook2 = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook2");
+        let worksheets1 = expect_object_handle(
+            runtime
+                .dispatch_get(workbook1.0, "Worksheets", &[])
+                .expect("Workbook1.Worksheets"),
+        );
+        let worksheet1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets1, "Item", &[OmValue::Number(1.0)])
+                .expect("Workbook1.Worksheets.Item(1)"),
+        );
+        let worksheets2 = expect_object_handle(
+            runtime
+                .dispatch_get(workbook2.0, "Worksheets", &[])
+                .expect("Workbook2.Worksheets"),
+        );
+        let worksheet2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets2, "Item", &[OmValue::Number(1.0)])
+                .expect("Workbook2.Worksheets.Item(1)"),
+        );
+
+        runtime
+            .dispatch_set(
+                worksheet1,
+                "Name",
+                OmValue::Text("FirstSheet".to_string()),
+                &[],
+            )
+            .expect("rename workbook1 sheet");
+        runtime
+            .dispatch_set(
+                worksheet2,
+                "Name",
+                OmValue::Text("SecondSheet".to_string()),
+                &[],
+            )
+            .expect("rename workbook2 sheet");
+        runtime
+            .dispatch_invoke(worksheet1, "Activate", &[])
+            .expect("Worksheet.Activate");
+
+        let application = runtime.root_application();
+        let seed_selection = expect_object_handle(
+            runtime
+                .dispatch_invoke(application, "Range", &[OmValue::Text("D5".to_string())])
+                .expect("Application.Range(D5)"),
+        );
+        let full_rows = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Rows", &[])
+                .expect("Application.Rows"),
+        );
+        let indexed_rows = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Rows", &[OmValue::Text("2:3".to_string())])
+                .expect("Application.Rows(\"2:3\")"),
+        );
+        let full_columns = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Columns", &[])
+                .expect("Application.Columns"),
+        );
+        let indexed_columns = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Columns", &[OmValue::Text("B:C".to_string())])
+                .expect("Application.Columns(\"B:C\")"),
+        );
+        let active_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after Application.Rows/Columns"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after Application.Rows/Columns"),
+        );
+        let active_cell = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveCell", &[])
+                .expect("ActiveCell after Application.Rows/Columns"),
+        );
+        let selection = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after Application.Rows/Columns"),
+        );
+
+        assert_eq!(active_workbook, workbook1.0);
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(full_rows, "Address", &[])
+                    .expect("Application.Rows address")
+            ),
+            "$A$1:$XFD$1048576"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(full_rows, "Count", &[])
+                .expect("Application.Rows count"),
+            OmValue::Number(crate::EXCEL_MAX_ROW_INDEX as f64)
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(indexed_rows, "Address", &[])
+                    .expect("Application.Rows(\"2:3\") address")
+            ),
+            "$A$2:$XFD$3"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(indexed_rows, "Count", &[])
+                .expect("Application.Rows(\"2:3\") count"),
+            OmValue::Number(2.0)
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(full_columns, "Address", &[])
+                    .expect("Application.Columns address")
+            ),
+            "$A$1:$XFD$1048576"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(full_columns, "Count", &[])
+                .expect("Application.Columns count"),
+            OmValue::Number(crate::EXCEL_MAX_COLUMN_INDEX as f64)
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(indexed_columns, "Address", &[])
+                    .expect("Application.Columns(\"B:C\") address")
+            ),
+            "$B$1:$C$1048576"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(indexed_columns, "Count", &[])
+                .expect("Application.Columns(\"B:C\") count"),
+            OmValue::Number(2.0)
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("ActiveSheet after Application.Rows/Columns name")
+            ),
+            "FirstSheet"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection, "Address", &[])
+                    .expect("Selection after Application.Rows/Columns address")
+            ),
+            "$D$5"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_cell, "Address", &[])
+                    .expect("ActiveCell after Application.Rows/Columns address")
+            ),
+            "$D$5"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(seed_selection, "Address", &[])
+                    .expect("seed selection address")
+            ),
+            "$D$5"
+        );
+
+        let mut empty_runtime = ExcelRuntime::new();
+        let empty_application = empty_runtime.root_application();
+        assert_eq!(
+            empty_runtime
+                .dispatch_get(empty_application, "Rows", &[])
+                .expect("Application.Rows without active workbook"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            empty_runtime
+                .dispatch_get(empty_application, "Columns", &[])
+                .expect("Application.Columns without active workbook"),
             OmValue::Empty
         );
     }
