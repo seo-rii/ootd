@@ -65,6 +65,14 @@ cargo test -p excel-xlsx
 cargo test -p office-capture
 ```
 
+## Continuous Integration
+
+GitHub Actions runs the workspace test suite on pushes to `main`, pull requests, and manual dispatches.
+
+```bash
+cargo test --workspace --locked --quiet
+```
+
 ## Documentation
 
 - [Documentation index](docs/README.md)

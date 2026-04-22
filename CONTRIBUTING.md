@@ -36,6 +36,12 @@ Run the full workspace tests:
 cargo test --workspace --quiet
 ```
 
+GitHub Actions CI currently runs the locked workspace test command:
+
+```bash
+cargo test --workspace --locked --quiet
+```
+
 Run focused tests while iterating:
 
 ```bash
