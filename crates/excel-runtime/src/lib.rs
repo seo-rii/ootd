@@ -20,6 +20,7 @@ const ROOT_APPLICATION_HANDLE_VALUE: u64 = 0;
 const FIRST_DYNAMIC_OBJECT_HANDLE_VALUE: u64 = 1_000_000;
 const EXCEL_MAX_ROW_INDEX: u32 = 1_048_576;
 const EXCEL_MAX_COLUMN_INDEX: u32 = 16_384;
+const XL_SHEET_TYPE_WORKSHEET: i32 = -4167;
 const CONTENT_TYPES_PART_NAME: &str = "[Content_Types].xml";
 const WORKBOOK_PART_NAME: &str = "xl/workbook.xml";
 const WORKBOOK_RELS_PART_NAME: &str = "xl/_rels/workbook.xml.rels";
@@ -2150,10 +2151,27 @@ impl ExcelRuntime {
                 }
             },
         };
-        if matches!(args.get(3), Some(value) if !om_value_is_omitted(value)) {
-            return Err(OmError::unsupported(
-                "Worksheets.Add currently only supports omitted Type arguments",
-            ));
+        if let Some(value) = args.get(3) {
+            match value {
+                OmValue::Missing | OmValue::Empty | OmValue::Null => {}
+                OmValue::Number(sheet_type)
+                    if *sheet_type == f64::from(XL_SHEET_TYPE_WORKSHEET) => {}
+                OmValue::Number(_) => {
+                    return Err(OmError::unsupported(
+                        "Worksheets.Add currently only supports Type := xlWorksheet",
+                    ));
+                }
+                OmValue::Text(_) => {
+                    return Err(OmError::unsupported(
+                        "Worksheets.Add template Type arguments are not implemented",
+                    ));
+                }
+                _ => {
+                    return Err(OmError::type_mismatch(
+                        "Worksheets.Add Type expects an XlSheetType numeric value or template path when provided",
+                    ));
+                }
+            }
         }
 
         let base_insertion_index = self
@@ -9143,6 +9161,94 @@ mod tests {
     }
 
     #[test]
+    fn worksheets_add_supports_explicit_xlworksheet_type() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheet2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheets,
+                    "Add",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(f64::from(super::XL_SHEET_TYPE_WORKSHEET)),
+                    ],
+                )
+                .expect("Worksheets.Add Type:=xlWorksheet"),
+        );
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(worksheets, "Count", &[])
+                    .expect("Worksheets.Count after typed add")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(sheet2, "Name", &[])
+                    .expect("typed add sheet name")
+            ),
+            "Sheet2"
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after typed add"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("active sheet name after typed add")
+            ),
+            "Sheet2"
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen saved workbook");
+
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .map(|worksheet| worksheet.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["Sheet2".to_string(), "Sheet1".to_string()]
+        );
+    }
+
+    #[test]
     fn worksheets_add_rejects_invalid_placement_arguments_and_read_only_workbooks() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -9237,6 +9343,51 @@ mod tests {
             .expect_err("Worksheets.Add should reject non-numeric Count");
         assert_eq!(count_type_error.code, OmErrorCode::TypeMismatch);
         assert!(count_type_error.message.contains("numeric value"));
+
+        let unsupported_type_error = runtime
+            .dispatch_invoke(
+                worksheets,
+                "Add",
+                &[
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Number(-4109.0),
+                ],
+            )
+            .expect_err("Worksheets.Add should reject non-worksheet sheet types");
+        assert_eq!(unsupported_type_error.code, OmErrorCode::Unsupported);
+        assert!(unsupported_type_error.message.contains("xlWorksheet"));
+
+        let template_type_error = runtime
+            .dispatch_invoke(
+                worksheets,
+                "Add",
+                &[
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Text("template.xltx".to_string()),
+                ],
+            )
+            .expect_err("Worksheets.Add should reject template-based Type arguments");
+        assert_eq!(template_type_error.code, OmErrorCode::Unsupported);
+        assert!(template_type_error.message.contains("template Type"));
+
+        let type_mismatch_error = runtime
+            .dispatch_invoke(
+                worksheets,
+                "Add",
+                &[
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Bool(true),
+                ],
+            )
+            .expect_err("Worksheets.Add should reject invalid Type coercions");
+        assert_eq!(type_mismatch_error.code, OmErrorCode::TypeMismatch);
+        assert!(type_mismatch_error.message.contains("XlSheetType"));
 
         let mut read_only_runtime = ExcelRuntime::new();
         let read_only_workbook = read_only_runtime
