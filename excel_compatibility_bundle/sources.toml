@@ -1,0 +1,115 @@
+# Canonical spec source registry
+# Keep revisions pinned. Update intentionally.
+
+[project]
+name = "excel-compat-core"
+default_profile = "excel_365"
+default_mode = "lossless"
+
+[om_contract]
+primary = "excel_type_library"
+secondary = "excel_pia"
+docs = "excel_vba_reference"
+
+[om_contract.excel_type_library]
+platform = "windows"
+app = "Excel"
+major = 16
+minor = 0
+artifact_kind = "tlb"
+notes = "Primary machine-readable OM contract source"
+
+[om_contract.excel_pia]
+assembly = "Microsoft.Office.Interop.Excel"
+notes = "Secondary machine-readable OM contract source"
+
+[om_contract.docs]
+vba_reference = "learn_excel_vba_object_model"
+range_object = "learn_excel_range_object"
+value2 = "learn_excel_range_value2"
+
+[ooxml]
+primary = "ecma_376"
+packaging = "opc_part2"
+implementation_notes = "ms_oi29500"
+excel_extensions = "ms_xlsx"
+shared_structures = "ms_oshared"
+
+[ooxml.ecma_376]
+edition = 5
+published = "2021-12"
+part1 = "Fundamentals and Markup Language Reference"
+part2 = "Open Packaging Conventions"
+part3 = "Markup Compatibility and Extensibility"
+part4 = "Transitional Migration Features"
+
+[ooxml.ms_xlsx]
+family = "openspecs"
+doc = "MS-XLSX"
+revision_date = "2025-05-20"
+role = "Excel-specific OOXML extensions"
+
+[ooxml.ms_oi29500]
+family = "openspecs"
+doc = "MS-OI29500"
+revision_date = "2023-03-08"
+role = "Office implementation notes for ISO/IEC 29500"
+
+[ooxml.ms_oshared]
+family = "openspecs"
+doc = "MS-OSHARED"
+revision_date = "2021-08-17"
+role = "Shared Office structures"
+
+[binary_formats]
+xlsb = "MS-XLSB"
+xls = "MS-XLS"
+cfb = "MS-CFB"
+offcrypto = "MS-OFFCRYPTO"
+
+[behavior]
+oracle = "microsoft_excel_desktop"
+recalc = "excel_recalculation"
+calc_chain = "calc_chain_docs"
+date_system = "excel_date_systems"
+limits = "excel_specifications_and_limits"
+compatibility = "function_version_behavior"
+
+[test_corpus]
+official_ms = true
+open_source = true
+synthetic = true
+real_world = true
+
+[test_corpus.official_ms]
+office_scripts_samples = true
+data_validation_examples = true
+power_bi_financial_sample = true
+mos_excel_course_materials = true
+mos_excel_expert_course_materials = true
+
+[test_corpus.open_source]
+open_xml_sdk = true
+apache_poi_test_data = true
+libreoffice_sc_qa_unit_data = true
+
+[validation]
+openxml_validator = true
+excel_oracle = true
+render_snapshot = true
+fuzz = true
+
+[profiles.excel_2016]
+dynamic_arrays = false
+implicit_intersection_at = false
+strict_write = false
+
+[profiles.excel_2021]
+dynamic_arrays = true
+implicit_intersection_at = true
+strict_write = false
+
+[profiles.excel_365]
+dynamic_arrays = true
+implicit_intersection_at = true
+strict_write = false
