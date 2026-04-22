@@ -87,7 +87,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development expectations and contribu
 
 ## License
 
-Licensed under either of the following, at your option:
-
-- MIT
-- Apache-2.0
+MIT. See [LICENSE](LICENSE).
