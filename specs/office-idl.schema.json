@@ -1,0 +1,185 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/office-idl.schema.json",
+  "title": "Office IDL",
+  "type": "object",
+  "required": ["library", "version", "interfaces"],
+  "properties": {
+    "library": { "type": "string" },
+    "version": { "type": "string" },
+    "metadata": { "$ref": "#/$defs/metadata" },
+    "enums": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/enum" }
+    },
+    "interfaces": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/interface" }
+    },
+    "classes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/class" }
+    }
+  },
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "namespace": { "type": "string" },
+        "typeLibraryGuid": { "type": "string" },
+        "iid": { "type": "string" },
+        "clsid": { "type": "string" },
+        "sourceInherits": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "sourceDefaultInterface": { "type": "string" },
+        "capture": { "$ref": "#/$defs/captureMetadata" }
+      }
+    },
+    "supportState": {
+      "type": "string",
+      "enum": [
+        "generated_only",
+        "stub",
+        "partial",
+        "implemented",
+        "oracle_verified",
+        "unsupported"
+      ]
+    },
+    "typeRef": {
+      "type": "object",
+      "required": ["kind", "name"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["primitive", "enum", "interface", "class", "alias", "variant", "array"]
+        },
+        "name": { "type": "string" },
+        "itemType": { "$ref": "#/$defs/typeRef" },
+        "nullable": { "type": "boolean", "default": false },
+        "aliasOf": { "type": "string" },
+        "metadata": { "$ref": "#/$defs/metadata" }
+      }
+    },
+    "captureOriginKind": {
+      "type": "string",
+      "enum": ["property_get", "property_set", "method", "event"]
+    },
+    "captureOrigin": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/captureOriginKind" },
+        "sourceInterface": { "type": "string" },
+        "sourceMember": { "type": "string" },
+        "dispId": { "type": "integer" }
+      }
+    },
+    "captureMetadata": {
+      "type": "object",
+      "properties": {
+        "origins": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/captureOrigin" },
+          "default": []
+        },
+        "typeInfo": { "$ref": "#/$defs/typeRef" }
+      }
+    },
+    "parameter": {
+      "type": "object",
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "$ref": "#/$defs/typeRef" },
+        "optional": { "type": "boolean", "default": false },
+        "byRef": { "type": "boolean", "default": false },
+        "defaultValue": {}
+      }
+    },
+    "member": {
+      "type": "object",
+      "required": ["name", "memberKind", "support"],
+      "properties": {
+        "name": { "type": "string" },
+        "memberKind": {
+          "type": "string",
+          "enum": ["property", "method", "event"]
+        },
+        "access": {
+          "type": "string",
+          "enum": ["read", "write", "readwrite"],
+          "default": "read"
+        },
+        "returnType": { "$ref": "#/$defs/typeRef" },
+        "params": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/parameter" },
+          "default": []
+        },
+        "dispId": { "type": "integer" },
+        "support": { "$ref": "#/$defs/supportState" },
+        "notes": { "type": "string" },
+        "metadata": { "$ref": "#/$defs/metadata" }
+      }
+    },
+    "interface": {
+      "type": "object",
+      "required": ["name", "kind", "members"],
+      "properties": {
+        "name": { "type": "string" },
+        "kind": {
+          "type": "string",
+          "enum": ["dispatch", "dual", "vtable"]
+        },
+        "inherits": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "members": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/member" }
+        },
+        "metadata": { "$ref": "#/$defs/metadata" }
+      }
+    },
+    "class": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "implements": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "defaultInterface": { "type": "string" },
+        "metadata": { "$ref": "#/$defs/metadata" }
+      }
+    },
+    "enumValue": {
+      "type": "object",
+      "required": ["name", "value"],
+      "properties": {
+        "name": { "type": "string" },
+        "value": { "type": "integer" }
+      }
+    },
+    "enum": {
+      "type": "object",
+      "required": ["name", "values"],
+      "properties": {
+        "name": { "type": "string" },
+        "values": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/enumValue" }
+        },
+        "metadata": { "$ref": "#/$defs/metadata" }
+      }
+    }
+  }
+}
