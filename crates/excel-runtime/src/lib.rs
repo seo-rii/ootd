@@ -535,31 +535,19 @@ impl ExcelRuntime {
                                         }
                                     }
                                     RangeProjection::Cells => {
-                                        if rect.height() == 1 {
-                                            if index > rect.width() {
-                                                return Err(OmError::invalid_argument(
-                                                    "Range.Item column index is out of bounds",
-                                                ));
-                                            }
-                                            Rect::single_cell(
-                                                rect.row_first,
-                                                rect.col_first + index - 1,
-                                            )
-                                        } else if rect.width() == 1 {
-                                            if index > rect.height() {
-                                                return Err(OmError::invalid_argument(
-                                                    "Range.Item row index is out of bounds",
-                                                ));
-                                            }
-                                            Rect::single_cell(
-                                                rect.row_first + index - 1,
-                                                rect.col_first,
-                                            )
-                                        } else {
+                                        let cell_count = rect.width() * rect.height();
+                                        if index > cell_count {
                                             return Err(OmError::invalid_argument(
-                                                "Range.Item expects row and column indexes for 2D ranges",
+                                                "Range.Item index is out of bounds",
                                             ));
                                         }
+                                        let zero_based = index - 1;
+                                        let row_offset = zero_based / rect.width();
+                                        let col_offset = zero_based % rect.width();
+                                        Rect::single_cell(
+                                            rect.row_first + row_offset,
+                                            rect.col_first + col_offset,
+                                        )
                                     }
                                 }
                             }
@@ -2701,6 +2689,11 @@ mod tests {
                 .dispatch_invoke(range, "Item", &[OmValue::Number(2.0), OmValue::Number(2.0)])
                 .expect("Range.Item(2, 2)"),
         );
+        let linear_second_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(range, "Item", &[OmValue::Number(2.0)])
+                .expect("Range.Item(2)"),
+        );
         let second_row = expect_object_handle(
             runtime
                 .dispatch_invoke(rows, "Item", &[OmValue::Number(2.0)])
@@ -2729,6 +2722,14 @@ mod tests {
                     .expect("Range.Item(2, 2).Address")
             ),
             "$B$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(linear_second_cell, "Address", &[])
+                    .expect("Range.Item(2).Address")
+            ),
+            "$B$1"
         );
         assert_eq!(
             expect_text(
@@ -2781,8 +2782,8 @@ mod tests {
 
         assert_eq!(
             runtime
-                .dispatch_invoke(range, "Item", &[OmValue::Number(2.0)])
-                .expect_err("Range.Item(2) should fail for 2D ranges")
+                .dispatch_invoke(range, "Item", &[OmValue::Number(5.0)])
+                .expect_err("Range.Item(5) should be out of bounds")
                 .code,
             OmErrorCode::InvalidArgument
         );
@@ -2930,6 +2931,11 @@ mod tests {
                 .dispatch_get(columns, "Cells", &[])
                 .expect("Columns.Cells"),
         );
+        let rows_cells_item = expect_object_handle(
+            runtime
+                .dispatch_invoke(rows_cells, "Item", &[OmValue::Number(3.0)])
+                .expect("Rows.Cells.Item(3)"),
+        );
 
         assert_eq!(
             expect_number(
@@ -2970,6 +2976,14 @@ mod tests {
                     .expect("Columns.Cells.Address")
             ),
             "$A$1:$B$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(rows_cells_item, "Address", &[])
+                    .expect("Rows.Cells.Item(3).Address")
+            ),
+            "$A$2"
         );
     }
 
