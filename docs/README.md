@@ -1,6 +1,38 @@
-# OOTD Docs
+# OOTD Documentation
 
-이 디렉터리는 `ootd`의 canonical 설계 문서와 구현 메모를 보관한다.
+This directory is the documentation entry point for `ootd`.
 
-현재 기준 설계 입력은 `excel_compatibility_bundle/`에 들어 있는 초안 문서이며,
-핵심 구현 계획은 [PLAN.md](/home/seorii/dev/hancomac/ootd/PLAN.md)에 정리되어 있다.
+Start here if you want to understand the repository before jumping into crate code.
+Some detailed implementation notes currently remain in Korean because they were written directly alongside development work.
+
+## Core Entry Points
+
+- [Repository overview](../README.md)
+- [Current implementation plan](../PLAN.md)
+- [Contributing guide](../CONTRIBUTING.md)
+
+## Spec Intake And Contracts
+
+- [Spec roots](spec_roots.md): source-of-truth references for XLSX, OPC, and Excel object model intake.
+- [OM source acquisition](specs/om_source_acquisition.md): how Excel COM type library and PIA inputs are pinned and normalized.
+- [Windows capture runner](specs/windows_capture_runner.md): capture bundle layout, output contract, and current execution boundary.
+
+## Repository Data Sources
+
+- [`../specs/`](../specs/): canonical schemas, generated assets, and pinned templates used by the codebase.
+- [`../specs/pinned/`](../specs/pinned/): versioned contract templates and pinned capture placeholders.
+- [`../fixtures/`](../fixtures/): synthetic and golden inputs used by regression tests.
+
+## Background Material
+
+- [`../excel_compatibility_bundle/`](../excel_compatibility_bundle/): original bundle of architecture notes and references that informed the current workspace split.
+
+## Reserved Documentation Areas
+
+The following directories exist for focused documentation as the project grows:
+
+- `architecture/`
+- `interfaces/`
+- `test-protocols/`
+
+When a change adds a new long-lived design boundary, prefer placing the document under one of those directories instead of growing a single catch-all note.
