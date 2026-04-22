@@ -1245,7 +1245,7 @@ impl ExcelRuntime {
         args: &[OmValue],
     ) -> OmResult<OmValue> {
         self.focus_member_supported("Range", member, false)?;
-        if !args.is_empty() {
+        if member != "Address" && !args.is_empty() {
             return Err(OmError::invalid_argument(format!(
                 "Range.{member} does not accept arguments"
             )));
@@ -1344,7 +1344,30 @@ impl ExcelRuntime {
 
                 Ok(OmValue::Bool(has_formula))
             }
-            "Address" => Ok(OmValue::Text(format_rect_address(rect))),
+            "Address" => {
+                let row_absolute = match args {
+                    [] => true,
+                    [value, ..] => {
+                        coerce_optional_bool_arg(value, true, "Range.Address row absolute")?
+                    }
+                };
+                let column_absolute = match args {
+                    [] | [_] => true,
+                    [_, value] => {
+                        coerce_optional_bool_arg(value, true, "Range.Address column absolute")?
+                    }
+                    _ => {
+                        return Err(OmError::invalid_argument(
+                            "Range.Address accepts optional row and column absolute flags",
+                        ));
+                    }
+                };
+                Ok(OmValue::Text(format_rect_address_with_flags(
+                    rect,
+                    row_absolute,
+                    column_absolute,
+                )))
+            }
             "Parent" => Ok(OmValue::Object(
                 self.register_worksheet_handle(workbook, sheet_id).0,
             )),
@@ -2260,6 +2283,16 @@ fn parse_cells_args(args: &[OmValue]) -> OmResult<(u32, u32)> {
     Ok((coerce_u32_arg(&args[0], "Worksheet.Cells row")?, column))
 }
 
+fn coerce_optional_bool_arg(value: &OmValue, default: bool, label: &str) -> OmResult<bool> {
+    match value {
+        OmValue::Missing | OmValue::Empty | OmValue::Null => Ok(default),
+        OmValue::Bool(value) => Ok(*value),
+        _ => Err(OmError::type_mismatch(format!(
+            "{label} must be boolean when provided"
+        ))),
+    }
+}
+
 fn parse_rect_a1(input: &str) -> OmResult<Rect> {
     let input = input.trim();
     let mut parts = input.split(':');
@@ -2316,19 +2349,32 @@ fn parse_cell_a1(input: &str) -> OmResult<(u32, u32)> {
     Ok((row, col))
 }
 
-fn format_rect_address(rect: Rect) -> String {
+fn format_rect_address_with_flags(rect: Rect, row_absolute: bool, column_absolute: bool) -> String {
+    let start = format_cell_address(
+        rect.row_first,
+        rect.col_first,
+        row_absolute,
+        column_absolute,
+    );
     if rect.row_first == rect.row_last && rect.col_first == rect.col_last {
-        format!("${}$${}", column_to_letters(rect.col_first), rect.row_first).replace("$$", "$")
+        start
     } else {
-        format!(
-            "${}$${}:${}$${}",
-            column_to_letters(rect.col_first),
-            rect.row_first,
-            column_to_letters(rect.col_last),
-            rect.row_last
-        )
-        .replace("$$", "$")
+        let end = format_cell_address(rect.row_last, rect.col_last, row_absolute, column_absolute);
+        format!("{start}:{end}")
     }
+}
+
+fn format_cell_address(row: u32, col: u32, row_absolute: bool, column_absolute: bool) -> String {
+    let mut address = String::new();
+    if column_absolute {
+        address.push('$');
+    }
+    address.push_str(&column_to_letters(col));
+    if row_absolute {
+        address.push('$');
+    }
+    address.push_str(&row.to_string());
+    address
 }
 
 fn column_to_letters(mut col: u32) -> String {
@@ -3813,6 +3859,88 @@ mod tests {
                     .expect("C3.Text")
             ),
             ""
+        );
+    }
+
+    #[test]
+    fn range_address_dispatch_accepts_optional_absolute_flags() {
+        let mut runtime = ExcelRuntime::new();
+        let _workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B2".to_string())])
+                .expect("Range(A1:B2)"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(range, "Address", &[])
+                    .expect("Address()")
+            ),
+            "$A$1:$B$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(range, "Address", &[OmValue::Bool(false)])
+                    .expect("Address(false)")
+            ),
+            "$A1:$B2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        range,
+                        "Address",
+                        &[OmValue::Bool(false), OmValue::Bool(false)]
+                    )
+                    .expect("Address(false, false)")
+            ),
+            "A1:B2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(range, "Address", &[OmValue::Missing, OmValue::Bool(false)])
+                    .expect("Address(, false)")
+            ),
+            "A$1:B$2"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(range, "Address", &[OmValue::Number(1.0)])
+                .expect_err("Address(1) should be rejected")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    range,
+                    "Address",
+                    &[
+                        OmValue::Bool(true),
+                        OmValue::Bool(true),
+                        OmValue::Bool(true)
+                    ],
+                )
+                .expect_err("Address with too many args should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 

@@ -263,6 +263,24 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
             .and_then(|type_ref| type_ref.alias_of.as_deref()),
         Some("Excel.Range")
     );
+    let range_address = range
+        .members
+        .iter()
+        .find(|member| member.name == "Address")
+        .expect("Range.Address");
+    assert_eq!(range_address.access, AccessMode::Read);
+    assert_eq!(range_address.params.len(), 2);
+    assert_eq!(range_address.params[0].name, "RowAbsolute");
+    assert!(range_address.params[0].optional);
+    assert_eq!(range_address.params[1].name, "ColumnAbsolute");
+    assert!(range_address.params[1].optional);
+    assert_eq!(
+        range_address
+            .return_type
+            .as_ref()
+            .and_then(|type_ref| type_ref.alias_of.as_deref()),
+        Some("BSTR")
+    );
     let range_offset = range
         .members
         .iter()
@@ -1402,6 +1420,24 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             .as_ref()
             .and_then(|type_ref| type_ref.alias_of.as_deref()),
         Some("Excel.Range")
+    );
+    let range_address = range
+        .members
+        .iter()
+        .find(|member| member.name == "Address")
+        .expect("Range.Address");
+    assert_eq!(range_address.access, AccessMode::Read);
+    assert_eq!(range_address.params.len(), 2);
+    assert_eq!(range_address.params[0].name, "RowAbsolute");
+    assert!(range_address.params[0].optional);
+    assert_eq!(range_address.params[1].name, "ColumnAbsolute");
+    assert!(range_address.params[1].optional);
+    assert_eq!(
+        range_address
+            .return_type
+            .as_ref()
+            .and_then(|type_ref| type_ref.alias_of.as_deref()),
+        Some("BSTR")
     );
     let range_offset = range
         .members

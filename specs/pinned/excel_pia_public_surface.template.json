@@ -1160,6 +1160,26 @@
         {
           "name": "Address",
           "memberKind": "property_get",
+          "params": [
+            {
+              "name": "RowAbsolute",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "ColumnAbsolute",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ],
           "returnType": {
             "kind": "primitive",
             "name": "string",
