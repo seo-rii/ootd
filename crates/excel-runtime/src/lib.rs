@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 
 const ROOT_APPLICATION_HANDLE_VALUE: u64 = 0;
 const FIRST_DYNAMIC_OBJECT_HANDLE_VALUE: u64 = 1_000_000;
+const EXCEL_MAX_ROW_INDEX: u32 = 1_048_576;
+const EXCEL_MAX_COLUMN_INDEX: u32 = 16_384;
 const PINNED_OM_TEMPLATE_JSON: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../specs/pinned/office_idl_excel_om.template.json"
@@ -1149,6 +1151,32 @@ impl ExcelRuntime {
                     workbook,
                     sheet_id,
                     self.current_region_rect(workbook, sheet_id, rect)?,
+                )
+                .0,
+            )),
+            "EntireRow" => Ok(OmValue::Object(
+                self.register_range_handle(
+                    workbook,
+                    sheet_id,
+                    Rect {
+                        row_first: rect.row_first,
+                        row_last: rect.row_last,
+                        col_first: 1,
+                        col_last: EXCEL_MAX_COLUMN_INDEX,
+                    },
+                )
+                .0,
+            )),
+            "EntireColumn" => Ok(OmValue::Object(
+                self.register_range_handle(
+                    workbook,
+                    sheet_id,
+                    Rect {
+                        row_first: 1,
+                        row_last: EXCEL_MAX_ROW_INDEX,
+                        col_first: rect.col_first,
+                        col_last: rect.col_last,
+                    },
                 )
                 .0,
             )),
@@ -3364,6 +3392,98 @@ mod tests {
                 .expect("A1:C1.HasFormula"),
             OmValue::Null
         ));
+    }
+
+    #[test]
+    fn range_dispatch_entire_row_and_column_expand_to_full_sheet_axes() {
+        let mut runtime = ExcelRuntime::new();
+        let _workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B2:C3".to_string())])
+                .expect("Range(B2:C3)"),
+        );
+        let entire_row = expect_object_handle(
+            runtime
+                .dispatch_get(range, "EntireRow", &[])
+                .expect("Range.EntireRow"),
+        );
+        let entire_column = expect_object_handle(
+            runtime
+                .dispatch_get(range, "EntireColumn", &[])
+                .expect("Range.EntireColumn"),
+        );
+        let entire_row_rows = expect_object_handle(
+            runtime
+                .dispatch_get(entire_row, "Rows", &[])
+                .expect("EntireRow.Rows"),
+        );
+        let entire_column_columns = expect_object_handle(
+            runtime
+                .dispatch_get(entire_column, "Columns", &[])
+                .expect("EntireColumn.Columns"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(entire_row, "Address", &[])
+                    .expect("EntireRow.Address")
+            ),
+            "$A$2:$XFD$3"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(entire_column, "Address", &[])
+                    .expect("EntireColumn.Address")
+            ),
+            "$B$1:$C$1048576"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(entire_row, "Count", &[])
+                    .expect("EntireRow.Count")
+            ),
+            32768.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(entire_column, "Count", &[])
+                    .expect("EntireColumn.Count")
+            ),
+            2097152.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(entire_row_rows, "Count", &[])
+                    .expect("EntireRow.Rows.Count")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(entire_column_columns, "Count", &[])
+                    .expect("EntireColumn.Columns.Count")
+            ),
+            2.0
+        );
     }
 
     #[test]
