@@ -1,0 +1,55 @@
+{
+  "library": "Excel",
+  "version": "16.0",
+  "namespace": "Microsoft.Office.Interop.Excel",
+  "typeLibraryGuid": "{00020813-0000-0000-C000-000000000046}",
+  "interfaces": [
+    {
+      "name": "Application",
+      "iid": "{000208D5-0000-0000-C000-000000000046}",
+      "kind": "dispatch",
+      "inherits": ["IDispatch"]
+    },
+    {
+      "name": "Workbooks",
+      "iid": "{000208DB-0000-0000-C000-000000000046}",
+      "kind": "dispatch",
+      "inherits": ["IDispatch"]
+    },
+    {
+      "name": "Workbook",
+      "iid": "{000208DA-0000-0000-C000-000000000046}",
+      "kind": "dispatch",
+      "inherits": ["IDispatch"]
+    },
+    {
+      "name": "Worksheets",
+      "iid": "{000208B1-0000-0000-C000-000000000046}",
+      "kind": "dispatch",
+      "inherits": ["IDispatch"]
+    },
+    {
+      "name": "Worksheet",
+      "iid": "{000208D8-0000-0000-C000-000000000046}",
+      "kind": "dispatch",
+      "inherits": ["IDispatch", "Excel._Worksheet"]
+    }
+  ],
+  "coclasses": [
+    {
+      "name": "Application",
+      "clsid": "{00024500-0000-0000-C000-000000000046}",
+      "defaultInterface": "Application"
+    },
+    {
+      "name": "Workbook",
+      "clsid": "{00020819-0000-0000-C000-000000000046}",
+      "defaultInterface": "Workbook"
+    },
+    {
+      "name": "Worksheet",
+      "clsid": "{00020820-0000-0000-C000-000000000046}",
+      "defaultInterface": "Worksheet"
+    }
+  ]
+}

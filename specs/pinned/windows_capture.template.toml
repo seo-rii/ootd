@@ -1,0 +1,55 @@
+# Windows capture input template for Excel OM acquisition.
+# Fill this on a Windows + Excel machine before running the future capture runner.
+
+[capture]
+name = "excel_om_windows_capture"
+status = "template"
+workspace = "ootd"
+
+[target]
+host_os = "windows"
+product_family = "microsoft_365_apps"
+channel = "Current"
+version = "16.0.x.y"
+build = "16.0.x.y"
+arch = "x64"
+locale = "en-us"
+
+[excel]
+type_library_major = 16
+type_library_minor = 0
+pia_assembly = "Microsoft.Office.Interop.Excel"
+pia_file = "Microsoft.Office.Interop.Excel.dll"
+
+[paths]
+excel_install_root = "C:\\Program Files\\Microsoft Office\\root\\Office16"
+typelib_container = "C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE"
+pia_path = "C:\\Windows\\assembly\\GAC_MSIL\\Microsoft.Office.Interop.Excel\\..."
+output_dir = "C:\\ootd-capture\\excel-om"
+capture_root = "C:\\ootd-capture\\excel-om\\excel_om_windows_capture"
+
+[tooling]
+oleview = "C:\\Program Files (x86)\\Windows Kits\\10\\bin\\x64\\oleview.exe"
+tlbimp = "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\Tlbimp.exe"
+regasm = "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\RegAsm.exe"
+
+[validation]
+fail_if_output_dir_exists = true
+fail_if_tooling_missing = true
+fail_if_paths_missing = true
+fail_if_typelib_version_mismatch = true
+write_capture_manifest = true
+write_output_checksums = true
+
+[outputs]
+capture_manifest = "manifest/capture_manifest.json"
+capture_log = "logs/capture.log"
+raw_typelib_identity = "raw_typelib_identity.json"
+excel_typelib_snapshot_idl = "excel_typelib_snapshot.idl"
+excel_typelib_snapshot_odl = "excel_typelib_snapshot.odl"
+excel_pia_identity = "excel_pia_identity.json"
+excel_pia_public_surface = "excel_pia_public_surface.json"
+output_checksums = "manifest/output_checksums.json"
+
+[downstream]
+office_idl_excel_om = "office_idl_excel_om.json"

@@ -1,0 +1,97 @@
+# Pinned Excel Object Model source manifest
+# This file records the canonical machine-readable source strategy for `ootd`.
+# Stable identifiers are pinned here. Environment-specific capture values remain
+# unresolved until a Windows + Excel acquisition run is performed.
+
+[manifest]
+schema_version = 1
+name = "excel_om_sources"
+status = "pending_capture"
+owner = "ootd"
+
+[contract]
+domain = "excel_object_model"
+primary_artifact = "excel_type_library"
+secondary_artifact = "excel_primary_interop_assembly"
+behavior_docs = "excel_vba_reference"
+
+[artifacts.excel_type_library]
+kind = "com_type_library"
+platform = "windows"
+app = "Excel"
+major = 16
+minor = 0
+machine_readable = true
+acquisition_priority = 1
+notes = "Primary OM contract source. Capture from installed Excel on Windows."
+
+[artifacts.excel_type_library.capture]
+status = "pending"
+tooling = ["oleview", "tlbimp"]
+required_outputs = [
+  "raw_typelib_identity.json",
+  "excel_typelib_snapshot.idl",
+  "excel_typelib_snapshot.odl",
+]
+
+[artifacts.excel_primary_interop_assembly]
+kind = "publisher_pia"
+assembly = "Microsoft.Office.Interop.Excel"
+assembly_file = "Microsoft.Office.Interop.Excel.dll"
+namespace = "Microsoft.Office.Interop.Excel"
+machine_readable = true
+acquisition_priority = 2
+notes = "Preferred managed projection when vendor-supplied PIA is available."
+
+[artifacts.excel_primary_interop_assembly.capture]
+status = "pending"
+tooling = ["gac_lookup", "dotnet_reflection", "regasm"]
+required_outputs = [
+  "excel_pia_identity.json",
+  "excel_pia_public_surface.json",
+]
+
+[docs.excel_vba_reference]
+kind = "behavior_reference"
+url = "https://learn.microsoft.com/en-us/office/vba/api/overview/excel/object-model"
+acquisition_priority = 3
+notes = "Semantics and behavior reference after machine-readable extraction."
+
+[docs.office_library_reference]
+kind = "behavior_reference"
+url = "https://learn.microsoft.com/en-us/office/vba/api/overview/library-reference/reference-object-library-reference-for-office"
+acquisition_priority = 4
+notes = "Office-shared object model reference."
+
+[docs.interop_namespace]
+kind = "surface_reference"
+url = "https://learn.microsoft.com/en-us/dotnet/api/microsoft.office.interop.excel?view=excel-pia"
+acquisition_priority = 3
+notes = "Managed surface coverage and naming cross-check."
+
+[target_capture]
+status = "pending_windows_excel_capture"
+product_family = "unresolved"
+channel = "unresolved"
+version = "unresolved"
+build = "unresolved"
+arch = "unresolved"
+locale = "unresolved"
+
+[acquisition]
+host_os = "windows"
+requires_installed_excel = true
+requires_windows_sdk = true
+requires_dotnet_framework_tooling = true
+normalization_target = "office-idl"
+normalization_output = "specs/pinned/office_idl_excel_om.json"
+
+[references]
+typelib_import = "https://learn.microsoft.com/en-us/dotnet/framework/interop/importing-a-type-library-as-an-assembly"
+tlbimp = "https://learn.microsoft.com/en-us/dotnet/framework/interop/how-to-generate-primary-interop-assemblies-using-tlbimp-exe"
+oleview = "https://learn.microsoft.com/en-us/windows/win32/com/ole-com-object-viewer"
+office_pia = "https://learn.microsoft.com/en-us/visualstudio/vsto/office-primary-interop-assemblies?view=visualstudio"
+excel_vba_object_model = "https://learn.microsoft.com/en-us/office/vba/api/overview/excel/object-model"
+interop_namespace = "https://learn.microsoft.com/en-us/dotnet/api/microsoft.office.interop.excel?view=excel-pia"
+office_update_channels = "https://learn.microsoft.com/en-us/deployoffice/overview-of-update-channels-for-office-365-proplus"
+office_update_process = "https://learn.microsoft.com/en-us/microsoft-365-apps/updates/overview-update-process-microsoft-365-apps"
