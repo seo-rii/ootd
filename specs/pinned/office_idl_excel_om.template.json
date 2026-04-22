@@ -957,6 +957,33 @@
           }
         },
         {
+          "name": "HasFormula",
+          "memberKind": "property",
+          "access": "read",
+          "returnType": {
+            "kind": "variant",
+            "name": "Variant",
+            "aliasOf": "VARIANT"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Range",
+                  "sourceMember": "HasFormula"
+                }
+              ],
+              "typeInfo": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          }
+        },
+        {
           "name": "Address",
           "memberKind": "property",
           "returnType": {

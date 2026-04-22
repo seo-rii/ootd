@@ -1081,6 +1081,36 @@ impl ExcelRuntime {
                     Ok(OmValue::Array(array))
                 }
             }
+            "HasFormula" => {
+                let worksheet_data = self
+                    .runtime_workbook(workbook)?
+                    .loaded
+                    .state
+                    .worksheet_data_for_sheet(sheet_id)?;
+                let mut has_formula = false;
+                let mut has_non_formula = false;
+
+                for row in rect.row_first..=rect.row_last {
+                    for col in rect.col_first..=rect.col_last {
+                        if worksheet_data
+                            .cells
+                            .get(&(row, col))
+                            .and_then(|cell| cell.formula.as_ref())
+                            .is_some()
+                        {
+                            has_formula = true;
+                        } else {
+                            has_non_formula = true;
+                        }
+
+                        if has_formula && has_non_formula {
+                            return Ok(OmValue::Null);
+                        }
+                    }
+                }
+
+                Ok(OmValue::Bool(has_formula))
+            }
             "Address" => Ok(OmValue::Text(format_rect_address(rect))),
             "Parent" => Ok(OmValue::Object(
                 self.register_worksheet_handle(workbook, sheet_id).0,
@@ -3284,6 +3314,56 @@ mod tests {
                 .code,
             OmErrorCode::InvalidArgument
         );
+    }
+
+    #[test]
+    fn range_dispatch_has_formula_reports_uniform_and_mixed_formula_state() {
+        let mut runtime = ExcelRuntime::new();
+        let _workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formula_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Range(B1)"),
+        );
+        let plain_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        let mixed_row = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:C1".to_string())])
+                .expect("Range(A1:C1)"),
+        );
+
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(formula_cell, "HasFormula", &[])
+                .expect("B1.HasFormula")
+        ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(plain_cell, "HasFormula", &[])
+                .expect("A1.HasFormula")
+        ));
+        assert!(matches!(
+            runtime
+                .dispatch_get(mixed_row, "HasFormula", &[])
+                .expect("A1:C1.HasFormula"),
+            OmValue::Null
+        ));
     }
 
     #[test]

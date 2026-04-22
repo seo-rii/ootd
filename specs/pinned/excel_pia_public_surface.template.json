@@ -1043,6 +1043,31 @@
           }
         },
         {
+          "name": "HasFormula",
+          "memberKind": "property_get",
+          "returnType": {
+            "kind": "variant",
+            "name": "Variant",
+            "aliasOf": "VARIANT"
+          },
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Range",
+                  "sourceMember": "HasFormula"
+                }
+              ],
+              "typeInfo": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          }
+        },
+        {
           "name": "Address",
           "memberKind": "property_get",
           "returnType": {
