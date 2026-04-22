@@ -135,6 +135,33 @@
               }
             }
           }
+        },
+        {
+          "name": "Selection",
+          "memberKind": "property_get",
+          "returnType": {
+            "kind": "interface",
+            "name": "Range",
+            "nullable": true,
+            "aliasOf": "Excel.Range"
+          },
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Application",
+                  "sourceMember": "Selection"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Range",
+                "nullable": true,
+                "aliasOf": "Excel.Range"
+              }
+            }
+          }
         }
       ]
     },

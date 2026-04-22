@@ -593,6 +593,25 @@ impl ExcelRuntime {
                         .0,
                 ))
             }
+            "Selection" => {
+                let Some(active_workbook) = self.active_workbook else {
+                    return Ok(OmValue::Empty);
+                };
+                let sheet_id = self
+                    .runtime_workbook(active_workbook)?
+                    .loaded
+                    .state
+                    .worksheets
+                    .first()
+                    .map(|worksheet| worksheet.id)
+                    .ok_or_else(|| {
+                        OmError::new(OmErrorCode::NotFound, "workbook has no worksheets")
+                    })?;
+                Ok(OmValue::Object(
+                    self.register_range_handle(active_workbook, sheet_id, Rect::single_cell(1, 1))
+                        .0,
+                ))
+            }
             _ => Err(OmError::unsupported(format!(
                 "Application.{member} is not implemented"
             ))),
@@ -1927,6 +1946,11 @@ mod tests {
                 .dispatch_get(application, "ActiveCell", &[])
                 .expect("ActiveCell"),
         );
+        let selection = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection"),
+        );
         let workbooks = expect_object_handle(
             runtime
                 .dispatch_get(application, "Workbooks", &[])
@@ -1993,6 +2017,14 @@ mod tests {
                     .dispatch_get(active_sheet, "Name", &[])
                     .expect("active sheet name")
             )
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection, "Address", &[])
+                    .expect("selection address")
+            ),
+            "$A$1"
         );
     }
 
@@ -2822,6 +2854,12 @@ mod tests {
             runtime
                 .dispatch_get(application, "ActiveCell", &[])
                 .expect("empty ActiveCell"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("empty Selection"),
             OmValue::Empty
         );
 
