@@ -832,16 +832,21 @@ impl ExcelRuntime {
 
     fn dispatch_get_application(&mut self, member: &str, args: &[OmValue]) -> OmResult<OmValue> {
         self.focus_member_supported("Application", member, false)?;
-        if member != "Cells" && !args.is_empty() {
+        if !args.is_empty() && !matches!(member, "Cells" | "Workbooks") {
             return Err(OmError::invalid_argument(format!(
                 "Application.{member} does not accept index arguments"
             )));
         }
 
         match member {
-            "Workbooks" => Ok(OmValue::Object(
-                self.register_object(RuntimeObjectKind::WorkbooksCollection),
-            )),
+            "Workbooks" => {
+                let handle = self.register_object(RuntimeObjectKind::WorkbooksCollection);
+                if args.is_empty() {
+                    Ok(OmValue::Object(handle))
+                } else {
+                    self.dispatch_invoke(handle, "Item", args)
+                }
+            }
             "ActiveWorkbook" => Ok(self
                 .active_workbook
                 .map(|workbook| OmValue::Object(workbook.0))
@@ -909,7 +914,7 @@ impl ExcelRuntime {
         args: &[OmValue],
     ) -> OmResult<OmValue> {
         self.focus_member_supported("Workbook", member, false)?;
-        if !args.is_empty() {
+        if !args.is_empty() && member != "Worksheets" {
             return Err(OmError::invalid_argument(format!(
                 "Workbook.{member} does not accept index arguments"
             )));
@@ -949,9 +954,15 @@ impl ExcelRuntime {
                         .values()
                         .all(|worksheet| !worksheet.dirty)
             })),
-            "Worksheets" => Ok(OmValue::Object(
-                self.register_object(RuntimeObjectKind::WorksheetsCollection { workbook }),
-            )),
+            "Worksheets" => {
+                let handle =
+                    self.register_object(RuntimeObjectKind::WorksheetsCollection { workbook });
+                if args.is_empty() {
+                    Ok(OmValue::Object(handle))
+                } else {
+                    self.dispatch_invoke(handle, "Item", args)
+                }
+            }
             _ => Err(OmError::unsupported(format!(
                 "Workbook.{member} is not implemented as a property"
             ))),
@@ -3058,6 +3069,123 @@ mod tests {
                     .expect("Selection after Cells address")
             ),
             "$B$2"
+        );
+    }
+
+    #[test]
+    fn collection_properties_accept_direct_index_args() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook1 = runtime.create_workbook().expect("create workbook1");
+        let workbook2 = runtime.create_workbook().expect("create workbook2");
+        let worksheets1 = expect_object_handle(
+            runtime
+                .dispatch_get(workbook1.0, "Worksheets", &[])
+                .expect("Workbook1.Worksheets"),
+        );
+        let worksheet1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets1, "Item", &[OmValue::Number(1.0)])
+                .expect("Workbook1.Worksheets.Item(1)"),
+        );
+
+        runtime
+            .dispatch_set(
+                worksheet1,
+                "Name",
+                OmValue::Text("Renamed".to_string()),
+                &[],
+            )
+            .expect("rename workbook1 sheet");
+
+        let application = runtime.root_application();
+        let first_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Workbooks", &[OmValue::Number(1.0)])
+                .expect("Application.Workbooks(1)"),
+        );
+        let named_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    application,
+                    "Workbooks",
+                    &[OmValue::Text("Book2".to_string())],
+                )
+                .expect("Application.Workbooks(\"Book2\")"),
+        );
+        let indexed_worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook1.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook1.Worksheets(1)"),
+        );
+        let named_worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    workbook1.0,
+                    "Worksheets",
+                    &[OmValue::Text("Renamed".to_string())],
+                )
+                .expect("Workbook1.Worksheets(\"Renamed\")"),
+        );
+
+        assert_eq!(first_workbook, workbook1.0);
+        assert_eq!(named_workbook, workbook2.0);
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(first_workbook, "Name", &[])
+                    .expect("Application.Workbooks(1).Name")
+            ),
+            "Book1"
+        );
+        assert_eq!(
+            expect_object_handle(
+                runtime
+                    .dispatch_get(indexed_worksheet, "Parent", &[])
+                    .expect("Workbook1.Worksheets(1).Parent")
+            ),
+            workbook1.0
+        );
+        assert_eq!(
+            expect_object_handle(
+                runtime
+                    .dispatch_get(named_worksheet, "Parent", &[])
+                    .expect("Workbook1.Worksheets(\"Renamed\").Parent")
+            ),
+            workbook1.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(indexed_worksheet, "Name", &[])
+                    .expect("Workbook1.Worksheets(1).Name")
+            ),
+            "Renamed"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(named_worksheet, "Name", &[])
+                    .expect("Workbook1.Worksheets(\"Renamed\").Name")
+            ),
+            "Renamed"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "Workbooks", &[OmValue::Bool(true)])
+                .expect_err("Application.Workbooks(true) should be rejected")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    workbook1.0,
+                    "Worksheets",
+                    &[OmValue::Text("Missing".to_string())]
+                )
+                .expect_err("Workbook1.Worksheets(\"Missing\") should fail")
+                .code,
+            OmErrorCode::NotFound
         );
     }
 
