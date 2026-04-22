@@ -2449,13 +2449,77 @@ impl ExcelRuntime {
             ));
         }
 
-        let Some(insertion_index) =
-            self.worksheet_placement_index(workbook, args.first(), args.get(1), "Worksheet.Move")?
-        else {
-            return Err(OmError::unsupported(
-                "Worksheet.Move currently requires Before or After worksheet arguments",
-            ));
-        };
+        let insertion_index =
+            self.worksheet_placement_index(workbook, args.first(), args.get(1), "Worksheet.Move")?;
+
+        if insertion_index.is_none() {
+            let selection_rect = self
+                .selection
+                .filter(|selection| {
+                    selection.workbook == workbook && selection.sheet_id == sheet_id
+                })
+                .map(|selection| selection.rect)
+                .unwrap_or(Rect::single_cell(1, 1));
+            let (detected_format, read_only, source_sheet_ids) = {
+                let runtime = self.runtime_workbook(workbook)?;
+                (
+                    runtime.loaded.detected_format,
+                    runtime.read_only,
+                    runtime
+                        .loaded
+                        .state
+                        .worksheets
+                        .iter()
+                        .map(|worksheet| worksheet.id)
+                        .collect::<Vec<_>>(),
+                )
+            };
+            if read_only {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    "cannot modify a read-only workbook",
+                ));
+            }
+            let source_bytes = self.save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: detected_format,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )?;
+
+            let workbook_name = format!("Book{}", self.next_created_workbook_index);
+            self.next_created_workbook_index += 1;
+            let moved_workbook = self.open_workbook_with_display_name(
+                OpenWorkbookSpec {
+                    bytes: source_bytes,
+                    format_hint: Some(detected_format),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                },
+                Some(workbook_name),
+                None,
+            )?;
+            for other_sheet_id in source_sheet_ids
+                .iter()
+                .copied()
+                .filter(|other_sheet_id| *other_sheet_id != sheet_id)
+            {
+                self.delete_worksheet(moved_workbook, other_sheet_id)?;
+            }
+            self.runtime_workbook_mut(moved_workbook)?.dirty = true;
+
+            if source_sheet_ids.len() > 1 {
+                self.delete_worksheet(workbook, sheet_id)?;
+            } else {
+                self.close_workbook(workbook)?;
+            }
+            self.set_selection(moved_workbook, sheet_id, selection_rect);
+            return Ok(());
+        }
+
+        let insertion_index = insertion_index.expect("Worksheet.Move placement index");
 
         let runtime = self.runtime_workbook_mut(workbook)?;
         if runtime.read_only {
@@ -9718,6 +9782,258 @@ mod tests {
     }
 
     #[test]
+    fn worksheet_move_without_targets_creates_new_workbook_and_preserves_sheet_data() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Workbooks", &[])
+                .expect("Application.Workbooks"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheet2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Add", &[])
+                .expect("Worksheets.Add Sheet2"),
+        );
+        let moved_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(sheet2, "Range", &[OmValue::Text("B2".to_string())])
+                .expect("Sheet2.Range(B2)"),
+        );
+        runtime
+            .dispatch_set(
+                moved_range,
+                "Value",
+                OmValue::Text("moved".to_string()),
+                &[],
+            )
+            .expect("Sheet2.Range(B2).Value");
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(sheet2, "Move", &[])
+                .expect("Worksheet.Move without placement args"),
+            OmValue::Empty
+        ));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbooks, "Count", &[])
+                    .expect("Workbooks.Count after move")
+            ),
+            2.0
+        );
+        let moved_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after move"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after move"),
+        );
+        let source_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("source Workbook.Worksheets after move"),
+        );
+        let moved_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(moved_workbook, "Worksheets", &[])
+                .expect("moved Workbook.Worksheets"),
+        );
+        let moved_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    moved_worksheets,
+                    "Item",
+                    &[OmValue::Text("Sheet2".to_string())],
+                )
+                .expect("moved Worksheets.Item(Sheet2)"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(moved_workbook, "Name", &[])
+                    .expect("moved workbook name")
+            ),
+            "Book1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("active sheet name after move")
+            ),
+            "Sheet2"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(source_worksheets, "Count", &[])
+                    .expect("source Worksheets.Count after move")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(moved_worksheets, "Count", &[])
+                    .expect("moved Worksheets.Count after move")
+            ),
+            1.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    source_worksheets,
+                    "Item",
+                    &[OmValue::Text("Sheet2".to_string())]
+                )
+                .expect_err("moved sheet should be removed from source workbook")
+                .code,
+            OmErrorCode::NotFound
+        );
+        let moved_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(moved_sheet, "Range", &[OmValue::Text("B2".to_string())])
+                .expect("moved Sheet2.Range(B2)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(moved_range, "Value", &[])
+                    .expect("moved sheet B2 value")
+            ),
+            "moved"
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(moved_workbook, "Saved", &[])
+                .expect("moved workbook Saved")
+        ));
+
+        let saved = runtime
+            .save_workbook(
+                super::WorkbookHandle(moved_workbook),
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save moved workbook");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen moved workbook");
+
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .map(|worksheet| worksheet.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["Sheet2".to_string()]
+        );
+        assert_eq!(
+            reopened
+                .state
+                .cell(reopened.state.worksheets[0].id, 2, 2)
+                .map(|cell| cell.value.clone()),
+            Some(CellValue::Text("moved".to_string()))
+        );
+    }
+
+    #[test]
+    fn worksheet_move_without_targets_closes_single_sheet_source_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let sheet1 = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("initial ActiveSheet"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(sheet1, "Move", &[])
+                .expect("Worksheet.Move without placement args"),
+            OmValue::Empty
+        ));
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Workbooks", &[])
+                .expect("Application.Workbooks"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbooks, "Count", &[])
+                    .expect("Workbooks.Count after single-sheet move")
+            ),
+            1.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Name", &[])
+                .expect_err("source workbook should become stale after move")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        let moved_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after single-sheet move"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after single-sheet move"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(moved_workbook, "Name", &[])
+                    .expect("moved workbook name")
+            ),
+            "Book1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("active sheet name after single-sheet move")
+            ),
+            "Sheet1"
+        );
+    }
+
+    #[test]
     fn worksheet_move_supports_after_targets_and_rejects_invalid_arguments() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -9766,11 +10082,6 @@ mod tests {
             ),
             2.0
         );
-
-        let no_args_error = runtime
-            .dispatch_invoke(sheet1, "Move", &[])
-            .expect_err("Worksheet.Move without placement args should be rejected");
-        assert_eq!(no_args_error.code, OmErrorCode::Unsupported);
 
         let conflicting_error = runtime
             .dispatch_invoke(
