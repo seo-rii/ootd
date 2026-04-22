@@ -1,0 +1,64 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/office-idl",
+  "crates/office-codegen",
+  "crates/office-common",
+  "crates/office-opc",
+  "crates/office-ooxml-shared",
+  "crates/office-runtime",
+  "crates/office-om-common",
+  "crates/excel-om",
+  "crates/excel-model",
+  "crates/excel-formula",
+  "crates/excel-calc",
+  "crates/excel-runtime",
+  "crates/excel-xlsx",
+  "crates/excel-render",
+  "crates/office-wasm",
+  "crates/office-ts",
+  "crates/excel-oracle-win",
+  "crates/office-fixtures",
+  "crates/office-fuzz",
+  "crates/excel-xlsb",
+  "crates/excel-xls",
+]
+
+default-members = [
+  "crates/office-common",
+  "crates/office-runtime",
+  "crates/excel-model",
+  "crates/excel-formula",
+  "crates/excel-calc",
+  "crates/excel-runtime",
+  "crates/excel-xlsx",
+  "crates/excel-render",
+  "crates/office-wasm",
+  "crates/office-fixtures",
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.85"
+publish = false
+
+[workspace.metadata.excel_compat]
+default_profile = "excel_365"
+default_io_mode = "lossless"
+strict_write_default = false
+macro_execution_supported = false
+macro_preservation_supported = true
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = "none"
