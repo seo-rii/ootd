@@ -2483,10 +2483,168 @@ impl ExcelRuntime {
                     self.register_range_handle(workbook, sheet_id, rect).0,
                 ))
             }
+            "Delete" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Worksheet.Delete does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Bool(self.delete_worksheet(workbook, sheet_id)?))
+            }
             _ => Err(OmError::unsupported(format!(
                 "Worksheet.{member} is not implemented as a method"
             ))),
         }
+    }
+
+    fn delete_worksheet(&mut self, workbook: WorkbookHandle, sheet_id: SheetId) -> OmResult<bool> {
+        let deleted_was_active = self.active_workbook == Some(workbook)
+            && self.selection.is_some_and(|selection| {
+                selection.workbook == workbook && selection.sheet_id == sheet_id
+            });
+        let replacement_sheet_id = {
+            let runtime = self.runtime_workbook_mut(workbook)?;
+            if runtime.read_only {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    "cannot modify a read-only workbook",
+                ));
+            }
+            if runtime.loaded.state.worksheets.len() <= 1 {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    "cannot delete the last worksheet in a workbook",
+                ));
+            }
+
+            let worksheet_index = runtime
+                .loaded
+                .state
+                .worksheets
+                .iter()
+                .position(|worksheet| worksheet.id == sheet_id)
+                .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?;
+            let removed_worksheet = runtime.loaded.state.worksheets.remove(worksheet_index);
+            runtime.loaded.state.worksheet_data.remove(&sheet_id);
+            let removed_support_parts = runtime.loaded.worksheet_support_parts.remove(&sheet_id);
+
+            let replacement_sheet_id = if worksheet_index < runtime.loaded.state.worksheets.len() {
+                runtime.loaded.state.worksheets[worksheet_index].id
+            } else {
+                runtime
+                    .loaded
+                    .state
+                    .worksheets
+                    .last()
+                    .map(|worksheet| worksheet.id)
+                    .ok_or_else(|| {
+                        OmError::new(OmErrorCode::NotFound, "workbook has no worksheets")
+                    })?
+            };
+
+            let workbook_xml = runtime
+                .loaded
+                .package
+                .part(WORKBOOK_PART_NAME)
+                .ok_or_else(|| {
+                    OmError::new(
+                        OmErrorCode::Parse,
+                        format!("workbook package is missing {WORKBOOK_PART_NAME}"),
+                    )
+                })?
+                .bytes
+                .clone();
+            runtime.loaded.package.replace_part_bytes(
+                WORKBOOK_PART_NAME,
+                strip_workbook_sheet_entry(
+                    workbook_xml.as_slice(),
+                    sheet_id,
+                    removed_worksheet.relationship_id.as_deref(),
+                )?,
+            )?;
+
+            let workbook_rels_part_name = runtime
+                .loaded
+                .support_parts
+                .workbook_relationships_part_uri
+                .clone()
+                .unwrap_or_else(|| WORKBOOK_RELS_PART_NAME.to_string());
+            let mut relationship_ids_to_strip = Vec::<String>::new();
+            if let Some(relationship_id) = removed_worksheet.relationship_id.as_ref() {
+                relationship_ids_to_strip.push(relationship_id.clone());
+            }
+            if let Some(calc_chain_relationship_id) = runtime
+                .loaded
+                .support_parts
+                .calc_chain_relationship
+                .as_ref()
+                .map(|relationship| relationship.id.clone())
+            {
+                relationship_ids_to_strip.push(calc_chain_relationship_id);
+            }
+            if !relationship_ids_to_strip.is_empty()
+                && let Some(workbook_rels_xml) = runtime
+                    .loaded
+                    .package
+                    .part(workbook_rels_part_name.as_str())
+                    .map(|part| part.bytes.clone())
+            {
+                runtime.loaded.package.replace_part_bytes(
+                    workbook_rels_part_name.as_str(),
+                    strip_relationship_entries_by_id(
+                        workbook_rels_xml.as_slice(),
+                        &relationship_ids_to_strip,
+                    )?,
+                )?;
+            }
+
+            let mut content_type_overrides_to_strip = Vec::<String>::new();
+            if let Some(part_uri) = removed_worksheet.part_uri.as_ref() {
+                runtime.loaded.package.remove_part(part_uri);
+                content_type_overrides_to_strip.push(part_uri.clone());
+            }
+            if let Some(relationships_part_uri) = removed_support_parts
+                .as_ref()
+                .and_then(|support_parts| support_parts.relationships_part_uri.as_deref())
+            {
+                runtime.loaded.package.remove_part(relationships_part_uri);
+            }
+            if let Some(calc_chain_part_uri) =
+                runtime.loaded.support_parts.calc_chain_part_uri.take()
+            {
+                runtime
+                    .loaded
+                    .package
+                    .remove_part(calc_chain_part_uri.as_str());
+                content_type_overrides_to_strip.push(calc_chain_part_uri);
+            }
+            runtime.loaded.support_parts.calc_chain_relationship = None;
+            if !content_type_overrides_to_strip.is_empty()
+                && let Some(content_types_xml) = runtime
+                    .loaded
+                    .package
+                    .part(CONTENT_TYPES_PART_NAME)
+                    .map(|part| part.bytes.clone())
+            {
+                runtime.loaded.package.replace_part_bytes(
+                    CONTENT_TYPES_PART_NAME,
+                    strip_content_type_overrides(
+                        content_types_xml.as_slice(),
+                        &content_type_overrides_to_strip,
+                    )?,
+                )?;
+            }
+
+            runtime.dirty = true;
+            replacement_sheet_id
+        };
+
+        self.invalidate_sheet_object_handles(workbook, sheet_id);
+        if deleted_was_active {
+            self.set_selection(workbook, replacement_sheet_id, Rect::single_cell(1, 1));
+        }
+
+        Ok(true)
     }
 
     fn resolve_workbook_item(&self, args: &[OmValue]) -> OmResult<OmValue> {
@@ -2800,6 +2958,31 @@ impl ExcelRuntime {
         }
         Ok(())
     }
+
+    fn invalidate_sheet_object_handles(&mut self, workbook: WorkbookHandle, sheet_id: SheetId) {
+        let stale_object_ids = self
+            .objects
+            .iter()
+            .filter_map(|(&object_id, object)| match object {
+                RuntimeObjectKind::Worksheet {
+                    workbook: object_workbook,
+                    sheet_id: object_sheet_id,
+                }
+                | RuntimeObjectKind::Range {
+                    workbook: object_workbook,
+                    sheet_id: object_sheet_id,
+                    ..
+                } if *object_workbook == workbook && *object_sheet_id == sheet_id => {
+                    Some(object_id)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for object_id in stale_object_ids {
+            self.objects.remove(&object_id);
+            self.stale_objects.insert(object_id);
+        }
+    }
 }
 
 fn xml_local_name(name: &[u8]) -> &[u8] {
@@ -3012,6 +3195,230 @@ fn insert_sheet_into_workbook_xml(
     }
 
     Ok(writer.into_inner().into_inner())
+}
+
+fn strip_workbook_sheet_entry(
+    workbook_xml: &[u8],
+    sheet_id: SheetId,
+    relationship_id: Option<&str>,
+) -> OmResult<Vec<u8>> {
+    let mut reader = Reader::from_reader(Cursor::new(workbook_xml));
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut buffer = Vec::new();
+    let mut skip_depth = 0usize;
+
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(_)) if skip_depth > 0 => {
+                skip_depth += 1;
+            }
+            Ok(Event::End(_)) if skip_depth > 0 => {
+                skip_depth -= 1;
+            }
+            Ok(Event::Empty(element))
+                if xml_local_name(element.name().as_ref()) == b"sheet"
+                    && should_strip_workbook_sheet(
+                        &element,
+                        reader.decoder(),
+                        sheet_id,
+                        relationship_id,
+                    )? => {}
+            Ok(Event::Start(element))
+                if xml_local_name(element.name().as_ref()) == b"sheet"
+                    && should_strip_workbook_sheet(
+                        &element,
+                        reader.decoder(),
+                        sheet_id,
+                        relationship_id,
+                    )? =>
+            {
+                skip_depth = 1;
+            }
+            Ok(Event::Eof) => break,
+            Ok(event) if skip_depth == 0 => writer
+                .write_event(event.into_owned())
+                .map_err(runtime_xml_error)?,
+            Ok(_) => {}
+            Err(error) => return Err(runtime_xml_error(error)),
+        }
+        buffer.clear();
+    }
+
+    Ok(writer.into_inner().into_inner())
+}
+
+fn should_strip_workbook_sheet(
+    element: &BytesStart<'_>,
+    decoder: quick_xml::encoding::Decoder,
+    sheet_id: SheetId,
+    relationship_id: Option<&str>,
+) -> OmResult<bool> {
+    let mut matches_sheet_id = false;
+    let mut matches_relationship_id = false;
+    for attr in element.attributes() {
+        let attr = attr.map_err(runtime_xml_error)?;
+        let value = attr
+            .decode_and_unescape_value(decoder)
+            .map_err(runtime_xml_error)?
+            .into_owned();
+        match attr.key.as_ref() {
+            b"sheetId" => {
+                matches_sheet_id = value.parse::<u64>().ok() == Some(sheet_id.0);
+            }
+            b"r:id" => {
+                matches_relationship_id = relationship_id == Some(value.as_str());
+            }
+            _ => {}
+        }
+    }
+    Ok(matches_sheet_id || matches_relationship_id)
+}
+
+fn strip_relationship_entries_by_id(
+    rels_xml: &[u8],
+    relationship_ids: &[String],
+) -> OmResult<Vec<u8>> {
+    let relationship_ids = relationship_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let mut reader = Reader::from_reader(Cursor::new(rels_xml));
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut buffer = Vec::new();
+    let mut skip_depth = 0usize;
+
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(_)) if skip_depth > 0 => {
+                skip_depth += 1;
+            }
+            Ok(Event::End(_)) if skip_depth > 0 => {
+                skip_depth -= 1;
+            }
+            Ok(Event::Empty(element))
+                if xml_local_name(element.name().as_ref()) == b"Relationship"
+                    && should_strip_relationship_entry(
+                        &element,
+                        reader.decoder(),
+                        &relationship_ids,
+                    )? => {}
+            Ok(Event::Start(element))
+                if xml_local_name(element.name().as_ref()) == b"Relationship"
+                    && should_strip_relationship_entry(
+                        &element,
+                        reader.decoder(),
+                        &relationship_ids,
+                    )? =>
+            {
+                skip_depth = 1;
+            }
+            Ok(Event::Eof) => break,
+            Ok(event) if skip_depth == 0 => writer
+                .write_event(event.into_owned())
+                .map_err(runtime_xml_error)?,
+            Ok(_) => {}
+            Err(error) => return Err(runtime_xml_error(error)),
+        }
+        buffer.clear();
+    }
+
+    Ok(writer.into_inner().into_inner())
+}
+
+fn should_strip_relationship_entry(
+    element: &BytesStart<'_>,
+    decoder: quick_xml::encoding::Decoder,
+    relationship_ids: &BTreeSet<&str>,
+) -> OmResult<bool> {
+    for attr in element.attributes() {
+        let attr = attr.map_err(runtime_xml_error)?;
+        if attr.key.as_ref() != b"Id" {
+            continue;
+        }
+        let value = attr
+            .decode_and_unescape_value(decoder)
+            .map_err(runtime_xml_error)?
+            .into_owned();
+        if relationship_ids.contains(value.as_str()) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn strip_content_type_overrides(
+    content_types_xml: &[u8],
+    part_names: &[String],
+) -> OmResult<Vec<u8>> {
+    let part_names = part_names
+        .iter()
+        .map(|part_name| format!("/{}", part_name.trim_start_matches('/')))
+        .collect::<BTreeSet<_>>();
+    let mut reader = Reader::from_reader(Cursor::new(content_types_xml));
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut buffer = Vec::new();
+    let mut skip_depth = 0usize;
+
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(_)) if skip_depth > 0 => {
+                skip_depth += 1;
+            }
+            Ok(Event::End(_)) if skip_depth > 0 => {
+                skip_depth -= 1;
+            }
+            Ok(Event::Empty(element))
+                if xml_local_name(element.name().as_ref()) == b"Override"
+                    && should_strip_content_type_override(
+                        &element,
+                        reader.decoder(),
+                        &part_names,
+                    )? => {}
+            Ok(Event::Start(element))
+                if xml_local_name(element.name().as_ref()) == b"Override"
+                    && should_strip_content_type_override(
+                        &element,
+                        reader.decoder(),
+                        &part_names,
+                    )? =>
+            {
+                skip_depth = 1;
+            }
+            Ok(Event::Eof) => break,
+            Ok(event) if skip_depth == 0 => writer
+                .write_event(event.into_owned())
+                .map_err(runtime_xml_error)?,
+            Ok(_) => {}
+            Err(error) => return Err(runtime_xml_error(error)),
+        }
+        buffer.clear();
+    }
+
+    Ok(writer.into_inner().into_inner())
+}
+
+fn should_strip_content_type_override(
+    element: &BytesStart<'_>,
+    decoder: quick_xml::encoding::Decoder,
+    part_names: &BTreeSet<String>,
+) -> OmResult<bool> {
+    for attr in element.attributes() {
+        let attr = attr.map_err(runtime_xml_error)?;
+        if attr.key.as_ref() != b"PartName" {
+            continue;
+        }
+        let value = attr
+            .decode_and_unescape_value(decoder)
+            .map_err(runtime_xml_error)?
+            .into_owned();
+        if part_names.contains(value.as_str()) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 pub fn supports_format(format: FileFormat) -> bool {
@@ -8438,6 +8845,176 @@ mod tests {
         let read_only_error = read_only_runtime
             .dispatch_invoke(read_only_worksheets, "Add", &[])
             .expect_err("Worksheets.Add should reject read-only workbooks");
+        assert_eq!(read_only_error.code, OmErrorCode::InvalidState);
+        assert!(read_only_error.message.contains("read-only"));
+    }
+
+    #[test]
+    fn worksheet_delete_removes_sheet_updates_selection_and_persists_on_save() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let _sheet2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Add", &[])
+                .expect("Worksheets.Add Sheet2"),
+        );
+        let sheet3 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Add", &[])
+                .expect("Worksheets.Add Sheet3"),
+        );
+        let range_b2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(sheet3, "Range", &[OmValue::Text("B2".to_string())])
+                .expect("Sheet3.Range(B2)"),
+        );
+
+        assert!(expect_bool(
+            runtime
+                .dispatch_invoke(sheet3, "Delete", &[])
+                .expect("Worksheet.Delete")
+        ));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(worksheets, "Count", &[])
+                    .expect("Worksheets.Count after delete")
+            ),
+            2.0
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after delete"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("ActiveSheet name after delete")
+            ),
+            "Sheet2"
+        );
+        let active_cell = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveCell", &[])
+                .expect("ActiveCell after delete"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_cell, "Address", &[])
+                    .expect("ActiveCell address after delete")
+            ),
+            "$A$1"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(sheet3, "Name", &[])
+                .expect_err("deleted worksheet handle should become stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(range_b2, "Address", &[])
+                .expect_err("ranges on deleted worksheets should become stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Text("Sheet3".to_string())])
+                .expect_err("deleted worksheet should no longer resolve by name")
+                .code,
+            OmErrorCode::NotFound
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved workbook package");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen saved workbook");
+
+        assert!(!saved_package.contains("xl/worksheets/sheet3.xml"));
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .map(|worksheet| worksheet.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["Sheet2".to_string(), "Sheet1".to_string()]
+        );
+    }
+
+    #[test]
+    fn worksheet_delete_rejects_last_sheet_read_only_and_extra_arguments() {
+        let mut runtime = ExcelRuntime::new();
+        let _workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let last_sheet_error = runtime
+            .dispatch_invoke(sheet, "Delete", &[])
+            .expect_err("Worksheet.Delete should reject deleting the last sheet");
+        assert_eq!(last_sheet_error.code, OmErrorCode::InvalidState);
+        assert!(last_sheet_error.message.contains("last worksheet"));
+
+        let arg_error = runtime
+            .dispatch_invoke(sheet, "Delete", &[OmValue::Bool(true)])
+            .expect_err("Worksheet.Delete should reject arguments");
+        assert_eq!(arg_error.code, OmErrorCode::InvalidArgument);
+
+        let mut read_only_runtime = ExcelRuntime::new();
+        let _read_only_workbook = read_only_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook");
+        let read_only_sheet = expect_object_handle(
+            read_only_runtime
+                .dispatch_get(read_only_runtime.root_application(), "ActiveSheet", &[])
+                .expect("read-only ActiveSheet"),
+        );
+        let read_only_error = read_only_runtime
+            .dispatch_invoke(read_only_sheet, "Delete", &[])
+            .expect_err("Worksheet.Delete should reject read-only workbooks");
         assert_eq!(read_only_error.code, OmErrorCode::InvalidState);
         assert!(read_only_error.message.contains("read-only"));
     }
