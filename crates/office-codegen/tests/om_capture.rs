@@ -76,8 +76,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 28);
-    assert_eq!(summary.stub_member_count, 28);
+    assert_eq!(summary.member_count, 30);
+    assert_eq!(summary.stub_member_count, 30);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -120,13 +120,18 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 28);
+    assert_eq!(summary.member_count, 30);
 
     let worksheet = document
         .interfaces
         .iter()
         .find(|interface| interface.name == "Worksheet")
         .expect("Worksheet");
+    let workbook = document
+        .interfaces
+        .iter()
+        .find(|interface| interface.name == "Workbook")
+        .expect("Workbook");
     let range = document
         .interfaces
         .iter()
@@ -183,6 +188,24 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
             .and_then(|member| member.return_type.as_ref())
             .and_then(|type_ref| type_ref.alias_of.as_deref()),
         Some("Excel.Workbook")
+    );
+    assert_eq!(
+        workbook
+            .members
+            .iter()
+            .find(|member| member.name == "Path")
+            .and_then(|member| member.return_type.as_ref())
+            .and_then(|type_ref| type_ref.alias_of.as_deref()),
+        Some("BSTR")
+    );
+    assert_eq!(
+        workbook
+            .members
+            .iter()
+            .find(|member| member.name == "ReadOnly")
+            .and_then(|member| member.return_type.as_ref())
+            .and_then(|type_ref| type_ref.alias_of.as_deref()),
+        Some("VARIANT_BOOL")
     );
     let value_member = range
         .members
@@ -787,7 +810,7 @@ fn writes_canonical_office_idl_json_from_bundle_inputs() {
     assert_eq!(round_trip_summary.enum_count, 1);
     assert_eq!(round_trip_summary.interface_count, 6);
     assert_eq!(round_trip_summary.class_count, 3);
-    assert_eq!(round_trip_summary.member_count, 28);
+    assert_eq!(round_trip_summary.member_count, 30);
     assert_eq!(generation.summary.library, "Excel");
     assert_eq!(generation.summary.version, "16.0");
     assert_eq!(
@@ -854,7 +877,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .expect("Range");
 
     assert_eq!(application.member_count, 3);
-    assert_eq!(workbook.member_count, 6);
+    assert_eq!(workbook.member_count, 8);
     assert_eq!(worksheet.member_count, 6);
     assert_eq!(range.member_count, 7);
     assert_eq!(
@@ -924,6 +947,18 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             .and_then(|type_ref| type_ref.alias_of.as_deref()),
         Some("Excel.Application")
     );
+    let workbook_path = workbook
+        .members
+        .iter()
+        .find(|member| member.name == "Path")
+        .expect("Workbook.Path");
+    assert_eq!(workbook_path.access, AccessMode::Read);
+    let workbook_read_only = workbook
+        .members
+        .iter()
+        .find(|member| member.name == "ReadOnly")
+        .expect("Workbook.ReadOnly");
+    assert_eq!(workbook_read_only.access, AccessMode::Read);
     let worksheet_parent = worksheet
         .members
         .iter()
@@ -989,8 +1024,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 28);
-    assert_eq!(coverage.support_counts.stub, 28);
+    assert_eq!(coverage.member_count, 30);
+    assert_eq!(coverage.support_counts.stub, 30);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -1025,14 +1060,16 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(workbook_coverage.member_count, 6);
-    assert_eq!(workbook_coverage.support_counts.stub, 6);
+    assert_eq!(workbook_coverage.member_count, 8);
+    assert_eq!(workbook_coverage.support_counts.stub, 8);
     assert_eq!(
         workbook_coverage.stub_members,
         vec![
             "Worksheets".to_string(),
             "Name".to_string(),
             "Parent".to_string(),
+            "Path".to_string(),
+            "ReadOnly".to_string(),
             "Save".to_string(),
             "SaveAs".to_string(),
             "Close".to_string()

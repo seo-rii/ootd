@@ -528,6 +528,15 @@ impl ExcelRuntime {
                 self.workbook_model(workbook)?.display_name.clone(),
             )),
             "Parent" => Ok(OmValue::Object(self.root_application())),
+            "Path" => Ok(OmValue::Text(
+                self.runtime_workbook(workbook)?
+                    .source_path
+                    .as_ref()
+                    .and_then(|path| path.parent())
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            )),
+            "ReadOnly" => Ok(OmValue::Bool(self.runtime_workbook(workbook)?.read_only)),
             "Worksheets" => Ok(OmValue::Object(
                 self.register_object(RuntimeObjectKind::WorksheetsCollection { workbook }),
             )),
@@ -1294,6 +1303,13 @@ mod tests {
         match value {
             OmValue::Number(number) => number,
             other => panic!("expected numeric value, got {other:?}"),
+        }
+    }
+
+    fn expect_bool(value: OmValue) -> bool {
+        match value {
+            OmValue::Bool(value) => value,
+            other => panic!("expected bool value, got {other:?}"),
         }
     }
 
@@ -2561,6 +2577,11 @@ mod tests {
             )
             .expect_err("read-only rename should fail");
         assert_eq!(read_only_error.code, OmErrorCode::InvalidState);
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "ReadOnly", &[])
+                .expect("Workbook.ReadOnly")
+        ));
 
         runtime
             .close_workbook(workbook)
@@ -2627,6 +2648,19 @@ mod tests {
             ),
             "Workbook"
         );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_workbook, "Path", &[])
+                    .expect("Workbook.Path")
+            ),
+            ""
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(active_workbook, "ReadOnly", &[])
+                .expect("Workbook.ReadOnly")
+        ));
         assert_eq!(
             expect_number(
                 runtime
@@ -2710,9 +2744,13 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system clock")
             .as_nanos();
-        let temp_dir = std::env::temp_dir();
-        let source_path = temp_dir.join(format!("ootd-saveas-source-{unique}.xlsx"));
-        let target_path = temp_dir.join(format!("ootd-saveas-target-{unique}.xlsx"));
+        let base_dir = std::env::temp_dir().join(format!("ootd-saveas-{unique}"));
+        let source_dir = base_dir.join("source");
+        let target_dir = base_dir.join("target");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        fs::create_dir_all(&target_dir).expect("create target dir");
+        let source_path = source_dir.join("source.xlsx");
+        let target_path = target_dir.join("target.xlsx");
         fs::write(&source_path, synthetic_workbook_bytes()).expect("write source workbook");
 
         let workbooks = expect_object_handle(
@@ -2728,6 +2766,14 @@ mod tests {
                     &[OmValue::Text(source_path.to_string_lossy().into_owned())],
                 )
                 .expect("Workbooks.Open"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(workbook, "Path", &[])
+                    .expect("Workbook.Path after Open")
+            ),
+            source_dir.to_string_lossy()
         );
         let active_sheet = expect_object_handle(
             runtime
@@ -2761,6 +2807,14 @@ mod tests {
                 .file_name()
                 .and_then(|value| value.to_str())
                 .expect("target file name")
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(workbook, "Path", &[])
+                    .expect("Workbook.Path after SaveAs")
+            ),
+            target_dir.to_string_lossy()
         );
 
         let reopened_after_save_as = ExcelRuntime::new()
@@ -2799,8 +2853,7 @@ mod tests {
             "SavedAfterSaveAs"
         );
 
-        fs::remove_file(&source_path).expect("cleanup source fixture");
-        fs::remove_file(&target_path).expect("cleanup target fixture");
+        fs::remove_dir_all(&base_dir).expect("cleanup SaveAs fixture");
     }
 
     #[test]

@@ -305,6 +305,58 @@
           }
         },
         {
+          "name": "Path",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "primitive",
+            "name": "string",
+            "aliasOf": "BSTR"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "Path"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "string",
+                "aliasOf": "BSTR"
+              }
+            }
+          }
+        },
+        {
+          "name": "ReadOnly",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "ReadOnly"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          }
+        },
+        {
           "name": "Save",
           "memberKind": "method",
           "support": "stub",

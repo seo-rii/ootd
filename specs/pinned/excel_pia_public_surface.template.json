@@ -292,6 +292,56 @@
           }
         },
         {
+          "name": "Path",
+          "memberKind": "property_get",
+          "returnType": {
+            "kind": "primitive",
+            "name": "string",
+            "aliasOf": "BSTR"
+          },
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "Path"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "string",
+                "aliasOf": "BSTR"
+              }
+            }
+          }
+        },
+        {
+          "name": "ReadOnly",
+          "memberKind": "property_get",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          },
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "ReadOnly"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          }
+        },
+        {
           "name": "Save",
           "memberKind": "method",
           "metadata": {
