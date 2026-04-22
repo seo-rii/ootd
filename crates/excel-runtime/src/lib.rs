@@ -1061,6 +1061,50 @@ impl ExcelRuntime {
                         col_first: 1,
                         col_last: EXCEL_MAX_COLUMN_INDEX,
                     },
+                    [OmValue::Text(reference)] => {
+                        let reference = reference.trim().replace('$', "");
+                        let parts: Vec<_> = reference.split(':').collect();
+                        let parse_row = |part: &str| -> OmResult<u32> {
+                            if part.is_empty() || !part.chars().all(|ch| ch.is_ascii_digit()) {
+                                return Err(OmError::invalid_argument(
+                                    "Worksheet.Rows text selector must be a row number or range like \"2:3\"",
+                                ));
+                            }
+                            let index = part.parse::<u32>().map_err(|_| {
+                                OmError::invalid_argument(
+                                    "Worksheet.Rows text selector is not a valid row number",
+                                )
+                            })?;
+                            if index == 0 || index > EXCEL_MAX_ROW_INDEX {
+                                return Err(OmError::invalid_argument(
+                                    "Worksheet.Rows text selector is out of bounds",
+                                ));
+                            }
+                            Ok(index)
+                        };
+                        let (row_first, row_last) = match parts.as_slice() {
+                            [single] => {
+                                let index = parse_row(single)?;
+                                (index, index)
+                            }
+                            [start, end] => {
+                                let start = parse_row(start)?;
+                                let end = parse_row(end)?;
+                                (start.min(end), start.max(end))
+                            }
+                            _ => {
+                                return Err(OmError::invalid_argument(
+                                    "Worksheet.Rows text selector must be a row number or range like \"2:3\"",
+                                ));
+                            }
+                        };
+                        Rect {
+                            row_first,
+                            row_last,
+                            col_first: 1,
+                            col_last: EXCEL_MAX_COLUMN_INDEX,
+                        }
+                    }
                     [index] => {
                         let index = coerce_u32_arg(index, "Worksheet.Rows index")?;
                         if index > EXCEL_MAX_ROW_INDEX {
@@ -1077,7 +1121,7 @@ impl ExcelRuntime {
                     }
                     _ => {
                         return Err(OmError::invalid_argument(
-                            "Worksheet.Rows expects an optional row index",
+                            "Worksheet.Rows expects an optional row index or text range",
                         ));
                     }
                 };
@@ -1115,35 +1159,53 @@ impl ExcelRuntime {
                     }
                     [OmValue::Text(reference)] => {
                         let reference = reference.trim().replace('$', "").to_ascii_uppercase();
-                        if reference.is_empty()
-                            || !reference.chars().all(|ch| ch.is_ascii_alphabetic())
-                        {
-                            return Err(OmError::invalid_argument(
-                                "Worksheet.Columns text selector must be a column label like \"B\"",
-                            ));
-                        }
+                        let parts: Vec<_> = reference.split(':').collect();
+                        let parse_column = |part: &str| -> OmResult<u32> {
+                            if part.is_empty() || !part.chars().all(|ch| ch.is_ascii_alphabetic()) {
+                                return Err(OmError::invalid_argument(
+                                    "Worksheet.Columns text selector must be a column label or range like \"B:C\"",
+                                ));
+                            }
 
-                        let mut index = 0u32;
-                        for ch in reference.bytes() {
-                            index = index
-                                .checked_mul(26)
-                                .and_then(|value| value.checked_add((ch - b'A' + 1) as u32))
-                                .ok_or_else(|| {
-                                    OmError::invalid_argument(
-                                        "Worksheet.Columns text selector overflows column bounds",
-                                    )
-                                })?;
-                        }
-                        if index > EXCEL_MAX_COLUMN_INDEX {
-                            return Err(OmError::invalid_argument(
-                                "Worksheet.Columns text selector is out of bounds",
-                            ));
-                        }
+                            let mut index = 0u32;
+                            for ch in part.bytes() {
+                                index = index
+                                    .checked_mul(26)
+                                    .and_then(|value| value.checked_add((ch - b'A' + 1) as u32))
+                                    .ok_or_else(|| {
+                                        OmError::invalid_argument(
+                                            "Worksheet.Columns text selector overflows column bounds",
+                                        )
+                                    })?;
+                            }
+                            if index > EXCEL_MAX_COLUMN_INDEX {
+                                return Err(OmError::invalid_argument(
+                                    "Worksheet.Columns text selector is out of bounds",
+                                ));
+                            }
+                            Ok(index)
+                        };
+                        let (col_first, col_last) = match parts.as_slice() {
+                            [single] => {
+                                let index = parse_column(single)?;
+                                (index, index)
+                            }
+                            [start, end] => {
+                                let start = parse_column(start)?;
+                                let end = parse_column(end)?;
+                                (start.min(end), start.max(end))
+                            }
+                            _ => {
+                                return Err(OmError::invalid_argument(
+                                    "Worksheet.Columns text selector must be a column label or range like \"B:C\"",
+                                ));
+                            }
+                        };
                         Rect {
                             row_first: 1,
                             row_last: EXCEL_MAX_ROW_INDEX,
-                            col_first: index,
-                            col_last: index,
+                            col_first,
+                            col_last,
                         }
                     }
                     [_] => {
@@ -1153,7 +1215,7 @@ impl ExcelRuntime {
                     }
                     _ => {
                         return Err(OmError::invalid_argument(
-                            "Worksheet.Columns expects an optional column index or label",
+                            "Worksheet.Columns expects an optional column index or text range",
                         ));
                     }
                 };
@@ -3846,6 +3908,11 @@ mod tests {
                 .dispatch_invoke(rows, "Item", &[OmValue::Number(2.0)])
                 .expect("Rows.Item(2)"),
         );
+        let text_rows = expect_object_handle(
+            runtime
+                .dispatch_get(active_sheet, "Rows", &[OmValue::Text("2:3".to_string())])
+                .expect("Rows(\"2:3\")"),
+        );
         let columns = expect_object_handle(
             runtime
                 .dispatch_get(active_sheet, "Columns", &[])
@@ -3860,6 +3927,11 @@ mod tests {
             runtime
                 .dispatch_get(active_sheet, "Columns", &[OmValue::Text("B".to_string())])
                 .expect("Columns(\"B\")"),
+        );
+        let text_columns = expect_object_handle(
+            runtime
+                .dispatch_get(active_sheet, "Columns", &[OmValue::Text("B:C".to_string())])
+                .expect("Columns(\"B:C\")"),
         );
         let columns_item = expect_object_handle(
             runtime
@@ -3902,6 +3974,14 @@ mod tests {
         assert_eq!(
             expect_text(
                 runtime
+                    .dispatch_get(text_rows, "Address", &[])
+                    .expect("Rows(\"2:3\").Address")
+            ),
+            "$A$2:$XFD$3"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
                     .dispatch_get(second_column, "Address", &[])
                     .expect("Columns(2).Address")
             ),
@@ -3914,6 +3994,14 @@ mod tests {
                     .expect("Columns(\"B\").Address")
             ),
             "$B$1:$B$1048576"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(text_columns, "Address", &[])
+                    .expect("Columns(\"B:C\").Address")
+            ),
+            "$B$1:$C$1048576"
         );
         assert_eq!(
             expect_text(
@@ -3934,6 +4022,13 @@ mod tests {
             runtime
                 .dispatch_get(active_sheet, "Columns", &[OmValue::Text("XFE".to_string())])
                 .expect_err("Columns(\"XFE\") should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(active_sheet, "Rows", &[OmValue::Text("0:1".to_string())])
+                .expect_err("Rows(\"0:1\") should be rejected")
                 .code,
             OmErrorCode::InvalidArgument
         );
