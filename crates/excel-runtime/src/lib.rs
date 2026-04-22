@@ -29,6 +29,13 @@ struct RuntimeWorkbook {
 }
 
 #[derive(Debug, Clone, Copy)]
+struct RuntimeSelection {
+    workbook: WorkbookHandle,
+    sheet_id: SheetId,
+    rect: Rect,
+}
+
+#[derive(Debug, Clone, Copy)]
 enum RangeProjection {
     Cells,
     Rows,
@@ -66,6 +73,7 @@ pub struct ExcelRuntime {
     next_object_handle: u64,
     next_created_workbook_index: u64,
     active_workbook: Option<WorkbookHandle>,
+    selection: Option<RuntimeSelection>,
     workbooks: BTreeMap<u64, RuntimeWorkbook>,
     objects: BTreeMap<u64, RuntimeObjectKind>,
     stale_objects: BTreeSet<u64>,
@@ -88,6 +96,7 @@ impl ExcelRuntime {
             next_object_handle: FIRST_DYNAMIC_OBJECT_HANDLE_VALUE,
             next_created_workbook_index: 1,
             active_workbook: None,
+            selection: None,
             workbooks: BTreeMap::new(),
             objects,
             stale_objects: BTreeSet::new(),
@@ -157,6 +166,15 @@ impl ExcelRuntime {
         let workbook_id = WorkbookId(handle_value);
         loaded.state.assign_workbook_id(workbook_id);
         let workbook_handle = WorkbookHandle(ObjectHandle(handle_value));
+        let default_selection = loaded
+            .state
+            .worksheets
+            .first()
+            .map(|worksheet| RuntimeSelection {
+                workbook: workbook_handle,
+                sheet_id: worksheet.id,
+                rect: Rect::single_cell(1, 1),
+            });
 
         self.workbooks.insert(
             handle_value,
@@ -174,6 +192,7 @@ impl ExcelRuntime {
             },
         );
         self.active_workbook = Some(workbook_handle);
+        self.selection = default_selection;
 
         Ok(workbook_handle)
     }
@@ -238,6 +257,14 @@ impl ExcelRuntime {
                 .next_back()
                 .copied()
                 .map(|id| WorkbookHandle(ObjectHandle(id)));
+        }
+        if self
+            .selection
+            .is_some_and(|selection| selection.workbook == workbook)
+        {
+            self.selection = self
+                .active_workbook
+                .and_then(|active_workbook| self.default_selection(active_workbook).ok());
         }
         Ok(())
     }
@@ -669,16 +696,7 @@ impl ExcelRuntime {
                 let Some(active_workbook) = self.active_workbook else {
                     return Ok(OmValue::Empty);
                 };
-                let sheet_id = self
-                    .runtime_workbook(active_workbook)?
-                    .loaded
-                    .state
-                    .worksheets
-                    .first()
-                    .map(|worksheet| worksheet.id)
-                    .ok_or_else(|| {
-                        OmError::new(OmErrorCode::NotFound, "workbook has no worksheets")
-                    })?;
+                let sheet_id = self.active_sheet_id(active_workbook)?;
                 Ok(OmValue::Object(
                     self.register_worksheet_handle(active_workbook, sheet_id).0,
                 ))
@@ -687,37 +705,29 @@ impl ExcelRuntime {
                 let Some(active_workbook) = self.active_workbook else {
                     return Ok(OmValue::Empty);
                 };
-                let sheet_id = self
-                    .runtime_workbook(active_workbook)?
-                    .loaded
-                    .state
-                    .worksheets
-                    .first()
-                    .map(|worksheet| worksheet.id)
-                    .ok_or_else(|| {
-                        OmError::new(OmErrorCode::NotFound, "workbook has no worksheets")
-                    })?;
+                let selection = self
+                    .selection
+                    .filter(|selection| selection.workbook == active_workbook)
+                    .unwrap_or(self.default_selection(active_workbook)?);
                 Ok(OmValue::Object(
-                    self.register_range_handle(active_workbook, sheet_id, Rect::single_cell(1, 1))
-                        .0,
+                    self.register_range_handle(
+                        active_workbook,
+                        selection.sheet_id,
+                        Rect::single_cell(selection.rect.row_first, selection.rect.col_first),
+                    )
+                    .0,
                 ))
             }
             "Selection" => {
                 let Some(active_workbook) = self.active_workbook else {
                     return Ok(OmValue::Empty);
                 };
-                let sheet_id = self
-                    .runtime_workbook(active_workbook)?
-                    .loaded
-                    .state
-                    .worksheets
-                    .first()
-                    .map(|worksheet| worksheet.id)
-                    .ok_or_else(|| {
-                        OmError::new(OmErrorCode::NotFound, "workbook has no worksheets")
-                    })?;
+                let selection = self
+                    .selection
+                    .filter(|selection| selection.workbook == active_workbook)
+                    .unwrap_or(self.default_selection(active_workbook)?);
                 Ok(OmValue::Object(
-                    self.register_range_handle(active_workbook, sheet_id, Rect::single_cell(1, 1))
+                    self.register_range_handle(active_workbook, selection.sheet_id, selection.rect)
                         .0,
                 ))
             }
@@ -1343,15 +1353,17 @@ impl ExcelRuntime {
                         ));
                     }
                 };
+                self.remember_selection(workbook, sheet_id, rect);
                 Ok(OmValue::Object(
                     self.register_range_handle(workbook, sheet_id, rect).0,
                 ))
             }
             "Cells" => {
                 let (row, col) = parse_cells_args(args)?;
+                let rect = Rect::single_cell(row, col);
+                self.remember_selection(workbook, sheet_id, rect);
                 Ok(OmValue::Object(
-                    self.register_range_handle(workbook, sheet_id, Rect::single_cell(row, col))
-                        .0,
+                    self.register_range_handle(workbook, sheet_id, rect).0,
                 ))
             }
             _ => Err(OmError::unsupported(format!(
@@ -1511,6 +1523,40 @@ impl ExcelRuntime {
             col_first,
             col_last,
         })
+    }
+
+    fn default_selection(&self, workbook: WorkbookHandle) -> OmResult<RuntimeSelection> {
+        let sheet_id = self
+            .runtime_workbook(workbook)?
+            .loaded
+            .state
+            .worksheets
+            .first()
+            .map(|worksheet| worksheet.id)
+            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "workbook has no worksheets"))?;
+        Ok(RuntimeSelection {
+            workbook,
+            sheet_id,
+            rect: Rect::single_cell(1, 1),
+        })
+    }
+
+    fn active_sheet_id(&self, workbook: WorkbookHandle) -> OmResult<SheetId> {
+        Ok(self
+            .selection
+            .filter(|selection| selection.workbook == workbook)
+            .map(|selection| selection.sheet_id)
+            .unwrap_or(self.default_selection(workbook)?.sheet_id))
+    }
+
+    fn remember_selection(&mut self, workbook: WorkbookHandle, sheet_id: SheetId, rect: Rect) {
+        if self.active_workbook == Some(workbook) {
+            self.selection = Some(RuntimeSelection {
+                workbook,
+                sheet_id,
+                rect,
+            });
+        }
     }
 
     fn current_region_rect(
@@ -2346,6 +2392,77 @@ mod tests {
                     .expect("selection address")
             ),
             "$A$1"
+        );
+
+        let updated_selection = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:C1".to_string())])
+                .expect("Range(B1:C1)"),
+        );
+        let selection_after_range = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after Range"),
+        );
+        let active_cell_after_range = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveCell", &[])
+                .expect("ActiveCell after Range"),
+        );
+        let selection_after_cells = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Cells",
+                    &[OmValue::Number(2.0), OmValue::Number(2.0)],
+                )
+                .expect("Cells(2, 2)"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(updated_selection, "Address", &[])
+                    .expect("updated selection address")
+            ),
+            "$B$1:$C$1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection_after_range, "Address", &[])
+                    .expect("Selection after Range address")
+            ),
+            "$B$1:$C$1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_cell_after_range, "Address", &[])
+                    .expect("ActiveCell after Range address")
+            ),
+            "$B$1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection_after_cells, "Address", &[])
+                    .expect("Cells(2, 2) address")
+            ),
+            "$B$2"
+        );
+        let selection_after_cells_handle = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after Cells"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection_after_cells_handle, "Address", &[])
+                    .expect("Selection after Cells address")
+            ),
+            "$B$2"
         );
     }
 
