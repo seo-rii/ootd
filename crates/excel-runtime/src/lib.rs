@@ -1725,6 +1725,66 @@ impl ExcelRuntime {
                 }
                 Ok(OmValue::Empty)
             }
+            "Goto" => {
+                if args.len() > 2 {
+                    return Err(OmError::invalid_argument(
+                        "Application.Goto accepts at most reference and scroll arguments",
+                    ));
+                }
+
+                match args.get(1) {
+                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => {}
+                    Some(OmValue::Bool(_)) => {}
+                    Some(_) => {
+                        return Err(OmError::type_mismatch(
+                            "Application.Goto scroll expects a boolean when provided",
+                        ));
+                    }
+                }
+
+                let (workbook, sheet_id, rect) = match args.first() {
+                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => {
+                        return Err(OmError::unsupported(
+                            "Application.Goto without a reference is not implemented",
+                        ));
+                    }
+                    Some(OmValue::Text(reference)) => {
+                        let Some(active_workbook) = self.active_workbook else {
+                            return Err(OmError::invalid_state(
+                                "application has no active workbook",
+                            ));
+                        };
+                        let sheet_id = self.active_sheet_id(active_workbook)?;
+                        let rect = parse_rect_a1(reference).map_err(|_| {
+                            OmError::invalid_argument(
+                                "Application.Goto string references must use A1 notation",
+                            )
+                        })?;
+                        (active_workbook, sheet_id, rect)
+                    }
+                    Some(OmValue::Object(handle)) => match self.runtime_object(*handle)? {
+                        RuntimeObjectKind::Range {
+                            workbook,
+                            sheet_id,
+                            rect,
+                            ..
+                        } => (workbook, sheet_id, rect),
+                        _ => {
+                            return Err(OmError::type_mismatch(
+                                "Application.Goto expects a Range object or A1-style text reference",
+                            ));
+                        }
+                    },
+                    Some(_) => {
+                        return Err(OmError::type_mismatch(
+                            "Application.Goto expects a Range object or A1-style text reference",
+                        ));
+                    }
+                };
+
+                self.set_selection(workbook, sheet_id, rect);
+                Ok(OmValue::Empty)
+            }
             "Range" => {
                 let Some(active_workbook) = self.active_workbook else {
                     return Err(OmError::invalid_state("application has no active workbook"));
@@ -6969,6 +7029,194 @@ mod tests {
                 .dispatch_get(empty_application, "Worksheets", &[])
                 .expect("Application.Worksheets without active workbook"),
             OmValue::Empty
+        );
+    }
+
+    #[test]
+    fn application_goto_selects_ranges_and_activates_foreign_workbooks() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook1 = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook1");
+        let workbook2 = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook2");
+        let worksheets1 = expect_object_handle(
+            runtime
+                .dispatch_get(workbook1.0, "Worksheets", &[])
+                .expect("Workbook1.Worksheets"),
+        );
+        let worksheet1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets1, "Item", &[OmValue::Number(1.0)])
+                .expect("Workbook1.Worksheets.Item(1)"),
+        );
+        let worksheets2 = expect_object_handle(
+            runtime
+                .dispatch_get(workbook2.0, "Worksheets", &[])
+                .expect("Workbook2.Worksheets"),
+        );
+        let worksheet2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets2, "Item", &[OmValue::Number(1.0)])
+                .expect("Workbook2.Worksheets.Item(1)"),
+        );
+
+        runtime
+            .dispatch_set(
+                worksheet1,
+                "Name",
+                OmValue::Text("FirstSheet".to_string()),
+                &[],
+            )
+            .expect("rename workbook1 sheet");
+        runtime
+            .dispatch_set(
+                worksheet2,
+                "Name",
+                OmValue::Text("SecondSheet".to_string()),
+                &[],
+            )
+            .expect("rename workbook2 sheet");
+        runtime
+            .dispatch_invoke(worksheet1, "Activate", &[])
+            .expect("Worksheet.Activate");
+
+        let foreign_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet2, "Range", &[OmValue::Text("B3:C4".to_string())])
+                .expect("Workbook2.Range(B3:C4)"),
+        );
+        let application = runtime.root_application();
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(application, "Goto", &[OmValue::Object(foreign_range)])
+                .expect("Application.Goto(range)"),
+            OmValue::Empty
+        ));
+
+        let active_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after Application.Goto(range)"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after Application.Goto(range)"),
+        );
+        let active_cell = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveCell", &[])
+                .expect("ActiveCell after Application.Goto(range)"),
+        );
+        let selection = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after Application.Goto(range)"),
+        );
+
+        assert_eq!(active_workbook, workbook2.0);
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("ActiveSheet after Application.Goto(range) name")
+            ),
+            "SecondSheet"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection, "Address", &[])
+                    .expect("Selection after Application.Goto(range) address")
+            ),
+            "$B$3:$C$4"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_cell, "Address", &[])
+                    .expect("ActiveCell after Application.Goto(range) address")
+            ),
+            "$B$3"
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(
+                    application,
+                    "Goto",
+                    &[OmValue::Text("D5".to_string()), OmValue::Bool(true)],
+                )
+                .expect("Application.Goto(\"D5\", true)"),
+            OmValue::Empty
+        ));
+        let selection_after_text = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after Application.Goto(\"D5\")"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection_after_text, "Address", &[])
+                    .expect("Selection after Application.Goto(\"D5\") address")
+            ),
+            "$D$5"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(application, "Goto", &[])
+                .expect_err("Application.Goto without reference should be rejected")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(application, "Goto", &[OmValue::Object(workbook1.0)])
+                .expect_err("Application.Goto should reject non-range objects")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    application,
+                    "Goto",
+                    &[
+                        OmValue::Text("A1".to_string()),
+                        OmValue::Text("bad".to_string())
+                    ],
+                )
+                .expect_err("Application.Goto should reject non-bool scroll values")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+
+        let mut empty_runtime = ExcelRuntime::new();
+        let empty_application = empty_runtime.root_application();
+        assert_eq!(
+            empty_runtime
+                .dispatch_invoke(
+                    empty_application,
+                    "Goto",
+                    &[OmValue::Text("A1".to_string())],
+                )
+                .expect_err("Application.Goto without active workbook")
+                .code,
+            OmErrorCode::InvalidState
         );
     }
 

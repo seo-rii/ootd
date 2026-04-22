@@ -76,8 +76,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 60);
-    assert_eq!(summary.stub_member_count, 60);
+    assert_eq!(summary.member_count, 61);
+    assert_eq!(summary.stub_member_count, 61);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -120,7 +120,7 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 60);
+    assert_eq!(summary.member_count, 61);
 
     let application = document
         .interfaces
@@ -222,6 +222,16 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
         .find(|member| member.name == "CalculateFullRebuild")
         .expect("Application.CalculateFullRebuild");
     assert_eq!(calculate_full_rebuild.params.len(), 0);
+    let application_goto = application
+        .members
+        .iter()
+        .find(|member| member.name == "Goto")
+        .expect("Application.Goto");
+    assert_eq!(application_goto.access, AccessMode::Read);
+    assert_eq!(application_goto.params.len(), 2);
+    assert!(application_goto.params[0].optional);
+    assert!(application_goto.params[1].optional);
+    assert!(application_goto.return_type.is_none());
     let application_range = application
         .members
         .iter()
@@ -1155,7 +1165,7 @@ fn writes_canonical_office_idl_json_from_bundle_inputs() {
     assert_eq!(round_trip_summary.enum_count, 1);
     assert_eq!(round_trip_summary.interface_count, 6);
     assert_eq!(round_trip_summary.class_count, 3);
-    assert_eq!(round_trip_summary.member_count, 60);
+    assert_eq!(round_trip_summary.member_count, 61);
     assert_eq!(generation.summary.library, "Excel");
     assert_eq!(generation.summary.version, "16.0");
     assert_eq!(
@@ -1221,7 +1231,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|entry| entry.name == "Range")
         .expect("Range");
 
-    assert_eq!(application.member_count, 13);
+    assert_eq!(application.member_count, 14);
     assert_eq!(workbook.member_count, 10);
     assert_eq!(worksheet.member_count, 9);
     assert_eq!(range.member_count, 21);
@@ -1381,6 +1391,16 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .expect("Application.CalculateFullRebuild");
     assert_eq!(application_calculate_full_rebuild.access, AccessMode::Read);
     assert_eq!(application_calculate_full_rebuild.params.len(), 0);
+    let application_goto = application
+        .members
+        .iter()
+        .find(|member| member.name == "Goto")
+        .expect("Application.Goto");
+    assert_eq!(application_goto.access, AccessMode::Read);
+    assert_eq!(application_goto.params.len(), 2);
+    assert!(application_goto.params[0].optional);
+    assert!(application_goto.params[1].optional);
+    assert!(application_goto.return_type.is_none());
     let application_range = application
         .members
         .iter()
@@ -1735,8 +1755,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 60);
-    assert_eq!(coverage.support_counts.stub, 60);
+    assert_eq!(coverage.member_count, 61);
+    assert_eq!(coverage.support_counts.stub, 61);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -1760,8 +1780,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|entry| entry.name == "Range")
         .expect("Range coverage");
 
-    assert_eq!(application_coverage.member_count, 13);
-    assert_eq!(application_coverage.support_counts.stub, 13);
+    assert_eq!(application_coverage.member_count, 14);
+    assert_eq!(application_coverage.support_counts.stub, 14);
     assert_eq!(
         application_coverage.stub_members,
         vec![
@@ -1775,6 +1795,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Rows".to_string(),
             "Columns".to_string(),
             "CalculateFullRebuild".to_string(),
+            "Goto".to_string(),
             "Range".to_string(),
             "Intersect".to_string(),
             "Union".to_string()

@@ -279,6 +279,41 @@
           }
         },
         {
+          "name": "Goto",
+          "memberKind": "method",
+          "params": [
+            {
+              "name": "Reference",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Scroll",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ],
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Application",
+                  "sourceMember": "Goto"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "Range",
           "memberKind": "method",
           "returnType": {
