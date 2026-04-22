@@ -1107,6 +1107,32 @@
           }
         },
         {
+          "name": "Type",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "XlSheetType"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "Type"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlSheetType"
+              }
+            }
+          }
+        },
+        {
           "name": "Range",
           "memberKind": "method",
           "returnType": {

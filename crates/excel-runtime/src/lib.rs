@@ -1107,6 +1107,14 @@ impl ExcelRuntime {
                     .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?;
                 Ok(OmValue::Number((index + 1) as f64))
             }
+            "Type" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Worksheet.Type does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Number(f64::from(XL_SHEET_TYPE_WORKSHEET)))
+            }
             "UsedRange" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(
@@ -9208,6 +9216,14 @@ mod tests {
             ),
             "Sheet2"
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheet2, "Type", &[])
+                    .expect("typed add sheet type")
+            ),
+            f64::from(super::XL_SHEET_TYPE_WORKSHEET)
+        );
         let active_sheet = expect_object_handle(
             runtime
                 .dispatch_get(application, "ActiveSheet", &[])
@@ -9220,6 +9236,14 @@ mod tests {
                     .expect("active sheet name after typed add")
             ),
             "Sheet2"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(active_sheet, "Type", &[])
+                    .expect("active sheet type after typed add")
+            ),
+            f64::from(super::XL_SHEET_TYPE_WORKSHEET)
         );
 
         let saved = runtime
