@@ -179,6 +179,32 @@
           }
         },
         {
+          "name": "Add",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "interface",
+            "name": "Workbook",
+            "aliasOf": "Excel.Workbook"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Workbooks",
+                  "sourceMember": "Add"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Workbook",
+                "aliasOf": "Excel.Workbook"
+              }
+            }
+          }
+        },
+        {
           "name": "Open",
           "memberKind": "method",
           "returnType": {

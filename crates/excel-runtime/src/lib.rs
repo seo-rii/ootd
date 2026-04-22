@@ -8,6 +8,7 @@ use office_common::{
     WorkbookModel, WorksheetHandle, WorksheetModel,
 };
 use office_idl::{AccessMode, SupportState};
+use office_opc::{CompressionMethod, OpcPackage, OpcPart};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -55,6 +56,7 @@ pub struct ExcelRuntime {
     root_application: ObjectHandle,
     next_handle: u64,
     next_object_handle: u64,
+    next_created_workbook_index: u64,
     active_workbook: Option<WorkbookHandle>,
     workbooks: BTreeMap<u64, RuntimeWorkbook>,
     objects: BTreeMap<u64, RuntimeObjectKind>,
@@ -76,6 +78,7 @@ impl ExcelRuntime {
             root_application: ObjectHandle(ROOT_APPLICATION_HANDLE_VALUE),
             next_handle: 1,
             next_object_handle: FIRST_DYNAMIC_OBJECT_HANDLE_VALUE,
+            next_created_workbook_index: 1,
             active_workbook: None,
             workbooks: BTreeMap::new(),
             objects,
@@ -93,6 +96,21 @@ impl ExcelRuntime {
 
     pub fn open_workbook(&mut self, spec: OpenWorkbookSpec) -> OmResult<WorkbookHandle> {
         self.open_workbook_with_display_name(spec, None, None)
+    }
+
+    pub fn create_workbook(&mut self) -> OmResult<WorkbookHandle> {
+        let workbook_name = format!("Book{}", self.next_created_workbook_index);
+        self.next_created_workbook_index += 1;
+        self.open_workbook_with_display_name(
+            OpenWorkbookSpec {
+                bytes: blank_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            },
+            Some(workbook_name),
+            None,
+        )
     }
 
     fn open_workbook_with_display_name(
@@ -940,6 +958,14 @@ impl ExcelRuntime {
 
     fn dispatch_invoke_workbooks(&mut self, member: &str, args: &[OmValue]) -> OmResult<OmValue> {
         match member {
+            "Add" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Workbooks.Add does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Object(self.create_workbook()?.0))
+            }
             "Open" => {
                 if args.len() != 1 {
                     return Err(OmError::invalid_argument(
@@ -1200,6 +1226,69 @@ pub fn supports_format(format: FileFormat) -> bool {
     )
 }
 
+fn blank_workbook_bytes() -> Vec<u8> {
+    let package = OpcPackage::new(vec![
+        OpcPart {
+            name: "[Content_Types].xml".to_string(),
+            content_type: None,
+            compression: CompressionMethod::Stored,
+            bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>"#
+                .to_vec(),
+        },
+        OpcPart {
+            name: "_rels/.rels".to_string(),
+            content_type: None,
+            compression: CompressionMethod::Stored,
+            bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"#
+                .to_vec(),
+        },
+        OpcPart {
+            name: "xl/workbook.xml".to_string(),
+            content_type: None,
+            compression: CompressionMethod::Stored,
+            bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"#
+                .to_vec(),
+        },
+        OpcPart {
+            name: "xl/_rels/workbook.xml.rels".to_string(),
+            content_type: None,
+            compression: CompressionMethod::Stored,
+            bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"#
+                .to_vec(),
+        },
+        OpcPart {
+            name: "xl/worksheets/sheet1.xml".to_string(),
+            content_type: None,
+            compression: CompressionMethod::Stored,
+            bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData/>
+</worksheet>"#
+                .to_vec(),
+        },
+    ]);
+
+    package.to_bytes().expect("blank workbook package bytes")
+}
+
 fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
     match object {
         RuntimeObjectKind::Application | RuntimeObjectKind::WorkbooksCollection => None,
@@ -1340,13 +1429,14 @@ fn column_to_letters(mut col: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExcelRuntime, supports_format};
+    use super::{ExcelRuntime, blank_workbook_bytes, supports_format};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use office_common::{
-        ExcelProfile, FileFormat, GetRangeValuesSpec, ObjectHandle, OmArray, OmErrorCode, OmValue,
-        OpenWorkbookSpec, RangeRef, Rect, SaveWorkbookSpec, SetRangeValuesSpec, WorkbookId,
+        CellValue, ExcelProfile, FileFormat, GetRangeValuesSpec, LoadOptions, ObjectHandle,
+        OmArray, OmErrorCode, OmValue, OpenWorkbookSpec, RangeRef, Rect, SaveWorkbookSpec,
+        SetRangeValuesSpec, WorkbookId,
     };
     use office_opc::{CompressionMethod, OpcPackage, OpcPart};
 
@@ -1821,6 +1911,27 @@ mod tests {
     }
 
     #[test]
+    fn blank_workbook_bytes_load_as_single_empty_sheet() {
+        let runtime = ExcelRuntime::new();
+        let loaded = runtime
+            .codec
+            .load(&blank_workbook_bytes(), LoadOptions::default())
+            .expect("load blank workbook");
+
+        assert_eq!(loaded.detected_format, FileFormat::Xlsx);
+        assert_eq!(loaded.state.worksheets.len(), 1);
+        assert_eq!(loaded.state.worksheets[0].name, "Sheet1");
+        assert!(
+            loaded
+                .state
+                .worksheet_data_for_sheet(loaded.state.worksheets[0].id)
+                .expect("worksheet data")
+                .cells
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn worksheet_range_dispatch_normalizes_lowercase_absolute_and_reversed_a1_refs() {
         let mut runtime = ExcelRuntime::new();
         let _workbook = runtime
@@ -1935,6 +2046,129 @@ mod tests {
                 .code,
             OmErrorCode::NotFound
         );
+    }
+
+    #[test]
+    fn workbooks_add_dispatch_creates_blank_unsaved_workbook_and_updates_active_context() {
+        let mut runtime = ExcelRuntime::new();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let base_dir = std::env::temp_dir().join(format!("ootd-workbooks-add-{unique}"));
+        fs::create_dir_all(&base_dir).expect("create add fixture dir");
+        let target_path = base_dir.join("created.xlsx");
+
+        let application = runtime.root_application();
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+        let workbook = expect_object_handle(
+            runtime
+                .dispatch_invoke(workbooks, "Add", &[])
+                .expect("Workbooks.Add"),
+        );
+        let active_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let used_range = expect_object_handle(
+            runtime
+                .dispatch_get(active_sheet, "UsedRange", &[])
+                .expect("UsedRange"),
+        );
+
+        assert_eq!(workbook, active_workbook);
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbooks, "Count", &[])
+                    .expect("Workbooks.Count")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(workbook, "Name", &[])
+                    .expect("Workbook.Name")
+            ),
+            "Book1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(workbook, "FullName", &[])
+                    .expect("Workbook.FullName")
+            ),
+            "Book1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(used_range, "Address", &[])
+                    .expect("UsedRange.Address")
+            ),
+            "$A$1"
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("Workbook.Saved on add")
+        ));
+
+        runtime
+            .dispatch_set(
+                used_range,
+                "Value",
+                OmValue::Text("created".to_string()),
+                &[],
+            )
+            .expect("Range.Value");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("Workbook.Saved after edit")
+        ));
+
+        runtime
+            .dispatch_invoke(
+                workbook,
+                "SaveAs",
+                &[OmValue::Text(target_path.to_string_lossy().into_owned())],
+            )
+            .expect("Workbook.SaveAs");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("Workbook.Saved after SaveAs")
+        ));
+
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(
+                &fs::read(&target_path).expect("read created workbook"),
+                LoadOptions::default(),
+            )
+            .expect("reload created workbook");
+        assert_eq!(reopened.state.worksheets[0].name, "Sheet1");
+        assert_eq!(
+            reopened
+                .state
+                .cell(reopened.state.worksheets[0].id, 1, 1)
+                .map(|cell| cell.value.clone()),
+            Some(CellValue::Text("created".to_string()))
+        );
+
+        fs::remove_dir_all(&base_dir).expect("cleanup add fixture");
     }
 
     #[test]
