@@ -1,0 +1,466 @@
+{
+  "library": "Excel",
+  "version": "16.0",
+  "metadata": {
+    "namespace": "Microsoft.Office.Interop.Excel",
+    "typeLibraryGuid": "{00020813-0000-0000-C000-000000000046}",
+    "sourceInherits": ["IDispatch"]
+  },
+  "enums": [
+    {
+      "name": "XlCalculation",
+      "values": [
+        {
+          "name": "xlCalculationAutomatic",
+          "value": -4105
+        },
+        {
+          "name": "xlCalculationManual",
+          "value": -4135
+        }
+      ]
+    }
+  ],
+  "interfaces": [
+    {
+      "name": "Application",
+      "kind": "dispatch",
+      "metadata": {
+        "iid": "{000208D5-0000-0000-C000-000000000046}",
+        "sourceInherits": ["IDispatch"]
+      },
+      "members": [
+        {
+          "name": "Workbooks",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Workbooks",
+            "aliasOf": "Excel.Workbooks"
+          },
+          "support": "stub",
+          "notes": "Pinned template slot for extracted Application.Workbooks member.",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Application",
+                  "sourceMember": "Workbooks",
+                  "dispId": 572
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Workbooks",
+                "aliasOf": "Excel.Workbooks"
+              }
+            }
+          }
+        },
+        {
+          "name": "ActiveWorkbook",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Workbook",
+            "nullable": true,
+            "aliasOf": "Excel.Workbook"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Application",
+                  "sourceMember": "ActiveWorkbook",
+                  "dispId": 142
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Workbook",
+                "nullable": true,
+                "aliasOf": "Excel.Workbook"
+              }
+            }
+          }
+        },
+        {
+          "name": "ActiveSheet",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Worksheet",
+            "nullable": true,
+            "aliasOf": "Excel.Worksheet"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Application",
+                  "sourceMember": "ActiveSheet",
+                  "dispId": 246
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Worksheet",
+                "nullable": true,
+                "aliasOf": "Excel.Worksheet"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Workbooks",
+      "kind": "dispatch",
+      "metadata": {
+        "iid": "{000208DB-0000-0000-C000-000000000046}",
+        "sourceInherits": ["IDispatch"]
+      },
+      "members": [
+        {
+          "name": "Open",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "interface",
+            "name": "Workbook",
+            "aliasOf": "Excel.Workbook"
+          },
+          "params": [
+            {
+              "name": "Filename",
+              "type": {
+                "kind": "primitive",
+                "name": "string",
+                "aliasOf": "BSTR"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Workbooks",
+                  "sourceMember": "Open",
+                  "dispId": 183
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Workbook",
+                "aliasOf": "Excel.Workbook"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Workbook",
+      "kind": "dispatch",
+      "metadata": {
+        "iid": "{000208DA-0000-0000-C000-000000000046}",
+        "sourceInherits": ["IDispatch"]
+      },
+      "members": [
+        {
+          "name": "Worksheets",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Worksheets",
+            "aliasOf": "Excel.Worksheets"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "Worksheets",
+                  "dispId": 494
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Worksheets",
+                "aliasOf": "Excel.Worksheets"
+              }
+            }
+          }
+        },
+        {
+          "name": "Save",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "Save",
+                  "dispId": 100
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Close",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "Close",
+                  "dispId": 277
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Worksheets",
+      "kind": "dispatch",
+      "metadata": {
+        "iid": "{000208B1-0000-0000-C000-000000000046}",
+        "sourceInherits": ["IDispatch"]
+      },
+      "members": [
+        {
+          "name": "Item",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "interface",
+            "name": "Worksheet",
+            "aliasOf": "Excel.Worksheet"
+          },
+          "params": [
+            {
+              "name": "Index",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Worksheets",
+                  "sourceMember": "Item",
+                  "dispId": 0
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Worksheet",
+                "aliasOf": "Excel.Worksheet"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Worksheet",
+      "kind": "dispatch",
+      "metadata": {
+        "iid": "{000208D8-0000-0000-C000-000000000046}",
+        "sourceInherits": ["IDispatch", "Excel._Worksheet"]
+      },
+      "members": [
+        {
+          "name": "Name",
+          "memberKind": "property",
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "string",
+            "aliasOf": "BSTR"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "Name",
+                  "dispId": 110
+                },
+                {
+                  "kind": "property_set",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "Name",
+                  "dispId": 110
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "string",
+                "aliasOf": "BSTR"
+              }
+            }
+          }
+        },
+        {
+          "name": "Range",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "interface",
+            "name": "Range",
+            "aliasOf": "Excel.Range"
+          },
+          "params": [
+            {
+              "name": "Cell1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Cell2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "Range",
+                  "dispId": 197
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              }
+            }
+          }
+        },
+        {
+          "name": "UsedRange",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Range",
+            "aliasOf": "Excel.Range"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "UsedRange",
+                  "dispId": 133
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              }
+            }
+          }
+        },
+        {
+          "name": "Cells",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Range",
+            "aliasOf": "Excel.Range"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "Cells",
+                  "dispId": 238
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "classes": [
+    {
+      "name": "Application",
+      "implements": [
+        "Application"
+      ],
+      "defaultInterface": "Application",
+      "metadata": {
+        "clsid": "{00024500-0000-0000-C000-000000000046}",
+        "sourceDefaultInterface": "Application"
+      }
+    },
+    {
+      "name": "Workbook",
+      "implements": [
+        "Workbook"
+      ],
+      "defaultInterface": "Workbook",
+      "metadata": {
+        "clsid": "{00020819-0000-0000-C000-000000000046}",
+        "sourceDefaultInterface": "Workbook"
+      }
+    },
+    {
+      "name": "Worksheet",
+      "implements": [
+        "Worksheet"
+      ],
+      "defaultInterface": "Worksheet",
+      "metadata": {
+        "clsid": "{00020820-0000-0000-C000-000000000046}",
+        "sourceDefaultInterface": "Worksheet"
+      }
+    }
+  ]
+}
