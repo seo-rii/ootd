@@ -1282,7 +1282,7 @@ impl ExcelRuntime {
         args: &[OmValue],
     ) -> OmResult<OmValue> {
         self.focus_member_supported("Range", member, false)?;
-        if member != "Address" && !args.is_empty() {
+        if !args.is_empty() && !matches!(member, "Address" | "Rows" | "Columns" | "Cells") {
             return Err(OmError::invalid_argument(format!(
                 "Range.{member} does not accept arguments"
             )));
@@ -1410,33 +1410,45 @@ impl ExcelRuntime {
             )),
             "Row" => Ok(OmValue::Number(rect.row_first as f64)),
             "Column" => Ok(OmValue::Number(rect.col_first as f64)),
-            "Rows" => Ok(OmValue::Object(
-                self.register_projected_range_handle(
+            "Rows" => {
+                let handle = self.register_projected_range_handle(
                     workbook,
                     sheet_id,
                     rect,
                     RangeProjection::Rows,
-                )
-                .0,
-            )),
-            "Columns" => Ok(OmValue::Object(
-                self.register_projected_range_handle(
+                );
+                if args.is_empty() {
+                    Ok(OmValue::Object(handle.0))
+                } else {
+                    self.dispatch_invoke(handle.0, "Item", args)
+                }
+            }
+            "Columns" => {
+                let handle = self.register_projected_range_handle(
                     workbook,
                     sheet_id,
                     rect,
                     RangeProjection::Columns,
-                )
-                .0,
-            )),
-            "Cells" => Ok(OmValue::Object(
-                self.register_projected_range_handle(
+                );
+                if args.is_empty() {
+                    Ok(OmValue::Object(handle.0))
+                } else {
+                    self.dispatch_invoke(handle.0, "Item", args)
+                }
+            }
+            "Cells" => {
+                let handle = self.register_projected_range_handle(
                     workbook,
                     sheet_id,
                     rect,
                     RangeProjection::Cells,
-                )
-                .0,
-            )),
+                );
+                if args.is_empty() {
+                    Ok(OmValue::Object(handle.0))
+                } else {
+                    self.dispatch_invoke(handle.0, "Item", args)
+                }
+            }
             "CurrentRegion" => Ok(OmValue::Object(
                 self.register_range_handle(
                     workbook,
@@ -3717,6 +3729,107 @@ mod tests {
             runtime
                 .dispatch_invoke(rows, "Item", &[OmValue::Number(3.0)])
                 .expect_err("Rows.Item(3) should be out of bounds")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn range_projection_properties_accept_direct_index_args() {
+        let mut runtime = ExcelRuntime::new();
+        let _workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B2".to_string())])
+                .expect("Range(A1:B2)"),
+        );
+        let second_row = expect_object_handle(
+            runtime
+                .dispatch_get(range, "Rows", &[OmValue::Number(2.0)])
+                .expect("Range.Rows(2)"),
+        );
+        let second_column = expect_object_handle(
+            runtime
+                .dispatch_get(range, "Columns", &[OmValue::Number(2.0)])
+                .expect("Range.Columns(2)"),
+        );
+        let linear_second_cell = expect_object_handle(
+            runtime
+                .dispatch_get(range, "Cells", &[OmValue::Number(2.0)])
+                .expect("Range.Cells(2)"),
+        );
+        let indexed_cell = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    range,
+                    "Cells",
+                    &[OmValue::Number(2.0), OmValue::Number(2.0)],
+                )
+                .expect("Range.Cells(2, 2)"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(second_row, "Address", &[])
+                    .expect("Range.Rows(2).Address")
+            ),
+            "$A$2:$B$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(second_column, "Address", &[])
+                    .expect("Range.Columns(2).Address")
+            ),
+            "$B$1:$B$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(linear_second_cell, "Address", &[])
+                    .expect("Range.Cells(2).Address")
+            ),
+            "$B$1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(indexed_cell, "Address", &[])
+                    .expect("Range.Cells(2, 2).Address")
+            ),
+            "$B$2"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(range, "Rows", &[OmValue::Number(3.0)])
+                .expect_err("Range.Rows(3) should be out of bounds")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(range, "Columns", &[OmValue::Text("B".to_string())])
+                .expect_err("Range.Columns(\"B\") should be rejected")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(range, "Cells", &[OmValue::Number(0.0)])
+                .expect_err("Range.Cells(0) should be rejected")
                 .code,
             OmErrorCode::InvalidArgument
         );
