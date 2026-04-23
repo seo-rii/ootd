@@ -109,6 +109,7 @@ pub struct ExcelRuntime {
     status_bar: Option<String>,
     display_status_bar: bool,
     display_formula_bar: bool,
+    display_scroll_bars: bool,
     cut_copy_mode: Option<i32>,
     next_handle: u64,
     next_object_handle: u64,
@@ -142,6 +143,7 @@ impl ExcelRuntime {
             status_bar: None,
             display_status_bar: true,
             display_formula_bar: true,
+            display_scroll_bars: true,
             cut_copy_mode: None,
             next_handle: 1,
             next_object_handle: FIRST_DYNAMIC_OBJECT_HANDLE_VALUE,
@@ -560,6 +562,15 @@ impl ExcelRuntime {
                             ));
                         };
                         self.display_formula_bar = display_formula_bar;
+                        Ok(())
+                    }
+                    "DisplayScrollBars" => {
+                        let OmValue::Bool(display_scroll_bars) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Application.DisplayScrollBars expects a boolean value",
+                            ));
+                        };
+                        self.display_scroll_bars = display_scroll_bars;
                         Ok(())
                     }
                     "CutCopyMode" => {
@@ -1482,6 +1493,14 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Bool(self.display_formula_bar))
+            }
+            "DisplayScrollBars" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.DisplayScrollBars does not accept index arguments",
+                    ));
+                }
+                Ok(OmValue::Bool(self.display_scroll_bars))
             }
             "CutCopyMode" => {
                 if !args.is_empty() {
@@ -7452,6 +7471,56 @@ mod tests {
             runtime
                 .dispatch_get(application, "DisplayFormulaBar", &[OmValue::Bool(true)])
                 .expect_err("Application.DisplayFormulaBar should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn application_display_scroll_bars_dispatch_roundtrips_and_rejects_invalid_values() {
+        let mut runtime = ExcelRuntime::new();
+        let application = runtime.root_application();
+
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(application, "DisplayScrollBars", &[])
+                .expect("Application.DisplayScrollBars default")
+        ));
+
+        runtime
+            .dispatch_set(application, "DisplayScrollBars", OmValue::Bool(false), &[])
+            .expect("Application.DisplayScrollBars = false");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "DisplayScrollBars", &[])
+                .expect("Application.DisplayScrollBars after false")
+        ));
+
+        runtime
+            .dispatch_set(application, "DisplayScrollBars", OmValue::Bool(true), &[])
+            .expect("Application.DisplayScrollBars = true");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(application, "DisplayScrollBars", &[])
+                .expect("Application.DisplayScrollBars after true")
+        ));
+
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    application,
+                    "DisplayScrollBars",
+                    OmValue::Text("bad".to_string()),
+                    &[]
+                )
+                .expect_err("Application.DisplayScrollBars should reject non-bool values")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "DisplayScrollBars", &[OmValue::Bool(true)])
+                .expect_err("Application.DisplayScrollBars should reject index args")
                 .code,
             OmErrorCode::InvalidArgument
         );
