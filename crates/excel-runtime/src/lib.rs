@@ -38,7 +38,9 @@ const XL_DOWN: i32 = -4121;
 const XL_TO_LEFT: i32 = -4159;
 const XL_TO_RIGHT: i32 = -4161;
 const XL_UP: i32 = -4162;
+const XL_SHIFT_DOWN: i32 = -4121;
 const XL_SHIFT_TO_LEFT: i32 = -4159;
+const XL_SHIFT_TO_RIGHT: i32 = -4161;
 const XL_SHIFT_UP: i32 = -4162;
 const XL_COPY: i32 = 1;
 const XL_CUT: i32 = 2;
@@ -1375,6 +1377,145 @@ impl ExcelRuntime {
                             }
                             other => Err(OmError::unsupported(format!(
                                 "Range.Delete Shift {other} is not implemented"
+                            ))),
+                        }
+                    }
+                    "Insert" => {
+                        let shift = match args {
+                            [] | [OmValue::Missing] | [OmValue::Empty] | [OmValue::Null] => {
+                                XL_SHIFT_DOWN
+                            }
+                            [OmValue::Number(shift)] => {
+                                if !shift.is_finite()
+                                    || shift.fract() != 0.0
+                                    || *shift < i32::MIN as f64
+                                    || *shift > i32::MAX as f64
+                                {
+                                    return Err(OmError::invalid_argument(
+                                        "Range.Insert Shift expects an integral XlInsertShiftDirection value",
+                                    ));
+                                }
+                                *shift as i32
+                            }
+                            [_] => {
+                                return Err(OmError::type_mismatch(
+                                    "Range.Insert Shift expects a numeric XlInsertShiftDirection value when provided",
+                                ));
+                            }
+                            _ => {
+                                return Err(OmError::invalid_argument(
+                                    "Range.Insert accepts at most one Shift argument",
+                                ));
+                            }
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let worksheet = runtime
+                            .loaded
+                            .state
+                            .worksheet_data_for_sheet_mut(sheet_id)?;
+                        match shift {
+                            XL_SHIFT_DOWN => {
+                                let shift_height = rect.height();
+                                let affected_columns = worksheet
+                                    .cells
+                                    .keys()
+                                    .filter_map(|&(row, col)| {
+                                        (row >= rect.row_first
+                                            && (rect.col_first..=rect.col_last).contains(&col))
+                                        .then_some(col)
+                                    })
+                                    .collect::<BTreeSet<_>>();
+                                for col in affected_columns {
+                                    let Some(max_row) = worksheet
+                                        .cells
+                                        .keys()
+                                        .filter_map(|&(row, cell_col)| {
+                                            (cell_col == col && row >= rect.row_first)
+                                                .then_some(row)
+                                        })
+                                        .max()
+                                    else {
+                                        continue;
+                                    };
+                                    let shifted_max_row =
+                                        max_row.checked_add(shift_height).ok_or_else(|| {
+                                            OmError::invalid_argument(
+                                                "Range.Insert would shift cells beyond worksheet rows",
+                                            )
+                                        })?;
+                                    if shifted_max_row > EXCEL_MAX_ROW_INDEX {
+                                        return Err(OmError::invalid_argument(
+                                            "Range.Insert would shift cells beyond worksheet rows",
+                                        ));
+                                    }
+                                    for row in (rect.row_first..=max_row).rev() {
+                                        let key = (row, col);
+                                        let target_key = (row + shift_height, col);
+                                        if let Some(cell) = worksheet.cells.remove(&key) {
+                                            worksheet.cells.insert(target_key, cell);
+                                            worksheet.dirty = true;
+                                            worksheet.dirty_cells.insert(key);
+                                            worksheet.dirty_cells.insert(target_key);
+                                        }
+                                    }
+                                }
+                                Ok(OmValue::Empty)
+                            }
+                            XL_SHIFT_TO_RIGHT => {
+                                let shift_width = rect.width();
+                                let affected_rows = worksheet
+                                    .cells
+                                    .keys()
+                                    .filter_map(|&(row, col)| {
+                                        ((rect.row_first..=rect.row_last).contains(&row)
+                                            && col >= rect.col_first)
+                                            .then_some(row)
+                                    })
+                                    .collect::<BTreeSet<_>>();
+                                for row in affected_rows {
+                                    let Some(max_col) = worksheet
+                                        .cells
+                                        .keys()
+                                        .filter_map(|&(cell_row, col)| {
+                                            (cell_row == row && col >= rect.col_first)
+                                                .then_some(col)
+                                        })
+                                        .max()
+                                    else {
+                                        continue;
+                                    };
+                                    let shifted_max_col =
+                                        max_col.checked_add(shift_width).ok_or_else(|| {
+                                            OmError::invalid_argument(
+                                                "Range.Insert would shift cells beyond worksheet columns",
+                                            )
+                                        })?;
+                                    if shifted_max_col > EXCEL_MAX_COLUMN_INDEX {
+                                        return Err(OmError::invalid_argument(
+                                            "Range.Insert would shift cells beyond worksheet columns",
+                                        ));
+                                    }
+                                    for col in (rect.col_first..=max_col).rev() {
+                                        let key = (row, col);
+                                        let target_key = (row, col + shift_width);
+                                        if let Some(cell) = worksheet.cells.remove(&key) {
+                                            worksheet.cells.insert(target_key, cell);
+                                            worksheet.dirty = true;
+                                            worksheet.dirty_cells.insert(key);
+                                            worksheet.dirty_cells.insert(target_key);
+                                        }
+                                    }
+                                }
+                                Ok(OmValue::Empty)
+                            }
+                            other => Err(OmError::unsupported(format!(
+                                "Range.Insert Shift {other} is not implemented"
                             ))),
                         }
                     }
@@ -10514,6 +10655,211 @@ mod tests {
                     ],
                 )
                 .expect_err("Range.Delete should reject extra args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn range_insert_dispatch_shifts_cells_down_or_right() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let b1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Range(B1)"),
+        );
+        let c1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1".to_string())])
+                .expect("Range(C1)"),
+        );
+        let d1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1".to_string())])
+                .expect("Range(D1)"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(
+                    b1,
+                    "Insert",
+                    &[OmValue::Number(f64::from(super::XL_SHIFT_TO_RIGHT))],
+                )
+                .expect("B1.Insert(xlShiftToRight)"),
+            OmValue::Empty
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_get(b1, "Value", &[])
+                .expect("B1 after right shift"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(c1, "Formula", &[])
+                    .expect("C1 formula after right shift")
+            ),
+            r#"=UPPER("shared")"#
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(d1, "Value", &[])
+                    .expect("D1 value after right shift")
+            ),
+            "shared"
+        );
+
+        let b2_b3 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B2:B3".to_string())])
+                .expect("Range(B2:B3)"),
+        );
+        runtime
+            .dispatch_set(
+                b2_b3,
+                "Value",
+                OmValue::Array(
+                    OmArray::new(2, 1, vec![OmValue::Number(2.0), OmValue::Number(3.0)])
+                        .expect("B2:B3 values"),
+                ),
+                &[],
+            )
+            .expect("B2:B3.Value");
+        let b2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B2".to_string())])
+                .expect("Range(B2)"),
+        );
+        let b3 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B3".to_string())])
+                .expect("Range(B3)"),
+        );
+        let b4 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B4".to_string())])
+                .expect("Range(B4)"),
+        );
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(
+                    b2,
+                    "Insert",
+                    &[OmValue::Number(f64::from(super::XL_SHIFT_DOWN))],
+                )
+                .expect("B2.Insert(xlShiftDown)"),
+            OmValue::Empty
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_get(b2, "Value", &[])
+                .expect("B2 after downward shift"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(b3, "Value", &[])
+                    .expect("B3 after downward shift")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(b4, "Value", &[])
+                    .expect("B4 after downward shift")
+            ),
+            3.0
+        );
+
+        let e2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E2".to_string())])
+                .expect("Range(E2)"),
+        );
+        let e3 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E3".to_string())])
+                .expect("Range(E3)"),
+        );
+        runtime
+            .dispatch_set(e2, "Value", OmValue::Number(9.0), &[])
+            .expect("E2.Value");
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(e2, "Insert", &[])
+                .expect("E2.Insert()"),
+            OmValue::Empty
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_get(e2, "Value", &[])
+                .expect("E2 after default Insert"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(e3, "Value", &[])
+                    .expect("E3 after default Insert")
+            ),
+            9.0
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after Range.Insert")
+        ));
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(b2, "Insert", &[OmValue::Text("down".to_string())])
+                .expect_err("Range.Insert should reject non-numeric Shift")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(b2, "Insert", &[OmValue::Number(-4121.5)])
+                .expect_err("Range.Insert should reject fractional Shift")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(b2, "Insert", &[OmValue::Number(999.0)])
+                .expect_err("Range.Insert should reject unsupported Shift")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    b2,
+                    "Insert",
+                    &[
+                        OmValue::Number(f64::from(super::XL_SHIFT_DOWN)),
+                        OmValue::Missing,
+                    ],
+                )
+                .expect_err("Range.Insert should reject extra args")
                 .code,
             OmErrorCode::InvalidArgument
         );

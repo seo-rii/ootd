@@ -68,6 +68,19 @@
       ]
     },
     {
+      "name": "XlInsertShiftDirection",
+      "values": [
+        {
+          "name": "xlShiftDown",
+          "value": -4121
+        },
+        {
+          "name": "xlShiftToRight",
+          "value": -4161
+        }
+      ]
+    },
+    {
       "name": "XlApplicationInternational",
       "values": [
         {
@@ -3460,6 +3473,33 @@
                   "kind": "method",
                   "sourceInterface": "Range",
                   "sourceMember": "Delete"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Insert",
+          "memberKind": "method",
+          "params": [
+            {
+              "name": "Shift",
+              "type": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlInsertShiftDirection"
+              },
+              "optional": true
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Insert"
                 }
               ]
             }
