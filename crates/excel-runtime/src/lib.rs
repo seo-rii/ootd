@@ -103,6 +103,7 @@ pub struct ExcelRuntime {
     screen_updating: bool,
     enable_events: bool,
     status_bar: Option<String>,
+    display_status_bar: bool,
     next_handle: u64,
     next_object_handle: u64,
     next_created_workbook_index: u64,
@@ -131,6 +132,7 @@ impl ExcelRuntime {
             screen_updating: true,
             enable_events: true,
             status_bar: None,
+            display_status_bar: true,
             next_handle: 1,
             next_object_handle: FIRST_DYNAMIC_OBJECT_HANDLE_VALUE,
             next_created_workbook_index: 1,
@@ -514,6 +516,15 @@ impl ExcelRuntime {
                             "Application.StatusBar expects text or false",
                         )),
                     },
+                    "DisplayStatusBar" => {
+                        let OmValue::Bool(display_status_bar) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Application.DisplayStatusBar expects a boolean value",
+                            ));
+                        };
+                        self.display_status_bar = display_status_bar;
+                        Ok(())
+                    }
                     _ => Err(OmError::unsupported(format!(
                         "Application.{member} is not writable"
                     ))),
@@ -1206,6 +1217,14 @@ impl ExcelRuntime {
                     .as_ref()
                     .map(|value| OmValue::Text(value.clone()))
                     .unwrap_or(OmValue::Bool(false)))
+            }
+            "DisplayStatusBar" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.DisplayStatusBar does not accept index arguments",
+                    ));
+                }
+                Ok(OmValue::Bool(self.display_status_bar))
             }
             "Cells" => {
                 let Some(active_workbook) = self.active_workbook else {
@@ -6759,6 +6778,56 @@ mod tests {
             runtime
                 .dispatch_get(application, "StatusBar", &[OmValue::Bool(true)])
                 .expect_err("Application.StatusBar should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn application_display_status_bar_dispatch_roundtrips_and_rejects_invalid_values() {
+        let mut runtime = ExcelRuntime::new();
+        let application = runtime.root_application();
+
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(application, "DisplayStatusBar", &[])
+                .expect("Application.DisplayStatusBar default")
+        ));
+
+        runtime
+            .dispatch_set(application, "DisplayStatusBar", OmValue::Bool(false), &[])
+            .expect("Application.DisplayStatusBar = false");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "DisplayStatusBar", &[])
+                .expect("Application.DisplayStatusBar after false")
+        ));
+
+        runtime
+            .dispatch_set(application, "DisplayStatusBar", OmValue::Bool(true), &[])
+            .expect("Application.DisplayStatusBar = true");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(application, "DisplayStatusBar", &[])
+                .expect("Application.DisplayStatusBar after true")
+        ));
+
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    application,
+                    "DisplayStatusBar",
+                    OmValue::Text("bad".to_string()),
+                    &[]
+                )
+                .expect_err("Application.DisplayStatusBar should reject non-bool values")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "DisplayStatusBar", &[OmValue::Bool(true)])
+                .expect_err("Application.DisplayStatusBar should reject index args")
                 .code,
             OmErrorCode::InvalidArgument
         );
