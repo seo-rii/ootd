@@ -585,53 +585,78 @@ impl ExcelRuntime {
                     }
                     "Visible" => {
                         let new_visibility = coerce_sheet_visibility(value)?;
-                        let runtime = self.runtime_workbook_mut(workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
-                        }
-                        let current_visibility = runtime
-                            .loaded
-                            .state
-                            .worksheets
-                            .iter()
-                            .find(|worksheet| worksheet.id == sheet_id)
-                            .map(|worksheet| worksheet.visibility)
-                            .ok_or_else(|| {
-                                OmError::new(OmErrorCode::NotFound, "unknown worksheet")
-                            })?;
-                        if current_visibility == SheetVisibility::Visible
-                            && new_visibility != SheetVisibility::Visible
-                            && runtime
+                        let active_sheet_is_target = self.active_workbook == Some(workbook)
+                            && self.active_sheet_id(workbook).ok() == Some(sheet_id);
+                        let mut replacement_selection = None;
+                        {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let current_visibility = runtime
                                 .loaded
                                 .state
                                 .worksheets
                                 .iter()
-                                .filter(|worksheet| {
-                                    worksheet.visibility == SheetVisibility::Visible
-                                })
-                                .count()
-                                <= 1
-                        {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot hide the last visible worksheet in a workbook",
-                            ));
+                                .find(|worksheet| worksheet.id == sheet_id)
+                                .map(|worksheet| worksheet.visibility)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "unknown worksheet")
+                                })?;
+                            if current_visibility == SheetVisibility::Visible
+                                && new_visibility != SheetVisibility::Visible
+                            {
+                                let visible_count = runtime
+                                    .loaded
+                                    .state
+                                    .worksheets
+                                    .iter()
+                                    .filter(|worksheet| {
+                                        worksheet.visibility == SheetVisibility::Visible
+                                    })
+                                    .count();
+                                if visible_count <= 1 {
+                                    return Err(OmError::new(
+                                        OmErrorCode::InvalidState,
+                                        "cannot hide the last visible worksheet in a workbook",
+                                    ));
+                                }
+                                if active_sheet_is_target {
+                                    replacement_selection = runtime
+                                        .loaded
+                                        .state
+                                        .worksheets
+                                        .iter()
+                                        .find(|worksheet| {
+                                            worksheet.id != sheet_id
+                                                && worksheet.visibility == SheetVisibility::Visible
+                                        })
+                                        .map(|worksheet| worksheet.id);
+                                }
+                            }
+                            let worksheet = runtime
+                                .loaded
+                                .state
+                                .worksheets
+                                .iter_mut()
+                                .find(|worksheet| worksheet.id == sheet_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "unknown worksheet")
+                                })?;
+                            if worksheet.visibility != new_visibility {
+                                worksheet.visibility = new_visibility;
+                                runtime.dirty = true;
+                            }
                         }
-                        let worksheet = runtime
-                            .loaded
-                            .state
-                            .worksheets
-                            .iter_mut()
-                            .find(|worksheet| worksheet.id == sheet_id)
-                            .ok_or_else(|| {
-                                OmError::new(OmErrorCode::NotFound, "unknown worksheet")
-                            })?;
-                        if worksheet.visibility != new_visibility {
-                            worksheet.visibility = new_visibility;
-                            runtime.dirty = true;
+                        if let Some(replacement_sheet_id) = replacement_selection {
+                            self.set_selection(
+                                workbook,
+                                replacement_sheet_id,
+                                Rect::single_cell(1, 1),
+                            );
                         }
                         Ok(())
                     }
@@ -3800,6 +3825,7 @@ impl ExcelRuntime {
                         "Worksheet.Activate does not accept arguments",
                     ));
                 }
+                self.ensure_worksheet_visible(workbook, sheet_id, "Worksheet.Activate")?;
                 let rect = self
                     .selection
                     .filter(|selection| {
@@ -3826,6 +3852,7 @@ impl ExcelRuntime {
                         ));
                     }
                 }
+                self.ensure_worksheet_visible(workbook, sheet_id, "Worksheet.Select")?;
                 let rect = self
                     .selection
                     .filter(|selection| {
@@ -4173,6 +4200,21 @@ impl ExcelRuntime {
             .iter()
             .find(|worksheet| worksheet.id == sheet_id)
             .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))
+    }
+
+    fn ensure_worksheet_visible(
+        &self,
+        workbook: WorkbookHandle,
+        sheet_id: SheetId,
+        operation: &str,
+    ) -> OmResult<()> {
+        if self.worksheet_model(workbook, sheet_id)?.visibility != SheetVisibility::Visible {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!("{operation} cannot target a hidden worksheet"),
+            ));
+        }
+        Ok(())
     }
 
     fn used_range_rect(&self, workbook: WorkbookHandle, sheet_id: SheetId) -> OmResult<Rect> {
@@ -12111,6 +12153,94 @@ mod tests {
                     .expect("Worksheets.Count")
             ),
             1.0
+        );
+    }
+
+    #[test]
+    fn worksheet_visibility_moves_active_selection_and_blocks_hidden_activation() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let _sheet1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let sheet2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Add", &[])
+                .expect("Worksheets.Add"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(application, "ActiveSheet", &[])
+                    .and_then(|value| runtime.dispatch_get(
+                        expect_object_handle(value),
+                        "Name",
+                        &[]
+                    ))
+                    .expect("active sheet after add")
+            ),
+            "Sheet2"
+        );
+
+        runtime
+            .dispatch_set(sheet2, "Visible", OmValue::Bool(false), &[])
+            .expect("hide active Sheet2");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(application, "ActiveSheet", &[])
+                    .and_then(|value| runtime.dispatch_get(
+                        expect_object_handle(value),
+                        "Name",
+                        &[]
+                    ))
+                    .expect("active sheet after hiding active sheet")
+            ),
+            "Sheet1"
+        );
+
+        let activate_hidden = runtime
+            .dispatch_invoke(sheet2, "Activate", &[])
+            .expect_err("activating hidden sheet should fail");
+        assert_eq!(activate_hidden.code, OmErrorCode::InvalidState);
+        let select_hidden = runtime
+            .dispatch_invoke(sheet2, "Select", &[])
+            .expect_err("selecting hidden sheet should fail");
+        assert_eq!(select_hidden.code, OmErrorCode::InvalidState);
+
+        runtime
+            .dispatch_set(sheet2, "Visible", OmValue::Bool(true), &[])
+            .expect("show Sheet2");
+        runtime
+            .dispatch_invoke(sheet2, "Activate", &[])
+            .expect("activate visible Sheet2");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(application, "ActiveSheet", &[])
+                    .and_then(|value| runtime.dispatch_get(
+                        expect_object_handle(value),
+                        "Name",
+                        &[]
+                    ))
+                    .expect("active sheet after reactivation")
+            ),
+            "Sheet2"
         );
     }
 
