@@ -34,6 +34,8 @@ const XL_OPEN_XML_WORKBOOK_MACRO_ENABLED: i32 = 52;
 const XL_OPEN_XML_TEMPLATE_MACRO_ENABLED: i32 = 53;
 const XL_OPEN_XML_TEMPLATE: i32 = 54;
 const XL_OPEN_XML_STRICT_WORKBOOK: i32 = 61;
+const XL_A1: i32 = 1;
+const XL_R1C1: i32 = -4150;
 const XL_DOWN: i32 = -4121;
 const XL_TO_LEFT: i32 = -4159;
 const XL_TO_RIGHT: i32 = -4161;
@@ -3989,28 +3991,77 @@ impl ExcelRuntime {
                 Ok(OmValue::Bool(has_formula))
             }
             "Address" => {
-                let row_absolute = match args {
-                    [] => true,
-                    [value, ..] => {
-                        coerce_optional_bool_arg(value, true, "Range.Address row absolute")?
-                    }
-                };
-                let column_absolute = match args {
-                    [] | [_] => true,
-                    [_, value] => {
-                        coerce_optional_bool_arg(value, true, "Range.Address column absolute")?
-                    }
-                    _ => {
-                        return Err(OmError::invalid_argument(
-                            "Range.Address accepts optional row and column absolute flags",
+                if args.len() > 5 {
+                    return Err(OmError::invalid_argument(
+                        "Range.Address accepts optional RowAbsolute, ColumnAbsolute, ReferenceStyle, External, and RelativeTo arguments",
+                    ));
+                }
+                let row_absolute = args
+                    .first()
+                    .map(|value| {
+                        coerce_optional_bool_arg(value, true, "Range.Address row absolute")
+                    })
+                    .transpose()?
+                    .unwrap_or(true);
+                let column_absolute = args
+                    .get(1)
+                    .map(|value| {
+                        coerce_optional_bool_arg(value, true, "Range.Address column absolute")
+                    })
+                    .transpose()?
+                    .unwrap_or(true);
+                let reference_style = args
+                    .get(2)
+                    .map(coerce_optional_reference_style_arg)
+                    .transpose()?
+                    .unwrap_or(RangeAddressReferenceStyle::A1);
+                let external = args
+                    .get(3)
+                    .map(|value| coerce_optional_bool_arg(value, false, "Range.Address external"))
+                    .transpose()?
+                    .unwrap_or(false);
+                if external {
+                    return Err(OmError::unsupported(
+                        "Range.Address External:=True is not implemented",
+                    ));
+                }
+                let relative_to = match args.get(4) {
+                    None => None,
+                    Some(value) if om_value_is_omitted(value) => None,
+                    Some(OmValue::Object(handle)) => match self.runtime_object(*handle)? {
+                        RuntimeObjectKind::Range {
+                            rect: relative_rect,
+                            ..
+                        } => Some((relative_rect.row_first, relative_rect.col_first)),
+                        _ => {
+                            return Err(OmError::type_mismatch(
+                                "Range.Address RelativeTo expects a Range object when provided",
+                            ));
+                        }
+                    },
+                    Some(_) => {
+                        return Err(OmError::type_mismatch(
+                            "Range.Address RelativeTo expects a Range object when provided",
                         ));
                     }
                 };
-                Ok(OmValue::Text(format_rect_address_with_flags(
-                    rect,
-                    row_absolute,
-                    column_absolute,
-                )))
+                let address = match reference_style {
+                    RangeAddressReferenceStyle::A1 => {
+                        format_rect_address_with_flags(rect, row_absolute, column_absolute)
+                    }
+                    RangeAddressReferenceStyle::R1C1 => {
+                        let (base_row, base_col) =
+                            relative_to.unwrap_or((rect.row_first, rect.col_first));
+                        format_rect_r1c1_address_with_flags(
+                            rect,
+                            row_absolute,
+                            column_absolute,
+                            base_row,
+                            base_col,
+                        )
+                    }
+                };
+                Ok(OmValue::Text(address))
             }
             "Parent" => Ok(OmValue::Object(
                 self.register_worksheet_handle(workbook, sheet_id).0,
@@ -8112,6 +8163,39 @@ fn coerce_optional_bool_arg(value: &OmValue, default: bool, label: &str) -> OmRe
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RangeAddressReferenceStyle {
+    A1,
+    R1C1,
+}
+
+fn coerce_optional_reference_style_arg(value: &OmValue) -> OmResult<RangeAddressReferenceStyle> {
+    match value {
+        OmValue::Missing | OmValue::Empty | OmValue::Null => Ok(RangeAddressReferenceStyle::A1),
+        OmValue::Number(number) => {
+            if !number.is_finite()
+                || number.fract() != 0.0
+                || *number < i32::MIN as f64
+                || *number > i32::MAX as f64
+            {
+                return Err(OmError::invalid_argument(
+                    "Range.Address ReferenceStyle expects an integral XlReferenceStyle value",
+                ));
+            }
+            match *number as i32 {
+                XL_A1 => Ok(RangeAddressReferenceStyle::A1),
+                XL_R1C1 => Ok(RangeAddressReferenceStyle::R1C1),
+                _ => Err(OmError::invalid_argument(
+                    "Range.Address ReferenceStyle supports xlA1 and xlR1C1",
+                )),
+            }
+        }
+        _ => Err(OmError::type_mismatch(
+            "Range.Address ReferenceStyle expects a numeric XlReferenceStyle value when provided",
+        )),
+    }
+}
+
 fn parse_rect_a1(input: &str) -> OmResult<Rect> {
     let input = input.trim();
     let mut parts = input.split(':');
@@ -8337,6 +8421,36 @@ fn format_r1c1_reference(
         }
     }
     reference
+}
+
+fn format_rect_r1c1_address_with_flags(
+    rect: Rect,
+    row_absolute: bool,
+    column_absolute: bool,
+    base_row: u32,
+    base_col: u32,
+) -> String {
+    let start = format_r1c1_reference(
+        rect.row_first,
+        rect.col_first,
+        row_absolute,
+        column_absolute,
+        base_row,
+        base_col,
+    );
+    if rect.row_first == rect.row_last && rect.col_first == rect.col_last {
+        start
+    } else {
+        let end = format_r1c1_reference(
+            rect.row_last,
+            rect.col_last,
+            row_absolute,
+            column_absolute,
+            base_row,
+            base_col,
+        );
+        format!("{start}:{end}")
+    }
 }
 
 fn convert_formula_r1c1_to_a1(formula: &str, base_row: u32, base_col: u32) -> String {
@@ -8612,9 +8726,9 @@ fn column_to_letters(mut col: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        APPLICATION_NAME, APPLICATION_VERSION, ExcelRuntime, XL_CALCULATION_AUTOMATIC,
-        XL_CALCULATION_MANUAL, XL_DECIMAL_SEPARATOR, XL_LIST_SEPARATOR, XL_THOUSANDS_SEPARATOR,
-        blank_workbook_bytes, supports_format,
+        APPLICATION_NAME, APPLICATION_VERSION, ExcelRuntime, XL_A1, XL_CALCULATION_AUTOMATIC,
+        XL_CALCULATION_MANUAL, XL_DECIMAL_SEPARATOR, XL_LIST_SEPARATOR, XL_R1C1,
+        XL_THOUSANDS_SEPARATOR, blank_workbook_bytes, supports_format,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -13195,6 +13309,11 @@ mod tests {
                 .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B2".to_string())])
                 .expect("Range(A1:B2)"),
         );
+        let relative_to = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C3".to_string())])
+                .expect("Range(C3)"),
+        );
 
         assert_eq!(
             expect_text(
@@ -13233,6 +13352,67 @@ mod tests {
             "A$1:B$2"
         );
         assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        range,
+                        "Address",
+                        &[
+                            OmValue::Missing,
+                            OmValue::Missing,
+                            OmValue::Number(XL_R1C1 as f64)
+                        ]
+                    )
+                    .expect("Address(, , xlR1C1)")
+            ),
+            "R1C1:R2C2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        range,
+                        "Address",
+                        &[
+                            OmValue::Bool(false),
+                            OmValue::Bool(false),
+                            OmValue::Number(XL_R1C1 as f64),
+                            OmValue::Bool(false),
+                            OmValue::Object(relative_to)
+                        ],
+                    )
+                    .expect("Address(false, false, xlR1C1, false, C3)")
+            ),
+            "R[-2]C[-2]:R[-1]C[-1]"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    range,
+                    "Address",
+                    &[OmValue::Missing, OmValue::Missing, OmValue::Number(999.0)],
+                )
+                .expect_err("Address should reject unsupported ReferenceStyle")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    range,
+                    "Address",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(XL_A1 as f64),
+                        OmValue::Bool(true)
+                    ],
+                )
+                .expect_err("Address should reject External true until implemented")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
             runtime
                 .dispatch_get(range, "Address", &[OmValue::Number(1.0)])
                 .expect_err("Address(1) should be rejected")
@@ -13247,7 +13427,10 @@ mod tests {
                     &[
                         OmValue::Bool(true),
                         OmValue::Bool(true),
-                        OmValue::Bool(true)
+                        OmValue::Number(XL_A1 as f64),
+                        OmValue::Bool(false),
+                        OmValue::Missing,
+                        OmValue::Missing
                     ],
                 )
                 .expect_err("Address with too many args should be rejected")
