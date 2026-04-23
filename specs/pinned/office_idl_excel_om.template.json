@@ -843,6 +843,32 @@
           }
         },
         {
+          "name": "ActiveSheet",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Worksheet",
+            "aliasOf": "Excel.Worksheet"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "ActiveSheet"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Worksheet",
+                "aliasOf": "Excel.Worksheet"
+              }
+            }
+          }
+        },
+        {
           "name": "Name",
           "memberKind": "property",
           "returnType": {

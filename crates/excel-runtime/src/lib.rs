@@ -1172,6 +1172,10 @@ impl ExcelRuntime {
                     self.dispatch_invoke(handle, "Item", args)
                 }
             }
+            "ActiveSheet" => Ok(OmValue::Object(
+                self.register_worksheet_handle(workbook, self.active_sheet_id(workbook)?)
+                    .0,
+            )),
             _ => Err(OmError::unsupported(format!(
                 "Workbook.{member} is not implemented as a property"
             ))),
@@ -13694,6 +13698,11 @@ mod tests {
                 .dispatch_get(application, "ActiveSheet", &[])
                 .expect("ActiveSheet"),
         );
+        let workbook_active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(active_workbook, "ActiveSheet", &[])
+                .expect("Workbook.ActiveSheet"),
+        );
 
         assert_eq!(workbook.0, active_workbook);
         assert_eq!(
@@ -13737,6 +13746,18 @@ mod tests {
                     .expect("Worksheet.Index")
             ),
             1.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(workbook_active_sheet, "Name", &[])
+                    .expect("Workbook.ActiveSheet.Name")
+            ),
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("Application.ActiveSheet.Name")
+            )
         );
     }
 
