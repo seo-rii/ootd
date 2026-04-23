@@ -3715,6 +3715,32 @@ impl ExcelRuntime {
                 self.set_selection(workbook, sheet_id, rect);
                 Ok(OmValue::Empty)
             }
+            "Select" => {
+                match args {
+                    []
+                    | [OmValue::Missing | OmValue::Empty | OmValue::Null]
+                    | [OmValue::Bool(_)] => {}
+                    [_] => {
+                        return Err(OmError::type_mismatch(
+                            "Worksheet.Select Replace expects a boolean when provided",
+                        ));
+                    }
+                    _ => {
+                        return Err(OmError::invalid_argument(
+                            "Worksheet.Select accepts at most one Replace argument",
+                        ));
+                    }
+                }
+                let rect = self
+                    .selection
+                    .filter(|selection| {
+                        selection.workbook == workbook && selection.sheet_id == sheet_id
+                    })
+                    .map(|selection| selection.rect)
+                    .unwrap_or(Rect::single_cell(1, 1));
+                self.set_selection(workbook, sheet_id, rect);
+                Ok(OmValue::Empty)
+            }
             "Cells" => {
                 let (row, col) = parse_cells_args(args)?;
                 let rect = Rect::single_cell(row, col);
@@ -6735,6 +6761,51 @@ mod tests {
             runtime
                 .dispatch_invoke(workbook2.0, "Activate", &[OmValue::Bool(true)])
                 .expect_err("Workbook.Activate args should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(worksheet1, "Select", &[OmValue::Bool(true)])
+                .expect("Worksheet.Select"),
+            OmValue::Empty
+        ));
+        assert_eq!(
+            expect_object_handle(
+                runtime
+                    .dispatch_get(application, "ActiveWorkbook", &[])
+                    .expect("ActiveWorkbook after Worksheet.Select")
+            ),
+            workbook1.0
+        );
+        let active_sheet_after_select = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after Worksheet.Select"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet_after_select, "Name", &[])
+                    .expect("ActiveSheet after Worksheet.Select name")
+            ),
+            "FirstSheet"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(worksheet1, "Select", &[OmValue::Text("bad".to_string())])
+                .expect_err("Worksheet.Select should reject non-bool Replace")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet1,
+                    "Select",
+                    &[OmValue::Bool(true), OmValue::Bool(false)],
+                )
+                .expect_err("Worksheet.Select should reject extra args")
                 .code,
             OmErrorCode::InvalidArgument
         );

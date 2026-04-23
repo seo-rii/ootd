@@ -1736,6 +1736,33 @@
           }
         },
         {
+          "name": "Select",
+          "memberKind": "method",
+          "params": [
+            {
+              "name": "Replace",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "Select"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "Delete",
           "memberKind": "method",
           "returnType": {
