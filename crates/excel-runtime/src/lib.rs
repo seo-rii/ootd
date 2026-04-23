@@ -5097,7 +5097,15 @@ fn parse_cells_args(args: &[OmValue]) -> OmResult<(u32, u32)> {
         ));
     }
     let column = match &args[1] {
-        OmValue::Number(number) => coerce_positive_index(*number, "Worksheet.Cells column")?,
+        OmValue::Number(number) => {
+            let index = coerce_positive_index(*number, "Worksheet.Cells column")?;
+            if index > EXCEL_MAX_COLUMN_INDEX {
+                return Err(OmError::invalid_argument(
+                    "Worksheet.Cells column is out of bounds",
+                ));
+            }
+            index
+        }
         OmValue::Text(reference) => {
             let reference = reference.trim().replace('$', "").to_ascii_uppercase();
             if reference.is_empty() || !reference.chars().all(|ch| ch.is_ascii_alphabetic()) {
@@ -5130,7 +5138,13 @@ fn parse_cells_args(args: &[OmValue]) -> OmResult<(u32, u32)> {
             ));
         }
     };
-    Ok((coerce_u32_arg(&args[0], "Worksheet.Cells row")?, column))
+    let row = coerce_u32_arg(&args[0], "Worksheet.Cells row")?;
+    if row > EXCEL_MAX_ROW_INDEX {
+        return Err(OmError::invalid_argument(
+            "Worksheet.Cells row is out of bounds",
+        ));
+    }
+    Ok((row, column))
 }
 
 fn coerce_optional_bool_arg(value: &OmValue, default: bool, label: &str) -> OmResult<bool> {
@@ -5195,6 +5209,11 @@ fn parse_cell_a1(input: &str) -> OmResult<(u32, u32)> {
         .map_err(|_| OmError::parse(format!("invalid row index in {input:?}")))?;
     if row == 0 || col == 0 {
         return Err(OmError::parse(format!("invalid A1 reference {input:?}")));
+    }
+    if row > EXCEL_MAX_ROW_INDEX || col > EXCEL_MAX_COLUMN_INDEX {
+        return Err(OmError::parse(format!(
+            "A1 reference {input:?} is outside worksheet bounds"
+        )));
     }
     Ok((row, col))
 }
@@ -6423,6 +6442,24 @@ mod tests {
         assert_eq!(
             expect_number(runtime.dispatch_get(range, "Column", &[]).expect("Column")),
             1.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1048577".to_string())]
+                )
+                .expect_err("Range beyond max row should be rejected")
+                .code,
+            OmErrorCode::Parse
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("XFE1".to_string())])
+                .expect_err("Range beyond max column should be rejected")
+                .code,
+            OmErrorCode::Parse
         );
     }
 
@@ -7804,6 +7841,28 @@ mod tests {
                     &[OmValue::Number(1.0), OmValue::Text("XFE".to_string())],
                 )
                 .expect_err("Cells(1, \"XFE\") should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    active_sheet,
+                    "Cells",
+                    &[OmValue::Number(1048577.0), OmValue::Number(1.0)],
+                )
+                .expect_err("Cells(1048577, 1) should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    active_sheet,
+                    "Cells",
+                    &[OmValue::Number(1.0), OmValue::Number(16385.0)],
+                )
+                .expect_err("Cells(1, 16385) should be rejected")
                 .code,
             OmErrorCode::InvalidArgument
         );
