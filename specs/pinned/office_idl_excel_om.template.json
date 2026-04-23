@@ -457,6 +457,22 @@
           }
         },
         {
+          "name": "Quit",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Application",
+                  "sourceMember": "Quit"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "CalculateFullRebuild",
           "memberKind": "method",
           "support": "stub",

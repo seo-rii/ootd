@@ -2008,6 +2008,23 @@ impl ExcelRuntime {
         self.focus_member_supported("Application", member, false)?;
 
         match member {
+            "Quit" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.Quit does not accept arguments",
+                    ));
+                }
+                let workbooks = self
+                    .workbooks
+                    .keys()
+                    .copied()
+                    .map(|handle| WorkbookHandle(ObjectHandle(handle)))
+                    .collect::<Vec<_>>();
+                for workbook in workbooks {
+                    self.close_workbook(workbook)?;
+                }
+                Ok(OmValue::Empty)
+            }
             "CalculateFullRebuild" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(
@@ -14722,6 +14739,68 @@ mod tests {
             runtime
                 .dispatch_invoke(workbooks, "Close", &[OmValue::Bool(false)])
                 .expect_err("Workbooks.Close should reject arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn application_quit_dispatch_closes_all_open_workbooks() {
+        let mut runtime = ExcelRuntime::new();
+        let first = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open first workbook");
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open second workbook");
+        let application = runtime.root_application();
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(application, "Quit", &[])
+                .expect("Application.Quit"),
+            OmValue::Empty
+        ));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbooks, "Count", &[])
+                    .expect("Workbooks.Count after Application.Quit")
+            ),
+            0.0
+        );
+        assert!(matches!(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after Application.Quit"),
+            OmValue::Empty
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_get(first.0, "Name", &[])
+                .expect_err("closed workbook handle should be stale after Application.Quit")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(application, "Quit", &[OmValue::Bool(false)])
+                .expect_err("Application.Quit should reject arguments")
                 .code,
             OmErrorCode::InvalidArgument
         );
