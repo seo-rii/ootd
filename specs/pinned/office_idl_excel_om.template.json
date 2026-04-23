@@ -2638,6 +2638,22 @@
           }
         },
         {
+          "name": "Calculate",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "Calculate"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "Delete",
           "memberKind": "method",
           "returnType": {

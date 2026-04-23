@@ -76,8 +76,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 128);
-    assert_eq!(summary.stub_member_count, 128);
+    assert_eq!(summary.member_count, 129);
+    assert_eq!(summary.stub_member_count, 129);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1293,7 +1293,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(application.member_count, 37);
     assert_eq!(workbook.member_count, 19);
-    assert_eq!(worksheet.member_count, 18);
+    assert_eq!(worksheet.member_count, 19);
     assert_eq!(range.member_count, 43);
     assert_eq!(
         application.default_coclasses,
@@ -1805,6 +1805,14 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(worksheet_activate.access, AccessMode::Read);
     assert_eq!(worksheet_activate.params.len(), 0);
     assert!(worksheet_activate.return_type.is_none());
+    let worksheet_calculate = worksheet
+        .members
+        .iter()
+        .find(|member| member.name == "Calculate")
+        .expect("Worksheet.Calculate");
+    assert_eq!(worksheet_calculate.access, AccessMode::Read);
+    assert_eq!(worksheet_calculate.params.len(), 0);
+    assert!(worksheet_calculate.return_type.is_none());
     let worksheet_rows = worksheet
         .members
         .iter()
@@ -2219,8 +2227,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 128);
-    assert_eq!(coverage.support_counts.stub, 128);
+    assert_eq!(coverage.member_count, 129);
+    assert_eq!(coverage.support_counts.stub, 129);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -2316,8 +2324,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(worksheet_coverage.member_count, 18);
-    assert_eq!(worksheet_coverage.support_counts.stub, 18);
+    assert_eq!(worksheet_coverage.member_count, 19);
+    assert_eq!(worksheet_coverage.support_counts.stub, 19);
     assert_eq!(
         worksheet_coverage.stub_members,
         vec![
@@ -2336,6 +2344,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Columns".to_string(),
             "Activate".to_string(),
             "Select".to_string(),
+            "Calculate".to_string(),
             "Delete".to_string(),
             "Move".to_string(),
             "Copy".to_string()

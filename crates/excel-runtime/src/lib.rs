@@ -5502,6 +5502,14 @@ impl ExcelRuntime {
                 self.set_selection(workbook, sheet_id, rect);
                 Ok(OmValue::Empty)
             }
+            "Calculate" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Worksheet.Calculate does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Empty)
+            }
             "Cells" => {
                 let (row, col) = parse_cells_args(args)?;
                 let rect = Rect::single_cell(row, col);
@@ -10067,6 +10075,113 @@ mod tests {
             runtime
                 .dispatch_invoke(range, "Select", &[OmValue::Bool(true)])
                 .expect_err("Range.Select args should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn worksheet_calculate_is_noop_and_preserves_active_sheet_selection_and_saved_state() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook1 = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook1");
+        let workbook2 = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook2");
+        let worksheets1 = expect_object_handle(
+            runtime
+                .dispatch_get(workbook1.0, "Worksheets", &[])
+                .expect("Workbook1.Worksheets"),
+        );
+        let worksheet1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets1, "Item", &[OmValue::Number(1.0)])
+                .expect("Workbook1.Worksheets.Item(1)"),
+        );
+        let worksheets2 = expect_object_handle(
+            runtime
+                .dispatch_get(workbook2.0, "Worksheets", &[])
+                .expect("Workbook2.Worksheets"),
+        );
+        let worksheet2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets2, "Item", &[OmValue::Number(1.0)])
+                .expect("Workbook2.Worksheets.Item(1)"),
+        );
+        let selected_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet2, "Range", &[OmValue::Text("B2:C3".to_string())])
+                .expect("Workbook2.Worksheet.Range"),
+        );
+        runtime
+            .dispatch_invoke(selected_range, "Select", &[])
+            .expect("Range.Select");
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(worksheet1, "Calculate", &[])
+                .expect("Worksheet.Calculate"),
+            OmValue::Empty
+        ));
+        let application = runtime.root_application();
+        assert_eq!(
+            expect_object_handle(
+                runtime
+                    .dispatch_get(application, "ActiveWorkbook", &[])
+                    .expect("ActiveWorkbook after Worksheet.Calculate")
+            ),
+            workbook2.0
+        );
+        let active_sheet_after_calculate = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after Worksheet.Calculate"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet_after_calculate, "Name", &[])
+                    .expect("ActiveSheet name after Worksheet.Calculate")
+            ),
+            expect_text(
+                runtime
+                    .dispatch_get(worksheet2, "Name", &[])
+                    .expect("Worksheet2 name")
+            )
+        );
+        let selection = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after Worksheet.Calculate"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection, "Address", &[])
+                    .expect("Selection address after Worksheet.Calculate")
+            ),
+            "$B$2:$C$3"
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook1.0, "Saved", &[])
+                .expect("Workbook1.Saved after Worksheet.Calculate")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(worksheet1, "Calculate", &[OmValue::Missing])
+                .expect_err("Worksheet.Calculate args should be rejected")
                 .code,
             OmErrorCode::InvalidArgument
         );
