@@ -8768,11 +8768,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if let Some(number) = self.parse_number()? {
             return Ok(number);
         }
-        if let Some((rect, next_index)) = self.try_parse_reference() {
+        if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
             self.index = next_index;
             if rect.row_first == rect.row_last && rect.col_first == rect.col_last {
                 return self.evaluator.numeric_cell_value(
-                    self.sheet_id,
+                    target_sheet_id,
                     rect.row_first,
                     rect.col_first,
                 );
@@ -8813,11 +8813,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
 
     fn parse_sum_argument(&mut self) -> Result<f64, FormulaEvalError> {
         let checkpoint = self.index;
-        if let Some((rect, next_index)) = self.try_parse_reference() {
+        if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
             self.index = next_index;
             self.skip_whitespace();
             if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
-                return self.evaluator.sum_rect(self.sheet_id, rect);
+                return self.evaluator.sum_rect(target_sheet_id, rect);
             }
         }
         self.index = checkpoint;
@@ -8859,8 +8859,8 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         (self.index > start).then(|| self.input[start..self.index].to_string())
     }
 
-    fn try_parse_reference(&self) -> Option<(Rect, usize)> {
-        let start = self.index;
+    fn try_parse_reference(&self) -> Result<Option<(SheetId, Rect, usize)>, FormulaEvalError> {
+        let (sheet_id, start) = self.try_parse_sheet_qualifier()?;
         let mut cursor = start;
         let mut saw_reference_char = false;
         while let Some(ch) = self.input[cursor..].chars().next() {
@@ -8872,18 +8872,80 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
         }
         if !saw_reference_char {
-            return None;
+            return Ok(None);
         }
         let next_is_boundary = self.input[cursor..]
             .chars()
             .next()
             .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.');
         if !next_is_boundary {
-            return None;
+            return Ok(None);
         }
         let token = &self.input[start..cursor];
-        let rect = parse_rect_a1(token).ok()?;
-        Some((rect, cursor))
+        let Some(rect) = parse_rect_a1(token).ok() else {
+            return Ok(None);
+        };
+        Ok(Some((sheet_id, rect, cursor)))
+    }
+
+    fn try_parse_sheet_qualifier(&self) -> Result<(SheetId, usize), FormulaEvalError> {
+        if self.peek_char() == Some('\'') {
+            let mut cursor = self.index + 1;
+            let mut sheet_name = String::new();
+            while cursor < self.input.len() {
+                let ch = self.input[cursor..]
+                    .chars()
+                    .next()
+                    .ok_or(FormulaEvalError::Unsupported)?;
+                if ch == '\'' {
+                    let next_cursor = cursor + ch.len_utf8();
+                    if self.input[next_cursor..].starts_with('\'') {
+                        sheet_name.push('\'');
+                        cursor = next_cursor + 1;
+                        continue;
+                    }
+                    if !self.input[next_cursor..].starts_with('!') {
+                        return Ok((self.sheet_id, self.index));
+                    }
+                    let sheet_id = self
+                        .resolve_sheet_name(sheet_name.as_str())
+                        .ok_or(FormulaEvalError::Ref)?;
+                    return Ok((sheet_id, next_cursor + 1));
+                }
+                sheet_name.push(ch);
+                cursor += ch.len_utf8();
+            }
+            return Ok((self.sheet_id, self.index));
+        }
+
+        let mut cursor = self.index;
+        while let Some(ch) = self.input[cursor..].chars().next() {
+            if ch == '!' {
+                let sheet_name = &self.input[self.index..cursor];
+                if sheet_name.is_empty() {
+                    return Err(FormulaEvalError::Ref);
+                }
+                let sheet_id = self
+                    .resolve_sheet_name(sheet_name)
+                    .ok_or(FormulaEvalError::Ref)?;
+                return Ok((sheet_id, cursor + 1));
+            }
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' {
+                cursor += ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+        Ok((self.sheet_id, self.index))
+    }
+
+    fn resolve_sheet_name(&self, name: &str) -> Option<SheetId> {
+        self.evaluator
+            .state
+            .worksheets
+            .iter()
+            .find(|worksheet| worksheet.name.eq_ignore_ascii_case(name))
+            .map(|worksheet| worksheet.id)
     }
 
     fn skip_whitespace(&mut self) {
@@ -11170,6 +11232,93 @@ mod tests {
                 .dispatch_get(workbook.0, "Saved", &[])
                 .expect("Workbook.Saved remains dirty after formula edits")
         ));
+    }
+
+    #[test]
+    fn worksheet_calculate_resolves_sheet_qualified_formula_references() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Worksheets", &[])
+                .expect("Application.Worksheets"),
+        );
+        let data_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Add", &[])
+                .expect("Worksheets.Add"),
+        );
+        runtime
+            .dispatch_set(
+                data_sheet,
+                "Name",
+                OmValue::Text("Data Sheet".to_string()),
+                &[],
+            )
+            .expect("rename data sheet");
+        let sheet1_a1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Sheet1.Range(A1)"),
+        );
+        let sheet1_b1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Sheet1.Range(B1)"),
+        );
+        let data_a1_a2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(data_sheet, "Range", &[OmValue::Text("A1:A2".to_string())])
+                .expect("Data Sheet.Range(A1:A2)"),
+        );
+
+        runtime
+            .dispatch_set(sheet1_a1, "Value2", OmValue::Number(4.0), &[])
+            .expect("set Sheet1 A1");
+        runtime
+            .dispatch_set(
+                data_a1_a2,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(2, 1, vec![OmValue::Number(10.0), OmValue::Number(20.0)])
+                        .expect("data values"),
+                ),
+                &[],
+            )
+            .expect("set data values");
+        runtime
+            .dispatch_set(
+                sheet1_b1,
+                "Formula",
+                OmValue::Text("='Data Sheet'!A1+SUM('Data Sheet'!A1:A2)+Sheet1!A1".to_string()),
+                &[],
+            )
+            .expect("set sheet-qualified formula");
+
+        runtime
+            .dispatch_invoke(active_sheet, "Calculate", &[])
+            .expect("Worksheet.Calculate");
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheet1_b1, "Value2", &[])
+                    .expect("sheet-qualified formula Value2")
+            ),
+            44.0
+        );
     }
 
     #[test]
