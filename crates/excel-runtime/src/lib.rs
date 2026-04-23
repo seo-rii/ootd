@@ -1660,8 +1660,21 @@ impl ExcelRuntime {
                         let mut index = 0usize;
                         for row in target_rect.row_first..=target_rect.row_last {
                             for col in target_rect.col_first..=target_rect.col_last {
-                                let next_cell = source_cells[index].clone();
+                                let source_row = rect.row_first + (row - target_rect.row_first);
+                                let source_col = rect.col_first + (col - target_rect.col_first);
+                                let mut next_cell = source_cells[index].clone();
                                 index += 1;
+                                if let Some(cell) = next_cell.as_mut() {
+                                    if let Some(formula) = cell.formula.as_mut() {
+                                        if !formula.is_r1c1 {
+                                            formula.text = shift_formula_a1_references(
+                                                &formula.text,
+                                                i64::from(row) - i64::from(source_row),
+                                                i64::from(col) - i64::from(source_col),
+                                            );
+                                        }
+                                    }
+                                }
                                 match next_cell {
                                     Some(cell) => {
                                         if destination_worksheet.cells.get(&(row, col))
@@ -2291,6 +2304,10 @@ impl ExcelRuntime {
                                             if transpose { col_offset } else { row_offset };
                                         let source_col_offset =
                                             if transpose { row_offset } else { col_offset };
+                                        let source_row =
+                                            clipboard.rect.row_first + source_row_offset;
+                                        let source_col =
+                                            clipboard.rect.col_first + source_col_offset;
                                         let source_index = (source_row_offset * source_width
                                             + source_col_offset)
                                             as usize;
@@ -2339,6 +2356,26 @@ impl ExcelRuntime {
                                                                 style_id: None,
                                                             },
                                                         );
+                                                        if clipboard.mode == XL_COPY {
+                                                            if let Some(formula) =
+                                                                next_cell.formula.as_mut()
+                                                            {
+                                                                if !formula.is_r1c1 {
+                                                                    formula.text =
+                                                                        shift_formula_a1_references(
+                                                                            &formula.text,
+                                                                            i64::from(row)
+                                                                                - i64::from(
+                                                                                    source_row,
+                                                                                ),
+                                                                            i64::from(col)
+                                                                                - i64::from(
+                                                                                    source_col,
+                                                                                ),
+                                                                        );
+                                                                }
+                                                            }
+                                                        }
                                                     } else {
                                                         next_cell.value = source_cell
                                                             .map(|cell| cell.value.clone())
@@ -2419,6 +2456,22 @@ impl ExcelRuntime {
                                                     .unwrap_or(CellValue::Blank);
                                                 next_cell.formula = source_cell
                                                     .and_then(|cell| cell.formula.clone());
+                                                if clipboard.mode == XL_COPY {
+                                                    if let Some(formula) =
+                                                        next_cell.formula.as_mut()
+                                                    {
+                                                        if !formula.is_r1c1 {
+                                                            formula.text =
+                                                                shift_formula_a1_references(
+                                                                    &formula.text,
+                                                                    i64::from(row)
+                                                                        - i64::from(source_row),
+                                                                    i64::from(col)
+                                                                        - i64::from(source_col),
+                                                                );
+                                                        }
+                                                    }
+                                                }
                                                 if paste_type
                                                     == XL_PASTE_FORMULAS_AND_NUMBER_FORMATS
                                                 {
@@ -8045,6 +8098,132 @@ fn format_cell_address(row: u32, col: u32, row_absolute: bool, column_absolute: 
     }
     address.push_str(&row.to_string());
     address
+}
+
+fn shift_formula_a1_references(formula: &str, row_delta: i64, col_delta: i64) -> String {
+    if row_delta == 0 && col_delta == 0 {
+        return formula.to_string();
+    }
+
+    let bytes = formula.as_bytes();
+    let mut output = String::with_capacity(formula.len());
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'"' {
+            let quoted_start = index;
+            index += 1;
+            while index < bytes.len() {
+                if bytes[index] == b'"' {
+                    index += 1;
+                    if index < bytes.len() && bytes[index] == b'"' {
+                        index += 1;
+                        continue;
+                    }
+                    break;
+                }
+                let ch = formula[index..]
+                    .chars()
+                    .next()
+                    .expect("valid formula char boundary");
+                index += ch.len_utf8();
+            }
+            output.push_str(&formula[quoted_start..index]);
+            continue;
+        }
+
+        let previous_is_boundary = formula[..index]
+            .chars()
+            .next_back()
+            .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.');
+        if previous_is_boundary {
+            let reference_start = index;
+            let mut cursor = index;
+            let column_absolute = if cursor < bytes.len() && bytes[cursor] == b'$' {
+                cursor += 1;
+                true
+            } else {
+                false
+            };
+            let letters_start = cursor;
+            while cursor < bytes.len()
+                && bytes[cursor].is_ascii_alphabetic()
+                && cursor - letters_start < 3
+            {
+                cursor += 1;
+            }
+            let letters_end = cursor;
+            if letters_end > letters_start
+                && (cursor >= bytes.len() || !bytes[cursor].is_ascii_alphabetic())
+            {
+                let row_absolute = if cursor < bytes.len() && bytes[cursor] == b'$' {
+                    cursor += 1;
+                    true
+                } else {
+                    false
+                };
+                let digits_start = cursor;
+                while cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
+                    cursor += 1;
+                }
+                if digits_start < cursor {
+                    let next_char = formula[cursor..].chars().next();
+                    let next_is_boundary = next_char.is_none_or(|ch| {
+                        !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.' && ch != '('
+                    });
+                    if next_is_boundary {
+                        let mut col = 0u32;
+                        for byte in &bytes[letters_start..letters_end] {
+                            col = col * 26 + (byte.to_ascii_uppercase() - b'A' + 1) as u32;
+                        }
+                        let row = formula[digits_start..cursor].parse::<u32>().ok();
+                        if let Some(row) = row {
+                            if row > 0
+                                && col > 0
+                                && row <= EXCEL_MAX_ROW_INDEX
+                                && col <= EXCEL_MAX_COLUMN_INDEX
+                            {
+                                let shifted_row = if row_absolute {
+                                    i64::from(row)
+                                } else {
+                                    i64::from(row) + row_delta
+                                };
+                                let shifted_col = if column_absolute {
+                                    i64::from(col)
+                                } else {
+                                    i64::from(col) + col_delta
+                                };
+                                if shifted_row < 1
+                                    || shifted_row > i64::from(EXCEL_MAX_ROW_INDEX)
+                                    || shifted_col < 1
+                                    || shifted_col > i64::from(EXCEL_MAX_COLUMN_INDEX)
+                                {
+                                    output.push_str("#REF!");
+                                } else {
+                                    output.push_str(&format_cell_address(
+                                        shifted_row as u32,
+                                        shifted_col as u32,
+                                        row_absolute,
+                                        column_absolute,
+                                    ));
+                                }
+                                index = cursor;
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+            index = reference_start;
+        }
+
+        let ch = formula[index..]
+            .chars()
+            .next()
+            .expect("valid formula char boundary");
+        output.push(ch);
+        index += ch.len_utf8();
+    }
+    output
 }
 
 fn column_to_letters(mut col: u32) -> String {
@@ -15397,6 +15576,55 @@ mod tests {
     }
 
     #[test]
+    fn range_copy_destination_rewrites_relative_formula_references() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1".to_string())])
+                .expect("Range(C1)"),
+        );
+        let destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D2".to_string())])
+                .expect("Range(D2)"),
+        );
+        runtime
+            .dispatch_set(
+                source,
+                "Formula",
+                OmValue::Text(r#"=A1+$B1+C$1+$D$1+SUM(A1:B1)+LOG10(A1)&"A1""#.to_string()),
+                &[],
+            )
+            .expect("seed C1 Formula");
+
+        runtime
+            .dispatch_invoke(source, "Copy", &[OmValue::Object(destination)])
+            .expect("Range.Copy Destination with formula");
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(destination, "Formula", &[])
+                    .expect("D2 Formula after Range.Copy")
+            ),
+            r#"=B2+$B2+D$1+$D$1+SUM(B2:C2)+LOG10(B2)&"A1""#
+        );
+    }
+
+    #[test]
     fn range_paste_special_pastes_copied_clipboard_across_workbooks() {
         let mut runtime = ExcelRuntime::new();
         let source_workbook = runtime
@@ -15822,6 +16050,85 @@ mod tests {
         assert_eq!(
             worksheet.cells.get(&(1, 6)).expect("F1").style_id,
             Some(StyleId(5))
+        );
+    }
+
+    #[test]
+    fn range_paste_special_rewrites_copied_formulas_only() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1".to_string())])
+                .expect("Range(C1)"),
+        );
+        let copied_destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D2".to_string())])
+                .expect("Range(D2)"),
+        );
+        let cut_destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E3".to_string())])
+                .expect("Range(E3)"),
+        );
+        runtime
+            .dispatch_set(
+                source,
+                "Formula",
+                OmValue::Text(r#"=A1+B$1+$A1&"A1""#.to_string()),
+                &[],
+            )
+            .expect("seed C1 Formula");
+
+        runtime
+            .dispatch_invoke(source, "Copy", &[])
+            .expect("Range.Copy before PasteSpecial formula rewrite");
+        runtime
+            .dispatch_invoke(
+                copied_destination,
+                "PasteSpecial",
+                &[OmValue::Number(f64::from(super::XL_PASTE_FORMULAS))],
+            )
+            .expect("Range.PasteSpecial xlPasteFormulas copy");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(copied_destination, "Formula", &[])
+                    .expect("D2 Formula after copied PasteSpecial")
+            ),
+            r#"=B2+C$1+$A2&"A1""#
+        );
+
+        runtime
+            .dispatch_invoke(source, "Cut", &[])
+            .expect("Range.Cut before PasteSpecial formula move");
+        runtime
+            .dispatch_invoke(
+                cut_destination,
+                "PasteSpecial",
+                &[OmValue::Number(f64::from(super::XL_PASTE_FORMULAS))],
+            )
+            .expect("Range.PasteSpecial xlPasteFormulas cut");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(cut_destination, "Formula", &[])
+                    .expect("E3 Formula after cut PasteSpecial")
+            ),
+            r#"=A1+B$1+$A1&"A1""#
         );
     }
 
