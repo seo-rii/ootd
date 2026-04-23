@@ -29,6 +29,11 @@ const XL_SHEET_HIDDEN: i32 = 0;
 const XL_SHEET_VERY_HIDDEN: i32 = 2;
 const XL_SHEET_TYPE_WORKSHEET: i32 = -4167;
 const XL_WBA_TEMPLATE_WORKSHEET: i32 = -4167;
+const XL_OPEN_XML_WORKBOOK: i32 = 51;
+const XL_OPEN_XML_WORKBOOK_MACRO_ENABLED: i32 = 52;
+const XL_OPEN_XML_TEMPLATE_MACRO_ENABLED: i32 = 53;
+const XL_OPEN_XML_TEMPLATE: i32 = 54;
+const XL_OPEN_XML_STRICT_WORKBOOK: i32 = 61;
 const CONTENT_TYPES_PART_NAME: &str = "[Content_Types].xml";
 const WORKBOOK_PART_NAME: &str = "xl/workbook.xml";
 const WORKBOOK_RELS_PART_NAME: &str = "xl/_rels/workbook.xml.rels";
@@ -1232,6 +1237,9 @@ impl ExcelRuntime {
                         .unwrap_or_else(|| runtime.loaded.state.model.display_name.clone()),
                 ))
             }
+            "FileFormat" => Ok(OmValue::Number(f64::from(file_format_to_excel_value(
+                self.workbook_model(workbook)?.format,
+            )))),
             "ReadOnly" => Ok(OmValue::Bool(self.runtime_workbook(workbook)?.read_only)),
             "Saved" => Ok(OmValue::Bool({
                 let runtime = self.runtime_workbook(workbook)?;
@@ -4590,6 +4598,16 @@ fn coerce_sheet_visibility(value: OmValue) -> OmResult<SheetVisibility> {
     }
 }
 
+fn file_format_to_excel_value(format: FileFormat) -> i32 {
+    match format {
+        FileFormat::Xlsx => XL_OPEN_XML_WORKBOOK,
+        FileFormat::Xlsm => XL_OPEN_XML_WORKBOOK_MACRO_ENABLED,
+        FileFormat::Xltx => XL_OPEN_XML_TEMPLATE,
+        FileFormat::Xltm => XL_OPEN_XML_TEMPLATE_MACRO_ENABLED,
+        FileFormat::StrictXlsx => XL_OPEN_XML_STRICT_WORKBOOK,
+    }
+}
+
 fn runtime_xml_error(error: impl std::fmt::Display) -> OmError {
     OmError::new(OmErrorCode::Parse, error.to_string())
 }
@@ -6006,6 +6024,51 @@ mod tests {
         });
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn workbook_file_format_dispatch_reports_detected_format() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbook.0, "FileFormat", &[])
+                    .expect("Workbook.FileFormat")
+            ),
+            f64::from(super::XL_OPEN_XML_WORKBOOK)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "FileFormat", &[OmValue::Number(1.0)])
+                .expect_err("Workbook.FileFormat args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            super::file_format_to_excel_value(FileFormat::Xlsm),
+            super::XL_OPEN_XML_WORKBOOK_MACRO_ENABLED
+        );
+        assert_eq!(
+            super::file_format_to_excel_value(FileFormat::Xltm),
+            super::XL_OPEN_XML_TEMPLATE_MACRO_ENABLED
+        );
+        assert_eq!(
+            super::file_format_to_excel_value(FileFormat::Xltx),
+            super::XL_OPEN_XML_TEMPLATE
+        );
+        assert_eq!(
+            super::file_format_to_excel_value(FileFormat::StrictXlsx),
+            super::XL_OPEN_XML_STRICT_WORKBOOK
+        );
     }
 
     #[test]

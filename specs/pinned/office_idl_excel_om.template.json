@@ -21,6 +21,31 @@
       ]
     },
     {
+      "name": "XlFileFormat",
+      "values": [
+        {
+          "name": "xlOpenXMLWorkbook",
+          "value": 51
+        },
+        {
+          "name": "xlOpenXMLWorkbookMacroEnabled",
+          "value": 52
+        },
+        {
+          "name": "xlOpenXMLTemplateMacroEnabled",
+          "value": 53
+        },
+        {
+          "name": "xlOpenXMLTemplate",
+          "value": 54
+        },
+        {
+          "name": "xlOpenXMLStrictWorkbook",
+          "value": 61
+        }
+      ]
+    },
+    {
       "name": "XlSheetVisibility",
       "values": [
         {
@@ -1059,6 +1084,32 @@
                 "kind": "primitive",
                 "name": "string",
                 "aliasOf": "BSTR"
+              }
+            }
+          }
+        },
+        {
+          "name": "FileFormat",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "XlFileFormat"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "FileFormat"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlFileFormat"
               }
             }
           }
