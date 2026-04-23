@@ -234,7 +234,8 @@ impl ExcelRuntime {
         let default_selection = loaded
             .state
             .worksheets
-            .first()
+            .iter()
+            .find(|worksheet| worksheet.visibility == SheetVisibility::Visible)
             .map(|worksheet| RuntimeSelection {
                 workbook: workbook_handle,
                 sheet_id: worksheet.id,
@@ -3979,11 +3980,24 @@ impl ExcelRuntime {
             if respect_display_alerts && self.display_alerts {
                 return Ok(false);
             }
-            if worksheet_index < runtime.loaded.state.worksheets.len() - 1 {
-                runtime.loaded.state.worksheets[worksheet_index + 1].id
-            } else {
-                runtime.loaded.state.worksheets[worksheet_index - 1].id
-            }
+            runtime
+                .loaded
+                .state
+                .worksheets
+                .iter()
+                .enumerate()
+                .find(|(index, worksheet)| {
+                    *index != worksheet_index && worksheet.visibility == SheetVisibility::Visible
+                })
+                .map(|(_, worksheet)| worksheet.id)
+                .or_else(|| {
+                    if worksheet_index < runtime.loaded.state.worksheets.len() - 1 {
+                        Some(runtime.loaded.state.worksheets[worksheet_index + 1].id)
+                    } else {
+                        Some(runtime.loaded.state.worksheets[worksheet_index - 1].id)
+                    }
+                })
+                .expect("replacement worksheet should exist")
         };
 
         {
@@ -4266,9 +4280,12 @@ impl ExcelRuntime {
             .loaded
             .state
             .worksheets
-            .first()
+            .iter()
+            .find(|worksheet| worksheet.visibility == SheetVisibility::Visible)
             .map(|worksheet| worksheet.id)
-            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "workbook has no worksheets"))?;
+            .ok_or_else(|| {
+                OmError::new(OmErrorCode::NotFound, "workbook has no visible worksheets")
+            })?;
         Ok(RuntimeSelection {
             workbook,
             sheet_id,
@@ -4345,7 +4362,11 @@ impl ExcelRuntime {
     }
 
     fn remember_selection(&mut self, workbook: WorkbookHandle, sheet_id: SheetId, rect: Rect) {
-        if self.active_workbook == Some(workbook) {
+        let target_visible = self
+            .worksheet_model(workbook, sheet_id)
+            .map(|worksheet| worksheet.visibility == SheetVisibility::Visible)
+            .unwrap_or(false);
+        if self.active_workbook == Some(workbook) && target_visible {
             self.set_selection(workbook, sheet_id, rect);
         }
     }
@@ -12305,6 +12326,85 @@ mod tests {
             ),
             "Sheet2"
         );
+    }
+
+    #[test]
+    fn workbook_open_and_range_access_keep_selection_on_visible_sheets() {
+        let mut source_runtime = ExcelRuntime::new();
+        let workbook = source_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open source workbook");
+        let worksheets = expect_object_handle(
+            source_runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("source Workbook.Worksheets"),
+        );
+        let sheet1 = expect_object_handle(
+            source_runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("source Worksheets.Item(1)"),
+        );
+        source_runtime
+            .dispatch_invoke(worksheets, "Add", &[])
+            .expect("source Worksheets.Add Sheet2");
+        source_runtime
+            .dispatch_set(sheet1, "Visible", OmValue::Bool(false), &[])
+            .expect("hide first sheet");
+        let bytes = source_runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save hidden-first workbook");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen hidden-first workbook");
+        let application = runtime.root_application();
+        let active_sheet_name = |runtime: &mut ExcelRuntime| -> String {
+            let active_sheet = expect_object_handle(
+                runtime
+                    .dispatch_get(application, "ActiveSheet", &[])
+                    .expect("Application.ActiveSheet"),
+            );
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("ActiveSheet.Name"),
+            )
+        };
+        assert_eq!(active_sheet_name(&mut runtime), "Sheet2");
+
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("reopened Workbook.Worksheets"),
+        );
+        let hidden_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Text("Sheet1".to_string())])
+                .expect("hidden Sheet1"),
+        );
+        runtime
+            .dispatch_invoke(hidden_sheet, "Range", &[OmValue::Text("A1".to_string())])
+            .expect("hidden Sheet1.Range");
+
+        assert_eq!(active_sheet_name(&mut runtime), "Sheet2");
     }
 
     #[test]
