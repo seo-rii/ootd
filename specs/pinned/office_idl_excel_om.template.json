@@ -3386,6 +3386,22 @@
               ]
             }
           }
+        },
+        {
+          "name": "ClearFormats",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Range",
+                  "sourceMember": "ClearFormats"
+                }
+              ]
+            }
+          }
         }
       ]
     }

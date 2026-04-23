@@ -76,8 +76,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 5);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 111);
-    assert_eq!(summary.stub_member_count, 111);
+    assert_eq!(summary.member_count, 112);
+    assert_eq!(summary.stub_member_count, 112);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1277,7 +1277,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(application.member_count, 37);
     assert_eq!(workbook.member_count, 19);
     assert_eq!(worksheet.member_count, 18);
-    assert_eq!(range.member_count, 26);
+    assert_eq!(range.member_count, 27);
     assert_eq!(
         application.default_coclasses,
         vec!["Application".to_string()]
@@ -2016,6 +2016,14 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(range_clear.access, AccessMode::Read);
     assert_eq!(range_clear.params.len(), 0);
     assert!(range_clear.return_type.is_none());
+    let range_clear_formats = range
+        .members
+        .iter()
+        .find(|member| member.name == "ClearFormats")
+        .expect("Range.ClearFormats");
+    assert_eq!(range_clear_formats.access, AccessMode::Read);
+    assert_eq!(range_clear_formats.params.len(), 0);
+    assert!(range_clear_formats.return_type.is_none());
     let range_row = range
         .members
         .iter()
@@ -2044,8 +2052,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 111);
-    assert_eq!(coverage.support_counts.stub, 111);
+    assert_eq!(coverage.member_count, 112);
+    assert_eq!(coverage.support_counts.stub, 112);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -2167,8 +2175,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(range_coverage.member_count, 26);
-    assert_eq!(range_coverage.support_counts.stub, 26);
+    assert_eq!(range_coverage.member_count, 27);
+    assert_eq!(range_coverage.support_counts.stub, 27);
     assert_eq!(
         range_coverage.stub_members,
         vec![
@@ -2197,7 +2205,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Copy".to_string(),
             "Select".to_string(),
             "ClearContents".to_string(),
-            "Clear".to_string()
+            "Clear".to_string(),
+            "ClearFormats".to_string()
         ]
     );
 }
