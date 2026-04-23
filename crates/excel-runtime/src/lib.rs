@@ -105,6 +105,7 @@ pub struct ExcelRuntime {
     screen_updating: bool,
     enable_events: bool,
     user_name: String,
+    default_file_path: String,
     status_bar: Option<String>,
     display_status_bar: bool,
     display_formula_bar: bool,
@@ -137,6 +138,7 @@ impl ExcelRuntime {
             screen_updating: true,
             enable_events: true,
             user_name: String::new(),
+            default_file_path: String::new(),
             status_bar: None,
             display_status_bar: true,
             display_formula_bar: true,
@@ -515,6 +517,15 @@ impl ExcelRuntime {
                             ));
                         };
                         self.user_name = user_name;
+                        Ok(())
+                    }
+                    "DefaultFilePath" => {
+                        let OmValue::Text(default_file_path) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Application.DefaultFilePath expects a text value",
+                            ));
+                        };
+                        self.default_file_path = default_file_path;
                         Ok(())
                     }
                     "StatusBar" => match value {
@@ -1403,6 +1414,14 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Text(self.user_name.clone()))
+            }
+            "DefaultFilePath" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.DefaultFilePath does not accept index arguments",
+                    ));
+                }
+                Ok(OmValue::Text(self.default_file_path.clone()))
             }
             "DisplayAlerts" => {
                 if !args.is_empty() {
@@ -7624,6 +7643,65 @@ mod tests {
                     &[OmValue::Number(1.0)],
                 )
                 .expect_err("Application.UserName set should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn application_default_file_path_dispatch_roundtrips_and_rejects_invalid_values() {
+        let mut runtime = ExcelRuntime::new();
+        let application = runtime.root_application();
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(application, "DefaultFilePath", &[])
+                    .expect("Application.DefaultFilePath default")
+            ),
+            ""
+        );
+
+        runtime
+            .dispatch_set(
+                application,
+                "DefaultFilePath",
+                OmValue::Text("/tmp/ootd".to_string()),
+                &[],
+            )
+            .expect("Application.DefaultFilePath = text");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(application, "DefaultFilePath", &[])
+                    .expect("Application.DefaultFilePath after set")
+            ),
+            "/tmp/ootd"
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_set(application, "DefaultFilePath", OmValue::Bool(true), &[])
+                .expect_err("Application.DefaultFilePath should reject non-text values")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "DefaultFilePath", &[OmValue::Number(1.0)])
+                .expect_err("Application.DefaultFilePath should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    application,
+                    "DefaultFilePath",
+                    OmValue::Text("/tmp/other".to_string()),
+                    &[OmValue::Number(1.0)],
+                )
+                .expect_err("Application.DefaultFilePath set should reject index args")
                 .code,
             OmErrorCode::InvalidArgument
         );
