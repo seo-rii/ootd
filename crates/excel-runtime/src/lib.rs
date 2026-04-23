@@ -4551,9 +4551,9 @@ impl ExcelRuntime {
                 }
             },
             "Intersect" => {
-                if args.len() != 2 {
+                if !(2..=30).contains(&args.len()) {
                     return Err(OmError::invalid_argument(
-                        "Application.Intersect expects two range arguments",
+                        "Application.Intersect expects 2 to 30 range arguments",
                     ));
                 }
 
@@ -4579,26 +4579,38 @@ impl ExcelRuntime {
                     }
                 };
 
-                let (workbook1, sheet_id1, rect1) = parse_range(&args[0], "Arg1", self)?;
-                let (workbook2, sheet_id2, rect2) = parse_range(&args[1], "Arg2", self)?;
-                if workbook1 != workbook2 || sheet_id1 != sheet_id2 {
-                    return Err(OmError::invalid_argument(
-                        "Application.Intersect expects ranges from the same worksheet",
-                    ));
+                let (workbook, sheet_id, mut row_first, mut row_last, mut col_first, mut col_last) = {
+                    let (workbook, sheet_id, rect) = parse_range(&args[0], "Arg1", self)?;
+                    (
+                        workbook,
+                        sheet_id,
+                        rect.row_first,
+                        rect.row_last,
+                        rect.col_first,
+                        rect.col_last,
+                    )
+                };
+                for (index, arg) in args.iter().enumerate().skip(1) {
+                    let (next_workbook, next_sheet_id, next_rect) =
+                        parse_range(arg, &format!("Arg{}", index + 1), self)?;
+                    if next_workbook != workbook || next_sheet_id != sheet_id {
+                        return Err(OmError::invalid_argument(
+                            "Application.Intersect expects ranges from the same worksheet",
+                        ));
+                    }
+                    row_first = row_first.max(next_rect.row_first);
+                    row_last = row_last.min(next_rect.row_last);
+                    col_first = col_first.max(next_rect.col_first);
+                    col_last = col_last.min(next_rect.col_last);
                 }
-
-                let row_first = rect1.row_first.max(rect2.row_first);
-                let row_last = rect1.row_last.min(rect2.row_last);
-                let col_first = rect1.col_first.max(rect2.col_first);
-                let col_last = rect1.col_last.min(rect2.col_last);
                 if row_first > row_last || col_first > col_last {
                     return Ok(OmValue::Empty);
                 }
 
                 Ok(OmValue::Object(
                     self.register_range_handle(
-                        workbook1,
-                        sheet_id1,
+                        workbook,
+                        sheet_id,
                         Rect {
                             row_first,
                             row_last,
@@ -4610,9 +4622,9 @@ impl ExcelRuntime {
                 ))
             }
             "Union" => {
-                if args.len() != 2 {
+                if !(2..=30).contains(&args.len()) {
                     return Err(OmError::invalid_argument(
-                        "Application.Union expects two range arguments",
+                        "Application.Union expects 2 to 30 range arguments",
                     ));
                 }
 
@@ -4638,46 +4650,51 @@ impl ExcelRuntime {
                     }
                 };
 
-                let (workbook1, sheet_id1, rect1) = parse_range(&args[0], "Arg1", self)?;
-                let (workbook2, sheet_id2, rect2) = parse_range(&args[1], "Arg2", self)?;
-                if workbook1 != workbook2 || sheet_id1 != sheet_id2 {
-                    return Err(OmError::invalid_argument(
-                        "Application.Union expects ranges from the same worksheet",
-                    ));
-                }
-
-                let rect = Rect {
-                    row_first: rect1.row_first.min(rect2.row_first),
-                    row_last: rect1.row_last.max(rect2.row_last),
-                    col_first: rect1.col_first.min(rect2.col_first),
-                    col_last: rect1.col_last.max(rect2.col_last),
-                };
+                let (workbook, sheet_id, mut rect) = parse_range(&args[0], "Arg1", self)?;
                 let rect_area =
                     |rect: Rect| -> u64 { u64::from(rect.width()) * u64::from(rect.height()) };
-                let intersection_row_first = rect1.row_first.max(rect2.row_first);
-                let intersection_row_last = rect1.row_last.min(rect2.row_last);
-                let intersection_col_first = rect1.col_first.max(rect2.col_first);
-                let intersection_col_last = rect1.col_last.min(rect2.col_last);
-                let intersection_area = if intersection_row_first > intersection_row_last
-                    || intersection_col_first > intersection_col_last
-                {
-                    0
-                } else {
-                    rect_area(Rect {
-                        row_first: intersection_row_first,
-                        row_last: intersection_row_last,
-                        col_first: intersection_col_first,
-                        col_last: intersection_col_last,
-                    })
+                let intersection_area = |left: Rect, right: Rect| -> u64 {
+                    let row_first = left.row_first.max(right.row_first);
+                    let row_last = left.row_last.min(right.row_last);
+                    let col_first = left.col_first.max(right.col_first);
+                    let col_last = left.col_last.min(right.col_last);
+                    if row_first > row_last || col_first > col_last {
+                        0
+                    } else {
+                        rect_area(Rect {
+                            row_first,
+                            row_last,
+                            col_first,
+                            col_last,
+                        })
+                    }
                 };
-                if rect_area(rect) != rect_area(rect1) + rect_area(rect2) - intersection_area {
-                    return Err(OmError::unsupported(
-                        "Application.Union is only implemented for rectangular unions",
-                    ));
+                for (index, arg) in args.iter().enumerate().skip(1) {
+                    let (next_workbook, next_sheet_id, next_rect) =
+                        parse_range(arg, &format!("Arg{}", index + 1), self)?;
+                    if next_workbook != workbook || next_sheet_id != sheet_id {
+                        return Err(OmError::invalid_argument(
+                            "Application.Union expects ranges from the same worksheet",
+                        ));
+                    }
+                    let next_union = Rect {
+                        row_first: rect.row_first.min(next_rect.row_first),
+                        row_last: rect.row_last.max(next_rect.row_last),
+                        col_first: rect.col_first.min(next_rect.col_first),
+                        col_last: rect.col_last.max(next_rect.col_last),
+                    };
+                    let combined_area =
+                        rect_area(rect) + rect_area(next_rect) - intersection_area(rect, next_rect);
+                    if rect_area(next_union) != combined_area {
+                        return Err(OmError::unsupported(
+                            "Application.Union is only implemented for rectangular unions",
+                        ));
+                    }
+                    rect = next_union;
                 }
 
                 Ok(OmValue::Object(
-                    self.register_range_handle(workbook1, sheet_id1, rect).0,
+                    self.register_range_handle(workbook, sheet_id, rect).0,
                 ))
             }
             _ => Err(OmError::unsupported(format!(
@@ -18109,6 +18126,11 @@ mod tests {
                 .dispatch_invoke(application, "Range", &[OmValue::Text("B2:C3".to_string())])
                 .expect("Application.Range(B2:C3)"),
         );
+        let range3 = expect_object_handle(
+            runtime
+                .dispatch_invoke(application, "Range", &[OmValue::Text("B1:B5".to_string())])
+                .expect("Application.Range(B1:B5)"),
+        );
         let overlap = expect_object_handle(
             runtime
                 .dispatch_invoke(
@@ -18117,6 +18139,19 @@ mod tests {
                     &[OmValue::Object(range1), OmValue::Object(range2)],
                 )
                 .expect("Application.Intersect(range1, range2)"),
+        );
+        let multi_overlap = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    application,
+                    "Intersect",
+                    &[
+                        OmValue::Object(range1),
+                        OmValue::Object(range2),
+                        OmValue::Object(range3),
+                    ],
+                )
+                .expect("Application.Intersect(range1, range2, range3)"),
         );
         let selection_after_intersect = expect_object_handle(
             runtime
@@ -18145,10 +18180,18 @@ mod tests {
         assert_eq!(
             expect_text(
                 runtime
+                    .dispatch_get(multi_overlap, "Address", &[])
+                    .expect("Application.Intersect multi-arg overlap address")
+            ),
+            "$B$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
                     .dispatch_get(selection_after_intersect, "Address", &[])
                     .expect("Selection after Intersect address")
             ),
-            "$B$2:$C$3"
+            "$B$1:$B$5"
         );
         assert_eq!(
             runtime
@@ -18158,6 +18201,20 @@ mod tests {
                     &[OmValue::Object(range1), OmValue::Object(disjoint)],
                 )
                 .expect("Application.Intersect disjoint"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    application,
+                    "Intersect",
+                    &[
+                        OmValue::Object(range1),
+                        OmValue::Object(range2),
+                        OmValue::Object(disjoint),
+                    ],
+                )
+                .expect("Application.Intersect multi-arg disjoint"),
             OmValue::Empty
         );
         assert_eq!(
@@ -18175,6 +18232,14 @@ mod tests {
             runtime
                 .dispatch_invoke(application, "Intersect", &[OmValue::Object(range1)])
                 .expect_err("Application.Intersect requires two args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        let too_many_args = vec![OmValue::Object(range1); 31];
+        assert_eq!(
+            runtime
+                .dispatch_invoke(application, "Intersect", &too_many_args)
+                .expect_err("Application.Intersect should reject more than 30 args")
                 .code,
             OmErrorCode::InvalidArgument
         );
@@ -18265,6 +18330,24 @@ mod tests {
                 .dispatch_invoke(application, "Range", &[OmValue::Text("E1".to_string())])
                 .expect("Application.Range(E1)"),
         );
+        let range3 = expect_object_handle(
+            runtime
+                .dispatch_invoke(application, "Range", &[OmValue::Text("D1:D2".to_string())])
+                .expect("Application.Range(D1:D2)"),
+        );
+        let multi_union = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    application,
+                    "Union",
+                    &[
+                        OmValue::Object(range1),
+                        OmValue::Object(range2),
+                        OmValue::Object(range3),
+                    ],
+                )
+                .expect("Application.Union(range1, range2, range3)"),
+        );
         let foreign_range = expect_object_handle(
             runtime
                 .dispatch_invoke(worksheet2, "Range", &[OmValue::Text("A1".to_string())])
@@ -18278,6 +18361,14 @@ mod tests {
                     .expect("Application.Union address")
             ),
             "$A$1:$C$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(multi_union, "Address", &[])
+                    .expect("Application.Union multi-arg address")
+            ),
+            "$A$1:$D$2"
         );
         assert_eq!(
             expect_text(
@@ -18313,6 +18404,14 @@ mod tests {
             runtime
                 .dispatch_invoke(application, "Union", &[OmValue::Object(range1)])
                 .expect_err("Application.Union requires two args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        let too_many_args = vec![OmValue::Object(range1); 31];
+        assert_eq!(
+            runtime
+                .dispatch_invoke(application, "Union", &too_many_args)
+                .expect_err("Application.Union should reject more than 30 args")
                 .code,
             OmErrorCode::InvalidArgument
         );
