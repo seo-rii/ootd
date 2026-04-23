@@ -684,6 +684,102 @@
           }
         },
         {
+          "name": "UseSystemSeparators",
+          "memberKind": "property",
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Application",
+                  "sourceMember": "UseSystemSeparators"
+                },
+                {
+                  "kind": "property_set",
+                  "sourceInterface": "Application",
+                  "sourceMember": "UseSystemSeparators"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          }
+        },
+        {
+          "name": "DecimalSeparator",
+          "memberKind": "property",
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "string",
+            "aliasOf": "BSTR"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Application",
+                  "sourceMember": "DecimalSeparator"
+                },
+                {
+                  "kind": "property_set",
+                  "sourceInterface": "Application",
+                  "sourceMember": "DecimalSeparator"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "string",
+                "aliasOf": "BSTR"
+              }
+            }
+          }
+        },
+        {
+          "name": "ThousandsSeparator",
+          "memberKind": "property",
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "string",
+            "aliasOf": "BSTR"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Application",
+                  "sourceMember": "ThousandsSeparator"
+                },
+                {
+                  "kind": "property_set",
+                  "sourceInterface": "Application",
+                  "sourceMember": "ThousandsSeparator"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "string",
+                "aliasOf": "BSTR"
+              }
+            }
+          }
+        },
+        {
           "name": "Cells",
           "memberKind": "property",
           "returnType": {

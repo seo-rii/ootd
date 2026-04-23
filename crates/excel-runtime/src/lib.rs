@@ -110,6 +110,9 @@ pub struct ExcelRuntime {
     display_status_bar: bool,
     display_formula_bar: bool,
     display_scroll_bars: bool,
+    use_system_separators: bool,
+    decimal_separator: String,
+    thousands_separator: String,
     cut_copy_mode: Option<i32>,
     next_handle: u64,
     next_object_handle: u64,
@@ -144,6 +147,9 @@ impl ExcelRuntime {
             display_status_bar: true,
             display_formula_bar: true,
             display_scroll_bars: true,
+            use_system_separators: true,
+            decimal_separator: ".".to_string(),
+            thousands_separator: ",".to_string(),
             cut_copy_mode: None,
             next_handle: 1,
             next_object_handle: FIRST_DYNAMIC_OBJECT_HANDLE_VALUE,
@@ -571,6 +577,33 @@ impl ExcelRuntime {
                             ));
                         };
                         self.display_scroll_bars = display_scroll_bars;
+                        Ok(())
+                    }
+                    "UseSystemSeparators" => {
+                        let OmValue::Bool(use_system_separators) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Application.UseSystemSeparators expects a boolean value",
+                            ));
+                        };
+                        self.use_system_separators = use_system_separators;
+                        Ok(())
+                    }
+                    "DecimalSeparator" => {
+                        let OmValue::Text(decimal_separator) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Application.DecimalSeparator expects a text value",
+                            ));
+                        };
+                        self.decimal_separator = decimal_separator;
+                        Ok(())
+                    }
+                    "ThousandsSeparator" => {
+                        let OmValue::Text(thousands_separator) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Application.ThousandsSeparator expects a text value",
+                            ));
+                        };
+                        self.thousands_separator = thousands_separator;
                         Ok(())
                     }
                     "CutCopyMode" => {
@@ -1501,6 +1534,30 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Bool(self.display_scroll_bars))
+            }
+            "UseSystemSeparators" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.UseSystemSeparators does not accept index arguments",
+                    ));
+                }
+                Ok(OmValue::Bool(self.use_system_separators))
+            }
+            "DecimalSeparator" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.DecimalSeparator does not accept index arguments",
+                    ));
+                }
+                Ok(OmValue::Text(self.decimal_separator.clone()))
+            }
+            "ThousandsSeparator" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.ThousandsSeparator does not accept index arguments",
+                    ));
+                }
+                Ok(OmValue::Text(self.thousands_separator.clone()))
             }
             "CutCopyMode" => {
                 if !args.is_empty() {
@@ -7521,6 +7578,129 @@ mod tests {
             runtime
                 .dispatch_get(application, "DisplayScrollBars", &[OmValue::Bool(true)])
                 .expect_err("Application.DisplayScrollBars should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn application_separator_dispatch_roundtrips_and_rejects_invalid_values() {
+        let mut runtime = ExcelRuntime::new();
+        let application = runtime.root_application();
+
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(application, "UseSystemSeparators", &[])
+                .expect("Application.UseSystemSeparators default")
+        ));
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(application, "DecimalSeparator", &[])
+                    .expect("Application.DecimalSeparator default")
+            ),
+            "."
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(application, "ThousandsSeparator", &[])
+                    .expect("Application.ThousandsSeparator default")
+            ),
+            ","
+        );
+
+        runtime
+            .dispatch_set(
+                application,
+                "UseSystemSeparators",
+                OmValue::Bool(false),
+                &[],
+            )
+            .expect("Application.UseSystemSeparators = false");
+        runtime
+            .dispatch_set(
+                application,
+                "DecimalSeparator",
+                OmValue::Text(",".to_string()),
+                &[],
+            )
+            .expect("Application.DecimalSeparator = comma");
+        runtime
+            .dispatch_set(
+                application,
+                "ThousandsSeparator",
+                OmValue::Text(".".to_string()),
+                &[],
+            )
+            .expect("Application.ThousandsSeparator = period");
+
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "UseSystemSeparators", &[])
+                .expect("Application.UseSystemSeparators after false")
+        ));
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(application, "DecimalSeparator", &[])
+                    .expect("Application.DecimalSeparator after set")
+            ),
+            ","
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(application, "ThousandsSeparator", &[])
+                    .expect("Application.ThousandsSeparator after set")
+            ),
+            "."
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    application,
+                    "UseSystemSeparators",
+                    OmValue::Text("bad".to_string()),
+                    &[]
+                )
+                .expect_err("Application.UseSystemSeparators should reject non-bool values")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(application, "DecimalSeparator", OmValue::Bool(true), &[])
+                .expect_err("Application.DecimalSeparator should reject non-text values")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(application, "ThousandsSeparator", OmValue::Bool(true), &[])
+                .expect_err("Application.ThousandsSeparator should reject non-text values")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "UseSystemSeparators", &[OmValue::Number(1.0)])
+                .expect_err("Application.UseSystemSeparators should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "DecimalSeparator", &[OmValue::Number(1.0)])
+                .expect_err("Application.DecimalSeparator should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "ThousandsSeparator", &[OmValue::Number(1.0)])
+                .expect_err("Application.ThousandsSeparator should reject index args")
                 .code,
             OmErrorCode::InvalidArgument
         );
