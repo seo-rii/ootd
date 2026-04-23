@@ -44,6 +44,10 @@ const XL_SHIFT_TO_RIGHT: i32 = -4161;
 const XL_SHIFT_UP: i32 = -4162;
 const XL_COPY: i32 = 1;
 const XL_CUT: i32 = 2;
+const XL_PASTE_ALL: i32 = -4104;
+const XL_PASTE_FORMATS: i32 = -4122;
+const XL_PASTE_FORMULAS: i32 = -4123;
+const XL_PASTE_VALUES: i32 = -4163;
 const XL_DECIMAL_SEPARATOR: i32 = 3;
 const XL_THOUSANDS_SEPARATOR: i32 = 4;
 const XL_LIST_SEPARATOR: i32 = 5;
@@ -2074,12 +2078,49 @@ impl ExcelRuntime {
                                 "Range.PasteSpecial accepts at most Paste, Operation, SkipBlanks, and Transpose arguments",
                             ));
                         }
-                        if args.iter().any(|arg| {
-                            !matches!(arg, OmValue::Missing | OmValue::Empty | OmValue::Null)
-                        }) {
-                            return Err(OmError::unsupported(
-                                "Range.PasteSpecial currently supports omitted arguments only",
-                            ));
+                        let paste_type = match args.first() {
+                            None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => {
+                                XL_PASTE_ALL
+                            }
+                            Some(OmValue::Number(paste_type)) => {
+                                if !paste_type.is_finite()
+                                    || paste_type.fract() != 0.0
+                                    || *paste_type < i32::MIN as f64
+                                    || *paste_type > i32::MAX as f64
+                                {
+                                    return Err(OmError::invalid_argument(
+                                        "Range.PasteSpecial Paste expects an integral XlPasteType value",
+                                    ));
+                                }
+                                match *paste_type as i32 {
+                                    XL_PASTE_ALL | XL_PASTE_VALUES | XL_PASTE_FORMULAS
+                                    | XL_PASTE_FORMATS => *paste_type as i32,
+                                    other => {
+                                        return Err(OmError::unsupported(format!(
+                                            "Range.PasteSpecial Paste {other} is not implemented",
+                                        )));
+                                    }
+                                }
+                            }
+                            Some(_) => {
+                                return Err(OmError::type_mismatch(
+                                    "Range.PasteSpecial Paste expects a numeric XlPasteType value when provided",
+                                ));
+                            }
+                        };
+                        for (arg, name) in [
+                            (args.get(1), "Operation"),
+                            (args.get(2), "SkipBlanks"),
+                            (args.get(3), "Transpose"),
+                        ] {
+                            if let Some(arg) = arg {
+                                if !matches!(arg, OmValue::Missing | OmValue::Empty | OmValue::Null)
+                                {
+                                    return Err(OmError::unsupported(format!(
+                                        "Range.PasteSpecial {name} is not implemented",
+                                    )));
+                                }
+                            }
                         }
                         let clipboard = self.clipboard.ok_or_else(|| {
                             OmError::new(
@@ -2093,17 +2134,225 @@ impl ExcelRuntime {
                             clipboard.rect,
                         );
                         let destination = self.register_range_handle(workbook, sheet_id, rect);
+                        if paste_type == XL_PASTE_ALL {
+                            return match clipboard.mode {
+                                XL_COPY => self.dispatch_invoke(
+                                    source.0,
+                                    "Copy",
+                                    &[OmValue::Object(destination.0)],
+                                ),
+                                XL_CUT => self.dispatch_invoke(
+                                    source.0,
+                                    "Cut",
+                                    &[OmValue::Object(destination.0)],
+                                ),
+                                _ => Err(OmError::invalid_state(
+                                    "Range.PasteSpecial clipboard mode is invalid",
+                                )),
+                            };
+                        }
+
+                        let source_cells = {
+                            let state = &self.runtime_workbook(clipboard.workbook)?.loaded.state;
+                            let source_worksheet =
+                                state.worksheet_data_for_sheet(clipboard.sheet_id)?;
+                            let mut cells = Vec::with_capacity(
+                                (clipboard.rect.height() * clipboard.rect.width()) as usize,
+                            );
+                            for row in clipboard.rect.row_first..=clipboard.rect.row_last {
+                                for col in clipboard.rect.col_first..=clipboard.rect.col_last {
+                                    cells.push(source_worksheet.cells.get(&(row, col)).cloned());
+                                }
+                            }
+                            cells
+                        };
+                        let target_rect = if rect.height() == 1 && rect.width() == 1 {
+                            let row_last = rect
+                                .row_first
+                                .checked_add(clipboard.rect.height() - 1)
+                                .ok_or_else(|| {
+                                    OmError::invalid_argument(
+                                        "Range.PasteSpecial destination overflows worksheet rows",
+                                    )
+                                })?;
+                            let col_last = rect
+                                .col_first
+                                .checked_add(clipboard.rect.width() - 1)
+                                .ok_or_else(|| {
+                                OmError::invalid_argument(
+                                    "Range.PasteSpecial destination overflows worksheet columns",
+                                )
+                            })?;
+                            if row_last > EXCEL_MAX_ROW_INDEX {
+                                return Err(OmError::invalid_argument(
+                                    "Range.PasteSpecial destination overflows worksheet rows",
+                                ));
+                            }
+                            if col_last > EXCEL_MAX_COLUMN_INDEX {
+                                return Err(OmError::invalid_argument(
+                                    "Range.PasteSpecial destination overflows worksheet columns",
+                                ));
+                            }
+                            Rect {
+                                row_first: rect.row_first,
+                                row_last,
+                                col_first: rect.col_first,
+                                col_last,
+                            }
+                        } else {
+                            if rect.height() != clipboard.rect.height()
+                                || rect.width() != clipboard.rect.width()
+                            {
+                                return Err(OmError::invalid_argument(
+                                    "Range.PasteSpecial destination must be a single cell or match the clipboard range size",
+                                ));
+                            }
+                            rect
+                        };
+
+                        let apply_paste = |destination_worksheet: &mut WorksheetData| {
+                            let mut index = 0usize;
+                            for row in target_rect.row_first..=target_rect.row_last {
+                                for col in target_rect.col_first..=target_rect.col_last {
+                                    let key = (row, col);
+                                    let source_cell = source_cells[index].as_ref();
+                                    index += 1;
+                                    let existing = destination_worksheet.cells.get(&key).cloned();
+                                    let mut next_cell =
+                                        existing.clone().unwrap_or(excel_model::CellData {
+                                            value: CellValue::Blank,
+                                            formula: None,
+                                            style_id: None,
+                                        });
+                                    match paste_type {
+                                        XL_PASTE_VALUES => {
+                                            next_cell.value = source_cell
+                                                .map(|cell| cell.value.clone())
+                                                .unwrap_or(CellValue::Blank);
+                                            next_cell.formula = None;
+                                        }
+                                        XL_PASTE_FORMULAS => {
+                                            next_cell.value = source_cell
+                                                .map(|cell| cell.value.clone())
+                                                .unwrap_or(CellValue::Blank);
+                                            next_cell.formula =
+                                                source_cell.and_then(|cell| cell.formula.clone());
+                                        }
+                                        XL_PASTE_FORMATS => {
+                                            next_cell.style_id =
+                                                source_cell.and_then(|cell| cell.style_id);
+                                        }
+                                        _ => unreachable!("unsupported paste type was rejected"),
+                                    }
+                                    if matches!(next_cell.value, CellValue::Blank)
+                                        && next_cell.formula.is_none()
+                                        && next_cell.style_id.is_none()
+                                    {
+                                        if existing.is_some() {
+                                            destination_worksheet.cells.remove(&key);
+                                            destination_worksheet.dirty = true;
+                                            destination_worksheet.dirty_cells.insert(key);
+                                        }
+                                    } else if existing.as_ref() != Some(&next_cell) {
+                                        destination_worksheet.cells.insert(key, next_cell);
+                                        destination_worksheet.dirty = true;
+                                        destination_worksheet.dirty_cells.insert(key);
+                                    }
+                                }
+                            }
+                        };
+                        let clear_source =
+                            |source_worksheet: &mut WorksheetData, skip_target_overlap: bool| {
+                                for row in clipboard.rect.row_first..=clipboard.rect.row_last {
+                                    for col in clipboard.rect.col_first..=clipboard.rect.col_last {
+                                        if skip_target_overlap
+                                            && (target_rect.row_first..=target_rect.row_last)
+                                                .contains(&row)
+                                            && (target_rect.col_first..=target_rect.col_last)
+                                                .contains(&col)
+                                        {
+                                            continue;
+                                        }
+                                        let key = (row, col);
+                                        match source_worksheet.cells.get_mut(&key) {
+                                            Some(existing) if existing.style_id.is_some() => {
+                                                if existing.value != CellValue::Blank
+                                                    || existing.formula.is_some()
+                                                {
+                                                    existing.value = CellValue::Blank;
+                                                    existing.formula = None;
+                                                    source_worksheet.dirty = true;
+                                                    source_worksheet.dirty_cells.insert(key);
+                                                }
+                                            }
+                                            Some(_) => {
+                                                source_worksheet.cells.remove(&key);
+                                                source_worksheet.dirty = true;
+                                                source_worksheet.dirty_cells.insert(key);
+                                            }
+                                            None => {}
+                                        }
+                                    }
+                                }
+                            };
+
+                        if workbook == clipboard.workbook {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            {
+                                let destination_worksheet = runtime
+                                    .loaded
+                                    .state
+                                    .worksheet_data_for_sheet_mut(sheet_id)?;
+                                apply_paste(destination_worksheet);
+                            }
+                            if clipboard.mode == XL_CUT {
+                                let source_worksheet = runtime
+                                    .loaded
+                                    .state
+                                    .worksheet_data_for_sheet_mut(clipboard.sheet_id)?;
+                                clear_source(source_worksheet, sheet_id == clipboard.sheet_id);
+                            }
+                        } else {
+                            if self.runtime_workbook(workbook)?.read_only
+                                || (clipboard.mode == XL_CUT
+                                    && self.runtime_workbook(clipboard.workbook)?.read_only)
+                            {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            {
+                                let destination_runtime = self.runtime_workbook_mut(workbook)?;
+                                let destination_worksheet = destination_runtime
+                                    .loaded
+                                    .state
+                                    .worksheet_data_for_sheet_mut(sheet_id)?;
+                                apply_paste(destination_worksheet);
+                            }
+                            if clipboard.mode == XL_CUT {
+                                let source_runtime =
+                                    self.runtime_workbook_mut(clipboard.workbook)?;
+                                let source_worksheet = source_runtime
+                                    .loaded
+                                    .state
+                                    .worksheet_data_for_sheet_mut(clipboard.sheet_id)?;
+                                clear_source(source_worksheet, false);
+                            }
+                        }
+
                         match clipboard.mode {
-                            XL_COPY => self.dispatch_invoke(
-                                source.0,
-                                "Copy",
-                                &[OmValue::Object(destination.0)],
-                            ),
-                            XL_CUT => self.dispatch_invoke(
-                                source.0,
-                                "Cut",
-                                &[OmValue::Object(destination.0)],
-                            ),
+                            XL_COPY | XL_CUT => {
+                                self.cut_copy_mode = None;
+                                self.clipboard = None;
+                                Ok(OmValue::Empty)
+                            }
                             _ => Err(OmError::invalid_state(
                                 "Range.PasteSpecial clipboard mode is invalid",
                             )),
@@ -15084,6 +15333,147 @@ mod tests {
                 .expect_err("Range.PasteSpecial should reject empty clipboard")
                 .code,
             OmErrorCode::InvalidState
+        );
+    }
+
+    #[test]
+    fn range_paste_special_supports_values_formulas_and_formats() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source_formula = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Range(B1)"),
+        );
+        let values_destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1".to_string())])
+                .expect("Range(D1)"),
+        );
+        let formulas_destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E1".to_string())])
+                .expect("Range(E1)"),
+        );
+        let formats_destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("F1".to_string())])
+                .expect("Range(F1)"),
+        );
+        let sheet_id = runtime
+            .runtime_workbook(workbook)
+            .expect("runtime workbook")
+            .loaded
+            .state
+            .worksheets
+            .first()
+            .expect("worksheet")
+            .id;
+        runtime
+            .runtime_workbook_mut(workbook)
+            .expect("runtime workbook mut")
+            .loaded
+            .state
+            .worksheet_data_for_sheet_mut(sheet_id)
+            .expect("worksheet data")
+            .cells
+            .get_mut(&(1, 2))
+            .expect("B1")
+            .style_id = Some(StyleId(7));
+
+        runtime
+            .dispatch_invoke(source_formula, "Copy", &[])
+            .expect("Range.Copy before PasteSpecial values");
+        runtime
+            .dispatch_invoke(
+                values_destination,
+                "PasteSpecial",
+                &[OmValue::Number(f64::from(super::XL_PASTE_VALUES))],
+            )
+            .expect("Range.PasteSpecial xlPasteValues");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(values_destination, "Value", &[])
+                    .expect("D1 Value after xlPasteValues")
+            ),
+            "SHARED"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(values_destination, "HasFormula", &[])
+                .expect("D1 HasFormula after xlPasteValues"),
+            OmValue::Bool(false)
+        );
+
+        runtime
+            .dispatch_invoke(source_formula, "Copy", &[])
+            .expect("Range.Copy before PasteSpecial formulas");
+        runtime
+            .dispatch_invoke(
+                formulas_destination,
+                "PasteSpecial",
+                &[OmValue::Number(f64::from(super::XL_PASTE_FORMULAS))],
+            )
+            .expect("Range.PasteSpecial xlPasteFormulas");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(formulas_destination, "Formula", &[])
+                    .expect("E1 Formula after xlPasteFormulas")
+            ),
+            r#"=UPPER("shared")"#
+        );
+
+        runtime
+            .dispatch_invoke(source_formula, "Copy", &[])
+            .expect("Range.Copy before PasteSpecial formats");
+        runtime
+            .dispatch_invoke(
+                formats_destination,
+                "PasteSpecial",
+                &[OmValue::Number(f64::from(super::XL_PASTE_FORMATS))],
+            )
+            .expect("Range.PasteSpecial xlPasteFormats");
+        assert_eq!(
+            runtime
+                .dispatch_get(formats_destination, "Value", &[])
+                .expect("F1 Value after xlPasteFormats"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(formats_destination, "Formula", &[])
+                .expect("F1 Formula after xlPasteFormats"),
+            OmValue::Empty
+        );
+        let runtime_workbook = runtime
+            .runtime_workbook(workbook)
+            .expect("runtime workbook after PasteSpecial formats");
+        let worksheet = runtime_workbook
+            .loaded
+            .state
+            .worksheet_data_for_sheet(sheet_id)
+            .expect("worksheet data after PasteSpecial formats");
+        assert_eq!(
+            worksheet
+                .cells
+                .get(&(1, 6))
+                .expect("F1 style-only cell")
+                .style_id,
+            Some(StyleId(7))
         );
     }
 
