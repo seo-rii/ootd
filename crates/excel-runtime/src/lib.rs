@@ -2,7 +2,7 @@ use excel_model::{WorkbookState, WorksheetData};
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
 use office_common::{
-    CellValue, ExcelProfile, FileFormat, FormulaSource, GetRangeValuesSpec, LoadOptions,
+    CellError, CellValue, ExcelProfile, FileFormat, FormulaSource, GetRangeValuesSpec, LoadOptions,
     ObjectHandle, OmArray, OmError, OmErrorCode, OmResult, OmValue, OpaquePart, OpenWorkbookSpec,
     RangeHandle, RangeRef, Rect, SaveOptions, SaveWorkbookSpec, SetRangeValuesSpec, SheetId,
     SheetVisibility, WorkbookHandle, WorkbookId, WorkbookModel, WorksheetHandle, WorksheetModel,
@@ -478,6 +478,86 @@ impl ExcelRuntime {
             .loaded
             .state
             .set_range_formulas(&spec.range, &spec.values)
+    }
+
+    fn calculate_all_open_workbooks(&mut self) -> OmResult<()> {
+        let workbooks = self
+            .workbooks
+            .keys()
+            .copied()
+            .map(|handle| WorkbookHandle(ObjectHandle(handle)))
+            .collect::<Vec<_>>();
+        for workbook in workbooks {
+            self.calculate_workbook_formulas(workbook)?;
+        }
+        Ok(())
+    }
+
+    fn calculate_workbook_formulas(&mut self, workbook: WorkbookHandle) -> OmResult<()> {
+        let sheet_ids = self
+            .runtime_workbook(workbook)?
+            .loaded
+            .state
+            .worksheets
+            .iter()
+            .map(|worksheet| worksheet.id)
+            .collect::<Vec<_>>();
+        for sheet_id in sheet_ids {
+            self.calculate_sheet_formulas(workbook, sheet_id, None)?;
+        }
+        Ok(())
+    }
+
+    fn calculate_sheet_formulas(
+        &mut self,
+        workbook: WorkbookHandle,
+        sheet_id: SheetId,
+        scope: Option<Rect>,
+    ) -> OmResult<()> {
+        let snapshot = self.runtime_workbook(workbook)?.loaded.state.clone();
+        let worksheet = snapshot.worksheet_data_for_sheet(sheet_id)?;
+        let formula_cells = worksheet
+            .cells
+            .iter()
+            .filter_map(|(&(row, col), cell)| {
+                if cell.formula.is_some()
+                    && scope.is_none_or(|rect| {
+                        (rect.row_first..=rect.row_last).contains(&row)
+                            && (rect.col_first..=rect.col_last).contains(&col)
+                    })
+                {
+                    Some((row, col))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        if formula_cells.is_empty() {
+            return Ok(());
+        }
+
+        let mut updates = Vec::with_capacity(formula_cells.len());
+        for (row, col) in formula_cells {
+            let mut evaluator = FormulaEvaluator::new(&snapshot);
+            if let Some(value) = evaluator.evaluate_formula_cell(sheet_id, row, col) {
+                updates.push(((row, col), value));
+            }
+        }
+
+        if updates.is_empty() {
+            return Ok(());
+        }
+        let worksheet = self
+            .runtime_workbook_mut(workbook)?
+            .loaded
+            .state
+            .worksheet_data_for_sheet_mut(sheet_id)?;
+        for ((row, col), value) in updates {
+            if let Some(cell) = worksheet.cells.get_mut(&(row, col)) {
+                cell.value = value;
+            }
+        }
+        Ok(())
     }
 
     pub fn dispatch_get(
@@ -2911,6 +2991,7 @@ impl ExcelRuntime {
                                 "Range.Calculate does not accept arguments",
                             ));
                         }
+                        self.calculate_sheet_formulas(workbook, sheet_id, Some(rect))?;
                         Ok(OmValue::Empty)
                     }
                     "ClearContents" => {
@@ -4579,6 +4660,7 @@ impl ExcelRuntime {
                         "Application.Calculate does not accept arguments",
                     ));
                 }
+                self.calculate_all_open_workbooks()?;
                 Ok(OmValue::Empty)
             }
             "CalculateFull" => {
@@ -4587,6 +4669,7 @@ impl ExcelRuntime {
                         "Application.CalculateFull does not accept arguments",
                     ));
                 }
+                self.calculate_all_open_workbooks()?;
                 Ok(OmValue::Empty)
             }
             "CalculateFullRebuild" => {
@@ -4605,6 +4688,7 @@ impl ExcelRuntime {
                     if self.invalidate_workbook_calc_chain(workbook)? {
                         self.runtime_workbook_mut(workbook)?.dirty = true;
                     }
+                    self.calculate_workbook_formulas(workbook)?;
                 }
                 Ok(OmValue::Empty)
             }
@@ -6377,6 +6461,7 @@ impl ExcelRuntime {
                         "Worksheet.Calculate does not accept arguments",
                     ));
                 }
+                self.calculate_sheet_formulas(workbook, sheet_id, None)?;
                 Ok(OmValue::Empty)
             }
             "Cells" => {
@@ -8462,6 +8547,366 @@ fn coerce_optional_reference_style_arg(value: &OmValue) -> OmResult<RangeAddress
         _ => Err(OmError::type_mismatch(
             "Range.Address ReferenceStyle expects a numeric XlReferenceStyle value when provided",
         )),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormulaEvalError {
+    Unsupported,
+    Div0,
+    Value,
+    Ref,
+    Name,
+    Calc,
+}
+
+impl FormulaEvalError {
+    fn into_cell_value(self) -> Option<CellValue> {
+        match self {
+            FormulaEvalError::Unsupported => None,
+            FormulaEvalError::Div0 => Some(CellValue::Error(CellError::Div0)),
+            FormulaEvalError::Value => Some(CellValue::Error(CellError::Value)),
+            FormulaEvalError::Ref => Some(CellValue::Error(CellError::Ref)),
+            FormulaEvalError::Name => Some(CellValue::Error(CellError::Name)),
+            FormulaEvalError::Calc => Some(CellValue::Error(CellError::Calc)),
+        }
+    }
+}
+
+struct FormulaEvaluator<'a> {
+    state: &'a WorkbookState,
+    visiting: BTreeSet<(SheetId, u32, u32)>,
+}
+
+impl<'a> FormulaEvaluator<'a> {
+    fn new(state: &'a WorkbookState) -> Self {
+        Self {
+            state,
+            visiting: BTreeSet::new(),
+        }
+    }
+
+    fn evaluate_formula_cell(
+        &mut self,
+        sheet_id: SheetId,
+        row: u32,
+        col: u32,
+    ) -> Option<CellValue> {
+        match self.evaluate_cell(sheet_id, row, col) {
+            Ok(value) => Some(value),
+            Err(error) => error.into_cell_value(),
+        }
+    }
+
+    fn evaluate_cell(
+        &mut self,
+        sheet_id: SheetId,
+        row: u32,
+        col: u32,
+    ) -> Result<CellValue, FormulaEvalError> {
+        let Some(cell) = self
+            .state
+            .worksheet_data
+            .get(&sheet_id)
+            .and_then(|worksheet| worksheet.cells.get(&(row, col)))
+        else {
+            return Ok(CellValue::Blank);
+        };
+        let Some(formula) = cell.formula.as_ref() else {
+            return Ok(cell.value.clone());
+        };
+        if !self.visiting.insert((sheet_id, row, col)) {
+            return Err(FormulaEvalError::Calc);
+        }
+        let formula_text = if formula.is_r1c1 {
+            convert_formula_r1c1_to_a1(&formula.text, row, col)
+        } else {
+            formula.text.clone()
+        };
+        let result = FormulaParser::new(&formula_text, self, sheet_id)
+            .parse_formula()
+            .map(CellValue::Number);
+        self.visiting.remove(&(sheet_id, row, col));
+        result
+    }
+
+    fn numeric_cell_value(
+        &mut self,
+        sheet_id: SheetId,
+        row: u32,
+        col: u32,
+    ) -> Result<f64, FormulaEvalError> {
+        match self.evaluate_cell(sheet_id, row, col) {
+            Ok(CellValue::Blank) => Ok(0.0),
+            Ok(CellValue::Number(number)) => Ok(number),
+            Ok(CellValue::Bool(value)) => Ok(if value { 1.0 } else { 0.0 }),
+            Ok(CellValue::Text(_)) => Err(FormulaEvalError::Value),
+            Ok(CellValue::Error(error)) => Err(match error {
+                CellError::Div0 => FormulaEvalError::Div0,
+                CellError::Ref => FormulaEvalError::Ref,
+                CellError::Name => FormulaEvalError::Name,
+                CellError::Calc => FormulaEvalError::Calc,
+                _ => FormulaEvalError::Value,
+            }),
+            Err(FormulaEvalError::Unsupported) => self
+                .state
+                .worksheet_data
+                .get(&sheet_id)
+                .and_then(|worksheet| worksheet.cells.get(&(row, col)))
+                .map(|cell| match &cell.value {
+                    CellValue::Blank => Ok(0.0),
+                    CellValue::Number(number) => Ok(*number),
+                    CellValue::Bool(value) => Ok(if *value { 1.0 } else { 0.0 }),
+                    CellValue::Text(_) => Err(FormulaEvalError::Value),
+                    CellValue::Error(CellError::Div0) => Err(FormulaEvalError::Div0),
+                    CellValue::Error(CellError::Ref) => Err(FormulaEvalError::Ref),
+                    CellValue::Error(CellError::Name) => Err(FormulaEvalError::Name),
+                    CellValue::Error(CellError::Calc) => Err(FormulaEvalError::Calc),
+                    CellValue::Error(_) => Err(FormulaEvalError::Value),
+                })
+                .unwrap_or(Ok(0.0)),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn sum_rect(&mut self, sheet_id: SheetId, rect: Rect) -> Result<f64, FormulaEvalError> {
+        let Some(worksheet) = self.state.worksheet_data.get(&sheet_id) else {
+            return Err(FormulaEvalError::Ref);
+        };
+        let keys = worksheet
+            .cells
+            .keys()
+            .copied()
+            .filter(|(row, col)| {
+                (rect.row_first..=rect.row_last).contains(row)
+                    && (rect.col_first..=rect.col_last).contains(col)
+            })
+            .collect::<Vec<_>>();
+        let mut total = 0.0;
+        for (row, col) in keys {
+            total += self.numeric_cell_value(sheet_id, row, col)?;
+        }
+        Ok(total)
+    }
+}
+
+struct FormulaParser<'a, 'b, 'state> {
+    input: &'a str,
+    index: usize,
+    evaluator: &'b mut FormulaEvaluator<'state>,
+    sheet_id: SheetId,
+}
+
+impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
+    fn new(input: &'a str, evaluator: &'b mut FormulaEvaluator<'state>, sheet_id: SheetId) -> Self {
+        Self {
+            input: input.trim().strip_prefix('=').unwrap_or(input.trim()),
+            index: 0,
+            evaluator,
+            sheet_id,
+        }
+    }
+
+    fn parse_formula(&mut self) -> Result<f64, FormulaEvalError> {
+        let value = self.parse_expression()?;
+        self.skip_whitespace();
+        if self.index == self.input.len() {
+            Ok(value)
+        } else {
+            Err(FormulaEvalError::Unsupported)
+        }
+    }
+
+    fn parse_expression(&mut self) -> Result<f64, FormulaEvalError> {
+        let mut value = self.parse_term()?;
+        loop {
+            self.skip_whitespace();
+            if self.consume_char('+') {
+                value += self.parse_term()?;
+            } else if self.consume_char('-') {
+                value -= self.parse_term()?;
+            } else {
+                return Ok(value);
+            }
+        }
+    }
+
+    fn parse_term(&mut self) -> Result<f64, FormulaEvalError> {
+        let mut value = self.parse_factor()?;
+        loop {
+            self.skip_whitespace();
+            if self.consume_char('*') {
+                value *= self.parse_factor()?;
+            } else if self.consume_char('/') {
+                let divisor = self.parse_factor()?;
+                if divisor == 0.0 {
+                    return Err(FormulaEvalError::Div0);
+                }
+                value /= divisor;
+            } else {
+                return Ok(value);
+            }
+        }
+    }
+
+    fn parse_factor(&mut self) -> Result<f64, FormulaEvalError> {
+        self.skip_whitespace();
+        if self.consume_char('+') {
+            return self.parse_factor();
+        }
+        if self.consume_char('-') {
+            return Ok(-self.parse_factor()?);
+        }
+        if self.consume_char('(') {
+            let value = self.parse_expression()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return Ok(value);
+        }
+        if let Some(number) = self.parse_number()? {
+            return Ok(number);
+        }
+        if let Some((rect, next_index)) = self.try_parse_reference() {
+            self.index = next_index;
+            if rect.row_first == rect.row_last && rect.col_first == rect.col_last {
+                return self.evaluator.numeric_cell_value(
+                    self.sheet_id,
+                    rect.row_first,
+                    rect.col_first,
+                );
+            }
+            return Err(FormulaEvalError::Value);
+        }
+        if let Some(identifier) = self.parse_identifier() {
+            self.skip_whitespace();
+            if self.consume_char('(') {
+                return self.parse_function(identifier.as_str());
+            }
+            return Err(FormulaEvalError::Name);
+        }
+        Err(FormulaEvalError::Unsupported)
+    }
+
+    fn parse_function(&mut self, name: &str) -> Result<f64, FormulaEvalError> {
+        if !name.eq_ignore_ascii_case("SUM") {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let mut total = 0.0;
+        loop {
+            self.skip_whitespace();
+            if self.consume_char(')') {
+                return Ok(total);
+            }
+            total += self.parse_sum_argument()?;
+            self.skip_whitespace();
+            if self.consume_char(',') {
+                continue;
+            }
+            if self.consume_char(')') {
+                return Ok(total);
+            }
+            return Err(FormulaEvalError::Unsupported);
+        }
+    }
+
+    fn parse_sum_argument(&mut self) -> Result<f64, FormulaEvalError> {
+        let checkpoint = self.index;
+        if let Some((rect, next_index)) = self.try_parse_reference() {
+            self.index = next_index;
+            self.skip_whitespace();
+            if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
+                return self.evaluator.sum_rect(self.sheet_id, rect);
+            }
+        }
+        self.index = checkpoint;
+        self.parse_expression()
+    }
+
+    fn parse_number(&mut self) -> Result<Option<f64>, FormulaEvalError> {
+        let start = self.index;
+        let mut saw_digit = false;
+        while let Some(ch) = self.peek_char() {
+            if ch.is_ascii_digit() {
+                saw_digit = true;
+                self.index += ch.len_utf8();
+            } else if ch == '.' {
+                self.index += ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+        if !saw_digit {
+            self.index = start;
+            return Ok(None);
+        }
+        let number = self.input[start..self.index]
+            .parse::<f64>()
+            .map_err(|_| FormulaEvalError::Value)?;
+        Ok(Some(number))
+    }
+
+    fn parse_identifier(&mut self) -> Option<String> {
+        let start = self.index;
+        while let Some(ch) = self.peek_char() {
+            if ch.is_ascii_alphabetic() || ch == '_' || ch == '.' {
+                self.index += ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+        (self.index > start).then(|| self.input[start..self.index].to_string())
+    }
+
+    fn try_parse_reference(&self) -> Option<(Rect, usize)> {
+        let start = self.index;
+        let mut cursor = start;
+        let mut saw_reference_char = false;
+        while let Some(ch) = self.input[cursor..].chars().next() {
+            if ch.is_ascii_alphanumeric() || ch == '$' || ch == ':' {
+                saw_reference_char = true;
+                cursor += ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+        if !saw_reference_char {
+            return None;
+        }
+        let next_is_boundary = self.input[cursor..]
+            .chars()
+            .next()
+            .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.');
+        if !next_is_boundary {
+            return None;
+        }
+        let token = &self.input[start..cursor];
+        let rect = parse_rect_a1(token).ok()?;
+        Some((rect, cursor))
+    }
+
+    fn skip_whitespace(&mut self) {
+        while let Some(ch) = self.peek_char() {
+            if ch.is_whitespace() {
+                self.index += ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn consume_char(&mut self, expected: char) -> bool {
+        if self.peek_char() == Some(expected) {
+            self.index += expected.len_utf8();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn peek_char(&self) -> Option<char> {
+        self.input[self.index..].chars().next()
     }
 }
 
@@ -10619,6 +11064,115 @@ mod tests {
     }
 
     #[test]
+    fn application_calculate_updates_basic_formula_cached_values() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let a1_a2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A2".to_string())])
+                .expect("Range(A1:A2)"),
+        );
+        let b1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Range(B1)"),
+        );
+        let b2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B2".to_string())])
+                .expect("Range(B2)"),
+        );
+        let c1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1".to_string())])
+                .expect("Range(C1)"),
+        );
+
+        runtime
+            .dispatch_set(
+                a1_a2,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(2, 1, vec![OmValue::Number(2.0), OmValue::Number(3.0)])
+                        .expect("values"),
+                ),
+                &[],
+            )
+            .expect("set source values");
+        runtime
+            .dispatch_set(b1, "Formula", OmValue::Text("=A1+A2*4".to_string()), &[])
+            .expect("set B1 Formula");
+        runtime
+            .dispatch_set(
+                b2,
+                "Formula",
+                OmValue::Text("=SUM(A1:A2, 5)".to_string()),
+                &[],
+            )
+            .expect("set B2 Formula");
+        runtime
+            .dispatch_set(
+                c1,
+                "FormulaR1C1",
+                OmValue::Text("=RC[-2]+R[1]C[-2]".to_string()),
+                &[],
+            )
+            .expect("set C1 FormulaR1C1");
+
+        assert_eq!(
+            runtime
+                .dispatch_get(b1, "Value2", &[])
+                .expect("B1 Value2 before Calculate"),
+            OmValue::Empty
+        );
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(b1, "Value2", &[])
+                    .expect("B1 Value2 after Calculate")
+            ),
+            14.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(b2, "Value2", &[])
+                    .expect("B2 Value2 after Calculate")
+            ),
+            10.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(c1, "Value2", &[])
+                    .expect("C1 Value2 after Calculate")
+            ),
+            5.0
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved remains dirty after formula edits")
+        ));
+    }
+
+    #[test]
     fn application_calculate_full_is_noop_and_preserves_selection_and_saved_state() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -12439,6 +12993,68 @@ mod tests {
                 .expect_err("Range.Calculate args should be rejected")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn range_calculate_updates_only_formulas_inside_target_range() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let a1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        let b1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Range(B1)"),
+        );
+        let c1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1".to_string())])
+                .expect("Range(C1)"),
+        );
+
+        runtime
+            .dispatch_set(a1, "Value2", OmValue::Number(6.0), &[])
+            .expect("set A1");
+        runtime
+            .dispatch_set(b1, "Formula", OmValue::Text("=A1+1".to_string()), &[])
+            .expect("set B1 Formula");
+        runtime
+            .dispatch_set(c1, "Formula", OmValue::Text("=A1+2".to_string()), &[])
+            .expect("set C1 Formula");
+
+        runtime
+            .dispatch_invoke(b1, "Calculate", &[])
+            .expect("B1.Calculate");
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(b1, "Value2", &[])
+                    .expect("B1 Value2 after Calculate")
+            ),
+            7.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(c1, "Value2", &[])
+                .expect("C1 Value2 without Calculate"),
+            OmValue::Empty
         );
     }
 
