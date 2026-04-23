@@ -3737,6 +3737,14 @@ impl ExcelRuntime {
                 }
                 Ok(OmValue::Empty)
             }
+            "Calculate" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.Calculate does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Empty)
+            }
             "CalculateFullRebuild" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(
@@ -8495,6 +8503,62 @@ mod tests {
             runtime
                 .dispatch_invoke(application, "CalculateFullRebuild", &[OmValue::Bool(true)],)
                 .expect_err("CalculateFullRebuild arguments should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn application_calculate_is_noop_and_preserves_selection_and_saved_state() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_calc_chain_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open calc chain workbook");
+        let application = runtime.root_application();
+        let selection_before = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection before calculate"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(application, "Calculate", &[])
+                .expect("Application.Calculate"),
+            OmValue::Empty
+        ));
+
+        let selection_after = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after calculate"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection_before, "Address", &[])
+                    .expect("Selection before calculate address")
+            ),
+            expect_text(
+                runtime
+                    .dispatch_get(selection_after, "Address", &[])
+                    .expect("Selection after calculate address")
+            )
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after Application.Calculate")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(application, "Calculate", &[OmValue::Missing])
+                .expect_err("Application.Calculate args should be rejected")
                 .code,
             OmErrorCode::InvalidArgument
         );
