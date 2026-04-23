@@ -47,7 +47,9 @@ const XL_CUT: i32 = 2;
 const XL_PASTE_ALL: i32 = -4104;
 const XL_PASTE_FORMATS: i32 = -4122;
 const XL_PASTE_FORMULAS: i32 = -4123;
+const XL_PASTE_FORMULAS_AND_NUMBER_FORMATS: i32 = 11;
 const XL_PASTE_VALUES: i32 = -4163;
+const XL_PASTE_VALUES_AND_NUMBER_FORMATS: i32 = 12;
 const XL_PASTE_SPECIAL_OPERATION_NONE: i32 = -4142;
 const XL_PASTE_SPECIAL_OPERATION_ADD: i32 = 2;
 const XL_PASTE_SPECIAL_OPERATION_SUBTRACT: i32 = 3;
@@ -2098,8 +2100,12 @@ impl ExcelRuntime {
                                     ));
                                 }
                                 match *paste_type as i32 {
-                                    XL_PASTE_ALL | XL_PASTE_VALUES | XL_PASTE_FORMULAS
-                                    | XL_PASTE_FORMATS => *paste_type as i32,
+                                    XL_PASTE_ALL
+                                    | XL_PASTE_VALUES
+                                    | XL_PASTE_FORMULAS
+                                    | XL_PASTE_FORMATS
+                                    | XL_PASTE_VALUES_AND_NUMBER_FORMATS
+                                    | XL_PASTE_FORMULAS_AND_NUMBER_FORMATS => *paste_type as i32,
                                     other => {
                                         return Err(OmError::unsupported(format!(
                                             "Range.PasteSpecial Paste {other} is not implemented",
@@ -2147,10 +2153,13 @@ impl ExcelRuntime {
                             }
                         };
                         if operation != XL_PASTE_SPECIAL_OPERATION_NONE
-                            && !matches!(paste_type, XL_PASTE_ALL | XL_PASTE_VALUES)
+                            && !matches!(
+                                paste_type,
+                                XL_PASTE_ALL | XL_PASTE_VALUES | XL_PASTE_VALUES_AND_NUMBER_FORMATS
+                            )
                         {
                             return Err(OmError::unsupported(
-                                "Range.PasteSpecial Operation currently supports xlPasteAll and xlPasteValues",
+                                "Range.PasteSpecial Operation currently supports xlPasteAll, xlPasteValues, and xlPasteValuesAndNumberFormats",
                             ));
                         }
                         let skip_blanks = match args.get(2) {
@@ -2292,7 +2301,10 @@ impl ExcelRuntime {
                                                     && cell.formula.is_none()
                                                     && cell.style_id.is_none()
                                             }),
-                                            XL_PASTE_VALUES | XL_PASTE_FORMULAS => source_cell
+                                            XL_PASTE_VALUES
+                                            | XL_PASTE_FORMULAS
+                                            | XL_PASTE_VALUES_AND_NUMBER_FORMATS
+                                            | XL_PASTE_FORMULAS_AND_NUMBER_FORMATS => source_cell
                                                 .is_none_or(|cell| {
                                                     cell.value == CellValue::Blank
                                                         && cell.formula.is_none()
@@ -2315,7 +2327,9 @@ impl ExcelRuntime {
                                                 style_id: None,
                                             });
                                         match paste_type {
-                                            XL_PASTE_ALL | XL_PASTE_VALUES => {
+                                            XL_PASTE_ALL
+                                            | XL_PASTE_VALUES
+                                            | XL_PASTE_VALUES_AND_NUMBER_FORMATS => {
                                                 if operation == XL_PASTE_SPECIAL_OPERATION_NONE {
                                                     if paste_type == XL_PASTE_ALL {
                                                         next_cell = source_cell.cloned().unwrap_or(
@@ -2330,6 +2344,12 @@ impl ExcelRuntime {
                                                             .map(|cell| cell.value.clone())
                                                             .unwrap_or(CellValue::Blank);
                                                         next_cell.formula = None;
+                                                        if paste_type
+                                                            == XL_PASTE_VALUES_AND_NUMBER_FORMATS
+                                                        {
+                                                            next_cell.style_id = source_cell
+                                                                .and_then(|cell| cell.style_id);
+                                                        }
                                                     }
                                                 } else {
                                                     let source_value = source_cell
@@ -2382,18 +2402,29 @@ impl ExcelRuntime {
                                                         ),
                                                     };
                                                     next_cell.formula = None;
-                                                    if paste_type == XL_PASTE_ALL {
+                                                    if matches!(
+                                                        paste_type,
+                                                        XL_PASTE_ALL
+                                                            | XL_PASTE_VALUES_AND_NUMBER_FORMATS
+                                                    ) {
                                                         next_cell.style_id = source_cell
                                                             .and_then(|cell| cell.style_id);
                                                     }
                                                 }
                                             }
-                                            XL_PASTE_FORMULAS => {
+                                            XL_PASTE_FORMULAS
+                                            | XL_PASTE_FORMULAS_AND_NUMBER_FORMATS => {
                                                 next_cell.value = source_cell
                                                     .map(|cell| cell.value.clone())
                                                     .unwrap_or(CellValue::Blank);
                                                 next_cell.formula = source_cell
                                                     .and_then(|cell| cell.formula.clone());
+                                                if paste_type
+                                                    == XL_PASTE_FORMULAS_AND_NUMBER_FORMATS
+                                                {
+                                                    next_cell.style_id =
+                                                        source_cell.and_then(|cell| cell.style_id);
+                                                }
                                             }
                                             XL_PASTE_FORMATS => {
                                                 next_cell.style_id =
@@ -15634,6 +15665,163 @@ mod tests {
                 .expect("F1 style-only cell")
                 .style_id,
             Some(StyleId(7))
+        );
+    }
+
+    #[test]
+    fn range_paste_special_supports_number_format_paste_types() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source_value = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        let source_formula = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Range(B1)"),
+        );
+        let values_destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1".to_string())])
+                .expect("Range(D1)"),
+        );
+        let formulas_destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E1".to_string())])
+                .expect("Range(E1)"),
+        );
+        let operation_destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("F1".to_string())])
+                .expect("Range(F1)"),
+        );
+        let sheet_id = runtime
+            .runtime_workbook(workbook)
+            .expect("runtime workbook")
+            .loaded
+            .state
+            .worksheets
+            .first()
+            .expect("worksheet")
+            .id;
+        {
+            let worksheet = runtime
+                .runtime_workbook_mut(workbook)
+                .expect("runtime workbook mut")
+                .loaded
+                .state
+                .worksheet_data_for_sheet_mut(sheet_id)
+                .expect("worksheet data");
+            worksheet.cells.get_mut(&(1, 1)).expect("A1").style_id = Some(StyleId(5));
+            worksheet.cells.get_mut(&(1, 2)).expect("B1").style_id = Some(StyleId(7));
+        }
+
+        runtime
+            .dispatch_invoke(source_formula, "Copy", &[])
+            .expect("Range.Copy before xlPasteValuesAndNumberFormats");
+        runtime
+            .dispatch_invoke(
+                values_destination,
+                "PasteSpecial",
+                &[OmValue::Number(f64::from(
+                    super::XL_PASTE_VALUES_AND_NUMBER_FORMATS,
+                ))],
+            )
+            .expect("Range.PasteSpecial xlPasteValuesAndNumberFormats");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(values_destination, "Value", &[])
+                    .expect("D1 Value after xlPasteValuesAndNumberFormats")
+            ),
+            "SHARED"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(values_destination, "HasFormula", &[])
+                .expect("D1 HasFormula after xlPasteValuesAndNumberFormats"),
+            OmValue::Bool(false)
+        );
+
+        runtime
+            .dispatch_invoke(source_formula, "Copy", &[])
+            .expect("Range.Copy before xlPasteFormulasAndNumberFormats");
+        runtime
+            .dispatch_invoke(
+                formulas_destination,
+                "PasteSpecial",
+                &[OmValue::Number(f64::from(
+                    super::XL_PASTE_FORMULAS_AND_NUMBER_FORMATS,
+                ))],
+            )
+            .expect("Range.PasteSpecial xlPasteFormulasAndNumberFormats");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(formulas_destination, "Formula", &[])
+                    .expect("E1 Formula after xlPasteFormulasAndNumberFormats")
+            ),
+            r#"=UPPER("shared")"#
+        );
+
+        runtime
+            .dispatch_set(operation_destination, "Value", OmValue::Number(8.0), &[])
+            .expect("seed operation destination");
+        runtime
+            .dispatch_invoke(source_value, "Copy", &[])
+            .expect("Range.Copy before xlPasteValuesAndNumberFormats operation");
+        runtime
+            .dispatch_invoke(
+                operation_destination,
+                "PasteSpecial",
+                &[
+                    OmValue::Number(f64::from(super::XL_PASTE_VALUES_AND_NUMBER_FORMATS)),
+                    OmValue::Number(f64::from(super::XL_PASTE_SPECIAL_OPERATION_ADD)),
+                ],
+            )
+            .expect("Range.PasteSpecial xlPasteValuesAndNumberFormats operation");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(operation_destination, "Value", &[])
+                    .expect("F1 Value after xlPasteValuesAndNumberFormats operation")
+            ),
+            50.0
+        );
+
+        let runtime_workbook = runtime
+            .runtime_workbook(workbook)
+            .expect("runtime workbook after number format paste");
+        let worksheet = runtime_workbook
+            .loaded
+            .state
+            .worksheet_data_for_sheet(sheet_id)
+            .expect("worksheet data after number format paste");
+        assert_eq!(
+            worksheet.cells.get(&(1, 4)).expect("D1").style_id,
+            Some(StyleId(7))
+        );
+        assert_eq!(
+            worksheet.cells.get(&(1, 5)).expect("E1").style_id,
+            Some(StyleId(7))
+        );
+        assert_eq!(
+            worksheet.cells.get(&(1, 6)).expect("F1").style_id,
+            Some(StyleId(5))
         );
     }
 
