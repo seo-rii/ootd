@@ -1800,18 +1800,7 @@ impl ExcelRuntime {
                         ));
                     }
                     Some(OmValue::Text(reference)) => {
-                        let Some(active_workbook) = self.active_workbook else {
-                            return Err(OmError::invalid_state(
-                                "application has no active workbook",
-                            ));
-                        };
-                        let sheet_id = self.active_sheet_id(active_workbook)?;
-                        let rect = parse_rect_a1(reference).map_err(|_| {
-                            OmError::invalid_argument(
-                                "Application.Goto string references must use A1 notation",
-                            )
-                        })?;
-                        (active_workbook, sheet_id, rect)
+                        self.resolve_application_reference_text(reference)?
                     }
                     Some(OmValue::Object(handle)) => match self.runtime_object(*handle)? {
                         RuntimeObjectKind::Range {
@@ -1836,13 +1825,23 @@ impl ExcelRuntime {
                 self.set_selection(workbook, sheet_id, rect);
                 Ok(OmValue::Empty)
             }
-            "Range" => {
-                let Some(active_workbook) = self.active_workbook else {
-                    return Err(OmError::invalid_state("application has no active workbook"));
-                };
-                let sheet_id = self.active_sheet_id(active_workbook)?;
-                self.dispatch_invoke_worksheet(active_workbook, sheet_id, "Range", args)
-            }
+            "Range" => match args {
+                [OmValue::Text(reference)] => {
+                    let (workbook, sheet_id, rect) =
+                        self.resolve_application_reference_text(reference)?;
+                    self.remember_selection(workbook, sheet_id, rect);
+                    Ok(OmValue::Object(
+                        self.register_range_handle(workbook, sheet_id, rect).0,
+                    ))
+                }
+                _ => {
+                    let Some(active_workbook) = self.active_workbook else {
+                        return Err(OmError::invalid_state("application has no active workbook"));
+                    };
+                    let sheet_id = self.active_sheet_id(active_workbook)?;
+                    self.dispatch_invoke_worksheet(active_workbook, sheet_id, "Range", args)
+                }
+            },
             "Intersect" => {
                 if args.len() != 2 {
                     return Err(OmError::invalid_argument(
@@ -3811,6 +3810,57 @@ impl ExcelRuntime {
             .filter(|selection| selection.workbook == workbook)
             .map(|selection| selection.sheet_id)
             .unwrap_or(self.default_selection(workbook)?.sheet_id))
+    }
+
+    fn resolve_application_reference_text(
+        &self,
+        reference: &str,
+    ) -> OmResult<(WorkbookHandle, SheetId, Rect)> {
+        let Some(active_workbook) = self.active_workbook else {
+            return Err(OmError::invalid_state("application has no active workbook"));
+        };
+        let reference = reference.trim();
+        let (sheet_name, a1_reference) = match reference.rsplit_once('!') {
+            Some((sheet_name, a1_reference)) => {
+                let sheet_name = sheet_name.trim();
+                if sheet_name.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application string references must use A1 notation or SheetName!A1 notation",
+                    ));
+                }
+                let sheet_name = if sheet_name.starts_with('\'') {
+                    if !sheet_name.ends_with('\'') || sheet_name.len() < 2 {
+                        return Err(OmError::invalid_argument(
+                            "Application string references use unmatched worksheet quoting",
+                        ));
+                    }
+                    sheet_name[1..sheet_name.len() - 1].replace("''", "'")
+                } else {
+                    sheet_name.to_string()
+                };
+                (Some(sheet_name), a1_reference)
+            }
+            None => (None, reference),
+        };
+        let rect = parse_rect_a1(a1_reference).map_err(|_| {
+            OmError::invalid_argument(
+                "Application string references must use A1 notation or SheetName!A1 notation",
+            )
+        })?;
+        let sheet_id = match sheet_name {
+            Some(sheet_name) => self
+                .runtime_workbook(active_workbook)?
+                .loaded
+                .state
+                .worksheets
+                .iter()
+                .find(|worksheet| worksheet.name == sheet_name)
+                .map(|worksheet| worksheet.id)
+                .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?,
+            None => self.active_sheet_id(active_workbook)?,
+        };
+
+        Ok((active_workbook, sheet_id, rect))
     }
 
     fn set_selection(&mut self, workbook: WorkbookHandle, sheet_id: SheetId, rect: Rect) {
@@ -8992,6 +9042,107 @@ mod tests {
     }
 
     #[test]
+    fn application_range_accepts_sheet_qualified_string_references() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheet1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let sheet2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Add", &[])
+                .expect("Worksheets.Add Sheet2"),
+        );
+        runtime
+            .dispatch_set(sheet1, "Name", OmValue::Text("FirstSheet".to_string()), &[])
+            .expect("rename first sheet");
+        runtime
+            .dispatch_set(
+                sheet2,
+                "Name",
+                OmValue::Text("Quarter 1's Data".to_string()),
+                &[],
+            )
+            .expect("rename second sheet");
+        runtime
+            .dispatch_invoke(sheet1, "Activate", &[])
+            .expect("Worksheet.Activate");
+
+        let application = runtime.root_application();
+        let qualified_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    application,
+                    "Range",
+                    &[OmValue::Text("'Quarter 1''s Data'!C4:D5".to_string())],
+                )
+                .expect("Application.Range on quoted sheet reference"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after qualified Application.Range"),
+        );
+        let selection = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after qualified Application.Range"),
+        );
+        let range_parent = expect_object_handle(
+            runtime
+                .dispatch_get(qualified_range, "Parent", &[])
+                .expect("qualified Application.Range parent"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(qualified_range, "Address", &[])
+                    .expect("qualified Application.Range address")
+            ),
+            "$C$4:$D$5"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(range_parent, "Name", &[])
+                    .expect("qualified Application.Range parent name")
+            ),
+            "Quarter 1's Data"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("ActiveSheet after qualified Application.Range name")
+            ),
+            "Quarter 1's Data"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection, "Address", &[])
+                    .expect("Selection after qualified Application.Range address")
+            ),
+            "$C$4:$D$5"
+        );
+    }
+
+    #[test]
     fn application_intersect_returns_overlaps_without_mutating_selection() {
         let mut runtime = ExcelRuntime::new();
         let workbook1 = runtime
@@ -9945,6 +10096,112 @@ mod tests {
                 .expect_err("Application.Goto without active workbook")
                 .code,
             OmErrorCode::InvalidState
+        );
+    }
+
+    #[test]
+    fn application_goto_accepts_sheet_qualified_string_references() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheet1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let sheet2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Add", &[])
+                .expect("Worksheets.Add Sheet2"),
+        );
+        runtime
+            .dispatch_set(sheet1, "Name", OmValue::Text("Sheet One".to_string()), &[])
+            .expect("rename first sheet");
+        runtime
+            .dispatch_set(
+                sheet2,
+                "Name",
+                OmValue::Text("Detail Sheet".to_string()),
+                &[],
+            )
+            .expect("rename second sheet");
+        runtime
+            .dispatch_invoke(sheet1, "Activate", &[])
+            .expect("Worksheet.Activate");
+
+        let application = runtime.root_application();
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(
+                    application,
+                    "Goto",
+                    &[OmValue::Text("'Detail Sheet'!D5:E6".to_string())],
+                )
+                .expect("Application.Goto on qualified string reference"),
+            OmValue::Empty
+        ));
+
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after qualified Application.Goto"),
+        );
+        let active_cell = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveCell", &[])
+                .expect("ActiveCell after qualified Application.Goto"),
+        );
+        let selection = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after qualified Application.Goto"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("ActiveSheet after qualified Application.Goto name")
+            ),
+            "Detail Sheet"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection, "Address", &[])
+                    .expect("Selection after qualified Application.Goto address")
+            ),
+            "$D$5:$E$6"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_cell, "Address", &[])
+                    .expect("ActiveCell after qualified Application.Goto address")
+            ),
+            "$D$5"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    application,
+                    "Goto",
+                    &[OmValue::Text("'Missing Sheet'!A1".to_string())],
+                )
+                .expect_err("Application.Goto should reject unknown sheet names")
+                .code,
+            OmErrorCode::NotFound
         );
     }
 
