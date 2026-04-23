@@ -1900,6 +1900,35 @@
         {
           "name": "Close",
           "memberKind": "method",
+          "params": [
+            {
+              "name": "SaveChanges",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Filename",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "RouteWorkbook",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ],
           "support": "stub",
           "metadata": {
             "capture": {

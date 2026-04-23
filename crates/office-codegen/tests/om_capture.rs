@@ -1624,6 +1624,19 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|member| member.name == "Saved")
         .expect("Workbook.Saved");
     assert_eq!(workbook_saved.access, AccessMode::Readwrite);
+    let workbook_close = workbook
+        .members
+        .iter()
+        .find(|member| member.name == "Close")
+        .expect("Workbook.Close");
+    assert_eq!(workbook_close.access, AccessMode::Read);
+    assert_eq!(workbook_close.params.len(), 3);
+    assert_eq!(workbook_close.params[0].name, "SaveChanges");
+    assert!(workbook_close.params[0].optional);
+    assert_eq!(workbook_close.params[1].name, "Filename");
+    assert!(workbook_close.params[1].optional);
+    assert_eq!(workbook_close.params[2].name, "RouteWorkbook");
+    assert!(workbook_close.params[2].optional);
     let application_worksheets = application
         .members
         .iter()

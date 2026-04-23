@@ -2647,23 +2647,55 @@ impl ExcelRuntime {
                 Ok(OmValue::Empty)
             }
             "Close" => {
-                if args.len() > 1 {
+                if args.len() > 3 {
                     return Err(OmError::invalid_argument(
-                        "Workbook.Close accepts at most one save_changes argument",
+                        "Workbook.Close accepts at most SaveChanges, Filename, and RouteWorkbook arguments",
                     ));
                 }
-                let save_changes = match args {
-                    [] | [OmValue::Missing] | [OmValue::Empty] | [OmValue::Null] => false,
-                    [OmValue::Bool(save_changes)] => *save_changes,
-                    [_] => {
+                let save_changes = match args.first() {
+                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => false,
+                    Some(OmValue::Bool(save_changes)) => *save_changes,
+                    Some(_) => {
                         return Err(OmError::type_mismatch(
-                            "Workbook.Close save_changes expects a boolean when provided",
+                            "Workbook.Close SaveChanges expects a boolean when provided",
                         ));
                     }
-                    _ => unreachable!("Workbook.Close argument count already validated"),
                 };
+                let filename = match args.get(1) {
+                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => None,
+                    Some(OmValue::Text(path)) => Some(PathBuf::from(path)),
+                    Some(_) => {
+                        return Err(OmError::type_mismatch(
+                            "Workbook.Close Filename expects a string when provided",
+                        ));
+                    }
+                };
+                match args.get(2) {
+                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => {}
+                    Some(OmValue::Bool(_)) => {}
+                    Some(_) => {
+                        return Err(OmError::type_mismatch(
+                            "Workbook.Close RouteWorkbook expects a boolean when provided",
+                        ));
+                    }
+                }
                 if save_changes {
-                    let format = self.workbook_model(workbook)?.format;
+                    let filename_format = filename
+                        .as_ref()
+                        .and_then(|path| path.extension())
+                        .and_then(|value| value.to_str())
+                        .map(|value| value.to_ascii_lowercase())
+                        .and_then(|extension| match extension.as_str() {
+                            "xlsx" => Some(FileFormat::Xlsx),
+                            "xlsm" => Some(FileFormat::Xlsm),
+                            "xltx" => Some(FileFormat::Xltx),
+                            "xltm" => Some(FileFormat::Xltm),
+                            _ => None,
+                        });
+                    let format = match filename_format {
+                        Some(format) => format,
+                        None => self.workbook_model(workbook)?.format,
+                    };
                     let bytes = self.save_workbook(
                         workbook,
                         SaveWorkbookSpec {
@@ -2672,7 +2704,12 @@ impl ExcelRuntime {
                             lossless: true,
                         },
                     )?;
-                    if let Some(path) = self.runtime_workbook(workbook)?.source_path.as_ref() {
+                    let save_path = if let Some(path) = filename.as_ref() {
+                        Some(path.clone())
+                    } else {
+                        self.runtime_workbook(workbook)?.source_path.clone()
+                    };
+                    if let Some(path) = save_path.as_ref() {
                         fs::write(path, &bytes).map_err(|error| {
                             OmError::new(
                                 OmErrorCode::Io,
@@ -10733,7 +10770,7 @@ mod tests {
                 )
                 .expect_err("Close args")
                 .code,
-            OmErrorCode::InvalidArgument
+            OmErrorCode::TypeMismatch
         );
     }
 
@@ -17462,6 +17499,85 @@ mod tests {
     }
 
     #[test]
+    fn workbook_close_dispatch_with_filename_saves_target_and_closes() {
+        let mut runtime = ExcelRuntime::new();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let base_dir = std::env::temp_dir().join(format!("ootd-close-filename-{unique}"));
+        fs::create_dir_all(&base_dir).expect("create close filename dir");
+        let source_path = base_dir.join("source.xlsx");
+        let target_path = base_dir.join("target.xlsx");
+        fs::write(&source_path, synthetic_workbook_bytes()).expect("write source workbook");
+
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+        let workbook = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[OmValue::Text(source_path.to_string_lossy().into_owned())],
+                )
+                .expect("Workbooks.Open"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+
+        runtime
+            .dispatch_set(
+                active_sheet,
+                "Name",
+                OmValue::Text("ClosedAsTarget".to_string()),
+                &[],
+            )
+            .expect("rename worksheet before close");
+        runtime
+            .dispatch_invoke(
+                workbook,
+                "Close",
+                &[
+                    OmValue::Bool(true),
+                    OmValue::Text(target_path.to_string_lossy().into_owned()),
+                    OmValue::Bool(false),
+                ],
+            )
+            .expect("Workbook.Close(true, Filename, false)");
+
+        let stale_error = runtime
+            .dispatch_get(workbook, "Name", &[])
+            .expect_err("closed workbook handle should be stale");
+        assert_eq!(stale_error.code, OmErrorCode::InvalidState);
+
+        let source_reopened = ExcelRuntime::new()
+            .codec
+            .load(
+                &fs::read(&source_path).expect("read source workbook"),
+                office_common::LoadOptions::default(),
+            )
+            .expect("reload source workbook");
+        assert_eq!(source_reopened.state.worksheets[0].name, "Sheet1");
+
+        let target_reopened = ExcelRuntime::new()
+            .codec
+            .load(
+                &fs::read(&target_path).expect("read target workbook"),
+                office_common::LoadOptions::default(),
+            )
+            .expect("reload target workbook");
+        assert_eq!(target_reopened.state.worksheets[0].name, "ClosedAsTarget");
+
+        fs::remove_dir_all(&base_dir).expect("cleanup close filename dir");
+    }
+
+    #[test]
     fn workbook_close_dispatch_without_save_changes_leaves_source_file_untouched() {
         let mut runtime = ExcelRuntime::new();
         let unique = std::time::SystemTime::now()
@@ -17519,6 +17635,77 @@ mod tests {
         assert_eq!(reopened.state.worksheets[0].name, "Sheet1");
 
         fs::remove_file(&source_path).expect("cleanup source fixture");
+    }
+
+    #[test]
+    fn workbook_close_dispatch_rejects_invalid_optional_arguments_without_closing() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(workbook.0, "Close", &[OmValue::Number(1.0)])
+                .expect_err("Workbook.Close should reject non-bool SaveChanges")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbook.0,
+                    "Close",
+                    &[OmValue::Bool(true), OmValue::Number(1.0)],
+                )
+                .expect_err("Workbook.Close should reject non-text Filename")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbook.0,
+                    "Close",
+                    &[
+                        OmValue::Bool(false),
+                        OmValue::Missing,
+                        OmValue::Text("route".to_string()),
+                    ],
+                )
+                .expect_err("Workbook.Close should reject non-bool RouteWorkbook")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbook.0,
+                    "Close",
+                    &[
+                        OmValue::Bool(false),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                    ],
+                )
+                .expect_err("Workbook.Close should reject extra arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(workbook.0, "Name", &[])
+                    .expect("Workbook should remain open after argument errors")
+            ),
+            "Workbook"
+        );
     }
 
     #[test]
