@@ -21,6 +21,19 @@
       ]
     },
     {
+      "name": "XlCutCopyMode",
+      "values": [
+        {
+          "name": "xlCopy",
+          "value": 1
+        },
+        {
+          "name": "xlCut",
+          "value": 2
+        }
+      ]
+    },
+    {
       "name": "XlFileFormat",
       "values": [
         {
@@ -474,6 +487,38 @@
                 "kind": "variant",
                 "name": "Variant",
                 "aliasOf": "VARIANT"
+              }
+            }
+          }
+        },
+        {
+          "name": "CutCopyMode",
+          "memberKind": "property",
+          "access": "readwrite",
+          "returnType": {
+            "kind": "variant",
+            "name": "Variant",
+            "aliasOf": "XlCutCopyMode"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Application",
+                  "sourceMember": "CutCopyMode"
+                },
+                {
+                  "kind": "property_set",
+                  "sourceInterface": "Application",
+                  "sourceMember": "CutCopyMode"
+                }
+              ],
+              "typeInfo": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "XlCutCopyMode"
               }
             }
           }

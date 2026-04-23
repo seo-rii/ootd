@@ -73,11 +73,11 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
             .and_then(|metadata| metadata.namespace.as_deref()),
         Some("Microsoft.Office.Interop.Excel")
     );
-    assert_eq!(summary.enum_count, 3);
+    assert_eq!(summary.enum_count, 4);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 94);
-    assert_eq!(summary.stub_member_count, 94);
+    assert_eq!(summary.member_count, 95);
+    assert_eq!(summary.stub_member_count, 95);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1274,7 +1274,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|entry| entry.name == "Range")
         .expect("Range");
 
-    assert_eq!(application.member_count, 24);
+    assert_eq!(application.member_count, 25);
     assert_eq!(workbook.member_count, 17);
     assert_eq!(worksheet.member_count, 18);
     assert_eq!(range.member_count, 24);
@@ -1798,8 +1798,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 94);
-    assert_eq!(coverage.support_counts.stub, 94);
+    assert_eq!(coverage.member_count, 95);
+    assert_eq!(coverage.support_counts.stub, 95);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -1823,8 +1823,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|entry| entry.name == "Range")
         .expect("Range coverage");
 
-    assert_eq!(application_coverage.member_count, 24);
-    assert_eq!(application_coverage.support_counts.stub, 24);
+    assert_eq!(application_coverage.member_count, 25);
+    assert_eq!(application_coverage.support_counts.stub, 25);
     assert_eq!(
         application_coverage.stub_members,
         vec![
@@ -1842,6 +1842,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "ScreenUpdating".to_string(),
             "EnableEvents".to_string(),
             "StatusBar".to_string(),
+            "CutCopyMode".to_string(),
             "DisplayStatusBar".to_string(),
             "Cells".to_string(),
             "Rows".to_string(),

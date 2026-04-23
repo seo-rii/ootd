@@ -34,6 +34,8 @@ const XL_OPEN_XML_WORKBOOK_MACRO_ENABLED: i32 = 52;
 const XL_OPEN_XML_TEMPLATE_MACRO_ENABLED: i32 = 53;
 const XL_OPEN_XML_TEMPLATE: i32 = 54;
 const XL_OPEN_XML_STRICT_WORKBOOK: i32 = 61;
+const XL_COPY: i32 = 1;
+const XL_CUT: i32 = 2;
 const CONTENT_TYPES_PART_NAME: &str = "[Content_Types].xml";
 const WORKBOOK_PART_NAME: &str = "xl/workbook.xml";
 const WORKBOOK_RELS_PART_NAME: &str = "xl/_rels/workbook.xml.rels";
@@ -104,6 +106,7 @@ pub struct ExcelRuntime {
     enable_events: bool,
     status_bar: Option<String>,
     display_status_bar: bool,
+    cut_copy_mode: Option<i32>,
     next_handle: u64,
     next_object_handle: u64,
     next_created_workbook_index: u64,
@@ -133,6 +136,7 @@ impl ExcelRuntime {
             enable_events: true,
             status_bar: None,
             display_status_bar: true,
+            cut_copy_mode: None,
             next_handle: 1,
             next_object_handle: FIRST_DYNAMIC_OBJECT_HANDLE_VALUE,
             next_created_workbook_index: 1,
@@ -523,6 +527,10 @@ impl ExcelRuntime {
                             ));
                         };
                         self.display_status_bar = display_status_bar;
+                        Ok(())
+                    }
+                    "CutCopyMode" => {
+                        self.cut_copy_mode = coerce_cut_copy_mode(value)?;
                         Ok(())
                     }
                     _ => Err(OmError::unsupported(format!(
@@ -1225,6 +1233,17 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Bool(self.display_status_bar))
+            }
+            "CutCopyMode" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.CutCopyMode does not accept index arguments",
+                    ));
+                }
+                Ok(self
+                    .cut_copy_mode
+                    .map(|value| OmValue::Number(f64::from(value)))
+                    .unwrap_or(OmValue::Bool(false)))
             }
             "Cells" => {
                 let Some(active_workbook) = self.active_workbook else {
@@ -4674,6 +4693,36 @@ fn coerce_sheet_visibility(value: OmValue) -> OmResult<SheetVisibility> {
     }
 }
 
+fn coerce_cut_copy_mode(value: OmValue) -> OmResult<Option<i32>> {
+    match value {
+        OmValue::Bool(false) => Ok(None),
+        OmValue::Bool(true) => Err(OmError::invalid_argument(
+            "Application.CutCopyMode expects false, xlCopy, or xlCut",
+        )),
+        OmValue::Number(number) => {
+            if !number.is_finite()
+                || number.fract() != 0.0
+                || number < i32::MIN as f64
+                || number > i32::MAX as f64
+            {
+                return Err(OmError::invalid_argument(
+                    "Application.CutCopyMode expects an integral XlCutCopyMode value",
+                ));
+            }
+            match number as i32 {
+                XL_COPY => Ok(Some(XL_COPY)),
+                XL_CUT => Ok(Some(XL_CUT)),
+                _ => Err(OmError::invalid_argument(
+                    "Application.CutCopyMode supports xlCopy and xlCut numeric values",
+                )),
+            }
+        }
+        _ => Err(OmError::type_mismatch(
+            "Application.CutCopyMode expects false or an XlCutCopyMode numeric value",
+        )),
+    }
+}
+
 fn file_format_to_excel_value(format: FileFormat) -> i32 {
     match format {
         FileFormat::Xlsx => XL_OPEN_XML_WORKBOOK,
@@ -6932,6 +6981,95 @@ mod tests {
             runtime
                 .dispatch_get(application, "DisplayStatusBar", &[OmValue::Bool(true)])
                 .expect_err("Application.DisplayStatusBar should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn application_cut_copy_mode_dispatch_roundtrips_and_resets_with_false() {
+        let mut runtime = ExcelRuntime::new();
+        let application = runtime.root_application();
+
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[])
+                .expect("Application.CutCopyMode default")
+        ));
+
+        runtime
+            .dispatch_set(
+                application,
+                "CutCopyMode",
+                OmValue::Number(f64::from(super::XL_COPY)),
+                &[],
+            )
+            .expect("Application.CutCopyMode = xlCopy");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode after xlCopy")
+            ),
+            f64::from(super::XL_COPY)
+        );
+
+        runtime
+            .dispatch_set(
+                application,
+                "CutCopyMode",
+                OmValue::Number(f64::from(super::XL_CUT)),
+                &[],
+            )
+            .expect("Application.CutCopyMode = xlCut");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode after xlCut")
+            ),
+            f64::from(super::XL_CUT)
+        );
+
+        runtime
+            .dispatch_set(application, "CutCopyMode", OmValue::Bool(false), &[])
+            .expect("Application.CutCopyMode false reset");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after reset")
+        ));
+
+        assert_eq!(
+            runtime
+                .dispatch_set(application, "CutCopyMode", OmValue::Bool(true), &[])
+                .expect_err("Application.CutCopyMode should reject true")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(application, "CutCopyMode", OmValue::Number(3.0), &[])
+                .expect_err("Application.CutCopyMode should reject unsupported values")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    application,
+                    "CutCopyMode",
+                    OmValue::Text("copy".to_string()),
+                    &[],
+                )
+                .expect_err("Application.CutCopyMode should reject text values")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[OmValue::Bool(true)])
+                .expect_err("Application.CutCopyMode should reject index args")
                 .code,
             OmErrorCode::InvalidArgument
         );
