@@ -107,6 +107,7 @@ pub struct ExcelRuntime {
     user_name: String,
     status_bar: Option<String>,
     display_status_bar: bool,
+    display_formula_bar: bool,
     cut_copy_mode: Option<i32>,
     next_handle: u64,
     next_object_handle: u64,
@@ -138,6 +139,7 @@ impl ExcelRuntime {
             user_name: String::new(),
             status_bar: None,
             display_status_bar: true,
+            display_formula_bar: true,
             cut_copy_mode: None,
             next_handle: 1,
             next_object_handle: FIRST_DYNAMIC_OBJECT_HANDLE_VALUE,
@@ -538,6 +540,15 @@ impl ExcelRuntime {
                             ));
                         };
                         self.display_status_bar = display_status_bar;
+                        Ok(())
+                    }
+                    "DisplayFormulaBar" => {
+                        let OmValue::Bool(display_formula_bar) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Application.DisplayFormulaBar expects a boolean value",
+                            ));
+                        };
+                        self.display_formula_bar = display_formula_bar;
                         Ok(())
                     }
                     "CutCopyMode" => {
@@ -1252,6 +1263,14 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Bool(self.display_status_bar))
+            }
+            "DisplayFormulaBar" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.DisplayFormulaBar does not accept index arguments",
+                    ));
+                }
+                Ok(OmValue::Bool(self.display_formula_bar))
             }
             "CutCopyMode" => {
                 if !args.is_empty() {
@@ -7000,6 +7019,56 @@ mod tests {
             runtime
                 .dispatch_get(application, "DisplayStatusBar", &[OmValue::Bool(true)])
                 .expect_err("Application.DisplayStatusBar should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn application_display_formula_bar_dispatch_roundtrips_and_rejects_invalid_values() {
+        let mut runtime = ExcelRuntime::new();
+        let application = runtime.root_application();
+
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(application, "DisplayFormulaBar", &[])
+                .expect("Application.DisplayFormulaBar default")
+        ));
+
+        runtime
+            .dispatch_set(application, "DisplayFormulaBar", OmValue::Bool(false), &[])
+            .expect("Application.DisplayFormulaBar = false");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "DisplayFormulaBar", &[])
+                .expect("Application.DisplayFormulaBar after false")
+        ));
+
+        runtime
+            .dispatch_set(application, "DisplayFormulaBar", OmValue::Bool(true), &[])
+            .expect("Application.DisplayFormulaBar = true");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(application, "DisplayFormulaBar", &[])
+                .expect("Application.DisplayFormulaBar after true")
+        ));
+
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    application,
+                    "DisplayFormulaBar",
+                    OmValue::Text("bad".to_string()),
+                    &[]
+                )
+                .expect_err("Application.DisplayFormulaBar should reject non-bool values")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "DisplayFormulaBar", &[OmValue::Bool(true)])
+                .expect_err("Application.DisplayFormulaBar should reject index args")
                 .code,
             OmErrorCode::InvalidArgument
         );
