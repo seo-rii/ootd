@@ -8351,6 +8351,25 @@ fn parse_cell_a1(input: &str) -> OmResult<(u32, u32)> {
 }
 
 fn format_rect_address_with_flags(rect: Rect, row_absolute: bool, column_absolute: bool) -> String {
+    let spans_all_rows = rect.row_first == 1 && rect.row_last == EXCEL_MAX_ROW_INDEX;
+    let spans_all_columns = rect.col_first == 1 && rect.col_last == EXCEL_MAX_COLUMN_INDEX;
+    if spans_all_rows && !spans_all_columns {
+        let start = format_column_address(rect.col_first, column_absolute);
+        if rect.col_first == rect.col_last {
+            return format!("{start}:{start}");
+        }
+        let end = format_column_address(rect.col_last, column_absolute);
+        return format!("{start}:{end}");
+    }
+    if spans_all_columns && !spans_all_rows {
+        let start = format_row_address(rect.row_first, row_absolute);
+        if rect.row_first == rect.row_last {
+            return format!("{start}:{start}");
+        }
+        let end = format_row_address(rect.row_last, row_absolute);
+        return format!("{start}:{end}");
+    }
+
     let start = format_cell_address(
         rect.row_first,
         rect.col_first,
@@ -8366,11 +8385,24 @@ fn format_rect_address_with_flags(rect: Rect, row_absolute: bool, column_absolut
 }
 
 fn format_cell_address(row: u32, col: u32, row_absolute: bool, column_absolute: bool) -> String {
+    format!(
+        "{}{}",
+        format_column_address(col, column_absolute),
+        format_row_address(row, row_absolute)
+    )
+}
+
+fn format_column_address(col: u32, column_absolute: bool) -> String {
     let mut address = String::new();
     if column_absolute {
         address.push('$');
     }
     address.push_str(&column_to_letters(col));
+    address
+}
+
+fn format_row_address(row: u32, row_absolute: bool) -> String {
+    let mut address = String::new();
     if row_absolute {
         address.push('$');
     }
@@ -8510,28 +8542,37 @@ fn format_r1c1_reference(
     base_row: u32,
     base_col: u32,
 ) -> String {
-    let mut reference = String::new();
+    format!(
+        "{}{}",
+        format_r1c1_row_reference(row, row_absolute, base_row),
+        format_r1c1_column_reference(col, column_absolute, base_col)
+    )
+}
+
+fn format_r1c1_row_reference(row: u32, row_absolute: bool, base_row: u32) -> String {
     if row_absolute {
-        reference.push_str(&format!("R{row}"));
+        format!("R{row}")
     } else {
         let delta = i64::from(row) - i64::from(base_row);
         if delta == 0 {
-            reference.push('R');
+            "R".to_string()
         } else {
-            reference.push_str(&format!("R[{delta}]"));
+            format!("R[{delta}]")
         }
     }
+}
+
+fn format_r1c1_column_reference(col: u32, column_absolute: bool, base_col: u32) -> String {
     if column_absolute {
-        reference.push_str(&format!("C{col}"));
+        format!("C{col}")
     } else {
         let delta = i64::from(col) - i64::from(base_col);
         if delta == 0 {
-            reference.push('C');
+            "C".to_string()
         } else {
-            reference.push_str(&format!("C[{delta}]"));
+            format!("C[{delta}]")
         }
     }
-    reference
 }
 
 fn format_rect_r1c1_address_with_flags(
@@ -8541,6 +8582,25 @@ fn format_rect_r1c1_address_with_flags(
     base_row: u32,
     base_col: u32,
 ) -> String {
+    let spans_all_rows = rect.row_first == 1 && rect.row_last == EXCEL_MAX_ROW_INDEX;
+    let spans_all_columns = rect.col_first == 1 && rect.col_last == EXCEL_MAX_COLUMN_INDEX;
+    if spans_all_rows && !spans_all_columns {
+        let start = format_r1c1_column_reference(rect.col_first, column_absolute, base_col);
+        if rect.col_first == rect.col_last {
+            return start;
+        }
+        let end = format_r1c1_column_reference(rect.col_last, column_absolute, base_col);
+        return format!("{start}:{end}");
+    }
+    if spans_all_columns && !spans_all_rows {
+        let start = format_r1c1_row_reference(rect.row_first, row_absolute, base_row);
+        if rect.row_first == rect.row_last {
+            return start;
+        }
+        let end = format_r1c1_row_reference(rect.row_last, row_absolute, base_row);
+        return format!("{start}:{end}");
+    }
+
     let start = format_r1c1_reference(
         rect.row_first,
         rect.col_first,
@@ -13642,7 +13702,7 @@ mod tests {
                     .dispatch_get(entire_row, "Address", &[])
                     .expect("EntireRow.Address")
             ),
-            "$A$2:$XFD$3"
+            "$2:$3"
         );
         assert_eq!(
             expect_text(
@@ -13650,7 +13710,7 @@ mod tests {
                     .dispatch_get(entire_column, "Address", &[])
                     .expect("EntireColumn.Address")
             ),
-            "$B$1:$C$1048576"
+            "$B:$C"
         );
         assert_eq!(
             expect_number(
@@ -13770,7 +13830,7 @@ mod tests {
                     .dispatch_get(second_row, "Address", &[])
                     .expect("Rows(2).Address")
             ),
-            "$A$2:$XFD$2"
+            "$2:$2"
         );
         assert_eq!(
             expect_text(
@@ -13778,7 +13838,7 @@ mod tests {
                     .dispatch_get(rows_item, "Address", &[])
                     .expect("Rows.Item(2).Address")
             ),
-            "$A$2:$XFD$2"
+            "$2:$2"
         );
         assert_eq!(
             expect_text(
@@ -13786,7 +13846,7 @@ mod tests {
                     .dispatch_get(text_rows, "Address", &[])
                     .expect("Rows(\"2:3\").Address")
             ),
-            "$A$2:$XFD$3"
+            "$2:$3"
         );
         assert_eq!(
             expect_text(
@@ -13794,7 +13854,7 @@ mod tests {
                     .dispatch_get(second_column, "Address", &[])
                     .expect("Columns(2).Address")
             ),
-            "$B$1:$B$1048576"
+            "$B:$B"
         );
         assert_eq!(
             expect_text(
@@ -13802,7 +13862,7 @@ mod tests {
                     .dispatch_get(text_column, "Address", &[])
                     .expect("Columns(\"B\").Address")
             ),
-            "$B$1:$B$1048576"
+            "$B:$B"
         );
         assert_eq!(
             expect_text(
@@ -13810,7 +13870,7 @@ mod tests {
                     .dispatch_get(text_columns, "Address", &[])
                     .expect("Columns(\"B:C\").Address")
             ),
-            "$B$1:$C$1048576"
+            "$B:$C"
         );
         assert_eq!(
             expect_text(
@@ -13818,7 +13878,7 @@ mod tests {
                     .dispatch_get(columns_item, "Address", &[])
                     .expect("Columns.Item(2).Address")
             ),
-            "$B$1:$B$1048576"
+            "$B:$B"
         );
         assert_eq!(
             runtime
@@ -14908,7 +14968,23 @@ mod tests {
                     .dispatch_get(whole_columns, "Address", &[])
                     .expect("Range(B:D) Address")
             ),
-            "$B$1:$D$1048576"
+            "$B:$D"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        whole_columns,
+                        "Address",
+                        &[
+                            OmValue::Missing,
+                            OmValue::Missing,
+                            OmValue::Number(XL_R1C1 as f64)
+                        ],
+                    )
+                    .expect("Range(B:D) R1C1 Address")
+            ),
+            "C2:C4"
         );
         assert_eq!(
             expect_text(
@@ -14916,7 +14992,23 @@ mod tests {
                     .dispatch_get(whole_rows, "Address", &[])
                     .expect("Range(2:4) Address")
             ),
-            "$A$2:$XFD$4"
+            "$2:$4"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        whole_rows,
+                        "Address",
+                        &[
+                            OmValue::Missing,
+                            OmValue::Missing,
+                            OmValue::Number(XL_R1C1 as f64)
+                        ],
+                    )
+                    .expect("Range(2:4) R1C1 Address")
+            ),
+            "R2:R4"
         );
         assert_eq!(
             expect_text(
@@ -14924,7 +15016,7 @@ mod tests {
                     .dispatch_get(application_whole_column, "Address", &[])
                     .expect("Application.Range(A:A) Address")
             ),
-            "$A$1:$A$1048576"
+            "$A:$A"
         );
 
         runtime
@@ -19564,7 +19656,7 @@ mod tests {
                     .dispatch_get(indexed_rows, "Address", &[])
                     .expect("Application.Rows(\"2:3\") address")
             ),
-            "$A$2:$XFD$3"
+            "$2:$3"
         );
         assert_eq!(
             runtime
@@ -19592,7 +19684,7 @@ mod tests {
                     .dispatch_get(indexed_columns, "Address", &[])
                     .expect("Application.Columns(\"B:C\") address")
             ),
-            "$B$1:$C$1048576"
+            "$B:$C"
         );
         assert_eq!(
             runtime
