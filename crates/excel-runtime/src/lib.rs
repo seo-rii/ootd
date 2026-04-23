@@ -64,6 +64,12 @@ const XL_LIST_SEPARATOR: i32 = 5;
 const CONTENT_TYPES_PART_NAME: &str = "[Content_Types].xml";
 const WORKBOOK_PART_NAME: &str = "xl/workbook.xml";
 const WORKBOOK_RELS_PART_NAME: &str = "xl/_rels/workbook.xml.rels";
+const WORKBOOK_XLSX_CONTENT_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
+const WORKBOOK_XLSM_CONTENT_TYPE: &str = "application/vnd.ms-excel.sheet.macroEnabled.main+xml";
+const WORKBOOK_XLTX_CONTENT_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml";
+const WORKBOOK_XLTM_CONTENT_TYPE: &str = "application/vnd.ms-excel.template.macroEnabled.main+xml";
 const WORKSHEET_PART_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
 const COMMENTS_PART_CONTENT_TYPE: &str =
@@ -334,22 +340,25 @@ impl ExcelRuntime {
         spec: SaveWorkbookSpec,
     ) -> OmResult<Vec<u8>> {
         let runtime = self.runtime_workbook(workbook)?;
-        if spec.format != runtime.loaded.detected_format {
-            return Err(OmError::new(
-                OmErrorCode::Unsupported,
-                format!(
-                    "save conversion from {:?} to {:?} is not implemented yet",
-                    runtime.loaded.detected_format, spec.format
-                ),
-            ));
-        }
+        let loaded = self.loaded_workbook_for_save_format(runtime, spec.format)?;
         self.codec.save(
-            &runtime.loaded,
+            &loaded,
             SaveOptions {
                 profile: spec.profile,
                 lossless: spec.lossless,
             },
         )
+    }
+
+    fn loaded_workbook_for_save_format(
+        &self,
+        runtime: &RuntimeWorkbook,
+        format: FileFormat,
+    ) -> OmResult<LoadedXlsxWorkbook> {
+        if format == runtime.loaded.detected_format {
+            return Ok(runtime.loaded.clone());
+        }
+        retag_loaded_workbook_format(&runtime.loaded, format)
     }
 
     pub fn close_workbook(&mut self, workbook: WorkbookHandle) -> OmResult<()> {
@@ -4424,7 +4433,7 @@ impl ExcelRuntime {
                 {
                     let runtime = self.runtime_workbook_mut(workbook)?;
                     runtime.source_path = Some(path);
-                    runtime.loaded.state.model.format = format;
+                    runtime.loaded = retag_loaded_workbook_format(&runtime.loaded, format)?;
                     if let Some(display_name) = display_name {
                         runtime.loaded.state.model.display_name = display_name;
                     }
@@ -7228,6 +7237,78 @@ fn file_format_from_path(path: &Path) -> Option<FileFormat> {
     }
 }
 
+fn workbook_main_content_type(format: FileFormat) -> OmResult<&'static str> {
+    match format {
+        FileFormat::Xlsx => Ok(WORKBOOK_XLSX_CONTENT_TYPE),
+        FileFormat::Xlsm => Ok(WORKBOOK_XLSM_CONTENT_TYPE),
+        FileFormat::Xltx => Ok(WORKBOOK_XLTX_CONTENT_TYPE),
+        FileFormat::Xltm => Ok(WORKBOOK_XLTM_CONTENT_TYPE),
+        FileFormat::StrictXlsx => Err(OmError::unsupported(
+            "strict OOXML workbook save conversion is not implemented",
+        )),
+    }
+}
+
+fn format_allows_vba_project(format: FileFormat) -> bool {
+    matches!(format, FileFormat::Xlsm | FileFormat::Xltm)
+}
+
+fn retag_loaded_workbook_format(
+    loaded: &LoadedXlsxWorkbook,
+    format: FileFormat,
+) -> OmResult<LoadedXlsxWorkbook> {
+    if format == loaded.detected_format && loaded.state.model.format == format {
+        return Ok(loaded.clone());
+    }
+    let content_type = workbook_main_content_type(format)?;
+    if loaded.package.contains("xl/vbaProject.bin") && !format_allows_vba_project(format) {
+        return Err(OmError::unsupported(
+            "saving macro-enabled workbooks as non-macro OOXML formats is not implemented",
+        ));
+    }
+
+    let mut retagged = loaded.clone();
+    let content_types_xml = retagged
+        .package
+        .part(CONTENT_TYPES_PART_NAME)
+        .ok_or_else(|| {
+            OmError::new(
+                OmErrorCode::Parse,
+                format!("workbook package is missing {CONTENT_TYPES_PART_NAME}"),
+            )
+        })?
+        .bytes
+        .clone();
+    let content_types_xml = set_content_type_override(
+        content_types_xml.as_slice(),
+        WORKBOOK_PART_NAME,
+        content_type,
+    )?;
+    retagged
+        .package
+        .replace_part_bytes(CONTENT_TYPES_PART_NAME, content_types_xml)?;
+    retagged.package =
+        retag_package_part_content_type(retagged.package, WORKBOOK_PART_NAME, content_type);
+    retagged.detected_format = format;
+    retagged.state.model.format = format;
+    Ok(retagged)
+}
+
+fn retag_package_part_content_type(
+    package: OpcPackage,
+    part_name: &str,
+    content_type: &str,
+) -> OpcPackage {
+    let normalized_part_name = part_name.trim_start_matches('/');
+    let mut parts = package.parts().to_vec();
+    for part in &mut parts {
+        if part.name == normalized_part_name {
+            part.content_type = Some(content_type.to_string());
+        }
+    }
+    OpcPackage::new(parts)
+}
+
 fn runtime_xml_error(error: impl std::fmt::Display) -> OmError {
     OmError::new(OmErrorCode::Parse, error.to_string())
 }
@@ -7565,6 +7646,122 @@ fn append_content_type_default_if_missing(
         element.push_attribute(("ContentType", content_type));
         element
     })
+}
+
+fn set_content_type_override(
+    content_types_xml: &[u8],
+    part_uri: &str,
+    content_type: &str,
+) -> OmResult<Vec<u8>> {
+    let wanted_part_name = format!("/{}", part_uri.trim_start_matches('/'));
+    let mut reader = Reader::from_reader(Cursor::new(content_types_xml));
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut buffer = Vec::new();
+    let mut found = false;
+
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Empty(element))
+                if xml_local_name(element.name().as_ref()) == b"Override"
+                    && content_type_override_matches_part(
+                        &element,
+                        reader.decoder(),
+                        wanted_part_name.as_str(),
+                    )? =>
+            {
+                found = true;
+                writer
+                    .write_event(Event::Empty(rewrite_content_type_override_element(
+                        &element,
+                        reader.decoder(),
+                        content_type,
+                    )?))
+                    .map_err(runtime_xml_error)?;
+            }
+            Ok(Event::Start(element))
+                if xml_local_name(element.name().as_ref()) == b"Override"
+                    && content_type_override_matches_part(
+                        &element,
+                        reader.decoder(),
+                        wanted_part_name.as_str(),
+                    )? =>
+            {
+                found = true;
+                writer
+                    .write_event(Event::Start(rewrite_content_type_override_element(
+                        &element,
+                        reader.decoder(),
+                        content_type,
+                    )?))
+                    .map_err(runtime_xml_error)?;
+            }
+            Ok(Event::Eof) => break,
+            Ok(event) => writer
+                .write_event(event.into_owned())
+                .map_err(runtime_xml_error)?,
+            Err(error) => return Err(runtime_xml_error(error)),
+        }
+        buffer.clear();
+    }
+
+    let content_types_xml = writer.into_inner().into_inner();
+    if found {
+        Ok(content_types_xml)
+    } else {
+        append_content_type_override_if_missing(
+            content_types_xml.as_slice(),
+            part_uri,
+            content_type,
+        )
+    }
+}
+
+fn content_type_override_matches_part(
+    element: &BytesStart<'_>,
+    decoder: quick_xml::encoding::Decoder,
+    part_name: &str,
+) -> OmResult<bool> {
+    for attr in element.attributes() {
+        let attr = attr.map_err(runtime_xml_error)?;
+        if attr.key.as_ref() != b"PartName" {
+            continue;
+        }
+        let value = attr
+            .decode_and_unescape_value(decoder)
+            .map_err(runtime_xml_error)?
+            .into_owned();
+        return Ok(value == part_name);
+    }
+    Ok(false)
+}
+
+fn rewrite_content_type_override_element(
+    element: &BytesStart<'_>,
+    decoder: quick_xml::encoding::Decoder,
+    content_type: &str,
+) -> OmResult<BytesStart<'static>> {
+    let mut rewritten =
+        BytesStart::new(String::from_utf8_lossy(element.name().as_ref()).into_owned());
+    let mut saw_content_type = false;
+    for attr in element.attributes() {
+        let attr = attr.map_err(runtime_xml_error)?;
+        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+        let value = attr
+            .decode_and_unescape_value(decoder)
+            .map_err(runtime_xml_error)?
+            .into_owned();
+        if attr.key.as_ref() == b"ContentType" {
+            saw_content_type = true;
+            rewritten.push_attribute((key.as_str(), content_type));
+        } else {
+            rewritten.push_attribute((key.as_str(), value.as_str()));
+        }
+    }
+    if !saw_content_type {
+        rewritten.push_attribute(("ContentType", content_type));
+    }
+    Ok(rewritten)
 }
 
 fn insert_sheet_into_workbook_xml(
@@ -9884,7 +10081,7 @@ mod tests {
         let result = runtime.save_workbook(
             workbook,
             SaveWorkbookSpec {
-                format: FileFormat::Xlsm,
+                format: FileFormat::StrictXlsx,
                 profile: ExcelProfile::Excel365,
                 lossless: true,
             },
@@ -24412,6 +24609,7 @@ mod tests {
         fs::create_dir_all(&base_dir).expect("create SaveAs format dir");
         let source_path = base_dir.join("source.xlsx");
         let target_path = base_dir.join("target.bin");
+        let macro_target_path = base_dir.join("target.xlsm");
         let invalid_target_path = base_dir.join("invalid.xlsx");
         fs::write(&source_path, synthetic_workbook_bytes()).expect("write source workbook");
 
@@ -24470,6 +24668,57 @@ mod tests {
             )
             .expect("reload SaveAs FileFormat target");
         assert_eq!(reopened.state.worksheets[0].name, "SavedAsFormat");
+
+        runtime
+            .dispatch_invoke(
+                workbook,
+                "SaveAs",
+                &[OmValue::Text(
+                    macro_target_path.to_string_lossy().into_owned(),
+                )],
+            )
+            .expect("Workbook.SaveAs inferred xlsm FileFormat");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbook, "FileFormat", &[])
+                    .expect("Workbook.FileFormat after inferred xlsm SaveAs")
+            ),
+            f64::from(super::XL_OPEN_XML_WORKBOOK_MACRO_ENABLED)
+        );
+        let reopened_macro = ExcelRuntime::new()
+            .codec
+            .load(
+                &fs::read(&macro_target_path).expect("read inferred xlsm SaveAs target"),
+                office_common::LoadOptions::default(),
+            )
+            .expect("reload inferred xlsm SaveAs target");
+        assert_eq!(reopened_macro.detected_format, FileFormat::Xlsm);
+        assert_eq!(reopened_macro.state.worksheets[0].name, "SavedAsFormat");
+
+        runtime
+            .dispatch_set(
+                active_sheet,
+                "Name",
+                OmValue::Text("SavedAfterXlsm".to_string()),
+                &[],
+            )
+            .expect("rename worksheet after xlsm SaveAs");
+        runtime
+            .dispatch_invoke(workbook, "Save", &[])
+            .expect("Workbook.Save after xlsm SaveAs");
+        let reopened_after_save = ExcelRuntime::new()
+            .codec
+            .load(
+                &fs::read(&macro_target_path).expect("read inferred xlsm Save target"),
+                office_common::LoadOptions::default(),
+            )
+            .expect("reload inferred xlsm after Save");
+        assert_eq!(reopened_after_save.detected_format, FileFormat::Xlsm);
+        assert_eq!(
+            reopened_after_save.state.worksheets[0].name,
+            "SavedAfterXlsm"
+        );
 
         assert_eq!(
             runtime
@@ -24530,6 +24779,66 @@ mod tests {
         );
 
         fs::remove_dir_all(&base_dir).expect("cleanup SaveAs format fixture");
+    }
+
+    #[test]
+    fn workbook_save_as_rejects_macro_stripping_to_non_macro_format() {
+        let mut package =
+            OpcPackage::from_bytes(synthetic_workbook_bytes().as_slice()).expect("package");
+        package
+            .add_part(OpcPart {
+                name: "xl/vbaProject.bin".to_string(),
+                content_type: Some("application/vnd.ms-office.vbaProject".to_string()),
+                compression: CompressionMethod::Stored,
+                bytes: vec![0x56, 0x42, 0x41],
+            })
+            .expect("add vba project part");
+        let content_types_xml = package
+            .part(super::CONTENT_TYPES_PART_NAME)
+            .expect("content types part")
+            .bytes
+            .clone();
+        package
+            .replace_part_bytes(
+                super::CONTENT_TYPES_PART_NAME,
+                super::set_content_type_override(
+                    content_types_xml.as_slice(),
+                    super::WORKBOOK_PART_NAME,
+                    super::WORKBOOK_XLSM_CONTENT_TYPE,
+                )
+                .expect("retag workbook content type"),
+            )
+            .expect("replace content types");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("macro workbook bytes"),
+                format_hint: None,
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open macro workbook");
+        let target_path = std::env::temp_dir().join(format!(
+            "ootd-reject-macro-strip-{}.xlsx",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+
+        let error = runtime
+            .dispatch_invoke(
+                workbook.0,
+                "SaveAs",
+                &[
+                    OmValue::Text(target_path.to_string_lossy().into_owned()),
+                    OmValue::Number(f64::from(super::XL_OPEN_XML_WORKBOOK)),
+                ],
+            )
+            .expect_err("Workbook.SaveAs should reject macro stripping");
+        assert_eq!(error.code, OmErrorCode::Unsupported);
+        assert!(!target_path.exists());
     }
 
     #[test]
