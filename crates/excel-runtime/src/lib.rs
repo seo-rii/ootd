@@ -27,6 +27,11 @@ const WORKBOOK_PART_NAME: &str = "xl/workbook.xml";
 const WORKBOOK_RELS_PART_NAME: &str = "xl/_rels/workbook.xml.rels";
 const WORKSHEET_PART_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
+const COMMENTS_PART_CONTENT_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml";
+const VML_DRAWING_CONTENT_TYPE: &str = "application/vnd.openxmlformats-officedocument.vmlDrawing";
+const RELATIONSHIPS_PART_CONTENT_TYPE: &str =
+    "application/vnd.openxmlformats-package.relationships+xml";
 const PINNED_OM_TEMPLATE_JSON: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../specs/pinned/office_idl_excel_om.template.json"
@@ -2707,7 +2712,14 @@ impl ExcelRuntime {
             Rect::single_cell(1, 1),
         )?;
         let result = (|| {
-            let (source_name, source_sheet_data, source_support_parts, source_relationships_part) = {
+            let (
+                source_name,
+                source_sheet_data,
+                source_support_parts,
+                source_relationships_part,
+                source_comment_parts,
+                source_vml_parts,
+            ) = {
                 let runtime = self.runtime_workbook(snapshot)?;
                 let worksheet = runtime
                     .loaded
@@ -2755,34 +2767,69 @@ impl ExcelRuntime {
                         ))
                     })
                     .transpose()?;
+                let comment_parts = support_parts
+                    .comment_part_uris
+                    .iter()
+                    .map(|part_uri| {
+                        let package_part = runtime.loaded.package.part(part_uri);
+                        let source_bytes = support_parts
+                            .comment_part_source_bytes
+                            .get(part_uri)
+                            .cloned()
+                            .or_else(|| package_part.map(|part| part.bytes.clone()))
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    format!("worksheet comment part is missing: {part_uri}"),
+                                )
+                            })?;
+                        Ok((
+                            part_uri.clone(),
+                            (
+                                source_bytes,
+                                package_part
+                                    .map(|part| part.compression)
+                                    .unwrap_or(CompressionMethod::Stored),
+                            ),
+                        ))
+                    })
+                    .collect::<OmResult<BTreeMap<_, _>>>()?;
+                let vml_parts = support_parts
+                    .vml_drawing_part_uris
+                    .iter()
+                    .map(|part_uri| {
+                        let package_part = runtime.loaded.package.part(part_uri);
+                        let source_bytes = support_parts
+                            .vml_drawing_part_source_bytes
+                            .get(part_uri)
+                            .cloned()
+                            .or_else(|| package_part.map(|part| part.bytes.clone()))
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    format!("worksheet VML drawing part is missing: {part_uri}"),
+                                )
+                            })?;
+                        Ok((
+                            part_uri.clone(),
+                            (
+                                source_bytes,
+                                package_part
+                                    .map(|part| part.compression)
+                                    .unwrap_or(CompressionMethod::Stored),
+                            ),
+                        ))
+                    })
+                    .collect::<OmResult<BTreeMap<_, _>>>()?;
                 (
                     worksheet.name.clone(),
                     sheet_data,
                     support_parts,
                     relationships_part,
+                    comment_parts,
+                    vml_parts,
                 )
             };
-            if !source_support_parts.comment_part_uris.is_empty()
-                || !source_support_parts.comment_anchor_refs.is_empty()
-                || !source_support_parts.comment_part_source_bytes.is_empty()
-                || !source_support_parts.comment_summaries.is_empty()
-                || !source_support_parts.vml_drawing_part_uris.is_empty()
-                || !source_support_parts
-                    .vml_drawing_part_source_bytes
-                    .is_empty()
-                || !source_support_parts.vml_drawing_summaries.is_empty()
-                || !source_support_parts.legacy_drawing_relationships.is_empty()
-                || !source_support_parts
-                    .legacy_drawing_relationship_ids
-                    .is_empty()
-                || !source_support_parts.legacy_drawing_summaries.is_empty()
-                || !source_support_parts.comment_relationships.is_empty()
-                || !source_support_parts.comment_relationship_ids.is_empty()
-            {
-                return Err(OmError::unsupported(
-                    "worksheet placement copy currently only supports sheets without tracked comment or legacy drawing support parts",
-                ));
-            }
 
             let placement_args = {
                 let worksheets = &self
@@ -2835,35 +2882,157 @@ impl ExcelRuntime {
                     source_sheet_data.source_xml.clone(),
                 )?;
                 let target_relationships_part_uri =
-                    if let Some((prefix, file_name)) = target_part_uri.rsplit_once('/') {
-                        format!("{prefix}/_rels/{file_name}.rels")
-                    } else {
-                        format!("_rels/{target_part_uri}.rels")
-                    };
-                let has_relationships_part = source_relationships_part.is_some();
-                if let Some((relationships_bytes, relationships_compression)) =
-                    source_relationships_part.as_ref()
-                {
-                    if runtime
-                        .loaded
-                        .package
-                        .contains(&target_relationships_part_uri)
-                    {
-                        runtime.loaded.package.replace_part_bytes(
-                            target_relationships_part_uri.as_str(),
-                            relationships_bytes.clone(),
-                        )?;
-                    } else {
-                        runtime.loaded.package.add_part(OpcPart {
-                            name: target_relationships_part_uri.clone(),
-                            content_type: Some(
-                                "application/vnd.openxmlformats-package.relationships+xml"
-                                    .to_string(),
+                    worksheet_relationships_part_uri_for(target_part_uri.as_str());
+                let mut used_part_names = runtime
+                    .loaded
+                    .package
+                    .parts()
+                    .iter()
+                    .map(|part| part.name.clone())
+                    .collect::<BTreeSet<_>>();
+                let comment_part_uri_map = source_support_parts
+                    .comment_part_uris
+                    .iter()
+                    .map(|part_uri| {
+                        (
+                            part_uri.clone(),
+                            next_available_sequential_part_uri(
+                                &mut used_part_names,
+                                "xl/comments",
+                                ".xml",
                             ),
-                            compression: *relationships_compression,
-                            bytes: relationships_bytes.clone(),
+                        )
+                    })
+                    .collect::<BTreeMap<_, _>>();
+                let vml_part_uri_map = source_support_parts
+                    .vml_drawing_part_uris
+                    .iter()
+                    .map(|part_uri| {
+                        (
+                            part_uri.clone(),
+                            next_available_sequential_part_uri(
+                                &mut used_part_names,
+                                "xl/drawings/vmlDrawing",
+                                ".vml",
+                            ),
+                        )
+                    })
+                    .collect::<BTreeMap<_, _>>();
+                let rewritten_relationship_targets = source_support_parts
+                    .comment_relationships
+                    .iter()
+                    .filter_map(|binding| {
+                        comment_part_uri_map
+                            .get(&binding.target)
+                            .cloned()
+                            .map(|target| (binding.relationship_id.clone(), target))
+                    })
+                    .chain(
+                        source_support_parts
+                            .legacy_drawing_relationships
+                            .iter()
+                            .filter_map(|binding| {
+                                vml_part_uri_map
+                                    .get(&binding.target)
+                                    .cloned()
+                                    .map(|target| (binding.relationship_id.clone(), target))
+                            }),
+                    )
+                    .collect::<BTreeMap<_, _>>();
+                let mut content_types_xml = runtime
+                    .loaded
+                    .package
+                    .part(CONTENT_TYPES_PART_NAME)
+                    .ok_or_else(|| {
+                        OmError::new(
+                            OmErrorCode::Parse,
+                            format!("workbook package is missing {CONTENT_TYPES_PART_NAME}"),
+                        )
+                    })?
+                    .bytes
+                    .clone();
+                for part_uri in comment_part_uri_map.values() {
+                    content_types_xml = append_content_type_override_if_missing(
+                        content_types_xml.as_slice(),
+                        part_uri.as_str(),
+                        COMMENTS_PART_CONTENT_TYPE,
+                    )?;
+                }
+                if !vml_part_uri_map.is_empty() {
+                    content_types_xml = append_content_type_default_if_missing(
+                        content_types_xml.as_slice(),
+                        "vml",
+                        VML_DRAWING_CONTENT_TYPE,
+                    )?;
+                }
+                runtime
+                    .loaded
+                    .package
+                    .replace_part_bytes(CONTENT_TYPES_PART_NAME, content_types_xml)?;
+
+                let rewritten_relationships_part =
+                    if let Some((relationships_bytes, relationships_compression)) =
+                        source_relationships_part.as_ref()
+                    {
+                        let rewritten_bytes = if rewritten_relationship_targets.is_empty() {
+                            relationships_bytes.clone()
+                        } else {
+                            rewrite_relationship_targets(
+                                relationships_bytes.as_slice(),
+                                &rewritten_relationship_targets,
+                                target_part_uri.as_str(),
+                            )?
+                        };
+                        if runtime
+                            .loaded
+                            .package
+                            .contains(&target_relationships_part_uri)
+                        {
+                            runtime.loaded.package.replace_part_bytes(
+                                target_relationships_part_uri.as_str(),
+                                rewritten_bytes.clone(),
+                            )?;
+                        } else {
+                            runtime.loaded.package.add_part(OpcPart {
+                                name: target_relationships_part_uri.clone(),
+                                content_type: Some(RELATIONSHIPS_PART_CONTENT_TYPE.to_string()),
+                                compression: *relationships_compression,
+                                bytes: rewritten_bytes.clone(),
+                            })?;
+                        }
+                        Some(rewritten_bytes)
+                    } else {
+                        None
+                    };
+                for (source_part_uri, target_part_uri) in &comment_part_uri_map {
+                    let (part_bytes, compression) =
+                        source_comment_parts.get(source_part_uri).ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                format!("worksheet comment part is missing: {source_part_uri}"),
+                            )
                         })?;
-                    }
+                    runtime.loaded.package.add_part(OpcPart {
+                        name: target_part_uri.clone(),
+                        content_type: Some(COMMENTS_PART_CONTENT_TYPE.to_string()),
+                        compression: *compression,
+                        bytes: part_bytes.clone(),
+                    })?;
+                }
+                for (source_part_uri, target_part_uri) in &vml_part_uri_map {
+                    let (part_bytes, compression) =
+                        source_vml_parts.get(source_part_uri).ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                format!("worksheet VML drawing part is missing: {source_part_uri}"),
+                            )
+                        })?;
+                    runtime.loaded.package.add_part(OpcPart {
+                        name: target_part_uri.clone(),
+                        content_type: Some(VML_DRAWING_CONTENT_TYPE.to_string()),
+                        compression: *compression,
+                        bytes: part_bytes.clone(),
+                    })?;
                 }
                 runtime
                     .loaded
@@ -2872,9 +3041,121 @@ impl ExcelRuntime {
                     .insert(added_sheet_id, source_sheet_data);
 
                 let mut copied_support_parts = source_support_parts;
-                copied_support_parts.worksheet_part_uri = Some(target_part_uri);
-                copied_support_parts.relationships_part_uri =
-                    has_relationships_part.then_some(target_relationships_part_uri);
+                copied_support_parts.worksheet_part_uri = Some(target_part_uri.clone());
+                copied_support_parts.relationships_part_uri = rewritten_relationships_part
+                    .as_ref()
+                    .map(|_| target_relationships_part_uri);
+                copied_support_parts.relationships_part_source_bytes = rewritten_relationships_part;
+                if !rewritten_relationship_targets.is_empty() {
+                    copied_support_parts.relationships_summary = None;
+                }
+                copied_support_parts.comment_part_uris = copied_support_parts
+                    .comment_part_uris
+                    .iter()
+                    .map(|part_uri| {
+                        comment_part_uri_map
+                            .get(part_uri)
+                            .cloned()
+                            .unwrap_or_else(|| part_uri.clone())
+                    })
+                    .collect();
+                copied_support_parts.comment_anchor_refs = copied_support_parts
+                    .comment_anchor_refs
+                    .iter()
+                    .map(|(part_uri, refs)| {
+                        (
+                            comment_part_uri_map
+                                .get(part_uri)
+                                .cloned()
+                                .unwrap_or_else(|| part_uri.clone()),
+                            refs.clone(),
+                        )
+                    })
+                    .collect();
+                copied_support_parts.comment_part_source_bytes = copied_support_parts
+                    .comment_part_source_bytes
+                    .iter()
+                    .map(|(part_uri, bytes)| {
+                        (
+                            comment_part_uri_map
+                                .get(part_uri)
+                                .cloned()
+                                .unwrap_or_else(|| part_uri.clone()),
+                            bytes.clone(),
+                        )
+                    })
+                    .collect();
+                copied_support_parts.comment_summaries = copied_support_parts
+                    .comment_summaries
+                    .iter()
+                    .map(|(part_uri, summary)| {
+                        (
+                            comment_part_uri_map
+                                .get(part_uri)
+                                .cloned()
+                                .unwrap_or_else(|| part_uri.clone()),
+                            summary.clone(),
+                        )
+                    })
+                    .collect();
+                copied_support_parts.vml_drawing_part_uris = copied_support_parts
+                    .vml_drawing_part_uris
+                    .iter()
+                    .map(|part_uri| {
+                        vml_part_uri_map
+                            .get(part_uri)
+                            .cloned()
+                            .unwrap_or_else(|| part_uri.clone())
+                    })
+                    .collect();
+                copied_support_parts.vml_drawing_part_source_bytes = copied_support_parts
+                    .vml_drawing_part_source_bytes
+                    .iter()
+                    .map(|(part_uri, bytes)| {
+                        (
+                            vml_part_uri_map
+                                .get(part_uri)
+                                .cloned()
+                                .unwrap_or_else(|| part_uri.clone()),
+                            bytes.clone(),
+                        )
+                    })
+                    .collect();
+                copied_support_parts.vml_drawing_summaries = copied_support_parts
+                    .vml_drawing_summaries
+                    .iter()
+                    .map(|(part_uri, summary)| {
+                        (
+                            vml_part_uri_map
+                                .get(part_uri)
+                                .cloned()
+                                .unwrap_or_else(|| part_uri.clone()),
+                            summary.clone(),
+                        )
+                    })
+                    .collect();
+                copied_support_parts.comment_relationships = copied_support_parts
+                    .comment_relationships
+                    .iter()
+                    .map(|binding| excel_xlsx::WorksheetRelationshipBinding {
+                        relationship_id: binding.relationship_id.clone(),
+                        target: comment_part_uri_map
+                            .get(&binding.target)
+                            .cloned()
+                            .unwrap_or_else(|| binding.target.clone()),
+                    })
+                    .collect();
+                copied_support_parts.legacy_drawing_relationships = copied_support_parts
+                    .legacy_drawing_relationships
+                    .iter()
+                    .map(|binding| excel_xlsx::WorksheetRelationshipBinding {
+                        relationship_id: binding.relationship_id.clone(),
+                        target: vml_part_uri_map
+                            .get(&binding.target)
+                            .cloned()
+                            .unwrap_or_else(|| binding.target.clone()),
+                    })
+                    .collect();
                 runtime
                     .loaded
                     .worksheet_support_parts
@@ -3797,6 +4078,264 @@ fn append_empty_xml_child_before_container_end(
     }
 
     Ok(writer.into_inner().into_inner())
+}
+
+fn worksheet_relationships_part_uri_for(worksheet_part_uri: &str) -> String {
+    if let Some((prefix, file_name)) = worksheet_part_uri.rsplit_once('/') {
+        format!("{prefix}/_rels/{file_name}.rels")
+    } else {
+        format!("_rels/{worksheet_part_uri}.rels")
+    }
+}
+
+fn next_available_sequential_part_uri(
+    used_part_names: &mut BTreeSet<String>,
+    prefix: &str,
+    suffix: &str,
+) -> String {
+    let mut index = 1usize;
+    loop {
+        let candidate = format!("{prefix}{index}{suffix}");
+        if used_part_names.insert(candidate.clone()) {
+            return candidate;
+        }
+        index += 1;
+    }
+}
+
+fn relative_relationship_target(worksheet_part_uri: &str, target_part_uri: &str) -> String {
+    let Some((parent, _)) = worksheet_part_uri.rsplit_once('/') else {
+        return target_part_uri.to_string();
+    };
+    let base_segments = parent
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let target_segments = target_part_uri
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let shared_prefix_len = base_segments
+        .iter()
+        .zip(target_segments.iter())
+        .take_while(|(lhs, rhs)| lhs == rhs)
+        .count();
+    let mut relative_segments = vec![".."; base_segments.len().saturating_sub(shared_prefix_len)];
+    relative_segments.extend_from_slice(&target_segments[shared_prefix_len..]);
+    if relative_segments.is_empty() {
+        target_part_uri.to_string()
+    } else {
+        relative_segments.join("/")
+    }
+}
+
+fn rewrite_relationship_targets(
+    rels_xml: &[u8],
+    rewritten_targets: &BTreeMap<String, String>,
+    worksheet_part_uri: &str,
+) -> OmResult<Vec<u8>> {
+    let mut reader = Reader::from_reader(Cursor::new(rels_xml));
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut buffer = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element))
+                if xml_local_name(element.name().as_ref()) == b"Relationship" =>
+            {
+                writer
+                    .write_event(Event::Start(rewrite_relationship_target(
+                        &element,
+                        reader.decoder(),
+                        rewritten_targets,
+                        worksheet_part_uri,
+                    )?))
+                    .map_err(runtime_xml_error)?;
+            }
+            Ok(Event::Empty(element))
+                if xml_local_name(element.name().as_ref()) == b"Relationship" =>
+            {
+                writer
+                    .write_event(Event::Empty(rewrite_relationship_target(
+                        &element,
+                        reader.decoder(),
+                        rewritten_targets,
+                        worksheet_part_uri,
+                    )?))
+                    .map_err(runtime_xml_error)?;
+            }
+            Ok(Event::Eof) => {
+                writer.write_event(Event::Eof).map_err(runtime_xml_error)?;
+                break;
+            }
+            Ok(event) => writer
+                .write_event(event.into_owned())
+                .map_err(runtime_xml_error)?,
+            Err(error) => return Err(runtime_xml_error(error)),
+        }
+        buffer.clear();
+    }
+
+    Ok(writer.into_inner().into_inner())
+}
+
+fn rewrite_relationship_target(
+    element: &BytesStart<'_>,
+    decoder: quick_xml::encoding::Decoder,
+    rewritten_targets: &BTreeMap<String, String>,
+    worksheet_part_uri: &str,
+) -> OmResult<BytesStart<'static>> {
+    let mut relationship_id = None::<String>;
+    for attr in element.attributes() {
+        let attr = attr.map_err(runtime_xml_error)?;
+        if attr.key.as_ref() == b"Id" {
+            relationship_id = Some(
+                attr.decode_and_unescape_value(decoder)
+                    .map_err(runtime_xml_error)?
+                    .into_owned(),
+            );
+            break;
+        }
+    }
+    let Some(relationship_id) = relationship_id else {
+        return Ok(element.to_owned());
+    };
+    let Some(target_part_uri) = rewritten_targets.get(&relationship_id) else {
+        return Ok(element.to_owned());
+    };
+    let target = relative_relationship_target(worksheet_part_uri, target_part_uri);
+
+    let qualified_name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
+    let mut rewritten = BytesStart::new(qualified_name);
+    let mut saw_target = false;
+    for attr in element.attributes() {
+        let attr = attr.map_err(runtime_xml_error)?;
+        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+        let value = attr
+            .decode_and_unescape_value(decoder)
+            .map_err(runtime_xml_error)?
+            .into_owned();
+        let value = if attr.key.as_ref() == b"Target" {
+            saw_target = true;
+            target.as_str()
+        } else {
+            value.as_str()
+        };
+        rewritten.push_attribute((key.as_str(), value));
+    }
+    if !saw_target {
+        rewritten.push_attribute(("Target", target.as_str()));
+    }
+    Ok(rewritten)
+}
+
+fn content_types_has_override(content_types_xml: &[u8], part_uri: &str) -> OmResult<bool> {
+    let wanted_part_name = format!("/{}", part_uri.trim_start_matches('/'));
+    let mut reader = Reader::from_reader(Cursor::new(content_types_xml));
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) | Ok(Event::Empty(element))
+                if xml_local_name(element.name().as_ref()) == b"Override" =>
+            {
+                for attr in element.attributes() {
+                    let attr = attr.map_err(runtime_xml_error)?;
+                    if attr.key.as_ref() != b"PartName" {
+                        continue;
+                    }
+                    let value = attr
+                        .decode_and_unescape_value(reader.decoder())
+                        .map_err(runtime_xml_error)?
+                        .into_owned();
+                    if value == wanted_part_name {
+                        return Ok(true);
+                    }
+                }
+            }
+            Ok(Event::Eof) => return Ok(false),
+            Ok(_) => {}
+            Err(error) => return Err(runtime_xml_error(error)),
+        }
+        buffer.clear();
+    }
+}
+
+fn content_types_has_default(
+    content_types_xml: &[u8],
+    extension: &str,
+    content_type: &str,
+) -> OmResult<bool> {
+    let mut reader = Reader::from_reader(Cursor::new(content_types_xml));
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) | Ok(Event::Empty(element))
+                if xml_local_name(element.name().as_ref()) == b"Default" =>
+            {
+                let mut seen_extension = false;
+                let mut seen_content_type = false;
+                for attr in element.attributes() {
+                    let attr = attr.map_err(runtime_xml_error)?;
+                    let value = attr
+                        .decode_and_unescape_value(reader.decoder())
+                        .map_err(runtime_xml_error)?
+                        .into_owned();
+                    match attr.key.as_ref() {
+                        b"Extension" if value == extension => seen_extension = true,
+                        b"ContentType" if value == content_type => seen_content_type = true,
+                        _ => {}
+                    }
+                }
+                if seen_extension && seen_content_type {
+                    return Ok(true);
+                }
+            }
+            Ok(Event::Eof) => return Ok(false),
+            Ok(_) => {}
+            Err(error) => return Err(runtime_xml_error(error)),
+        }
+        buffer.clear();
+    }
+}
+
+fn append_content_type_override_if_missing(
+    content_types_xml: &[u8],
+    part_uri: &str,
+    content_type: &str,
+) -> OmResult<Vec<u8>> {
+    if content_types_has_override(content_types_xml, part_uri)? {
+        return Ok(content_types_xml.to_vec());
+    }
+    append_empty_xml_child_before_container_end(content_types_xml, b"Types", {
+        let mut element = BytesStart::new("Override");
+        element.push_attribute((
+            "PartName",
+            format!("/{}", part_uri.trim_start_matches('/')).as_str(),
+        ));
+        element.push_attribute(("ContentType", content_type));
+        element
+    })
+}
+
+fn append_content_type_default_if_missing(
+    content_types_xml: &[u8],
+    extension: &str,
+    content_type: &str,
+) -> OmResult<Vec<u8>> {
+    if content_types_has_default(content_types_xml, extension, content_type)? {
+        return Ok(content_types_xml.to_vec());
+    }
+    append_empty_xml_child_before_container_end(content_types_xml, b"Types", {
+        let mut element = BytesStart::new("Default");
+        element.push_attribute(("Extension", extension));
+        element.push_attribute(("ContentType", content_type));
+        element
+    })
 }
 
 fn insert_sheet_into_workbook_xml(
@@ -11518,6 +12057,104 @@ mod tests {
     }
 
     #[test]
+    fn worksheet_copy_supports_comment_sheets_for_placement_copy() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_comment_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open comment workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheet1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(sheet1, "Copy", &[OmValue::Missing, OmValue::Number(1.0)])
+                .expect("Worksheet.Copy After:=1 on comment sheet"),
+            OmValue::Empty
+        ));
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save comment workbook");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen copied comment workbook");
+        let copied_sheet_id = reopened.state.worksheets[1].id;
+        let support_parts = reopened
+            .worksheet_support_parts
+            .get(&copied_sheet_id)
+            .expect("copied comment support parts");
+
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .map(|worksheet| worksheet.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["Sheet1".to_string(), "Sheet1 (2)".to_string()]
+        );
+        assert!(
+            reopened
+                .package
+                .contains("xl/worksheets/_rels/sheet2.xml.rels")
+        );
+        assert!(reopened.package.contains("xl/comments2.xml"));
+        assert!(reopened.package.contains("xl/drawings/vmlDrawing2.vml"));
+        assert_eq!(
+            support_parts.relationships_part_uri.as_deref(),
+            Some("xl/worksheets/_rels/sheet2.xml.rels")
+        );
+        assert_eq!(
+            support_parts.comment_part_uris,
+            vec!["xl/comments2.xml".to_string()]
+        );
+        assert_eq!(
+            support_parts.vml_drawing_part_uris,
+            vec!["xl/drawings/vmlDrawing2.vml".to_string()]
+        );
+        assert_eq!(
+            support_parts.comment_anchor_refs.get("xl/comments2.xml"),
+            Some(&vec!["A1".to_string()])
+        );
+        assert_eq!(support_parts.comment_relationships.len(), 1);
+        assert_eq!(
+            support_parts.comment_relationships[0].target,
+            "xl/comments2.xml"
+        );
+        assert_eq!(support_parts.legacy_drawing_relationships.len(), 1);
+        assert_eq!(
+            support_parts.legacy_drawing_relationships[0].target,
+            "xl/drawings/vmlDrawing2.vml"
+        );
+        assert_eq!(support_parts.hyperlink_bindings.len(), 1);
+        assert_eq!(
+            support_parts.hyperlink_bindings[0].target,
+            "https://example.com"
+        );
+    }
+
+    #[test]
     fn worksheet_move_supports_after_targets_and_rejects_invalid_arguments() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -11613,6 +12250,122 @@ mod tests {
             .expect_err("Worksheet.Move should reject read-only workbooks");
         assert_eq!(read_only_error.code, OmErrorCode::InvalidState);
         assert!(read_only_error.message.contains("read-only"));
+    }
+
+    #[test]
+    fn worksheet_move_supports_comment_sheets_for_cross_workbook_targets() {
+        let mut runtime = ExcelRuntime::new();
+        let source_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_comment_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open comment source workbook");
+        let source_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(source_workbook.0, "Worksheets", &[])
+                .expect("source Workbook.Worksheets"),
+        );
+        let source_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(source_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("source Worksheets.Item(1)"),
+        );
+        let target_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open target workbook");
+        let target_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(target_workbook.0, "Worksheets", &[])
+                .expect("target Workbook.Worksheets"),
+        );
+        let target_sheet1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(target_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("target Worksheets.Item(1)"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(source_sheet, "Move", &[OmValue::Object(target_sheet1)])
+                .expect("Worksheet.Move Before:=target Sheet1 for comment sheet"),
+            OmValue::Empty
+        ));
+
+        let stale_error = runtime
+            .dispatch_get(source_workbook.0, "Name", &[])
+            .expect_err("single-sheet source workbook should close after move");
+        assert_eq!(stale_error.code, OmErrorCode::InvalidState);
+
+        let saved = runtime
+            .save_workbook(
+                target_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save target workbook");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen moved comment workbook");
+        let moved_sheet_id = reopened.state.worksheets[0].id;
+        let support_parts = reopened
+            .worksheet_support_parts
+            .get(&moved_sheet_id)
+            .expect("moved comment support parts");
+
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .map(|worksheet| worksheet.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["Sheet1 (2)".to_string(), "Sheet1".to_string()]
+        );
+        assert!(
+            reopened
+                .package
+                .contains("xl/worksheets/_rels/sheet2.xml.rels")
+        );
+        assert!(reopened.package.contains("xl/comments1.xml"));
+        assert!(reopened.package.contains("xl/drawings/vmlDrawing1.vml"));
+        assert_eq!(
+            support_parts.relationships_part_uri.as_deref(),
+            Some("xl/worksheets/_rels/sheet2.xml.rels")
+        );
+        assert_eq!(
+            support_parts.comment_part_uris,
+            vec!["xl/comments1.xml".to_string()]
+        );
+        assert_eq!(
+            support_parts.vml_drawing_part_uris,
+            vec!["xl/drawings/vmlDrawing1.vml".to_string()]
+        );
+        assert_eq!(
+            support_parts.comment_anchor_refs.get("xl/comments1.xml"),
+            Some(&vec!["A1".to_string()])
+        );
+        assert_eq!(support_parts.comment_relationships.len(), 1);
+        assert_eq!(
+            support_parts.comment_relationships[0].target,
+            "xl/comments1.xml"
+        );
+        assert_eq!(support_parts.legacy_drawing_relationships.len(), 1);
+        assert_eq!(
+            support_parts.legacy_drawing_relationships[0].target,
+            "xl/drawings/vmlDrawing1.vml"
+        );
     }
 
     #[test]
@@ -12606,5 +13359,125 @@ mod tests {
             })
             .expect("add hyperlink relationships part");
         package.to_bytes().expect("hyperlink package bytes")
+    }
+
+    fn synthetic_comment_workbook_bytes() -> Vec<u8> {
+        let package = OpcPackage::new(vec![
+            OpcPart {
+                name: "[Content_Types].xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/comments1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/>
+  <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+</Types>"#
+                    .to_vec(),
+            },
+            OpcPart {
+                name: "_rels/.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            },
+            OpcPart {
+                name: "xl/workbook.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"#
+                    .to_vec(),
+            },
+            OpcPart {
+                name: "xl/_rels/workbook.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            },
+            OpcPart {
+                name: "xl/sharedStrings.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <si><t>shared</t></si>
+</sst>"#
+                    .to_vec(),
+            },
+            OpcPart {
+                name: "xl/worksheets/sheet1.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <dimension ref="A1:C1"/>
+  <sheetData>
+    <row r="1">
+      <c r="A1"><v>42</v></c>
+      <c r="B1" t="str"><f>UPPER("shared")</f><v>SHARED</v></c>
+      <c r="C1" t="s"><v>0</v></c>
+    </row>
+  </sheetData>
+  <hyperlinks>
+    <hyperlink ref="C1" r:id="rId1"/>
+  </hyperlinks>
+  <legacyDrawing r:id="rId2"/>
+</worksheet>"#
+                    .to_vec(),
+            },
+            OpcPart {
+                name: "xl/worksheets/_rels/sheet1.xml.rels".to_string(),
+                content_type: Some(super::RELATIONSHIPS_PART_CONTENT_TYPE.to_string()),
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com" TargetMode="External"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments1.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            },
+            OpcPart {
+                name: "xl/comments1.xml".to_string(),
+                content_type: Some(super::COMMENTS_PART_CONTENT_TYPE.to_string()),
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <authors><author>Codex</author></authors>
+  <commentList>
+    <comment ref="A1" authorId="0"><text><t>Preserve me</t></text></comment>
+  </commentList>
+</comments>"#
+                    .to_vec(),
+            },
+            OpcPart {
+                name: "xl/drawings/vmlDrawing1.vml".to_string(),
+                content_type: Some(super::VML_DRAWING_CONTENT_TYPE.to_string()),
+                compression: CompressionMethod::Stored,
+                bytes: br#"<xml xmlns:v="urn:schemas-microsoft-com:vml"><v:shape id="CommentShape"/></xml>"#
+                    .to_vec(),
+            },
+        ]);
+
+        package.to_bytes().expect("comment package bytes")
     }
 }
