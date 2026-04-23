@@ -3533,6 +3533,33 @@
           }
         },
         {
+          "name": "Cut",
+          "memberKind": "method",
+          "params": [
+            {
+              "name": "Destination",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Cut"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "Select",
           "memberKind": "method",
           "support": "stub",

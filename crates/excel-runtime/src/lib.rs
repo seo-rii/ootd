@@ -1673,6 +1673,267 @@ impl ExcelRuntime {
                         self.cut_copy_mode = None;
                         Ok(OmValue::Empty)
                     }
+                    "Cut" => {
+                        let destination = match args {
+                            [] | [OmValue::Missing] | [OmValue::Empty] | [OmValue::Null] => None,
+                            [OmValue::Object(destination)] => Some(*destination),
+                            [_] => {
+                                return Err(OmError::type_mismatch(
+                                    "Range.Cut Destination expects a Range object",
+                                ));
+                            }
+                            _ => {
+                                return Err(OmError::invalid_argument(
+                                    "Range.Cut accepts at most one Destination argument",
+                                ));
+                            }
+                        };
+
+                        let Some(destination) = destination else {
+                            self.cut_copy_mode = Some(XL_CUT);
+                            return Ok(OmValue::Empty);
+                        };
+
+                        let RuntimeObjectKind::Range {
+                            workbook: destination_workbook,
+                            sheet_id: destination_sheet_id,
+                            rect: destination_rect,
+                            ..
+                        } = self.runtime_object(destination)?
+                        else {
+                            return Err(OmError::type_mismatch(
+                                "Range.Cut Destination expects a Range object",
+                            ));
+                        };
+                        if destination_workbook != workbook {
+                            return Err(OmError::unsupported(
+                                "Range.Cut currently supports same-workbook destinations",
+                            ));
+                        }
+
+                        let target_rect = if destination_rect.height() == 1
+                            && destination_rect.width() == 1
+                        {
+                            let row_last = destination_rect
+                                .row_first
+                                .checked_add(rect.height() - 1)
+                                .ok_or_else(|| {
+                                    OmError::invalid_argument(
+                                        "Range.Cut Destination overflows worksheet rows",
+                                    )
+                                })?;
+                            let col_last = destination_rect
+                                .col_first
+                                .checked_add(rect.width() - 1)
+                                .ok_or_else(|| {
+                                    OmError::invalid_argument(
+                                        "Range.Cut Destination overflows worksheet columns",
+                                    )
+                                })?;
+                            if row_last > EXCEL_MAX_ROW_INDEX {
+                                return Err(OmError::invalid_argument(
+                                    "Range.Cut Destination overflows worksheet rows",
+                                ));
+                            }
+                            if col_last > EXCEL_MAX_COLUMN_INDEX {
+                                return Err(OmError::invalid_argument(
+                                    "Range.Cut Destination overflows worksheet columns",
+                                ));
+                            }
+                            Rect {
+                                row_first: destination_rect.row_first,
+                                row_last,
+                                col_first: destination_rect.col_first,
+                                col_last,
+                            }
+                        } else {
+                            if destination_rect.height() != rect.height()
+                                || destination_rect.width() != rect.width()
+                            {
+                                return Err(OmError::invalid_argument(
+                                    "Range.Cut Destination must be a single cell or match the source range size",
+                                ));
+                            }
+                            destination_rect
+                        };
+
+                        let source_cells = {
+                            let state = &self.runtime_workbook(workbook)?.loaded.state;
+                            let source_worksheet = state.worksheet_data_for_sheet(sheet_id)?;
+                            let mut cells =
+                                Vec::with_capacity((rect.height() * rect.width()) as usize);
+                            for row in rect.row_first..=rect.row_last {
+                                for col in rect.col_first..=rect.col_last {
+                                    cells.push(source_worksheet.cells.get(&(row, col)).cloned());
+                                }
+                            }
+                            cells
+                        };
+
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+
+                        if destination_sheet_id == sheet_id {
+                            let worksheet = runtime
+                                .loaded
+                                .state
+                                .worksheet_data_for_sheet_mut(sheet_id)?;
+                            let mut index = 0usize;
+                            for row in target_rect.row_first..=target_rect.row_last {
+                                for col in target_rect.col_first..=target_rect.col_last {
+                                    let next_cell = source_cells[index].clone();
+                                    index += 1;
+                                    match next_cell {
+                                        Some(cell) => {
+                                            if worksheet.cells.get(&(row, col)) != Some(&cell) {
+                                                worksheet.cells.insert((row, col), cell);
+                                                worksheet.dirty = true;
+                                                worksheet.dirty_cells.insert((row, col));
+                                            }
+                                        }
+                                        None => match worksheet.cells.get_mut(&(row, col)) {
+                                            Some(existing) if existing.style_id.is_some() => {
+                                                if existing.value != office_common::CellValue::Blank
+                                                    || existing.formula.is_some()
+                                                {
+                                                    existing.value =
+                                                        office_common::CellValue::Blank;
+                                                    existing.formula = None;
+                                                    worksheet.dirty = true;
+                                                    worksheet.dirty_cells.insert((row, col));
+                                                }
+                                            }
+                                            Some(_) => {
+                                                worksheet.cells.remove(&(row, col));
+                                                worksheet.dirty = true;
+                                                worksheet.dirty_cells.insert((row, col));
+                                            }
+                                            None => {}
+                                        },
+                                    }
+                                }
+                            }
+
+                            for row in rect.row_first..=rect.row_last {
+                                for col in rect.col_first..=rect.col_last {
+                                    if (target_rect.row_first..=target_rect.row_last).contains(&row)
+                                        && (target_rect.col_first..=target_rect.col_last)
+                                            .contains(&col)
+                                    {
+                                        continue;
+                                    }
+                                    let key = (row, col);
+                                    match worksheet.cells.get_mut(&key) {
+                                        Some(existing) if existing.style_id.is_some() => {
+                                            if existing.value != office_common::CellValue::Blank
+                                                || existing.formula.is_some()
+                                            {
+                                                existing.value = office_common::CellValue::Blank;
+                                                existing.formula = None;
+                                                worksheet.dirty = true;
+                                                worksheet.dirty_cells.insert(key);
+                                            }
+                                        }
+                                        Some(_) => {
+                                            worksheet.cells.remove(&key);
+                                            worksheet.dirty = true;
+                                            worksheet.dirty_cells.insert(key);
+                                        }
+                                        None => {}
+                                    }
+                                }
+                            }
+                        } else {
+                            let destination_worksheet = runtime
+                                .loaded
+                                .state
+                                .worksheet_data_for_sheet_mut(destination_sheet_id)?;
+                            let mut index = 0usize;
+                            for row in target_rect.row_first..=target_rect.row_last {
+                                for col in target_rect.col_first..=target_rect.col_last {
+                                    let next_cell = source_cells[index].clone();
+                                    index += 1;
+                                    match next_cell {
+                                        Some(cell) => {
+                                            if destination_worksheet.cells.get(&(row, col))
+                                                != Some(&cell)
+                                            {
+                                                destination_worksheet
+                                                    .cells
+                                                    .insert((row, col), cell);
+                                                destination_worksheet.dirty = true;
+                                                destination_worksheet
+                                                    .dirty_cells
+                                                    .insert((row, col));
+                                            }
+                                        }
+                                        None => {
+                                            match destination_worksheet.cells.get_mut(&(row, col)) {
+                                                Some(existing) if existing.style_id.is_some() => {
+                                                    if existing.value
+                                                        != office_common::CellValue::Blank
+                                                        || existing.formula.is_some()
+                                                    {
+                                                        existing.value =
+                                                            office_common::CellValue::Blank;
+                                                        existing.formula = None;
+                                                        destination_worksheet.dirty = true;
+                                                        destination_worksheet
+                                                            .dirty_cells
+                                                            .insert((row, col));
+                                                    }
+                                                }
+                                                Some(_) => {
+                                                    destination_worksheet.cells.remove(&(row, col));
+                                                    destination_worksheet.dirty = true;
+                                                    destination_worksheet
+                                                        .dirty_cells
+                                                        .insert((row, col));
+                                                }
+                                                None => {}
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            let source_worksheet = runtime
+                                .loaded
+                                .state
+                                .worksheet_data_for_sheet_mut(sheet_id)?;
+                            for row in rect.row_first..=rect.row_last {
+                                for col in rect.col_first..=rect.col_last {
+                                    let key = (row, col);
+                                    match source_worksheet.cells.get_mut(&key) {
+                                        Some(existing) if existing.style_id.is_some() => {
+                                            if existing.value != office_common::CellValue::Blank
+                                                || existing.formula.is_some()
+                                            {
+                                                existing.value = office_common::CellValue::Blank;
+                                                existing.formula = None;
+                                                source_worksheet.dirty = true;
+                                                source_worksheet.dirty_cells.insert(key);
+                                            }
+                                        }
+                                        Some(_) => {
+                                            source_worksheet.cells.remove(&key);
+                                            source_worksheet.dirty = true;
+                                            source_worksheet.dirty_cells.insert(key);
+                                        }
+                                        None => {}
+                                    }
+                                }
+                            }
+                        }
+
+                        self.cut_copy_mode = None;
+                        Ok(OmValue::Empty)
+                    }
                     "Select" => {
                         if !args.is_empty() {
                             return Err(OmError::invalid_argument(
@@ -13297,6 +13558,223 @@ mod tests {
                 .expect_err("Range.Copy should reject extra args")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn range_cut_sets_cut_copy_mode_and_moves_to_destination_range() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B1".to_string())])
+                .expect("Range(A1:B1)"),
+        );
+        let destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D2".to_string())])
+                .expect("Range(D2)"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(source, "Cut", &[])
+                .expect("Range.Cut without destination"),
+            OmValue::Empty
+        ));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode after Range.Cut")
+            ),
+            f64::from(super::XL_CUT)
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(source, "Cut", &[OmValue::Object(destination)])
+                .expect("Range.Cut Destination"),
+            OmValue::Empty
+        ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after destination cut")
+        ));
+
+        let a1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        let b1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Range(B1)"),
+        );
+        let d2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D2".to_string())])
+                .expect("Range(D2)"),
+        );
+        let e2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E2".to_string())])
+                .expect("Range(E2)"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(a1, "Value", &[])
+                .expect("A1 Value after cut"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(b1, "Value", &[])
+                .expect("B1 Value after cut"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(d2, "Value", &[])
+                    .expect("D2 Value after cut")
+            ),
+            42.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(e2, "Formula", &[])
+                    .expect("E2 Formula after cut")
+            ),
+            r#"=UPPER("shared")"#
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after Range.Cut")
+        ));
+    }
+
+    #[test]
+    fn range_cut_rejects_invalid_destinations() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let active_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B1".to_string())])
+                .expect("Range(A1:B1)"),
+        );
+        let mismatched_destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A2:C2".to_string())])
+                .expect("Range(A2:C2)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(source, "Cut", &[OmValue::Text("A2".to_string())])
+                .expect_err("Range.Cut should reject non-object Destination")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(source, "Cut", &[OmValue::Object(active_workbook)])
+                .expect_err("Range.Cut should reject non-Range objects")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(source, "Cut", &[OmValue::Object(mismatched_destination)])
+                .expect_err("Range.Cut should reject mismatched destination size")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    source,
+                    "Cut",
+                    &[OmValue::Missing, OmValue::Object(mismatched_destination)]
+                )
+                .expect_err("Range.Cut should reject extra args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+
+        let mut read_only_runtime = ExcelRuntime::new();
+        read_only_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook");
+        let read_only_sheet = expect_object_handle(
+            read_only_runtime
+                .dispatch_get(read_only_runtime.root_application(), "ActiveSheet", &[])
+                .expect("read-only ActiveSheet"),
+        );
+        let read_only_source = expect_object_handle(
+            read_only_runtime
+                .dispatch_invoke(
+                    read_only_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:B1".to_string())],
+                )
+                .expect("read-only Range(A1:B1)"),
+        );
+        let read_only_destination = expect_object_handle(
+            read_only_runtime
+                .dispatch_invoke(read_only_sheet, "Range", &[OmValue::Text("D2".to_string())])
+                .expect("read-only Range(D2)"),
+        );
+        assert_eq!(
+            read_only_runtime
+                .dispatch_invoke(
+                    read_only_source,
+                    "Cut",
+                    &[OmValue::Object(read_only_destination)]
+                )
+                .expect_err("Range.Cut should reject read-only workbooks")
+                .code,
+            OmErrorCode::InvalidState
         );
     }
 
