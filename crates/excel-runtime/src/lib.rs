@@ -3125,8 +3125,11 @@ impl ExcelRuntime {
         }
 
         match member {
-            "Value" | "Value2" | "Formula" | "FormulaR1C1" => {
-                let array = if matches!(member, "Formula" | "FormulaR1C1") {
+            "Value" | "Value2" | "Formula" | "FormulaR1C1" | "Formula2" | "Formula2R1C1" => {
+                let array = if matches!(
+                    member,
+                    "Formula" | "FormulaR1C1" | "Formula2" | "Formula2R1C1"
+                ) {
                     self.get_range_formulas(GetRangeValuesSpec {
                         workbook,
                         range: self.range_ref(workbook, sheet_id, rect)?,
@@ -3352,7 +3355,7 @@ impl ExcelRuntime {
         }
 
         match member {
-            "Value" | "Value2" | "Formula" | "FormulaR1C1" => {
+            "Value" | "Value2" | "Formula" | "FormulaR1C1" | "Formula2" | "Formula2R1C1" => {
                 let values = match value {
                     OmValue::Array(array) => array,
                     scalar => OmArray::new(
@@ -3361,13 +3364,13 @@ impl ExcelRuntime {
                         vec![scalar; rect.height() as usize * rect.width() as usize],
                     )?,
                 };
-                if member == "Formula" {
+                if matches!(member, "Formula" | "Formula2") {
                     self.set_range_formulas(SetRangeValuesSpec {
                         workbook,
                         range: self.range_ref(workbook, sheet_id, rect)?,
                         values,
                     })?;
-                } else if member == "FormulaR1C1" {
+                } else if matches!(member, "FormulaR1C1" | "Formula2R1C1") {
                     if values.rows != rect.height() as usize || values.cols != rect.width() as usize
                     {
                         return Err(OmError::invalid_argument(format!(
@@ -12641,6 +12644,20 @@ mod tests {
         );
         assert_eq!(
             runtime
+                .dispatch_get(range, "Formula2", &[OmValue::Number(1.0)])
+                .expect_err("Range.Formula2 args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(range, "Formula2R1C1", &[OmValue::Number(1.0)])
+                .expect_err("Range.Formula2R1C1 args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
                 .dispatch_set(
                     range,
                     "Value2",
@@ -12660,6 +12677,30 @@ mod tests {
                     &[OmValue::Number(1.0)],
                 )
                 .expect_err("Range.FormulaR1C1 set args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    range,
+                    "Formula2",
+                    OmValue::Text("=A1".to_string()),
+                    &[OmValue::Number(1.0)],
+                )
+                .expect_err("Range.Formula2 set args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    range,
+                    "Formula2R1C1",
+                    OmValue::Text("=R1C1".to_string()),
+                    &[OmValue::Number(1.0)],
+                )
+                .expect_err("Range.Formula2R1C1 set args")
                 .code,
             OmErrorCode::InvalidArgument
         );
@@ -13372,6 +13413,96 @@ mod tests {
                 .code,
             OmErrorCode::InvalidState
         );
+    }
+
+    #[test]
+    fn range_dispatch_formula2_aliases_formula_storage_paths() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let sheet_id = runtime.worksheets(workbook).expect("worksheets")[0].id;
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let c3 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C3".to_string())])
+                .expect("Range(C3)"),
+        );
+        let d3 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D3".to_string())])
+                .expect("Range(D3)"),
+        );
+
+        runtime
+            .dispatch_set(
+                c3,
+                "Formula2",
+                OmValue::Text("=SUM(A1:B1)".to_string()),
+                &[],
+            )
+            .expect("set C3 Formula2");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(c3, "Formula2", &[])
+                    .expect("C3 Formula2")
+            ),
+            "=SUM(A1:B1)"
+        );
+        let c3_formula = runtime
+            .workbook_state(workbook)
+            .expect("workbook state")
+            .cell(sheet_id, 3, 3)
+            .expect("C3")
+            .formula
+            .as_ref()
+            .expect("C3 formula")
+            .clone();
+        assert_eq!(c3_formula.text, "SUM(A1:B1)");
+        assert!(!c3_formula.is_r1c1);
+
+        runtime
+            .dispatch_set(
+                d3,
+                "Formula2R1C1",
+                OmValue::Text("=RC[-1]*2".to_string()),
+                &[],
+            )
+            .expect("set D3 Formula2R1C1");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(d3, "Formula2R1C1", &[])
+                    .expect("D3 Formula2R1C1")
+            ),
+            "=RC[-1]*2"
+        );
+        let d3_formula = runtime
+            .workbook_state(workbook)
+            .expect("workbook state")
+            .cell(sheet_id, 3, 4)
+            .expect("D3")
+            .formula
+            .as_ref()
+            .expect("D3 formula")
+            .clone();
+        assert_eq!(d3_formula.text, "RC[-1]*2");
+        assert!(d3_formula.is_r1c1);
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after Formula2 set")
+        ));
     }
 
     #[test]
