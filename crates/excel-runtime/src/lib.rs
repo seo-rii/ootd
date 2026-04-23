@@ -8557,6 +8557,7 @@ enum FormulaEvalError {
     Value,
     Ref,
     Name,
+    Num,
     Calc,
 }
 
@@ -8568,6 +8569,7 @@ impl FormulaEvalError {
             FormulaEvalError::Value => Some(CellValue::Error(CellError::Value)),
             FormulaEvalError::Ref => Some(CellValue::Error(CellError::Ref)),
             FormulaEvalError::Name => Some(CellValue::Error(CellError::Name)),
+            FormulaEvalError::Num => Some(CellValue::Error(CellError::Num)),
             FormulaEvalError::Calc => Some(CellValue::Error(CellError::Calc)),
         }
     }
@@ -8578,8 +8580,97 @@ fn formula_eval_error_from_cell_error(error: CellError) -> FormulaEvalError {
         CellError::Div0 => FormulaEvalError::Div0,
         CellError::Ref => FormulaEvalError::Ref,
         CellError::Name => FormulaEvalError::Name,
+        CellError::Num => FormulaEvalError::Num,
         CellError::Calc => FormulaEvalError::Calc,
         _ => FormulaEvalError::Value,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormulaScalarFunction {
+    Abs,
+    Int,
+    Round,
+    Power,
+    Sqrt,
+}
+
+impl FormulaScalarFunction {
+    fn from_name(name: &str) -> Option<Self> {
+        if name.eq_ignore_ascii_case("ABS") {
+            Some(Self::Abs)
+        } else if name.eq_ignore_ascii_case("INT") {
+            Some(Self::Int)
+        } else if name.eq_ignore_ascii_case("ROUND") {
+            Some(Self::Round)
+        } else if name.eq_ignore_ascii_case("POWER") {
+            Some(Self::Power)
+        } else if name.eq_ignore_ascii_case("SQRT") {
+            Some(Self::Sqrt)
+        } else {
+            None
+        }
+    }
+
+    fn evaluate(self, args: &[f64]) -> Result<f64, FormulaEvalError> {
+        match self {
+            FormulaScalarFunction::Abs => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                Ok(value.abs())
+            }
+            FormulaScalarFunction::Int => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                Ok(value.floor())
+            }
+            FormulaScalarFunction::Round => {
+                let [value, digits] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if !digits.is_finite() || digits.fract() != 0.0 {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *digits < i32::MIN as f64 || *digits > i32::MAX as f64 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let factor = 10_f64.powi(*digits as i32);
+                if !factor.is_finite() || factor == 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                Ok(round_half_away_from_zero(value * factor) / factor)
+            }
+            FormulaScalarFunction::Power => {
+                let [base, exponent] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                let value = base.powf(*exponent);
+                if value.is_finite() {
+                    Ok(value)
+                } else {
+                    Err(FormulaEvalError::Num)
+                }
+            }
+            FormulaScalarFunction::Sqrt => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if *value < 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                Ok(value.sqrt())
+            }
+        }
+    }
+}
+
+fn round_half_away_from_zero(value: f64) -> f64 {
+    if value.is_sign_negative() {
+        -((-value) + 0.5).floor()
+    } else {
+        (value + 0.5).floor()
     }
 }
 
@@ -8864,6 +8955,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
     }
 
     fn parse_function(&mut self, name: &str) -> Result<f64, FormulaEvalError> {
+        if let Some(function) = FormulaScalarFunction::from_name(name) {
+            return self.parse_scalar_function(function);
+        }
         let function =
             FormulaAggregateFunction::from_name(name).ok_or(FormulaEvalError::Unsupported)?;
         let mut values = Vec::new();
@@ -8879,6 +8973,28 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
             if self.consume_char(')') {
                 return function.evaluate(values.as_slice());
+            }
+            return Err(FormulaEvalError::Unsupported);
+        }
+    }
+
+    fn parse_scalar_function(
+        &mut self,
+        function: FormulaScalarFunction,
+    ) -> Result<f64, FormulaEvalError> {
+        let mut args = Vec::new();
+        loop {
+            self.skip_whitespace();
+            if self.consume_char(')') {
+                return function.evaluate(args.as_slice());
+            }
+            args.push(self.parse_expression()?);
+            self.skip_whitespace();
+            if self.consume_char(',') {
+                continue;
+            }
+            if self.consume_char(')') {
+                return function.evaluate(args.as_slice());
             }
             return Err(FormulaEvalError::Unsupported);
         }
@@ -10071,9 +10187,9 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use office_common::{
-        CellValue, ExcelProfile, FileFormat, GetRangeValuesSpec, LoadOptions, ObjectHandle,
-        OmArray, OmErrorCode, OmValue, OpenWorkbookSpec, RangeRef, Rect, SaveWorkbookSpec,
-        SetRangeValuesSpec, StyleId, WorkbookId,
+        CellError, CellValue, ExcelProfile, FileFormat, GetRangeValuesSpec, LoadOptions,
+        ObjectHandle, OmArray, OmErrorCode, OmValue, OpenWorkbookSpec, RangeRef, Rect,
+        SaveWorkbookSpec, SetRangeValuesSpec, StyleId, WorkbookId,
     };
     use office_opc::{CompressionMethod, OpcPackage, OpcPart};
 
@@ -11392,6 +11508,74 @@ mod tests {
                 OmValue::Number(8.0),
                 OmValue::Number(5.0),
                 OmValue::Number(3.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_basic_scalar_functions() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A6".to_string())])
+                .expect("Range(A1:A6)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        6,
+                        1,
+                        vec![
+                            OmValue::Text("=ABS(-8)".to_string()),
+                            OmValue::Text("=INT(2.9)".to_string()),
+                            OmValue::Text("=ROUND(1.235, 2)".to_string()),
+                            OmValue::Text("=POWER(2, 3)".to_string()),
+                            OmValue::Text("=SQRT(81)".to_string()),
+                            OmValue::Text("=SQRT(-1)".to_string()),
+                        ],
+                    )
+                    .expect("scalar formulas"),
+                ),
+                &[],
+            )
+            .expect("set scalar formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("scalar values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected scalar value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(8.0),
+                OmValue::Number(2.0),
+                OmValue::Number(1.24),
+                OmValue::Number(8.0),
+                OmValue::Number(9.0),
+                OmValue::Error(CellError::Num),
             ]
         );
     }
