@@ -106,6 +106,7 @@ pub struct ExcelRuntime {
     enable_events: bool,
     user_name: String,
     default_file_path: String,
+    caption: String,
     status_bar: Option<String>,
     display_status_bar: bool,
     display_formula_bar: bool,
@@ -146,6 +147,7 @@ impl ExcelRuntime {
             enable_events: true,
             user_name: String::new(),
             default_file_path: String::new(),
+            caption: APPLICATION_NAME.to_string(),
             status_bar: None,
             display_status_bar: true,
             display_formula_bar: true,
@@ -540,6 +542,15 @@ impl ExcelRuntime {
                             ));
                         };
                         self.default_file_path = default_file_path;
+                        Ok(())
+                    }
+                    "Caption" => {
+                        let OmValue::Text(caption) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Application.Caption expects a text value",
+                            ));
+                        };
+                        self.caption = caption;
                         Ok(())
                     }
                     "StatusBar" => match value {
@@ -1499,6 +1510,14 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Text(self.default_file_path.clone()))
+            }
+            "Caption" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.Caption does not accept index arguments",
+                    ));
+                }
+                Ok(OmValue::Text(self.caption.clone()))
             }
             "DisplayAlerts" => {
                 if !args.is_empty() {
@@ -8168,6 +8187,65 @@ mod tests {
                     &[OmValue::Number(1.0)],
                 )
                 .expect_err("Application.DefaultFilePath set should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn application_caption_dispatch_roundtrips_and_rejects_invalid_values() {
+        let mut runtime = ExcelRuntime::new();
+        let application = runtime.root_application();
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(application, "Caption", &[])
+                    .expect("Application.Caption default")
+            ),
+            APPLICATION_NAME
+        );
+
+        runtime
+            .dispatch_set(
+                application,
+                "Caption",
+                OmValue::Text("Quarter Close".to_string()),
+                &[],
+            )
+            .expect("Application.Caption = text");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(application, "Caption", &[])
+                    .expect("Application.Caption after set")
+            ),
+            "Quarter Close"
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_set(application, "Caption", OmValue::Bool(true), &[])
+                .expect_err("Application.Caption should reject non-text values")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "Caption", &[OmValue::Number(1.0)])
+                .expect_err("Application.Caption should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    application,
+                    "Caption",
+                    OmValue::Text("Other".to_string()),
+                    &[OmValue::Number(1.0)],
+                )
+                .expect_err("Application.Caption set should reject index args")
                 .code,
             OmErrorCode::InvalidArgument
         );
