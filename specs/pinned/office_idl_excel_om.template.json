@@ -127,6 +127,32 @@
           }
         },
         {
+          "name": "Sheets",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Worksheets",
+            "aliasOf": "Excel.Sheets"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Application",
+                  "sourceMember": "Sheets"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Worksheets",
+                "aliasOf": "Excel.Sheets"
+              }
+            }
+          }
+        },
+        {
           "name": "ActiveWorkbook",
           "memberKind": "property",
           "returnType": {
@@ -976,6 +1002,32 @@
                 "kind": "interface",
                 "name": "Worksheets",
                 "aliasOf": "Excel.Worksheets"
+              }
+            }
+          }
+        },
+        {
+          "name": "Sheets",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Worksheets",
+            "aliasOf": "Excel.Sheets"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "Sheets"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Worksheets",
+                "aliasOf": "Excel.Sheets"
               }
             }
           }
