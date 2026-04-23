@@ -1700,11 +1700,6 @@ impl ExcelRuntime {
                                 "Range.Cut Destination expects a Range object",
                             ));
                         };
-                        if destination_workbook != workbook {
-                            return Err(OmError::unsupported(
-                                "Range.Cut currently supports same-workbook destinations",
-                            ));
-                        }
 
                         let target_rect = if destination_rect.height() == 1
                             && destination_rect.width() == 1
@@ -1765,33 +1760,68 @@ impl ExcelRuntime {
                             cells
                         };
 
-                        let runtime = self.runtime_workbook_mut(workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
-                        }
+                        if destination_workbook == workbook {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
 
-                        if destination_sheet_id == sheet_id {
-                            let worksheet = runtime
-                                .loaded
-                                .state
-                                .worksheet_data_for_sheet_mut(sheet_id)?;
-                            let mut index = 0usize;
-                            for row in target_rect.row_first..=target_rect.row_last {
-                                for col in target_rect.col_first..=target_rect.col_last {
-                                    let next_cell = source_cells[index].clone();
-                                    index += 1;
-                                    match next_cell {
-                                        Some(cell) => {
-                                            if worksheet.cells.get(&(row, col)) != Some(&cell) {
-                                                worksheet.cells.insert((row, col), cell);
-                                                worksheet.dirty = true;
-                                                worksheet.dirty_cells.insert((row, col));
+                            if destination_sheet_id == sheet_id {
+                                let worksheet = runtime
+                                    .loaded
+                                    .state
+                                    .worksheet_data_for_sheet_mut(sheet_id)?;
+                                let mut index = 0usize;
+                                for row in target_rect.row_first..=target_rect.row_last {
+                                    for col in target_rect.col_first..=target_rect.col_last {
+                                        let next_cell = source_cells[index].clone();
+                                        index += 1;
+                                        match next_cell {
+                                            Some(cell) => {
+                                                if worksheet.cells.get(&(row, col)) != Some(&cell) {
+                                                    worksheet.cells.insert((row, col), cell);
+                                                    worksheet.dirty = true;
+                                                    worksheet.dirty_cells.insert((row, col));
+                                                }
                                             }
+                                            None => match worksheet.cells.get_mut(&(row, col)) {
+                                                Some(existing) if existing.style_id.is_some() => {
+                                                    if existing.value
+                                                        != office_common::CellValue::Blank
+                                                        || existing.formula.is_some()
+                                                    {
+                                                        existing.value =
+                                                            office_common::CellValue::Blank;
+                                                        existing.formula = None;
+                                                        worksheet.dirty = true;
+                                                        worksheet.dirty_cells.insert((row, col));
+                                                    }
+                                                }
+                                                Some(_) => {
+                                                    worksheet.cells.remove(&(row, col));
+                                                    worksheet.dirty = true;
+                                                    worksheet.dirty_cells.insert((row, col));
+                                                }
+                                                None => {}
+                                            },
                                         }
-                                        None => match worksheet.cells.get_mut(&(row, col)) {
+                                    }
+                                }
+
+                                for row in rect.row_first..=rect.row_last {
+                                    for col in rect.col_first..=rect.col_last {
+                                        if (target_rect.row_first..=target_rect.row_last)
+                                            .contains(&row)
+                                            && (target_rect.col_first..=target_rect.col_last)
+                                                .contains(&col)
+                                        {
+                                            continue;
+                                        }
+                                        let key = (row, col);
+                                        match worksheet.cells.get_mut(&key) {
                                             Some(existing) if existing.style_id.is_some() => {
                                                 if existing.value != office_common::CellValue::Blank
                                                     || existing.formula.is_some()
@@ -1800,75 +1830,148 @@ impl ExcelRuntime {
                                                         office_common::CellValue::Blank;
                                                     existing.formula = None;
                                                     worksheet.dirty = true;
-                                                    worksheet.dirty_cells.insert((row, col));
+                                                    worksheet.dirty_cells.insert(key);
                                                 }
                                             }
                                             Some(_) => {
-                                                worksheet.cells.remove(&(row, col));
-                                                worksheet.dirty = true;
-                                                worksheet.dirty_cells.insert((row, col));
-                                            }
-                                            None => {}
-                                        },
-                                    }
-                                }
-                            }
-
-                            for row in rect.row_first..=rect.row_last {
-                                for col in rect.col_first..=rect.col_last {
-                                    if (target_rect.row_first..=target_rect.row_last).contains(&row)
-                                        && (target_rect.col_first..=target_rect.col_last)
-                                            .contains(&col)
-                                    {
-                                        continue;
-                                    }
-                                    let key = (row, col);
-                                    match worksheet.cells.get_mut(&key) {
-                                        Some(existing) if existing.style_id.is_some() => {
-                                            if existing.value != office_common::CellValue::Blank
-                                                || existing.formula.is_some()
-                                            {
-                                                existing.value = office_common::CellValue::Blank;
-                                                existing.formula = None;
+                                                worksheet.cells.remove(&key);
                                                 worksheet.dirty = true;
                                                 worksheet.dirty_cells.insert(key);
                                             }
+                                            None => {}
                                         }
-                                        Some(_) => {
-                                            worksheet.cells.remove(&key);
-                                            worksheet.dirty = true;
-                                            worksheet.dirty_cells.insert(key);
+                                    }
+                                }
+                            } else {
+                                let destination_worksheet = runtime
+                                    .loaded
+                                    .state
+                                    .worksheet_data_for_sheet_mut(destination_sheet_id)?;
+                                let mut index = 0usize;
+                                for row in target_rect.row_first..=target_rect.row_last {
+                                    for col in target_rect.col_first..=target_rect.col_last {
+                                        let next_cell = source_cells[index].clone();
+                                        index += 1;
+                                        match next_cell {
+                                            Some(cell) => {
+                                                if destination_worksheet.cells.get(&(row, col))
+                                                    != Some(&cell)
+                                                {
+                                                    destination_worksheet
+                                                        .cells
+                                                        .insert((row, col), cell);
+                                                    destination_worksheet.dirty = true;
+                                                    destination_worksheet
+                                                        .dirty_cells
+                                                        .insert((row, col));
+                                                }
+                                            }
+                                            None => {
+                                                match destination_worksheet
+                                                    .cells
+                                                    .get_mut(&(row, col))
+                                                {
+                                                    Some(existing)
+                                                        if existing.style_id.is_some() =>
+                                                    {
+                                                        if existing.value
+                                                            != office_common::CellValue::Blank
+                                                            || existing.formula.is_some()
+                                                        {
+                                                            existing.value =
+                                                                office_common::CellValue::Blank;
+                                                            existing.formula = None;
+                                                            destination_worksheet.dirty = true;
+                                                            destination_worksheet
+                                                                .dirty_cells
+                                                                .insert((row, col));
+                                                        }
+                                                    }
+                                                    Some(_) => {
+                                                        destination_worksheet
+                                                            .cells
+                                                            .remove(&(row, col));
+                                                        destination_worksheet.dirty = true;
+                                                        destination_worksheet
+                                                            .dirty_cells
+                                                            .insert((row, col));
+                                                    }
+                                                    None => {}
+                                                }
+                                            }
                                         }
-                                        None => {}
+                                    }
+                                }
+
+                                let source_worksheet = runtime
+                                    .loaded
+                                    .state
+                                    .worksheet_data_for_sheet_mut(sheet_id)?;
+                                for row in rect.row_first..=rect.row_last {
+                                    for col in rect.col_first..=rect.col_last {
+                                        let key = (row, col);
+                                        match source_worksheet.cells.get_mut(&key) {
+                                            Some(existing) if existing.style_id.is_some() => {
+                                                if existing.value != office_common::CellValue::Blank
+                                                    || existing.formula.is_some()
+                                                {
+                                                    existing.value =
+                                                        office_common::CellValue::Blank;
+                                                    existing.formula = None;
+                                                    source_worksheet.dirty = true;
+                                                    source_worksheet.dirty_cells.insert(key);
+                                                }
+                                            }
+                                            Some(_) => {
+                                                source_worksheet.cells.remove(&key);
+                                                source_worksheet.dirty = true;
+                                                source_worksheet.dirty_cells.insert(key);
+                                            }
+                                            None => {}
+                                        }
                                     }
                                 }
                             }
                         } else {
-                            let destination_worksheet = runtime
-                                .loaded
-                                .state
-                                .worksheet_data_for_sheet_mut(destination_sheet_id)?;
-                            let mut index = 0usize;
-                            for row in target_rect.row_first..=target_rect.row_last {
-                                for col in target_rect.col_first..=target_rect.col_last {
-                                    let next_cell = source_cells[index].clone();
-                                    index += 1;
-                                    match next_cell {
-                                        Some(cell) => {
-                                            if destination_worksheet.cells.get(&(row, col))
-                                                != Some(&cell)
-                                            {
-                                                destination_worksheet
-                                                    .cells
-                                                    .insert((row, col), cell);
-                                                destination_worksheet.dirty = true;
-                                                destination_worksheet
-                                                    .dirty_cells
-                                                    .insert((row, col));
+                            if self.runtime_workbook(workbook)?.read_only
+                                || self.runtime_workbook(destination_workbook)?.read_only
+                            {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+
+                            {
+                                let destination_runtime =
+                                    self.runtime_workbook_mut(destination_workbook)?;
+                                let destination_worksheet = destination_runtime
+                                    .loaded
+                                    .state
+                                    .worksheet_data_for_sheet_mut(destination_sheet_id)?;
+                                let mut index = 0usize;
+                                for row in target_rect.row_first..=target_rect.row_last {
+                                    for col in target_rect.col_first..=target_rect.col_last {
+                                        let next_cell = source_cells[index].clone();
+                                        index += 1;
+                                        match next_cell {
+                                            Some(cell) => {
+                                                if destination_worksheet.cells.get(&(row, col))
+                                                    != Some(&cell)
+                                                {
+                                                    destination_worksheet
+                                                        .cells
+                                                        .insert((row, col), cell);
+                                                    destination_worksheet.dirty = true;
+                                                    destination_worksheet
+                                                        .dirty_cells
+                                                        .insert((row, col));
+                                                }
                                             }
-                                        }
-                                        None => {
-                                            match destination_worksheet.cells.get_mut(&(row, col)) {
+                                            None => match destination_worksheet
+                                                .cells
+                                                .get_mut(&(row, col))
+                                            {
                                                 Some(existing) if existing.style_id.is_some() => {
                                                     if existing.value
                                                         != office_common::CellValue::Blank
@@ -1891,36 +1994,40 @@ impl ExcelRuntime {
                                                         .insert((row, col));
                                                 }
                                                 None => {}
-                                            }
+                                            },
                                         }
                                     }
                                 }
                             }
 
-                            let source_worksheet = runtime
-                                .loaded
-                                .state
-                                .worksheet_data_for_sheet_mut(sheet_id)?;
-                            for row in rect.row_first..=rect.row_last {
-                                for col in rect.col_first..=rect.col_last {
-                                    let key = (row, col);
-                                    match source_worksheet.cells.get_mut(&key) {
-                                        Some(existing) if existing.style_id.is_some() => {
-                                            if existing.value != office_common::CellValue::Blank
-                                                || existing.formula.is_some()
-                                            {
-                                                existing.value = office_common::CellValue::Blank;
-                                                existing.formula = None;
+                            {
+                                let source_runtime = self.runtime_workbook_mut(workbook)?;
+                                let source_worksheet = source_runtime
+                                    .loaded
+                                    .state
+                                    .worksheet_data_for_sheet_mut(sheet_id)?;
+                                for row in rect.row_first..=rect.row_last {
+                                    for col in rect.col_first..=rect.col_last {
+                                        let key = (row, col);
+                                        match source_worksheet.cells.get_mut(&key) {
+                                            Some(existing) if existing.style_id.is_some() => {
+                                                if existing.value != office_common::CellValue::Blank
+                                                    || existing.formula.is_some()
+                                                {
+                                                    existing.value =
+                                                        office_common::CellValue::Blank;
+                                                    existing.formula = None;
+                                                    source_worksheet.dirty = true;
+                                                    source_worksheet.dirty_cells.insert(key);
+                                                }
+                                            }
+                                            Some(_) => {
+                                                source_worksheet.cells.remove(&key);
                                                 source_worksheet.dirty = true;
                                                 source_worksheet.dirty_cells.insert(key);
                                             }
+                                            None => {}
                                         }
-                                        Some(_) => {
-                                            source_worksheet.cells.remove(&key);
-                                            source_worksheet.dirty = true;
-                                            source_worksheet.dirty_cells.insert(key);
-                                        }
-                                        None => {}
                                     }
                                 }
                             }
@@ -14942,6 +15049,135 @@ mod tests {
             runtime
                 .dispatch_get(workbook.0, "Saved", &[])
                 .expect("Workbook.Saved after Range.Cut")
+        ));
+    }
+
+    #[test]
+    fn range_cut_destination_supports_cross_workbook_ranges() {
+        let mut runtime = ExcelRuntime::new();
+        let source_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open source workbook");
+        let destination_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open destination workbook");
+        let source_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(source_workbook.0, "Worksheets", &[])
+                .expect("source Workbook.Worksheets"),
+        );
+        let source_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(source_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("source Worksheets.Item(1)"),
+        );
+        let destination_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(destination_workbook.0, "Worksheets", &[])
+                .expect("destination Workbook.Worksheets"),
+        );
+        let destination_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(destination_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("destination Worksheets.Item(1)"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(source_sheet, "Range", &[OmValue::Text("A1:B1".to_string())])
+                .expect("source Range(A1:B1)"),
+        );
+        let destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    destination_sheet,
+                    "Range",
+                    &[OmValue::Text("C3".to_string())],
+                )
+                .expect("destination Range(C3)"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(source, "Cut", &[OmValue::Object(destination)])
+                .expect("Range.Cut cross-workbook Destination"),
+            OmValue::Empty
+        ));
+
+        let source_a1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(source_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("source Range(A1)"),
+        );
+        let source_b1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(source_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("source Range(B1)"),
+        );
+        let destination_c3 = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    destination_sheet,
+                    "Range",
+                    &[OmValue::Text("C3".to_string())],
+                )
+                .expect("destination Range(C3)"),
+        );
+        let destination_d3 = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    destination_sheet,
+                    "Range",
+                    &[OmValue::Text("D3".to_string())],
+                )
+                .expect("destination Range(D3)"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(source_a1, "Value", &[])
+                .expect("source A1 Value after cut"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(source_b1, "Value", &[])
+                .expect("source B1 Value after cut"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(destination_c3, "Value", &[])
+                    .expect("destination C3 Value after cut")
+            ),
+            42.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(destination_d3, "Formula", &[])
+                    .expect("destination D3 Formula after cut")
+            ),
+            r#"=UPPER("shared")"#
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(source_workbook.0, "Saved", &[])
+                .expect("source Workbook.Saved after Range.Cut")
+        ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(destination_workbook.0, "Saved", &[])
+                .expect("destination Workbook.Saved after Range.Cut")
         ));
     }
 
