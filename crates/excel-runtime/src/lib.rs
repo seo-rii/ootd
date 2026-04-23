@@ -8921,6 +8921,13 @@ impl FormulaCriteria {
     }
 }
 
+#[derive(Debug, Clone)]
+struct FormulaCriteriaRange {
+    sheet_id: SheetId,
+    rect: Rect,
+    criteria: FormulaCriteria,
+}
+
 fn parse_formula_criteria_numeric_literal(input: &str) -> Option<(FormulaComparisonOperator, f64)> {
     for (prefix, operator) in [
         ("<>", FormulaComparisonOperator::NotEqual),
@@ -9283,6 +9290,101 @@ impl<'a> FormulaEvaluator<'a> {
         }
         Ok((total, count))
     }
+
+    fn countifs_values_in_rects(
+        &mut self,
+        criteria_ranges: &[FormulaCriteriaRange],
+    ) -> Result<u64, FormulaEvalError> {
+        let Some(base_rect) = criteria_ranges
+            .first()
+            .map(|criteria_range| criteria_range.rect)
+        else {
+            return Err(FormulaEvalError::Value);
+        };
+        let mut count = 0_u64;
+        for row in base_rect.row_first..=base_rect.row_last {
+            for col in base_rect.col_first..=base_rect.col_last {
+                let mut matches_all = true;
+                for criteria_range in criteria_ranges {
+                    if !self.criteria_range_matches_at_offset(
+                        base_rect,
+                        row,
+                        col,
+                        criteria_range,
+                    )? {
+                        matches_all = false;
+                        break;
+                    }
+                }
+                if matches_all {
+                    count += 1;
+                }
+            }
+        }
+        Ok(count)
+    }
+
+    fn sumifs_values_in_rect(
+        &mut self,
+        sum_sheet_id: SheetId,
+        sum_rect: Rect,
+        criteria_ranges: &[FormulaCriteriaRange],
+    ) -> Result<f64, FormulaEvalError> {
+        let Some(base_rect) = criteria_ranges
+            .first()
+            .map(|criteria_range| criteria_range.rect)
+        else {
+            return Err(FormulaEvalError::Value);
+        };
+        let mut total = 0.0;
+        for row in base_rect.row_first..=base_rect.row_last {
+            for col in base_rect.col_first..=base_rect.col_last {
+                let mut matches_all = true;
+                for criteria_range in criteria_ranges {
+                    if !self.criteria_range_matches_at_offset(
+                        base_rect,
+                        row,
+                        col,
+                        criteria_range,
+                    )? {
+                        matches_all = false;
+                        break;
+                    }
+                }
+                if !matches_all {
+                    continue;
+                }
+                let sum_row = sum_rect.row_first + (row - base_rect.row_first);
+                let sum_col = sum_rect.col_first + (col - base_rect.col_first);
+                let sum_value = self.cell_value_or_blank(sum_sheet_id, sum_row, sum_col)?;
+                match sum_value {
+                    CellValue::Number(number) => total += number,
+                    CellValue::Error(error) => {
+                        return Err(formula_eval_error_from_cell_error(error));
+                    }
+                    CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {}
+                }
+            }
+        }
+        Ok(total)
+    }
+
+    fn criteria_range_matches_at_offset(
+        &mut self,
+        base_rect: Rect,
+        row: u32,
+        col: u32,
+        criteria_range: &FormulaCriteriaRange,
+    ) -> Result<bool, FormulaEvalError> {
+        let criteria_row = criteria_range.rect.row_first + (row - base_rect.row_first);
+        let criteria_col = criteria_range.rect.col_first + (col - base_rect.col_first);
+        let value =
+            self.cell_value_or_blank(criteria_range.sheet_id, criteria_row, criteria_col)?;
+        if let CellValue::Error(error) = value {
+            return Err(formula_eval_error_from_cell_error(error));
+        }
+        Ok(criteria_range.criteria.matches(&value))
+    }
 }
 
 struct FormulaParser<'a, 'b, 'state> {
@@ -9425,6 +9527,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("AVERAGEIF") {
             return self.parse_averageif_function();
         }
+        if name.eq_ignore_ascii_case("COUNTIFS") {
+            return self.parse_countifs_function();
+        }
+        if name.eq_ignore_ascii_case("SUMIFS") {
+            return self.parse_sumifs_function();
+        }
         let function =
             FormulaAggregateFunction::from_name(name).ok_or(FormulaEvalError::Unsupported)?;
         let mut values = Vec::new();
@@ -9527,6 +9635,24 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             average_sheet_id,
             average_rect,
         )
+    }
+
+    fn parse_countifs_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let criteria_ranges = self.parse_criteria_ranges_arguments()?;
+        Ok(self
+            .evaluator
+            .countifs_values_in_rects(criteria_ranges.as_slice())? as f64)
+    }
+
+    fn parse_sumifs_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let (sum_sheet_id, sum_rect) = self.parse_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let criteria_ranges = self.parse_criteria_ranges_arguments()?;
+        self.evaluator
+            .sumifs_values_in_rect(sum_sheet_id, sum_rect, criteria_ranges.as_slice())
     }
 
     fn parse_countblank_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -9649,6 +9775,32 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         Ok(FormulaCriteria::from_numeric_value(
             self.parse_comparison()?,
         ))
+    }
+
+    fn parse_criteria_ranges_arguments(
+        &mut self,
+    ) -> Result<Vec<FormulaCriteriaRange>, FormulaEvalError> {
+        let mut criteria_ranges = Vec::new();
+        loop {
+            let (sheet_id, rect) = self.parse_reference_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let criteria = self.parse_criteria_argument()?;
+            criteria_ranges.push(FormulaCriteriaRange {
+                sheet_id,
+                rect,
+                criteria,
+            });
+            self.skip_whitespace();
+            if self.consume_char(')') {
+                return Ok(criteria_ranges);
+            }
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+        }
     }
 
     fn parse_number(&mut self) -> Result<Option<f64>, FormulaEvalError> {
@@ -12513,6 +12665,155 @@ mod tests {
                 OmValue::Number(30.0),
                 OmValue::Number(30.0),
                 OmValue::Error(CellError::Div0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_countifs_and_sumifs_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let first_criteria_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A6".to_string())])
+                .expect("Range(A1:A6)"),
+        );
+        let second_criteria_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B6".to_string())])
+                .expect("Range(B1:B6)"),
+        );
+        let sum_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1:C6".to_string())])
+                .expect("Range(C1:C6)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1:D5".to_string())])
+                .expect("Range(D1:D5)"),
+        );
+
+        runtime
+            .dispatch_set(
+                first_criteria_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        6,
+                        1,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(2.0),
+                            OmValue::Empty,
+                            OmValue::Number(1.0),
+                        ],
+                    )
+                    .expect("first criteria values"),
+                ),
+                &[],
+            )
+            .expect("set first criteria values");
+        runtime
+            .dispatch_set(
+                second_criteria_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        6,
+                        1,
+                        vec![
+                            OmValue::Text("east".to_string()),
+                            OmValue::Text("west".to_string()),
+                            OmValue::Text("east".to_string()),
+                            OmValue::Text("west".to_string()),
+                            OmValue::Text("east".to_string()),
+                            OmValue::Text("east".to_string()),
+                        ],
+                    )
+                    .expect("second criteria values"),
+                ),
+                &[],
+            )
+            .expect("set second criteria values");
+        runtime
+            .dispatch_set(
+                sum_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        6,
+                        1,
+                        vec![
+                            OmValue::Number(10.0),
+                            OmValue::Number(20.0),
+                            OmValue::Number(30.0),
+                            OmValue::Number(40.0),
+                            OmValue::Number(50.0),
+                            OmValue::Number(60.0),
+                        ],
+                    )
+                    .expect("sumifs values"),
+                ),
+                &[],
+            )
+            .expect("set sumifs values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        5,
+                        1,
+                        vec![
+                            OmValue::Text("=COUNTIFS(A1:A6, 1, B1:B6, \"east\")".to_string()),
+                            OmValue::Text("=COUNTIFS(A1:A6, \">1\", B1:B6, \"west\")".to_string()),
+                            OmValue::Text("=COUNTIFS(A1:A7, \"\", B1:B7, \"east\")".to_string()),
+                            OmValue::Text("=SUMIFS(C1:C6, A1:A6, 1, B1:B6, \"east\")".to_string()),
+                            OmValue::Text(
+                                "=SUMIFS(C1:C6, A1:A6, \">1\", B1:B6, \"east\")".to_string(),
+                            ),
+                        ],
+                    )
+                    .expect("countifs/sumifs formulas"),
+                ),
+                &[],
+            )
+            .expect("set countifs/sumifs formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("countifs/sumifs values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected countifs/sumifs value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(2.0),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(70.0),
+                OmValue::Number(30.0),
             ]
         );
     }
