@@ -6807,7 +6807,7 @@ impl ExcelRuntime {
             return Err(OmError::invalid_state("application has no active workbook"));
         };
         let reference = reference.trim();
-        let (sheet_name, a1_reference) = match reference.rsplit_once('!') {
+        let (sheet_qualifier, a1_reference) = match reference.rsplit_once('!') {
             Some((sheet_name, a1_reference)) => {
                 let sheet_name = sheet_name.trim();
                 if sheet_name.is_empty() {
@@ -6834,9 +6834,14 @@ impl ExcelRuntime {
                 "Application string references must use A1 notation or SheetName!A1 notation",
             )
         })?;
+        let (target_workbook, sheet_name) = match sheet_qualifier {
+            Some(sheet_qualifier) => self
+                .resolve_application_reference_sheet_qualifier(active_workbook, &sheet_qualifier)?,
+            None => (active_workbook, None),
+        };
         let sheet_id = match sheet_name {
             Some(sheet_name) => self
-                .runtime_workbook(active_workbook)?
+                .runtime_workbook(target_workbook)?
                 .loaded
                 .state
                 .worksheets
@@ -6844,10 +6849,61 @@ impl ExcelRuntime {
                 .find(|worksheet| worksheet.name.eq_ignore_ascii_case(&sheet_name))
                 .map(|worksheet| worksheet.id)
                 .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?,
-            None => self.active_sheet_id(active_workbook)?,
+            None => self.active_sheet_id(target_workbook)?,
         };
 
-        Ok((active_workbook, sheet_id, rect))
+        Ok((target_workbook, sheet_id, rect))
+    }
+
+    fn resolve_application_reference_sheet_qualifier(
+        &self,
+        active_workbook: WorkbookHandle,
+        qualifier: &str,
+    ) -> OmResult<(WorkbookHandle, Option<String>)> {
+        if let Some(qualified) = qualifier.strip_prefix('[') {
+            let Some(close_index) = qualified.find(']') else {
+                return Err(OmError::invalid_argument(
+                    "Application string references use invalid workbook qualification",
+                ));
+            };
+            let workbook_name = &qualified[..close_index];
+            let sheet_name = &qualified[close_index + 1..];
+            if workbook_name.is_empty() || sheet_name.is_empty() {
+                return Err(OmError::invalid_argument(
+                    "Application string references require workbook and worksheet names",
+                ));
+            }
+            let workbook = self.resolve_workbook_display_name(active_workbook, workbook_name)?;
+            Ok((workbook, Some(sheet_name.to_string())))
+        } else {
+            Ok((active_workbook, Some(qualifier.to_string())))
+        }
+    }
+
+    fn resolve_workbook_display_name(
+        &self,
+        active_workbook: WorkbookHandle,
+        workbook_name: &str,
+    ) -> OmResult<WorkbookHandle> {
+        if self
+            .workbook_model(active_workbook)?
+            .display_name
+            .eq_ignore_ascii_case(workbook_name)
+        {
+            return Ok(active_workbook);
+        }
+        self.workbooks
+            .iter()
+            .find(|(_, runtime)| {
+                runtime
+                    .loaded
+                    .state
+                    .model
+                    .display_name
+                    .eq_ignore_ascii_case(workbook_name)
+            })
+            .map(|(&handle, _)| WorkbookHandle(ObjectHandle(handle)))
+            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown workbook"))
     }
 
     fn set_selection(&mut self, workbook: WorkbookHandle, sheet_id: SheetId, rect: Rect) {
@@ -19380,6 +19436,51 @@ mod tests {
             ),
             "$C$4:$D$5"
         );
+
+        let external_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    application,
+                    "Range",
+                    &[OmValue::Text(
+                        "'[Workbook]Quarter 1''s Data'!A2:B3".to_string(),
+                    )],
+                )
+                .expect("Application.Range on external sheet reference"),
+        );
+        let external_parent = expect_object_handle(
+            runtime
+                .dispatch_get(external_range, "Parent", &[])
+                .expect("external Application.Range parent"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(external_range, "Address", &[])
+                    .expect("external Application.Range address")
+            ),
+            "$A$2:$B$3"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(external_parent, "Name", &[])
+                    .expect("external Application.Range parent name")
+            ),
+            "Quarter 1's Data"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    application,
+                    "Range",
+                    &[OmValue::Text("[Missing]FirstSheet!A1".to_string())],
+                )
+                .expect_err("Application.Range should reject unknown workbooks")
+                .code,
+            OmErrorCode::NotFound
+        );
     }
 
     #[test]
@@ -20514,6 +20615,43 @@ mod tests {
             ),
             "$D$5"
         );
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(
+                    application,
+                    "Goto",
+                    &[OmValue::Text("'[Workbook]Sheet One'!B2".to_string())],
+                )
+                .expect("Application.Goto on external sheet reference"),
+            OmValue::Empty
+        ));
+        let external_active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after external Application.Goto"),
+        );
+        let external_selection = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after external Application.Goto"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(external_active_sheet, "Name", &[])
+                    .expect("ActiveSheet after external Application.Goto name")
+            ),
+            "Sheet One"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(external_selection, "Address", &[])
+                    .expect("Selection after external Application.Goto address")
+            ),
+            "$B$2"
+        );
         assert_eq!(
             runtime
                 .dispatch_invoke(
@@ -20522,6 +20660,17 @@ mod tests {
                     &[OmValue::Text("'missing sheet'!A1".to_string())],
                 )
                 .expect_err("Application.Goto should reject unknown sheet names")
+                .code,
+            OmErrorCode::NotFound
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    application,
+                    "Goto",
+                    &[OmValue::Text("[Missing]Sheet One!A1".to_string())],
+                )
+                .expect_err("Application.Goto should reject unknown workbooks")
                 .code,
             OmErrorCode::NotFound
         );
