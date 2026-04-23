@@ -586,7 +586,9 @@ impl XlsxCodec {
             .iter()
             .map(|relationship| (relationship.id.clone(), relationship.target.clone()))
             .collect::<BTreeMap<_, _>>();
-        let worksheets = parse_workbook(workbook_part.bytes.as_slice(), &relationships)?;
+        let parsed_workbook = parse_workbook(workbook_part.bytes.as_slice(), &relationships)?;
+        let date1904 = parsed_workbook.date1904;
+        let worksheets = parsed_workbook.worksheets;
         let shared_strings = package
             .part("xl/sharedStrings.xml")
             .map(|part| parse_shared_strings(part.bytes.as_slice()))
@@ -637,6 +639,7 @@ impl XlsxCodec {
                 id: WorkbookId(0),
                 display_name: "Workbook".to_string(),
                 format: detected_format,
+                date1904,
             },
             worksheets,
             worksheet_data,
@@ -667,9 +670,11 @@ impl XlsxCodec {
             })?
             .bytes
             .clone();
-        let saved_worksheets = parse_workbook(workbook_xml.as_slice(), &BTreeMap::new())?;
-        if saved_worksheets.len() != workbook.state.worksheets.len()
-            || saved_worksheets
+        let saved_workbook = parse_workbook(workbook_xml.as_slice(), &BTreeMap::new())?;
+        if saved_workbook.date1904 != workbook.state.model.date1904
+            || saved_workbook.worksheets.len() != workbook.state.worksheets.len()
+            || saved_workbook
+                .worksheets
                 .iter()
                 .zip(&workbook.state.worksheets)
                 .any(|(saved, current)| {
@@ -730,9 +735,55 @@ impl XlsxCodec {
                 }
                 Ok(rewritten)
             };
+            let rewrite_workbook_pr_element = |element: &BytesStart<'_>,
+                                               decoder: quick_xml::encoding::Decoder|
+             -> OmResult<BytesStart<'static>> {
+                let mut rewritten =
+                    BytesStart::new(String::from_utf8_lossy(element.name().as_ref()).into_owned());
+                for attr in element.attributes() {
+                    let attr = attr.map_err(xml_error)?;
+                    let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+                    if key == "date1904" {
+                        continue;
+                    }
+                    let value = attr
+                        .decode_and_unescape_value(decoder)
+                        .map_err(xml_error)?
+                        .into_owned();
+                    rewritten.push_attribute((key.as_str(), value.as_str()));
+                }
+                if workbook.state.model.date1904 {
+                    rewritten.push_attribute(("date1904", "1"));
+                }
+                Ok(rewritten)
+            };
 
             loop {
                 match reader.read_event_into(&mut buffer) {
+                    Ok(Event::Start(element)) if element.name().as_ref() == b"workbook" => {
+                        writer
+                            .write_event(Event::Start(element.into_owned()))
+                            .map_err(xml_error)?;
+                        if !saved_workbook.has_workbook_pr && workbook.state.model.date1904 {
+                            let mut workbook_pr = BytesStart::new("workbookPr");
+                            workbook_pr.push_attribute(("date1904", "1"));
+                            writer
+                                .write_event(Event::Empty(workbook_pr))
+                                .map_err(xml_error)?;
+                        }
+                    }
+                    Ok(Event::Start(element)) if element.name().as_ref() == b"workbookPr" => writer
+                        .write_event(Event::Start(rewrite_workbook_pr_element(
+                            &element,
+                            reader.decoder(),
+                        )?))
+                        .map_err(xml_error)?,
+                    Ok(Event::Empty(element)) if element.name().as_ref() == b"workbookPr" => writer
+                        .write_event(Event::Empty(rewrite_workbook_pr_element(
+                            &element,
+                            reader.decoder(),
+                        )?))
+                        .map_err(xml_error)?,
                     Ok(Event::Start(element)) if element.name().as_ref() == b"sheet" => writer
                         .write_event(Event::Start(rewrite_sheet_element(
                             &element,
@@ -963,17 +1014,41 @@ fn detect_format(package: &OpcPackage) -> FileFormat {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedWorkbook {
+    date1904: bool,
+    has_workbook_pr: bool,
+    worksheets: Vec<WorksheetModel>,
+}
+
 fn parse_workbook(
     workbook_xml: &[u8],
     relationships: &BTreeMap<String, String>,
-) -> OmResult<Vec<WorksheetModel>> {
+) -> OmResult<ParsedWorkbook> {
     let mut reader = Reader::from_reader(Cursor::new(workbook_xml));
     reader.config_mut().trim_text(true);
     let mut buffer = Vec::new();
+    let mut date1904 = false;
+    let mut has_workbook_pr = false;
     let mut worksheets = Vec::new();
 
     loop {
         match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) | Ok(Event::Empty(element))
+                if element.name().as_ref() == b"workbookPr" =>
+            {
+                has_workbook_pr = true;
+                for attr in element.attributes() {
+                    let attr = attr.map_err(xml_error)?;
+                    let value = attr
+                        .decode_and_unescape_value(reader.decoder())
+                        .map_err(xml_error)?
+                        .into_owned();
+                    if attr.key.as_ref() == b"date1904" {
+                        date1904 = parse_ooxml_bool(value.as_str())?;
+                    }
+                }
+            }
             Ok(Event::Start(element)) | Ok(Event::Empty(element))
                 if element.name().as_ref() == b"sheet" =>
             {
@@ -1023,7 +1098,24 @@ fn parse_workbook(
         ));
     }
 
-    Ok(worksheets)
+    Ok(ParsedWorkbook {
+        date1904,
+        has_workbook_pr,
+        worksheets,
+    })
+}
+
+fn parse_ooxml_bool(value: &str) -> OmResult<bool> {
+    if value == "1" || value.eq_ignore_ascii_case("true") {
+        Ok(true)
+    } else if value == "0" || value.eq_ignore_ascii_case("false") {
+        Ok(false)
+    } else {
+        Err(OmError::new(
+            OmErrorCode::Parse,
+            format!("unsupported OOXML boolean value {value:?}"),
+        ))
+    }
 }
 
 fn parse_sheet_visibility_state(value: &str) -> OmResult<SheetVisibility> {
@@ -16699,7 +16791,7 @@ mod tests {
 
     #[test]
     fn parses_workbook_sheet_visibility_states() {
-        let worksheets = parse_workbook(
+        let workbook = parse_workbook(
             br#"<?xml version="1.0" encoding="UTF-8"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
@@ -16714,10 +16806,90 @@ mod tests {
         )
         .expect("workbook sheets");
 
-        assert_eq!(worksheets[0].visibility, SheetVisibility::Visible);
-        assert_eq!(worksheets[1].visibility, SheetVisibility::Hidden);
-        assert_eq!(worksheets[2].visibility, SheetVisibility::VeryHidden);
-        assert_eq!(worksheets[3].visibility, SheetVisibility::Visible);
+        assert_eq!(workbook.worksheets[0].visibility, SheetVisibility::Visible);
+        assert_eq!(workbook.worksheets[1].visibility, SheetVisibility::Hidden);
+        assert_eq!(
+            workbook.worksheets[2].visibility,
+            SheetVisibility::VeryHidden
+        );
+        assert_eq!(workbook.worksheets[3].visibility, SheetVisibility::Visible);
+    }
+
+    #[test]
+    fn parses_workbook_date1904_property() {
+        let workbook = parse_workbook(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <workbookPr date1904="true"/>
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"#,
+            &BTreeMap::new(),
+        )
+        .expect("workbook date1904");
+
+        assert!(workbook.has_workbook_pr);
+        assert!(workbook.date1904);
+        assert_eq!(workbook.worksheets.len(), 1);
+    }
+
+    #[test]
+    fn save_rewrites_workbook_date1904_property() {
+        let codec = XlsxCodec;
+        let mut loaded = codec
+            .load(
+                synthetic_workbook_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        assert!(!loaded.state.model.date1904);
+
+        loaded.state.model.date1904 = true;
+        let date1904_bytes = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("save date1904 workbook");
+        let date1904_package =
+            OpcPackage::from_bytes(date1904_bytes.as_slice()).expect("date1904 package");
+        let workbook_xml = std::str::from_utf8(
+            date1904_package
+                .part("xl/workbook.xml")
+                .expect("date1904 workbook.xml")
+                .bytes
+                .as_slice(),
+        )
+        .expect("date1904 workbook.xml utf8");
+        assert!(workbook_xml.contains(r#"date1904="1""#));
+
+        let mut reopened = codec
+            .load(date1904_bytes.as_slice(), CommonLoadOptions::default())
+            .expect("reopen date1904 workbook");
+        assert!(reopened.state.model.date1904);
+        reopened.state.model.date1904 = false;
+
+        let date1900_bytes = codec
+            .save(&reopened, office_common::SaveOptions::default())
+            .expect("save date1900 workbook");
+        let date1900_package =
+            OpcPackage::from_bytes(date1900_bytes.as_slice()).expect("date1900 package");
+        let workbook_xml = std::str::from_utf8(
+            date1900_package
+                .part("xl/workbook.xml")
+                .expect("date1900 workbook.xml")
+                .bytes
+                .as_slice(),
+        )
+        .expect("date1900 workbook.xml utf8");
+        assert!(!workbook_xml.contains("date1904="));
+        assert!(
+            !codec
+                .load(date1900_bytes.as_slice(), CommonLoadOptions::default())
+                .expect("reopen date1900 workbook")
+                .state
+                .model
+                .date1904
+        );
     }
 
     #[test]

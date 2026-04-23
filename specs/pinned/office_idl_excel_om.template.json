@@ -1340,6 +1340,38 @@
           }
         },
         {
+          "name": "Date1904",
+          "memberKind": "property",
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "Date1904"
+                },
+                {
+                  "kind": "property_set",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "Date1904"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          }
+        },
+        {
           "name": "HasVBProject",
           "memberKind": "property",
           "returnType": {

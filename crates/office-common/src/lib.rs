@@ -284,6 +284,8 @@ pub struct WorkbookModel {
     pub id: WorkbookId,
     pub display_name: String,
     pub format: FileFormat,
+    #[serde(default)]
+    pub date1904: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

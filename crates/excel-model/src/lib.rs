@@ -350,6 +350,7 @@ mod tests {
                 id: workbook_id,
                 display_name: "Workbook".to_string(),
                 format: FileFormat::Xlsx,
+                date1904: false,
             },
             worksheets: vec![WorksheetModel {
                 id: sheet_id,

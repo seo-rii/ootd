@@ -568,6 +568,25 @@ impl ExcelRuntime {
                     )));
                 }
                 match member {
+                    "Date1904" => {
+                        let OmValue::Bool(date1904) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Workbook.Date1904 expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        if runtime.loaded.state.model.date1904 != date1904 {
+                            runtime.loaded.state.model.date1904 = date1904;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     "Saved" => {
                         let OmValue::Bool(saved) = value else {
                             return Err(OmError::type_mismatch(
@@ -1347,6 +1366,7 @@ impl ExcelRuntime {
             "FileFormat" => Ok(OmValue::Number(f64::from(file_format_to_excel_value(
                 self.workbook_model(workbook)?.format,
             )))),
+            "Date1904" => Ok(OmValue::Bool(self.workbook_model(workbook)?.date1904)),
             "HasVBProject" => Ok(OmValue::Bool(
                 self.runtime_workbook(workbook)?
                     .loaded
@@ -6231,6 +6251,91 @@ mod tests {
         assert_eq!(
             super::file_format_to_excel_value(FileFormat::StrictXlsx),
             super::XL_OPEN_XML_STRICT_WORKBOOK
+        );
+    }
+
+    #[test]
+    fn workbook_date1904_dispatch_roundtrips_and_marks_workbook_dirty() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Date1904", &[])
+                .expect("Workbook.Date1904 default")
+        ));
+
+        runtime
+            .dispatch_set(workbook.0, "Date1904", OmValue::Bool(true), &[])
+            .expect("Workbook.Date1904 = true");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Date1904", &[])
+                .expect("Workbook.Date1904 after true")
+        ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after Date1904")
+        ));
+
+        runtime
+            .dispatch_set(workbook.0, "Date1904", OmValue::Bool(false), &[])
+            .expect("Workbook.Date1904 = false");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Date1904", &[])
+                .expect("Workbook.Date1904 after false")
+        ));
+
+        assert_eq!(
+            runtime
+                .dispatch_set(workbook.0, "Date1904", OmValue::Number(1.0), &[])
+                .expect_err("Workbook.Date1904 should reject numeric values")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Date1904", &[OmValue::Number(1.0)])
+                .expect_err("Workbook.Date1904 should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    workbook.0,
+                    "Date1904",
+                    OmValue::Bool(true),
+                    &[OmValue::Number(1.0)]
+                )
+                .expect_err("Workbook.Date1904 set should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+
+        let read_only_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook");
+        assert_eq!(
+            runtime
+                .dispatch_set(read_only_workbook.0, "Date1904", OmValue::Bool(true), &[])
+                .expect_err("Workbook.Date1904 should reject read-only edits")
+                .code,
+            OmErrorCode::InvalidState
         );
     }
 
