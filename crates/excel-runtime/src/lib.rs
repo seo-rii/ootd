@@ -8219,14 +8219,94 @@ fn parse_rect_a1(input: &str) -> OmResult<Rect> {
     if parts.next().is_some() {
         return Err(OmError::parse("A1 range contains too many ':' separators"));
     }
-    let first = parse_cell_a1(first)?;
-    let second = second.map(parse_cell_a1).transpose()?.unwrap_or(first);
-    Ok(Rect {
-        row_first: first.0.min(second.0),
-        row_last: first.0.max(second.0),
-        col_first: first.1.min(second.1),
-        col_last: first.1.max(second.1),
-    })
+    let first = parse_a1_endpoint(first)?;
+    let Some(second) = second else {
+        return match first {
+            A1Endpoint::Cell(row, col) => Ok(Rect::single_cell(row, col)),
+            A1Endpoint::Row(_) | A1Endpoint::Column(_) => Err(OmError::parse(format!(
+                "A1 range {input:?} must use ':' for whole-row or whole-column selectors"
+            ))),
+        };
+    };
+    let second = parse_a1_endpoint(second)?;
+    match (first, second) {
+        (A1Endpoint::Cell(first_row, first_col), A1Endpoint::Cell(second_row, second_col)) => {
+            Ok(Rect {
+                row_first: first_row.min(second_row),
+                row_last: first_row.max(second_row),
+                col_first: first_col.min(second_col),
+                col_last: first_col.max(second_col),
+            })
+        }
+        (A1Endpoint::Row(first_row), A1Endpoint::Row(second_row)) => Ok(Rect {
+            row_first: first_row.min(second_row),
+            row_last: first_row.max(second_row),
+            col_first: 1,
+            col_last: EXCEL_MAX_COLUMN_INDEX,
+        }),
+        (A1Endpoint::Column(first_col), A1Endpoint::Column(second_col)) => Ok(Rect {
+            row_first: 1,
+            row_last: EXCEL_MAX_ROW_INDEX,
+            col_first: first_col.min(second_col),
+            col_last: first_col.max(second_col),
+        }),
+        _ => Err(OmError::parse(format!(
+            "A1 range {input:?} cannot mix cell, row, and column endpoints"
+        ))),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum A1Endpoint {
+    Cell(u32, u32),
+    Row(u32),
+    Column(u32),
+}
+
+fn parse_a1_endpoint(input: &str) -> OmResult<A1Endpoint> {
+    let normalized = input.trim().replace('$', "");
+    if normalized.is_empty() {
+        return Err(OmError::parse(format!("invalid A1 reference {input:?}")));
+    }
+    if normalized.chars().all(|ch| ch.is_ascii_digit()) {
+        let row = normalized
+            .parse::<u32>()
+            .map_err(|_| OmError::parse(format!("invalid row index in {input:?}")))?;
+        if row == 0 || row > EXCEL_MAX_ROW_INDEX {
+            return Err(OmError::parse(format!(
+                "A1 row reference {input:?} is outside worksheet bounds"
+            )));
+        }
+        return Ok(A1Endpoint::Row(row));
+    }
+    if normalized.chars().all(|ch| ch.is_ascii_alphabetic()) {
+        return Ok(A1Endpoint::Column(parse_column_label_a1(input)?));
+    }
+
+    let (row, col) = parse_cell_a1(input)?;
+    Ok(A1Endpoint::Cell(row, col))
+}
+
+fn parse_column_label_a1(input: &str) -> OmResult<u32> {
+    let normalized = input.trim().replace('$', "").to_ascii_uppercase();
+    if normalized.is_empty() || !normalized.chars().all(|ch| ch.is_ascii_alphabetic()) {
+        return Err(OmError::parse(format!(
+            "invalid A1 column reference {input:?}"
+        )));
+    }
+    let mut col = 0u32;
+    for ch in normalized.bytes() {
+        col = col
+            .checked_mul(26)
+            .and_then(|value| value.checked_add((ch - b'A' + 1) as u32))
+            .ok_or_else(|| OmError::parse("column index overflow"))?;
+    }
+    if col == 0 || col > EXCEL_MAX_COLUMN_INDEX {
+        return Err(OmError::parse(format!(
+            "A1 column reference {input:?} is outside worksheet bounds"
+        )));
+    }
+    Ok(col)
 }
 
 fn parse_cell_a1(input: &str) -> OmResult<(u32, u32)> {
@@ -14716,6 +14796,14 @@ mod tests {
             invalid_range.expect_err("invalid range should fail").code,
             OmErrorCode::Parse
         );
+        let mixed_axis_range =
+            runtime.dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A:1".to_string())]);
+        assert_eq!(
+            mixed_axis_range
+                .expect_err("mixed row/column range should fail")
+                .code,
+            OmErrorCode::Parse
+        );
 
         let invalid_cells_type = runtime.dispatch_invoke(
             active_sheet,
@@ -14774,6 +14862,21 @@ mod tests {
                 )
                 .expect("Cells(1, 1)"),
         );
+        let whole_columns = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B:D".to_string())])
+                .expect("Range(B:D)"),
+        );
+        let whole_rows = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("2:4".to_string())])
+                .expect("Range(2:4)"),
+        );
+        let application_whole_column = expect_object_handle(
+            runtime
+                .dispatch_invoke(application, "Range", &[OmValue::Text("A:A".to_string())])
+                .expect("Application.Range(A:A)"),
+        );
 
         assert_eq!(
             expect_number(
@@ -14798,6 +14901,30 @@ mod tests {
                     .expect("Cells(1, 1) Address")
             ),
             "$A$1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(whole_columns, "Address", &[])
+                    .expect("Range(B:D) Address")
+            ),
+            "$B$1:$D$1048576"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(whole_rows, "Address", &[])
+                    .expect("Range(2:4) Address")
+            ),
+            "$A$2:$XFD$4"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(application_whole_column, "Address", &[])
+                    .expect("Application.Range(A:A) Address")
+            ),
+            "$A$1:$A$1048576"
         );
 
         runtime
