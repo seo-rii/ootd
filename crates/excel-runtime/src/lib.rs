@@ -1038,6 +1038,160 @@ impl ExcelRuntime {
                             .0,
                         ))
                     }
+                    "Copy" => {
+                        let destination = match args {
+                            [] | [OmValue::Missing] | [OmValue::Empty] | [OmValue::Null] => None,
+                            [OmValue::Object(destination)] => Some(*destination),
+                            [_] => {
+                                return Err(OmError::type_mismatch(
+                                    "Range.Copy Destination expects a Range object",
+                                ));
+                            }
+                            _ => {
+                                return Err(OmError::invalid_argument(
+                                    "Range.Copy accepts at most one Destination argument",
+                                ));
+                            }
+                        };
+
+                        let Some(destination) = destination else {
+                            self.cut_copy_mode = Some(XL_COPY);
+                            return Ok(OmValue::Empty);
+                        };
+
+                        let RuntimeObjectKind::Range {
+                            workbook: destination_workbook,
+                            sheet_id: destination_sheet_id,
+                            rect: destination_rect,
+                            ..
+                        } = self.runtime_object(destination)?
+                        else {
+                            return Err(OmError::type_mismatch(
+                                "Range.Copy Destination expects a Range object",
+                            ));
+                        };
+                        if destination_workbook != workbook {
+                            return Err(OmError::unsupported(
+                                "Range.Copy currently supports same-workbook destinations",
+                            ));
+                        }
+
+                        let target_rect = if destination_rect.height() == 1
+                            && destination_rect.width() == 1
+                        {
+                            let row_last = destination_rect
+                                .row_first
+                                .checked_add(rect.height() - 1)
+                                .ok_or_else(|| {
+                                    OmError::invalid_argument(
+                                        "Range.Copy Destination overflows worksheet rows",
+                                    )
+                                })?;
+                            let col_last = destination_rect
+                                .col_first
+                                .checked_add(rect.width() - 1)
+                                .ok_or_else(|| {
+                                    OmError::invalid_argument(
+                                        "Range.Copy Destination overflows worksheet columns",
+                                    )
+                                })?;
+                            if row_last > EXCEL_MAX_ROW_INDEX {
+                                return Err(OmError::invalid_argument(
+                                    "Range.Copy Destination overflows worksheet rows",
+                                ));
+                            }
+                            if col_last > EXCEL_MAX_COLUMN_INDEX {
+                                return Err(OmError::invalid_argument(
+                                    "Range.Copy Destination overflows worksheet columns",
+                                ));
+                            }
+                            Rect {
+                                row_first: destination_rect.row_first,
+                                row_last,
+                                col_first: destination_rect.col_first,
+                                col_last,
+                            }
+                        } else {
+                            if destination_rect.height() != rect.height()
+                                || destination_rect.width() != rect.width()
+                            {
+                                return Err(OmError::invalid_argument(
+                                    "Range.Copy Destination must be a single cell or match the source range size",
+                                ));
+                            }
+                            destination_rect
+                        };
+
+                        let source_cells = {
+                            let state = &self.runtime_workbook(workbook)?.loaded.state;
+                            let source_worksheet = state.worksheet_data_for_sheet(sheet_id)?;
+                            let mut cells =
+                                Vec::with_capacity((rect.height() * rect.width()) as usize);
+                            for row in rect.row_first..=rect.row_last {
+                                for col in rect.col_first..=rect.col_last {
+                                    cells.push(source_worksheet.cells.get(&(row, col)).cloned());
+                                }
+                            }
+                            cells
+                        };
+
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let destination_worksheet = runtime
+                            .loaded
+                            .state
+                            .worksheet_data_for_sheet_mut(destination_sheet_id)?;
+                        let mut index = 0usize;
+                        for row in target_rect.row_first..=target_rect.row_last {
+                            for col in target_rect.col_first..=target_rect.col_last {
+                                let next_cell = source_cells[index].clone();
+                                index += 1;
+                                match next_cell {
+                                    Some(cell) => {
+                                        if destination_worksheet.cells.get(&(row, col))
+                                            != Some(&cell)
+                                        {
+                                            destination_worksheet.cells.insert((row, col), cell);
+                                            destination_worksheet.dirty = true;
+                                            destination_worksheet.dirty_cells.insert((row, col));
+                                        }
+                                    }
+                                    None => {
+                                        match destination_worksheet.cells.get_mut(&(row, col)) {
+                                            Some(existing) if existing.style_id.is_some() => {
+                                                if existing.value != office_common::CellValue::Blank
+                                                    || existing.formula.is_some()
+                                                {
+                                                    existing.value =
+                                                        office_common::CellValue::Blank;
+                                                    existing.formula = None;
+                                                    destination_worksheet.dirty = true;
+                                                    destination_worksheet
+                                                        .dirty_cells
+                                                        .insert((row, col));
+                                                }
+                                            }
+                                            Some(_) => {
+                                                destination_worksheet.cells.remove(&(row, col));
+                                                destination_worksheet.dirty = true;
+                                                destination_worksheet
+                                                    .dirty_cells
+                                                    .insert((row, col));
+                                            }
+                                            None => {}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        self.cut_copy_mode = None;
+                        Ok(OmValue::Empty)
+                    }
                     "Select" => {
                         if !args.is_empty() {
                             return Err(OmError::invalid_argument(
@@ -10752,6 +10906,174 @@ mod tests {
         assert!(reopened.state.cell(sheet_id, 1, 1).is_none());
         assert!(reopened.state.cell(sheet_id, 1, 2).is_none());
         assert!(reopened.state.cell(sheet_id, 1, 3).is_none());
+    }
+
+    #[test]
+    fn range_copy_sets_cut_copy_mode_and_copies_to_destination_range() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B1".to_string())])
+                .expect("Range(A1:B1)"),
+        );
+        let destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A2".to_string())])
+                .expect("Range(A2)"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(source, "Copy", &[])
+                .expect("Range.Copy without destination"),
+            OmValue::Empty
+        ));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode after Range.Copy")
+            ),
+            f64::from(super::XL_COPY)
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(source, "Copy", &[OmValue::Object(destination)])
+                .expect("Range.Copy Destination"),
+            OmValue::Empty
+        ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after destination copy")
+        ));
+
+        let copied_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A2:B2".to_string())])
+                .expect("Range(A2:B2)"),
+        );
+        let copied_value = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    copied_range,
+                    "Item",
+                    &[OmValue::Number(1.0), OmValue::Number(1.0)],
+                )
+                .expect("Range(A2:B2).Item(1, 1)"),
+        );
+        let copied_formula = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    copied_range,
+                    "Item",
+                    &[OmValue::Number(1.0), OmValue::Number(2.0)],
+                )
+                .expect("Range(A2:B2).Item(1, 2)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_value, "Value", &[])
+                    .expect("A2 Value")
+            ),
+            42.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(copied_formula, "Formula", &[])
+                    .expect("B2 Formula")
+            ),
+            r#"=UPPER("shared")"#
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after Range.Copy")
+        ));
+    }
+
+    #[test]
+    fn range_copy_rejects_invalid_destinations() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let active_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B1".to_string())])
+                .expect("Range(A1:B1)"),
+        );
+        let mismatched_destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A2:C2".to_string())])
+                .expect("Range(A2:C2)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(source, "Copy", &[OmValue::Text("A2".to_string())])
+                .expect_err("Range.Copy should reject non-object Destination")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(source, "Copy", &[OmValue::Object(active_workbook)])
+                .expect_err("Range.Copy should reject non-Range objects")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(source, "Copy", &[OmValue::Object(mismatched_destination)])
+                .expect_err("Range.Copy should reject mismatched destination size")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    source,
+                    "Copy",
+                    &[OmValue::Missing, OmValue::Object(mismatched_destination)]
+                )
+                .expect_err("Range.Copy should reject extra args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
     }
 
     #[test]

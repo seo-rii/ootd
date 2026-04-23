@@ -76,8 +76,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 4);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 99);
-    assert_eq!(summary.stub_member_count, 99);
+    assert_eq!(summary.member_count, 100);
+    assert_eq!(summary.stub_member_count, 100);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1277,7 +1277,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(application.member_count, 27);
     assert_eq!(workbook.member_count, 19);
     assert_eq!(worksheet.member_count, 18);
-    assert_eq!(range.member_count, 24);
+    assert_eq!(range.member_count, 25);
     assert_eq!(
         application.default_coclasses,
         vec!["Application".to_string()]
@@ -1830,6 +1830,15 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             .and_then(|type_ref| type_ref.alias_of.as_deref()),
         Some("Excel.Range")
     );
+    let range_copy = range
+        .members
+        .iter()
+        .find(|member| member.name == "Copy")
+        .expect("Range.Copy");
+    assert_eq!(range_copy.access, AccessMode::Read);
+    assert_eq!(range_copy.params.len(), 1);
+    assert!(range_copy.params[0].optional);
+    assert!(range_copy.return_type.is_none());
     let range_select = range
         .members
         .iter()
@@ -1874,8 +1883,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 99);
-    assert_eq!(coverage.support_counts.stub, 99);
+    assert_eq!(coverage.member_count, 100);
+    assert_eq!(coverage.support_counts.stub, 100);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -1987,8 +1996,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(range_coverage.member_count, 24);
-    assert_eq!(range_coverage.support_counts.stub, 24);
+    assert_eq!(range_coverage.member_count, 25);
+    assert_eq!(range_coverage.support_counts.stub, 25);
     assert_eq!(
         range_coverage.stub_members,
         vec![
@@ -2014,6 +2023,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Item".to_string(),
             "Offset".to_string(),
             "Resize".to_string(),
+            "Copy".to_string(),
             "Select".to_string(),
             "ClearContents".to_string()
         ]
