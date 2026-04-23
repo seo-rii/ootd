@@ -2121,7 +2121,7 @@ impl ExcelRuntime {
                     .state
                     .worksheets
                     .iter()
-                    .position(|worksheet| worksheet.name == *name),
+                    .position(|worksheet| worksheet.name.eq_ignore_ascii_case(name)),
                 _ => {
                     return Err(OmError::type_mismatch(format!(
                         "{operation} Before expects a Worksheet object, numeric index, or worksheet name when provided"
@@ -2167,7 +2167,7 @@ impl ExcelRuntime {
                     .state
                     .worksheets
                     .iter()
-                    .position(|worksheet| worksheet.name == *name),
+                    .position(|worksheet| worksheet.name.eq_ignore_ascii_case(name)),
                 _ => {
                     return Err(OmError::type_mismatch(format!(
                         "{operation} After expects a Worksheet object, numeric index, or worksheet name when provided"
@@ -2230,7 +2230,7 @@ impl ExcelRuntime {
                         .state
                         .worksheets
                         .iter()
-                        .position(|worksheet| worksheet.name == *name),
+                        .position(|worksheet| worksheet.name.eq_ignore_ascii_case(name)),
                 ),
                 _ => {
                     return Err(OmError::type_mismatch(format!(
@@ -2276,7 +2276,7 @@ impl ExcelRuntime {
                         .state
                         .worksheets
                         .iter()
-                        .position(|worksheet| worksheet.name == *name),
+                        .position(|worksheet| worksheet.name.eq_ignore_ascii_case(name)),
                 ),
                 _ => {
                     return Err(OmError::type_mismatch(format!(
@@ -3654,7 +3654,14 @@ impl ExcelRuntime {
             OmValue::Text(name) => self
                 .workbooks
                 .iter()
-                .find(|(_, runtime)| runtime.loaded.state.model.display_name == *name)
+                .find(|(_, runtime)| {
+                    runtime
+                        .loaded
+                        .state
+                        .model
+                        .display_name
+                        .eq_ignore_ascii_case(name)
+                })
                 .map(|(&handle, _)| WorkbookHandle(ObjectHandle(handle))),
             _ => {
                 return Err(OmError::type_mismatch(
@@ -3693,7 +3700,7 @@ impl ExcelRuntime {
                 .state
                 .worksheets
                 .iter()
-                .find(|worksheet| worksheet.name == *name),
+                .find(|worksheet| worksheet.name.eq_ignore_ascii_case(name)),
             _ => {
                 return Err(OmError::type_mismatch(
                     "Worksheets.Item expects a numeric index or worksheet name",
@@ -3854,7 +3861,7 @@ impl ExcelRuntime {
                 .state
                 .worksheets
                 .iter()
-                .find(|worksheet| worksheet.name == sheet_name)
+                .find(|worksheet| worksheet.name.eq_ignore_ascii_case(&sheet_name))
                 .map(|worksheet| worksheet.id)
                 .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?,
             None => self.active_sheet_id(active_workbook)?,
@@ -9088,7 +9095,7 @@ mod tests {
                 .dispatch_invoke(
                     application,
                     "Range",
-                    &[OmValue::Text("'Quarter 1''s Data'!C4:D5".to_string())],
+                    &[OmValue::Text("'quarter 1''s data'!C4:D5".to_string())],
                 )
                 .expect("Application.Range on quoted sheet reference"),
         );
@@ -10146,7 +10153,7 @@ mod tests {
                 .dispatch_invoke(
                     application,
                     "Goto",
-                    &[OmValue::Text("'Detail Sheet'!D5:E6".to_string())],
+                    &[OmValue::Text("'detail sheet'!D5:E6".to_string())],
                 )
                 .expect("Application.Goto on qualified string reference"),
             OmValue::Empty
@@ -10197,7 +10204,7 @@ mod tests {
                 .dispatch_invoke(
                     application,
                     "Goto",
-                    &[OmValue::Text("'Missing Sheet'!A1".to_string())],
+                    &[OmValue::Text("'missing sheet'!A1".to_string())],
                 )
                 .expect_err("Application.Goto should reject unknown sheet names")
                 .code,
@@ -10361,7 +10368,7 @@ mod tests {
                         path.file_name()
                             .and_then(|value| value.to_str())
                             .expect("filename")
-                            .to_string(),
+                            .to_ascii_lowercase(),
                     )],
                 )
                 .expect("Workbooks.Item(filename)"),
@@ -10473,7 +10480,7 @@ mod tests {
         );
         let renamed_sheet = expect_object_handle(
             runtime
-                .dispatch_invoke(worksheets, "Item", &[OmValue::Text("Renamed".to_string())])
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Text("renamed".to_string())])
                 .expect("Worksheets.Item(Renamed)"),
         );
         assert_eq!(
@@ -10665,7 +10672,7 @@ mod tests {
         );
         let sheet3 = expect_object_handle(
             runtime
-                .dispatch_invoke(worksheets, "Add", &[OmValue::Text("Sheet1".to_string())])
+                .dispatch_invoke(worksheets, "Add", &[OmValue::Text("sheet1".to_string())])
                 .expect("Worksheets.Add Before:=\"Sheet1\""),
         );
         let sheet4 = expect_object_handle(
@@ -11678,23 +11685,23 @@ mod tests {
             .expect("Worksheets.Add Sheet3");
         let sheet1 = expect_object_handle(
             runtime
-                .dispatch_invoke(worksheets, "Item", &[OmValue::Text("Sheet1".to_string())])
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Text("sheet1".to_string())])
                 .expect("Worksheets.Item(Sheet1)"),
         );
         let sheet3 = expect_object_handle(
             runtime
-                .dispatch_invoke(worksheets, "Item", &[OmValue::Text("Sheet3".to_string())])
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Text("sheet3".to_string())])
                 .expect("Worksheets.Item(Sheet3)"),
         );
         let sheet2 = expect_object_handle(
             runtime
-                .dispatch_invoke(worksheets, "Item", &[OmValue::Text("Sheet2".to_string())])
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Text("sheet2".to_string())])
                 .expect("Worksheets.Item(Sheet2)"),
         );
 
         assert!(matches!(
             runtime
-                .dispatch_invoke(sheet1, "Move", &[OmValue::Text("Sheet3".to_string())])
+                .dispatch_invoke(sheet1, "Move", &[OmValue::Text("sheet3".to_string())])
                 .expect("Worksheet.Move Before:=\"Sheet3\""),
             OmValue::Empty
         ));
