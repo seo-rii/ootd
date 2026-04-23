@@ -76,8 +76,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 132);
-    assert_eq!(summary.stub_member_count, 132);
+    assert_eq!(summary.member_count, 133);
+    assert_eq!(summary.stub_member_count, 133);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1292,7 +1292,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .expect("Range");
 
     assert_eq!(application.member_count, 39);
-    assert_eq!(workbook.member_count, 19);
+    assert_eq!(workbook.member_count, 20);
     assert_eq!(worksheet.member_count, 19);
     assert_eq!(range.member_count, 44);
     assert_eq!(
@@ -1652,6 +1652,14 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert!(!workbook_save_as.params[0].optional);
     assert_eq!(workbook_save_as.params[1].name, "FileFormat");
     assert!(workbook_save_as.params[1].optional);
+    let workbook_refresh_all = workbook
+        .members
+        .iter()
+        .find(|member| member.name == "RefreshAll")
+        .expect("Workbook.RefreshAll");
+    assert_eq!(workbook_refresh_all.access, AccessMode::Read);
+    assert_eq!(workbook_refresh_all.params.len(), 0);
+    assert!(workbook_refresh_all.return_type.is_none());
     let workbook_close = workbook
         .members
         .iter()
@@ -2261,8 +2269,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 132);
-    assert_eq!(coverage.support_counts.stub, 132);
+    assert_eq!(coverage.member_count, 133);
+    assert_eq!(coverage.support_counts.stub, 133);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -2333,8 +2341,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(workbook_coverage.member_count, 19);
-    assert_eq!(workbook_coverage.support_counts.stub, 19);
+    assert_eq!(workbook_coverage.member_count, 20);
+    assert_eq!(workbook_coverage.support_counts.stub, 20);
     assert_eq!(
         workbook_coverage.stub_members,
         vec![
@@ -2356,6 +2364,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Save".to_string(),
             "SaveAs".to_string(),
             "SaveCopyAs".to_string(),
+            "RefreshAll".to_string(),
             "Close".to_string()
         ]
     );

@@ -2004,6 +2004,22 @@
           }
         },
         {
+          "name": "RefreshAll",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "RefreshAll"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "Close",
           "memberKind": "method",
           "params": [

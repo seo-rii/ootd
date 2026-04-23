@@ -3819,6 +3819,14 @@ impl ExcelRuntime {
                 })?;
                 Ok(OmValue::Empty)
             }
+            "RefreshAll" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Workbook.RefreshAll does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Empty)
+            }
             "Close" => {
                 if args.len() > 3 {
                     return Err(OmError::invalid_argument(
@@ -17619,6 +17627,65 @@ mod tests {
         );
 
         fs::remove_file(path).expect("cleanup fixture");
+    }
+
+    #[test]
+    fn workbook_refresh_all_is_noop_and_preserves_selection_and_saved_state() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let selected_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B2:C3".to_string())])
+                .expect("Range(B2:C3)"),
+        );
+        runtime
+            .dispatch_invoke(selected_range, "Select", &[])
+            .expect("Range.Select");
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(workbook.0, "RefreshAll", &[])
+                .expect("Workbook.RefreshAll"),
+            OmValue::Empty
+        ));
+        let selection = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after Workbook.RefreshAll"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection, "Address", &[])
+                    .expect("Selection address after Workbook.RefreshAll")
+            ),
+            "$B$2:$C$3"
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after RefreshAll")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(workbook.0, "RefreshAll", &[OmValue::Missing])
+                .expect_err("Workbook.RefreshAll args should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
     }
 
     #[test]
