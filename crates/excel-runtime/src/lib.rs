@@ -8428,6 +8428,99 @@ fn excel_reference_qualifier_needs_quotes(value: &str) -> bool {
             .any(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.')
 }
 
+fn parse_a1_axis_reference_to_r1c1(
+    formula: &str,
+    start: usize,
+    base_row: u32,
+    base_col: u32,
+) -> Option<(String, usize)> {
+    let bytes = formula.as_bytes();
+    let parse_column_endpoint = |mut cursor: usize| -> Option<(u32, bool, usize)> {
+        let absolute = if cursor < bytes.len() && bytes[cursor] == b'$' {
+            cursor += 1;
+            true
+        } else {
+            false
+        };
+        let letters_start = cursor;
+        while cursor < bytes.len()
+            && bytes[cursor].is_ascii_alphabetic()
+            && cursor - letters_start < 3
+        {
+            cursor += 1;
+        }
+        if letters_start == cursor || (cursor < bytes.len() && bytes[cursor].is_ascii_alphabetic())
+        {
+            return None;
+        }
+        let col = parse_column_label_a1(&formula[letters_start..cursor]).ok()?;
+        Some((col, absolute, cursor))
+    };
+    let parse_row_endpoint = |mut cursor: usize| -> Option<(u32, bool, usize)> {
+        let absolute = if cursor < bytes.len() && bytes[cursor] == b'$' {
+            cursor += 1;
+            true
+        } else {
+            false
+        };
+        let digits_start = cursor;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
+            cursor += 1;
+        }
+        if digits_start == cursor {
+            return None;
+        }
+        let row = formula[digits_start..cursor].parse::<u32>().ok()?;
+        if row == 0 || row > EXCEL_MAX_ROW_INDEX {
+            return None;
+        }
+        Some((row, absolute, cursor))
+    };
+
+    if let Some((first_col, first_absolute, colon_index)) = parse_column_endpoint(start)
+        && bytes.get(colon_index) == Some(&b':')
+        && let Some((second_col, second_absolute, next_index)) =
+            parse_column_endpoint(colon_index + 1)
+        && formula[next_index..]
+            .chars()
+            .next()
+            .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.' && ch != '(')
+    {
+        let start_ref = format_r1c1_column_reference(first_col, first_absolute, base_col);
+        let end_ref = format_r1c1_column_reference(second_col, second_absolute, base_col);
+        return Some((
+            if start_ref == end_ref {
+                start_ref
+            } else {
+                format!("{start_ref}:{end_ref}")
+            },
+            next_index,
+        ));
+    }
+
+    if let Some((first_row, first_absolute, colon_index)) = parse_row_endpoint(start)
+        && bytes.get(colon_index) == Some(&b':')
+        && let Some((second_row, second_absolute, next_index)) = parse_row_endpoint(colon_index + 1)
+        && formula[next_index..]
+            .chars()
+            .next()
+            .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.' && ch != '(')
+    {
+        let start_ref = format_r1c1_row_reference(first_row, first_absolute, base_row);
+        let end_ref = format_r1c1_row_reference(second_row, second_absolute, base_row);
+        return Some((
+            if start_ref == end_ref {
+                start_ref
+            } else {
+                format!("{start_ref}:{end_ref}")
+            },
+            next_index,
+        ));
+    }
+
+    None
+}
+
 fn convert_formula_a1_to_r1c1(formula: &str, base_row: u32, base_col: u32) -> String {
     let bytes = formula.as_bytes();
     let mut output = String::with_capacity(formula.len());
@@ -8460,6 +8553,14 @@ fn convert_formula_a1_to_r1c1(formula: &str, base_row: u32, base_col: u32) -> St
             .next_back()
             .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.');
         if previous_is_boundary {
+            if let Some((reference, next_index)) =
+                parse_a1_axis_reference_to_r1c1(formula, index, base_row, base_col)
+            {
+                output.push_str(&reference);
+                index = next_index;
+                continue;
+            }
+
             let reference_start = index;
             let mut cursor = index;
             let column_absolute = if cursor < bytes.len() && bytes[cursor] == b'$' {
@@ -8683,6 +8784,15 @@ fn convert_formula_r1c1_to_a1(formula: &str, base_row: u32, base_col: u32) -> St
                 }
             }
         }
+        if previous_is_boundary
+            && matches!(bytes[index], b'R' | b'r' | b'C' | b'c')
+            && let Some((reference, next_index)) =
+                parse_r1c1_axis_reference_to_a1(formula, index, base_row, base_col)
+        {
+            output.push_str(&reference);
+            index = next_index;
+            continue;
+        }
 
         let ch = formula[index..]
             .chars()
@@ -8692,6 +8802,95 @@ fn convert_formula_r1c1_to_a1(formula: &str, base_row: u32, base_col: u32) -> St
         index += ch.len_utf8();
     }
     output
+}
+
+fn parse_r1c1_axis_reference_to_a1(
+    formula: &str,
+    start: usize,
+    base_row: u32,
+    base_col: u32,
+) -> Option<(String, usize)> {
+    let bytes = formula.as_bytes();
+    if matches!(bytes.get(start), Some(b'R' | b'r')) {
+        let (first_row, first_absolute, cursor) =
+            parse_r1c1_axis(bytes, start + 1, i64::from(base_row))?;
+        if matches!(bytes.get(cursor), Some(b'C' | b'c')) {
+            return None;
+        }
+        if bytes.get(cursor) == Some(&b':') {
+            if !matches!(bytes.get(cursor + 1), Some(b'R' | b'r')) {
+                return None;
+            }
+            let (second_row, second_absolute, next_index) =
+                parse_r1c1_axis(bytes, cursor + 2, i64::from(base_row))?;
+            if !formula[next_index..]
+                .chars()
+                .next()
+                .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.' && ch != '(')
+            {
+                return None;
+            }
+            let first = format_a1_row_axis(first_row, first_absolute)?;
+            let second = format_a1_row_axis(second_row, second_absolute)?;
+            return Some((format!("{first}:{second}"), next_index));
+        }
+        if formula[cursor..]
+            .chars()
+            .next()
+            .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.' && ch != '(')
+        {
+            let first = format_a1_row_axis(first_row, first_absolute)?;
+            return Some((format!("{first}:{first}"), cursor));
+        }
+    }
+
+    if matches!(bytes.get(start), Some(b'C' | b'c')) {
+        let (first_col, first_absolute, cursor) =
+            parse_r1c1_axis(bytes, start + 1, i64::from(base_col))?;
+        if bytes.get(cursor) == Some(&b':') {
+            if !matches!(bytes.get(cursor + 1), Some(b'C' | b'c')) {
+                return None;
+            }
+            let (second_col, second_absolute, next_index) =
+                parse_r1c1_axis(bytes, cursor + 2, i64::from(base_col))?;
+            if !formula[next_index..]
+                .chars()
+                .next()
+                .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.' && ch != '(')
+            {
+                return None;
+            }
+            let first = format_a1_column_axis(first_col, first_absolute)?;
+            let second = format_a1_column_axis(second_col, second_absolute)?;
+            return Some((format!("{first}:{second}"), next_index));
+        }
+        if formula[cursor..]
+            .chars()
+            .next()
+            .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.' && ch != '(')
+        {
+            let first = format_a1_column_axis(first_col, first_absolute)?;
+            return Some((format!("{first}:{first}"), cursor));
+        }
+    }
+
+    None
+}
+
+fn format_a1_row_axis(row: i64, absolute: bool) -> Option<String> {
+    if row < 1 || row > i64::from(EXCEL_MAX_ROW_INDEX) {
+        None
+    } else {
+        Some(format_row_address(row as u32, absolute))
+    }
+}
+
+fn format_a1_column_axis(col: i64, absolute: bool) -> Option<String> {
+    if col < 1 || col > i64::from(EXCEL_MAX_COLUMN_INDEX) {
+        None
+    } else {
+        Some(format_column_address(col as u32, absolute))
+    }
 }
 
 fn parse_r1c1_reference(
@@ -15592,7 +15791,10 @@ mod tests {
             .dispatch_set(
                 c2,
                 "Formula",
-                OmValue::Text(r#"=A1+$B1+B$1+$B$1&"A1"&LOG10(A1)"#.to_string()),
+                OmValue::Text(
+                    r#"=A1+$B1+B$1+$B$1&"A1"&LOG10(A1)+SUM(A:A)+SUM($B:$C)+SUM(1:1)+SUM($2:$3)"#
+                        .to_string(),
+                ),
                 &[],
             )
             .expect("set C2 Formula");
@@ -15602,14 +15804,17 @@ mod tests {
                     .dispatch_get(c2, "FormulaR1C1", &[])
                     .expect("C2 FormulaR1C1 from A1 formula")
             ),
-            r#"=R[-1]C[-2]+R[-1]C2+R1C[-1]+R1C2&"A1"&LOG10(R[-1]C[-2])"#
+            r#"=R[-1]C[-2]+R[-1]C2+R1C[-1]+R1C2&"A1"&LOG10(R[-1]C[-2])+SUM(C[-2])+SUM(C2:C3)+SUM(R[-1])+SUM(R2:R3)"#
         );
 
         runtime
             .dispatch_set(
                 d3,
                 "FormulaR1C1",
-                OmValue::Text(r#"=RC[-2]+R1C1+R[-1]C&"R1C1"&ROW()"#.to_string()),
+                OmValue::Text(
+                    r#"=RC[-2]+R1C1+R[-1]C&"R1C1"&ROW()+SUM(C[-2])+SUM(C1:C2)+SUM(R[-1])+SUM(R1:R2)"#
+                        .to_string(),
+                ),
                 &[],
             )
             .expect("set D3 FormulaR1C1");
@@ -15619,7 +15824,7 @@ mod tests {
                     .dispatch_get(d3, "Formula", &[])
                     .expect("D3 Formula from R1C1 formula")
             ),
-            r#"=B3+$A$1+D2&"R1C1"&ROW()"#
+            r#"=B3+$A$1+D2&"R1C1"&ROW()+SUM(B:B)+SUM($A:$B)+SUM(2:2)+SUM($1:$2)"#
         );
         assert!(!expect_bool(
             runtime
