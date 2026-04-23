@@ -2108,15 +2108,14 @@ impl ExcelRuntime {
                                 ));
                             }
                         };
-                        for (arg, name) in [(args.get(1), "Operation"), (args.get(3), "Transpose")]
-                        {
-                            if let Some(arg) = arg {
-                                if !matches!(arg, OmValue::Missing | OmValue::Empty | OmValue::Null)
-                                {
-                                    return Err(OmError::unsupported(format!(
-                                        "Range.PasteSpecial {name} is not implemented",
-                                    )));
-                                }
+                        if let Some(operation) = args.get(1) {
+                            if !matches!(
+                                operation,
+                                OmValue::Missing | OmValue::Empty | OmValue::Null
+                            ) {
+                                return Err(OmError::unsupported(
+                                    "Range.PasteSpecial Operation is not implemented",
+                                ));
                             }
                         }
                         let skip_blanks = match args.get(2) {
@@ -2125,6 +2124,14 @@ impl ExcelRuntime {
                                 value,
                                 false,
                                 "Range.PasteSpecial SkipBlanks",
+                            )?,
+                        };
+                        let transpose = match args.get(3) {
+                            None => false,
+                            Some(value) => coerce_optional_bool_arg(
+                                value,
+                                false,
+                                "Range.PasteSpecial Transpose",
                             )?,
                         };
                         let clipboard = self.clipboard.ok_or_else(|| {
@@ -2139,7 +2146,7 @@ impl ExcelRuntime {
                             clipboard.rect,
                         );
                         let destination = self.register_range_handle(workbook, sheet_id, rect);
-                        if paste_type == XL_PASTE_ALL && !skip_blanks {
+                        if paste_type == XL_PASTE_ALL && !skip_blanks && !transpose {
                             return match clipboard.mode {
                                 XL_COPY => self.dispatch_invoke(
                                     source.0,
@@ -2171,10 +2178,22 @@ impl ExcelRuntime {
                             }
                             cells
                         };
+                        let source_height = clipboard.rect.height();
+                        let source_width = clipboard.rect.width();
+                        let paste_height = if transpose {
+                            source_width
+                        } else {
+                            source_height
+                        };
+                        let paste_width = if transpose {
+                            source_height
+                        } else {
+                            source_width
+                        };
                         let target_rect = if rect.height() == 1 && rect.width() == 1 {
                             let row_last = rect
                                 .row_first
-                                .checked_add(clipboard.rect.height() - 1)
+                                .checked_add(paste_height - 1)
                                 .ok_or_else(|| {
                                     OmError::invalid_argument(
                                         "Range.PasteSpecial destination overflows worksheet rows",
@@ -2182,7 +2201,7 @@ impl ExcelRuntime {
                                 })?;
                             let col_last = rect
                                 .col_first
-                                .checked_add(clipboard.rect.width() - 1)
+                                .checked_add(paste_width - 1)
                                 .ok_or_else(|| {
                                 OmError::invalid_argument(
                                     "Range.PasteSpecial destination overflows worksheet columns",
@@ -2205,9 +2224,7 @@ impl ExcelRuntime {
                                 col_last,
                             }
                         } else {
-                            if rect.height() != clipboard.rect.height()
-                                || rect.width() != clipboard.rect.width()
-                            {
+                            if rect.height() != paste_height || rect.width() != paste_width {
                                 return Err(OmError::invalid_argument(
                                     "Range.PasteSpecial destination must be a single cell or match the clipboard range size",
                                 ));
@@ -2216,12 +2233,19 @@ impl ExcelRuntime {
                         };
 
                         let apply_paste = |destination_worksheet: &mut WorksheetData| {
-                            let mut index = 0usize;
                             for row in target_rect.row_first..=target_rect.row_last {
                                 for col in target_rect.col_first..=target_rect.col_last {
                                     let key = (row, col);
-                                    let source_cell = source_cells[index].as_ref();
-                                    index += 1;
+                                    let row_offset = row - target_rect.row_first;
+                                    let col_offset = col - target_rect.col_first;
+                                    let source_row_offset =
+                                        if transpose { col_offset } else { row_offset };
+                                    let source_col_offset =
+                                        if transpose { row_offset } else { col_offset };
+                                    let source_index = (source_row_offset * source_width
+                                        + source_col_offset)
+                                        as usize;
+                                    let source_cell = source_cells[source_index].as_ref();
                                     let source_is_blank = match paste_type {
                                         XL_PASTE_ALL => source_cell.is_none_or(|cell| {
                                             cell.value == CellValue::Blank
@@ -15626,6 +15650,139 @@ mod tests {
                     ],
                 )
                 .expect_err("Range.PasteSpecial should reject non-bool SkipBlanks")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+    }
+
+    #[test]
+    fn range_paste_special_transpose_swaps_rows_and_columns() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let a2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A2".to_string())])
+                .expect("Range(A2)"),
+        );
+        let b2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B2".to_string())])
+                .expect("Range(B2)"),
+        );
+        runtime
+            .dispatch_set(a2, "Value", OmValue::Text("bottom-left".to_string()), &[])
+            .expect("seed A2");
+        runtime
+            .dispatch_set(b2, "Value", OmValue::Text("bottom-right".to_string()), &[])
+            .expect("seed B2");
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B2".to_string())])
+                .expect("Range(A1:B2)"),
+        );
+        let destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1".to_string())])
+                .expect("Range(D1)"),
+        );
+
+        runtime
+            .dispatch_invoke(source, "Copy", &[])
+            .expect("Range.Copy before transpose paste");
+        runtime
+            .dispatch_invoke(
+                destination,
+                "PasteSpecial",
+                &[
+                    OmValue::Number(f64::from(super::XL_PASTE_VALUES)),
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Bool(true),
+                ],
+            )
+            .expect("Range.PasteSpecial Transpose");
+
+        let d1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1".to_string())])
+                .expect("Range(D1)"),
+        );
+        let d2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D2".to_string())])
+                .expect("Range(D2)"),
+        );
+        let e1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E1".to_string())])
+                .expect("Range(E1)"),
+        );
+        let e2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E2".to_string())])
+                .expect("Range(E2)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(d1, "Value", &[])
+                    .expect("D1 Value after transpose")
+            ),
+            42.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(d2, "Value", &[])
+                    .expect("D2 Value after transpose")
+            ),
+            "SHARED"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(e1, "Value", &[])
+                    .expect("E1 Value after transpose")
+            ),
+            "bottom-left"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(e2, "Value", &[])
+                    .expect("E2 Value after transpose")
+            ),
+            "bottom-right"
+        );
+
+        runtime
+            .dispatch_invoke(source, "Copy", &[])
+            .expect("Range.Copy before invalid transpose");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    destination,
+                    "PasteSpecial",
+                    &[
+                        OmValue::Number(f64::from(super::XL_PASTE_VALUES)),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                    ],
+                )
+                .expect_err("Range.PasteSpecial should reject non-bool Transpose")
                 .code,
             OmErrorCode::TypeMismatch
         );
