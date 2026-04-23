@@ -1874,6 +1874,15 @@
                 "name": "string",
                 "aliasOf": "BSTR"
               }
+            },
+            {
+              "name": "FileFormat",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
             }
           ],
           "support": "stub",

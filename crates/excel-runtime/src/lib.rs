@@ -2560,9 +2560,9 @@ impl ExcelRuntime {
                 Ok(OmValue::Empty)
             }
             "SaveAs" => {
-                if args.len() != 1 {
+                if args.is_empty() || args.len() > 2 {
                     return Err(OmError::invalid_argument(
-                        "Workbook.SaveAs expects a single filename argument",
+                        "Workbook.SaveAs expects Filename and optional FileFormat arguments",
                     ));
                 }
                 let path = match &args[0] {
@@ -2573,17 +2573,39 @@ impl ExcelRuntime {
                         ));
                     }
                 };
-                let format = match path
-                    .extension()
-                    .and_then(|value| value.to_str())
-                    .map(|value| value.to_ascii_lowercase())
-                    .as_deref()
-                {
-                    Some("xlsx") => FileFormat::Xlsx,
-                    Some("xlsm") => FileFormat::Xlsm,
-                    Some("xltx") => FileFormat::Xltx,
-                    Some("xltm") => FileFormat::Xltm,
-                    _ => self.workbook_model(workbook)?.format,
+                let format = match args.get(1) {
+                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => {
+                        file_format_from_path(&path)
+                            .unwrap_or(self.workbook_model(workbook)?.format)
+                    }
+                    Some(OmValue::Number(format)) => {
+                        if !format.is_finite()
+                            || format.fract() != 0.0
+                            || *format < i32::MIN as f64
+                            || *format > i32::MAX as f64
+                        {
+                            return Err(OmError::invalid_argument(
+                                "Workbook.SaveAs FileFormat expects an integral XlFileFormat value",
+                            ));
+                        }
+                        match *format as i32 {
+                            XL_OPEN_XML_WORKBOOK => FileFormat::Xlsx,
+                            XL_OPEN_XML_WORKBOOK_MACRO_ENABLED => FileFormat::Xlsm,
+                            XL_OPEN_XML_TEMPLATE => FileFormat::Xltx,
+                            XL_OPEN_XML_TEMPLATE_MACRO_ENABLED => FileFormat::Xltm,
+                            XL_OPEN_XML_STRICT_WORKBOOK => FileFormat::StrictXlsx,
+                            other => {
+                                return Err(OmError::unsupported(format!(
+                                    "Workbook.SaveAs FileFormat {other} is not implemented",
+                                )));
+                            }
+                        }
+                    }
+                    Some(_) => {
+                        return Err(OmError::type_mismatch(
+                            "Workbook.SaveAs FileFormat expects a numeric XlFileFormat value when provided",
+                        ));
+                    }
                 };
                 let bytes = self.save_workbook(
                     workbook,
@@ -2682,16 +2704,7 @@ impl ExcelRuntime {
                 if save_changes {
                     let filename_format = filename
                         .as_ref()
-                        .and_then(|path| path.extension())
-                        .and_then(|value| value.to_str())
-                        .map(|value| value.to_ascii_lowercase())
-                        .and_then(|extension| match extension.as_str() {
-                            "xlsx" => Some(FileFormat::Xlsx),
-                            "xlsm" => Some(FileFormat::Xlsm),
-                            "xltx" => Some(FileFormat::Xltx),
-                            "xltm" => Some(FileFormat::Xltm),
-                            _ => None,
-                        });
+                        .and_then(|path| file_format_from_path(path));
                     let format = match filename_format {
                         Some(format) => format,
                         None => self.workbook_model(workbook)?.format,
@@ -5297,6 +5310,21 @@ fn file_format_to_excel_value(format: FileFormat) -> i32 {
         FileFormat::Xltx => XL_OPEN_XML_TEMPLATE,
         FileFormat::Xltm => XL_OPEN_XML_TEMPLATE_MACRO_ENABLED,
         FileFormat::StrictXlsx => XL_OPEN_XML_STRICT_WORKBOOK,
+    }
+}
+
+fn file_format_from_path(path: &Path) -> Option<FileFormat> {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("xlsx") => Some(FileFormat::Xlsx),
+        Some("xlsm") => Some(FileFormat::Xlsm),
+        Some("xltx") => Some(FileFormat::Xltx),
+        Some("xltm") => Some(FileFormat::Xltm),
+        _ => None,
     }
 }
 
@@ -17329,6 +17357,137 @@ mod tests {
         );
 
         fs::remove_dir_all(&base_dir).expect("cleanup SaveAs fixture");
+    }
+
+    #[test]
+    fn workbook_save_as_dispatch_honors_file_format_argument_and_validates_it() {
+        let mut runtime = ExcelRuntime::new();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let base_dir = std::env::temp_dir().join(format!("ootd-saveas-format-{unique}"));
+        fs::create_dir_all(&base_dir).expect("create SaveAs format dir");
+        let source_path = base_dir.join("source.xlsx");
+        let target_path = base_dir.join("target.bin");
+        let invalid_target_path = base_dir.join("invalid.xlsx");
+        fs::write(&source_path, synthetic_workbook_bytes()).expect("write source workbook");
+
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+        let workbook = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[OmValue::Text(source_path.to_string_lossy().into_owned())],
+                )
+                .expect("Workbooks.Open"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+
+        runtime
+            .dispatch_set(
+                active_sheet,
+                "Name",
+                OmValue::Text("SavedAsFormat".to_string()),
+                &[],
+            )
+            .expect("rename worksheet before SaveAs FileFormat");
+        runtime
+            .dispatch_invoke(
+                workbook,
+                "SaveAs",
+                &[
+                    OmValue::Text(target_path.to_string_lossy().into_owned()),
+                    OmValue::Number(f64::from(super::XL_OPEN_XML_WORKBOOK)),
+                ],
+            )
+            .expect("Workbook.SaveAs with FileFormat");
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbook, "FileFormat", &[])
+                    .expect("Workbook.FileFormat after SaveAs")
+            ),
+            f64::from(super::XL_OPEN_XML_WORKBOOK)
+        );
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(
+                &fs::read(&target_path).expect("read SaveAs FileFormat target"),
+                office_common::LoadOptions::default(),
+            )
+            .expect("reload SaveAs FileFormat target");
+        assert_eq!(reopened.state.worksheets[0].name, "SavedAsFormat");
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbook,
+                    "SaveAs",
+                    &[
+                        OmValue::Text(invalid_target_path.to_string_lossy().into_owned()),
+                        OmValue::Text("bad".to_string()),
+                    ],
+                )
+                .expect_err("Workbook.SaveAs should reject non-numeric FileFormat")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbook,
+                    "SaveAs",
+                    &[
+                        OmValue::Text(invalid_target_path.to_string_lossy().into_owned()),
+                        OmValue::Number(51.5),
+                    ],
+                )
+                .expect_err("Workbook.SaveAs should reject fractional FileFormat")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbook,
+                    "SaveAs",
+                    &[
+                        OmValue::Text(invalid_target_path.to_string_lossy().into_owned()),
+                        OmValue::Number(999.0),
+                    ],
+                )
+                .expect_err("Workbook.SaveAs should reject unsupported FileFormat")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbook,
+                    "SaveAs",
+                    &[
+                        OmValue::Text(invalid_target_path.to_string_lossy().into_owned()),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                    ],
+                )
+                .expect_err("Workbook.SaveAs should reject extra args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+
+        fs::remove_dir_all(&base_dir).expect("cleanup SaveAs format fixture");
     }
 
     #[test]

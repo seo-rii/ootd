@@ -1641,6 +1641,17 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|member| member.name == "Saved")
         .expect("Workbook.Saved");
     assert_eq!(workbook_saved.access, AccessMode::Readwrite);
+    let workbook_save_as = workbook
+        .members
+        .iter()
+        .find(|member| member.name == "SaveAs")
+        .expect("Workbook.SaveAs");
+    assert_eq!(workbook_save_as.access, AccessMode::Read);
+    assert_eq!(workbook_save_as.params.len(), 2);
+    assert_eq!(workbook_save_as.params[0].name, "Filename");
+    assert!(!workbook_save_as.params[0].optional);
+    assert_eq!(workbook_save_as.params[1].name, "FileFormat");
+    assert!(workbook_save_as.params[1].optional);
     let workbook_close = workbook
         .members
         .iter()
