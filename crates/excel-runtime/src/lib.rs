@@ -2,10 +2,10 @@ use excel_model::{WorkbookState, WorksheetData};
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
 use office_common::{
-    CellValue, ExcelProfile, FileFormat, GetRangeValuesSpec, LoadOptions, ObjectHandle, OmArray,
-    OmError, OmErrorCode, OmResult, OmValue, OpaquePart, OpenWorkbookSpec, RangeHandle, RangeRef,
-    Rect, SaveOptions, SaveWorkbookSpec, SetRangeValuesSpec, SheetId, SheetVisibility,
-    WorkbookHandle, WorkbookId, WorkbookModel, WorksheetHandle, WorksheetModel,
+    CellValue, ExcelProfile, FileFormat, FormulaSource, GetRangeValuesSpec, LoadOptions,
+    ObjectHandle, OmArray, OmError, OmErrorCode, OmResult, OmValue, OpaquePart, OpenWorkbookSpec,
+    RangeHandle, RangeRef, Rect, SaveOptions, SaveWorkbookSpec, SetRangeValuesSpec, SheetId,
+    SheetVisibility, WorkbookHandle, WorkbookId, WorkbookModel, WorksheetHandle, WorksheetModel,
 };
 use office_idl::{AccessMode, SupportState};
 use office_opc::{CompressionMethod, OpcPackage, OpcPart};
@@ -3125,8 +3125,8 @@ impl ExcelRuntime {
         }
 
         match member {
-            "Value" | "Value2" | "Formula" => {
-                let array = if member == "Formula" {
+            "Value" | "Value2" | "Formula" | "FormulaR1C1" => {
+                let array = if matches!(member, "Formula" | "FormulaR1C1") {
                     self.get_range_formulas(GetRangeValuesSpec {
                         workbook,
                         range: self.range_ref(workbook, sheet_id, rect)?,
@@ -3352,7 +3352,7 @@ impl ExcelRuntime {
         }
 
         match member {
-            "Value" | "Value2" | "Formula" => {
+            "Value" | "Value2" | "Formula" | "FormulaR1C1" => {
                 let values = match value {
                     OmValue::Array(array) => array,
                     scalar => OmArray::new(
@@ -3367,6 +3367,88 @@ impl ExcelRuntime {
                         range: self.range_ref(workbook, sheet_id, rect)?,
                         values,
                     })?;
+                } else if member == "FormulaR1C1" {
+                    if values.rows != rect.height() as usize || values.cols != rect.width() as usize
+                    {
+                        return Err(OmError::invalid_argument(format!(
+                            "range dimensions {}x{} do not match formula matrix {}x{}",
+                            rect.height(),
+                            rect.width(),
+                            values.rows,
+                            values.cols,
+                        )));
+                    }
+
+                    let mut updates = Vec::with_capacity(values.values.len());
+                    for row_offset in 0..values.rows {
+                        for col_offset in 0..values.cols {
+                            let row = rect.row_first + row_offset as u32;
+                            let col = rect.col_first + col_offset as u32;
+                            let value =
+                                values.values[row_offset * values.cols + col_offset].clone();
+                            let (cell_value, formula) = match value {
+                                OmValue::Text(text) => {
+                                    if let Some(formula_text) = text.strip_prefix('=') {
+                                        (
+                                            CellValue::Blank,
+                                            Some(FormulaSource {
+                                                text: formula_text.to_string(),
+                                                is_r1c1: true,
+                                            }),
+                                        )
+                                    } else {
+                                        (CellValue::Text(text), None)
+                                    }
+                                }
+                                other => (CellValue::try_from(other)?, None),
+                            };
+                            updates.push(((row, col), cell_value, formula));
+                        }
+                    }
+
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    let worksheet = runtime
+                        .loaded
+                        .state
+                        .worksheet_data_for_sheet_mut(sheet_id)?;
+                    for (key, cell_value, formula) in updates {
+                        if let Some(existing) = worksheet.cells.get_mut(&key) {
+                            if existing.value == cell_value && existing.formula == formula {
+                                continue;
+                            }
+
+                            existing.value = cell_value;
+                            existing.formula = formula;
+                            if matches!(existing.value, CellValue::Blank)
+                                && existing.style_id.is_none()
+                                && existing.formula.is_none()
+                            {
+                                worksheet.cells.remove(&key);
+                            }
+                            worksheet.dirty = true;
+                            worksheet.dirty_cells.insert(key);
+                            continue;
+                        }
+
+                        if !matches!(cell_value, CellValue::Blank) || formula.is_some() {
+                            worksheet.cells.insert(
+                                key,
+                                excel_model::CellData {
+                                    value: cell_value,
+                                    formula,
+                                    style_id: None,
+                                },
+                            );
+                            worksheet.dirty = true;
+                            worksheet.dirty_cells.insert(key);
+                        }
+                    }
                 } else {
                     self.set_range_values(SetRangeValuesSpec {
                         workbook,
@@ -12552,6 +12634,13 @@ mod tests {
         );
         assert_eq!(
             runtime
+                .dispatch_get(range, "FormulaR1C1", &[OmValue::Number(1.0)])
+                .expect_err("Range.FormulaR1C1 args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
                 .dispatch_set(
                     range,
                     "Value2",
@@ -12559,6 +12648,18 @@ mod tests {
                     &[OmValue::Number(1.0)],
                 )
                 .expect_err("Range.Value2 set args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    range,
+                    "FormulaR1C1",
+                    OmValue::Text("=R1C1".to_string()),
+                    &[OmValue::Number(1.0)],
+                )
+                .expect_err("Range.FormulaR1C1 set args")
                 .code,
             OmErrorCode::InvalidArgument
         );
@@ -13154,6 +13255,123 @@ mod tests {
         assert_eq!(reopened_formula.value, CellValue::Blank);
 
         fs::remove_dir_all(&base_dir).expect("cleanup formula fixture");
+    }
+
+    #[test]
+    fn range_dispatch_formula_r1c1_roundtrips_and_marks_formula_source() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let sheet_id = runtime.worksheets(workbook).expect("worksheets")[0].id;
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let existing_formula = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Range(B1)"),
+        );
+        let c2_d2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C2:D2".to_string())])
+                .expect("Range(C2:D2)"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(existing_formula, "FormulaR1C1", &[])
+                    .expect("B1 FormulaR1C1")
+            ),
+            r#"=UPPER("shared")"#
+        );
+
+        runtime
+            .dispatch_set(
+                c2_d2,
+                "FormulaR1C1",
+                OmValue::Array(
+                    OmArray::new(
+                        1,
+                        2,
+                        vec![
+                            OmValue::Text("=RC[-2]+R[-1]C[-1]".to_string()),
+                            OmValue::Text("literal".to_string()),
+                        ],
+                    )
+                    .expect("C2:D2 formulas"),
+                ),
+                &[],
+            )
+            .expect("set C2:D2 FormulaR1C1");
+
+        let OmValue::Array(formulas) = runtime
+            .dispatch_get(c2_d2, "FormulaR1C1", &[])
+            .expect("C2:D2 FormulaR1C1")
+        else {
+            panic!("expected FormulaR1C1 array");
+        };
+        assert_eq!(
+            formulas.values,
+            vec![
+                OmValue::Text("=RC[-2]+R[-1]C[-1]".to_string()),
+                OmValue::Text("literal".to_string()),
+            ]
+        );
+
+        let state = runtime.workbook_state(workbook).expect("workbook state");
+        let c2 = state.cell(sheet_id, 2, 3).expect("C2");
+        let c2_formula = c2.formula.as_ref().expect("C2 formula");
+        assert_eq!(c2_formula.text, "RC[-2]+R[-1]C[-1]");
+        assert!(c2_formula.is_r1c1);
+        let d2 = state.cell(sheet_id, 2, 4).expect("D2");
+        assert_eq!(d2.value, CellValue::Text("literal".to_string()));
+        assert!(d2.formula.is_none());
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after FormulaR1C1 set")
+        ));
+
+        let mut read_only_runtime = ExcelRuntime::new();
+        read_only_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook");
+        let read_only_sheet = expect_object_handle(
+            read_only_runtime
+                .dispatch_get(read_only_runtime.root_application(), "ActiveSheet", &[])
+                .expect("read-only ActiveSheet"),
+        );
+        let read_only_cell = expect_object_handle(
+            read_only_runtime
+                .dispatch_invoke(read_only_sheet, "Range", &[OmValue::Text("C2".to_string())])
+                .expect("read-only Range(C2)"),
+        );
+        assert_eq!(
+            read_only_runtime
+                .dispatch_set(
+                    read_only_cell,
+                    "FormulaR1C1",
+                    OmValue::Text("=R1C1".to_string()),
+                    &[],
+                )
+                .expect_err("Range.FormulaR1C1 should reject read-only workbooks")
+                .code,
+            OmErrorCode::InvalidState
+        );
     }
 
     #[test]

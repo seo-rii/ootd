@@ -76,8 +76,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 120);
-    assert_eq!(summary.stub_member_count, 120);
+    assert_eq!(summary.member_count, 121);
+    assert_eq!(summary.stub_member_count, 121);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1294,7 +1294,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(application.member_count, 37);
     assert_eq!(workbook.member_count, 19);
     assert_eq!(worksheet.member_count, 18);
-    assert_eq!(range.member_count, 35);
+    assert_eq!(range.member_count, 36);
     assert_eq!(
         application.default_coclasses,
         vec!["Application".to_string()]
@@ -1849,6 +1849,12 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|member| member.name == "Formula")
         .expect("Range.Formula");
     assert_eq!(range_formula.access, AccessMode::Readwrite);
+    let range_formula_r1c1 = range
+        .members
+        .iter()
+        .find(|member| member.name == "FormulaR1C1")
+        .expect("Range.FormulaR1C1");
+    assert_eq!(range_formula_r1c1.access, AccessMode::Readwrite);
     let range_text = range
         .members
         .iter()
@@ -2169,8 +2175,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 120);
-    assert_eq!(coverage.support_counts.stub, 120);
+    assert_eq!(coverage.member_count, 121);
+    assert_eq!(coverage.support_counts.stub, 121);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -2292,14 +2298,15 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(range_coverage.member_count, 35);
-    assert_eq!(range_coverage.support_counts.stub, 35);
+    assert_eq!(range_coverage.member_count, 36);
+    assert_eq!(range_coverage.support_counts.stub, 36);
     assert_eq!(
         range_coverage.stub_members,
         vec![
             "Value".to_string(),
             "Value2".to_string(),
             "Formula".to_string(),
+            "FormulaR1C1".to_string(),
             "Text".to_string(),
             "HasFormula".to_string(),
             "Address".to_string(),

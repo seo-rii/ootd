@@ -2841,6 +2841,38 @@
           }
         },
         {
+          "name": "FormulaR1C1",
+          "memberKind": "property",
+          "access": "readwrite",
+          "returnType": {
+            "kind": "variant",
+            "name": "Variant",
+            "aliasOf": "VARIANT"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Range",
+                  "sourceMember": "FormulaR1C1"
+                },
+                {
+                  "kind": "property_set",
+                  "sourceInterface": "Range",
+                  "sourceMember": "FormulaR1C1"
+                }
+              ],
+              "typeInfo": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          }
+        },
+        {
           "name": "Text",
           "memberKind": "property",
           "access": "read",
