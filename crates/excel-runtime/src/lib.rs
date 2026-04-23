@@ -1915,6 +1915,37 @@ impl ExcelRuntime {
                 self.clear_workbook_dirty_state(workbook)?;
                 Ok(OmValue::Empty)
             }
+            "SaveCopyAs" => {
+                if args.len() != 1 {
+                    return Err(OmError::invalid_argument(
+                        "Workbook.SaveCopyAs expects a single filename argument",
+                    ));
+                }
+                let path = match &args[0] {
+                    OmValue::Text(path) => PathBuf::from(path),
+                    _ => {
+                        return Err(OmError::type_mismatch(
+                            "Workbook.SaveCopyAs expects a string filename",
+                        ));
+                    }
+                };
+                let format = self.workbook_model(workbook)?.format;
+                let bytes = self.save_workbook(
+                    workbook,
+                    SaveWorkbookSpec {
+                        format,
+                        profile: ExcelProfile::Excel365,
+                        lossless: true,
+                    },
+                )?;
+                fs::write(&path, &bytes).map_err(|error| {
+                    OmError::new(
+                        OmErrorCode::Io,
+                        format!("failed to write workbook copy {}: {error}", path.display()),
+                    )
+                })?;
+                Ok(OmValue::Empty)
+            }
             "Close" => {
                 if args.len() > 1 {
                     return Err(OmError::invalid_argument(
@@ -14062,6 +14093,101 @@ mod tests {
         );
 
         fs::remove_dir_all(&base_dir).expect("cleanup SaveAs fixture");
+    }
+
+    #[test]
+    fn workbook_save_copy_as_dispatch_writes_copy_without_mutating_open_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let base_dir = std::env::temp_dir().join(format!("ootd-savecopyas-{unique}"));
+        let source_dir = base_dir.join("source");
+        let target_dir = base_dir.join("target");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        fs::create_dir_all(&target_dir).expect("create target dir");
+        let source_path = source_dir.join("source.xlsx");
+        let copy_path = target_dir.join("copy.xlsx");
+        fs::write(&source_path, synthetic_workbook_bytes()).expect("write source workbook");
+
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+        let workbook = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[OmValue::Text(source_path.to_string_lossy().into_owned())],
+                )
+                .expect("Workbooks.Open"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+
+        runtime
+            .dispatch_set(
+                active_sheet,
+                "Name",
+                OmValue::Text("CopiedOnly".to_string()),
+                &[],
+            )
+            .expect("rename worksheet before SaveCopyAs");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("Workbook.Saved before SaveCopyAs")
+        ));
+
+        runtime
+            .dispatch_invoke(
+                workbook,
+                "SaveCopyAs",
+                &[OmValue::Text(copy_path.to_string_lossy().into_owned())],
+            )
+            .expect("Workbook.SaveCopyAs");
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(workbook, "Name", &[])
+                    .expect("Workbook.Name after SaveCopyAs")
+            ),
+            source_path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .expect("source file name")
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(workbook, "FullName", &[])
+                    .expect("Workbook.FullName after SaveCopyAs")
+            ),
+            source_path.to_string_lossy()
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("Workbook.Saved after SaveCopyAs")
+        ));
+
+        let copied = ExcelRuntime::new()
+            .codec
+            .load(
+                &fs::read(&copy_path).expect("read SaveCopyAs target"),
+                office_common::LoadOptions::default(),
+            )
+            .expect("reload SaveCopyAs target");
+        assert_eq!(copied.state.worksheets[0].name, "CopiedOnly");
+
+        fs::remove_dir_all(&base_dir).expect("cleanup SaveCopyAs fixture");
     }
 
     #[test]

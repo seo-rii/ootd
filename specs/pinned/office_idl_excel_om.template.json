@@ -1074,6 +1074,32 @@
           }
         },
         {
+          "name": "SaveCopyAs",
+          "memberKind": "method",
+          "params": [
+            {
+              "name": "Filename",
+              "type": {
+                "kind": "primitive",
+                "name": "string",
+                "aliasOf": "BSTR"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "SaveCopyAs"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "Close",
           "memberKind": "method",
           "support": "stub",
