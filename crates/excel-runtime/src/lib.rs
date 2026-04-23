@@ -8872,6 +8872,7 @@ impl FormulaComparisonOperator {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FormulaAggregateFunction {
     Sum,
+    Product,
     Min,
     Max,
     Average,
@@ -8882,6 +8883,8 @@ impl FormulaAggregateFunction {
     fn from_name(name: &str) -> Option<Self> {
         if name.eq_ignore_ascii_case("SUM") {
             Some(Self::Sum)
+        } else if name.eq_ignore_ascii_case("PRODUCT") {
+            Some(Self::Product)
         } else if name.eq_ignore_ascii_case("MIN") {
             Some(Self::Min)
         } else if name.eq_ignore_ascii_case("MAX") {
@@ -8898,6 +8901,7 @@ impl FormulaAggregateFunction {
     fn evaluate(self, values: &[f64]) -> Result<f64, FormulaEvalError> {
         match self {
             FormulaAggregateFunction::Sum => Ok(values.iter().sum()),
+            FormulaAggregateFunction::Product => Ok(values.iter().product()),
             FormulaAggregateFunction::Min => {
                 Ok(values.iter().copied().reduce(f64::min).unwrap_or(0.0))
             }
@@ -9075,6 +9079,15 @@ impl<'a> FormulaEvaluator<'a> {
             })
             .count() as u64)
     }
+
+    fn countblank_values_in_rect(
+        &self,
+        sheet_id: SheetId,
+        rect: Rect,
+    ) -> Result<u64, FormulaEvalError> {
+        let total = u64::from(rect.width()) * u64::from(rect.height());
+        Ok(total - self.counta_values_in_rect(sheet_id, rect)?)
+    }
 }
 
 struct FormulaParser<'a, 'b, 'state> {
@@ -9205,6 +9218,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("COUNTA") {
             return self.parse_counta_function();
         }
+        if name.eq_ignore_ascii_case("COUNTBLANK") {
+            return self.parse_countblank_function();
+        }
         let function =
             FormulaAggregateFunction::from_name(name).ok_or(FormulaEvalError::Unsupported)?;
         let mut values = Vec::new();
@@ -9220,6 +9236,25 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
             if self.consume_char(')') {
                 return function.evaluate(values.as_slice());
+            }
+            return Err(FormulaEvalError::Unsupported);
+        }
+    }
+
+    fn parse_countblank_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let mut count = 0_u64;
+        loop {
+            self.skip_whitespace();
+            if self.consume_char(')') {
+                return Ok(count as f64);
+            }
+            count += self.parse_countblank_argument()?;
+            self.skip_whitespace();
+            if self.consume_char(',') {
+                continue;
+            }
+            if self.consume_char(')') {
+                return Ok(count as f64);
             }
             return Err(FormulaEvalError::Unsupported);
         }
@@ -9291,6 +9326,22 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         self.index = checkpoint;
         self.parse_comparison()?;
         Ok(1)
+    }
+
+    fn parse_countblank_argument(&mut self) -> Result<u64, FormulaEvalError> {
+        let checkpoint = self.index;
+        if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
+            self.index = next_index;
+            self.skip_whitespace();
+            if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
+                return self
+                    .evaluator
+                    .countblank_values_in_rect(target_sheet_id, rect);
+            }
+        }
+        self.index = checkpoint;
+        self.parse_comparison()?;
+        Ok(0)
     }
 
     fn parse_number(&mut self) -> Result<Option<f64>, FormulaEvalError> {
@@ -11806,6 +11857,95 @@ mod tests {
                 OmValue::Number(8.0),
                 OmValue::Number(5.0),
                 OmValue::Number(3.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_product_and_countblank_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A4".to_string())])
+                .expect("Range(A1:A4)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B4".to_string())])
+                .expect("Range(B1:B4)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        1,
+                        vec![
+                            OmValue::Number(2.0),
+                            OmValue::Text("ignored".to_string()),
+                            OmValue::Empty,
+                            OmValue::Number(4.0),
+                        ],
+                    )
+                    .expect("source values"),
+                ),
+                &[],
+            )
+            .expect("set product/countblank source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        1,
+                        vec![
+                            OmValue::Text("=PRODUCT(A1:A4)".to_string()),
+                            OmValue::Text("=PRODUCT(A1:A4, 3)".to_string()),
+                            OmValue::Text("=COUNTBLANK(A1:A5)".to_string()),
+                            OmValue::Text("=COUNTBLANK(A1:A5, 0)".to_string()),
+                        ],
+                    )
+                    .expect("aggregate helper formulas"),
+                ),
+                &[],
+            )
+            .expect("set product/countblank formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("product/countblank values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected product/countblank value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(8.0),
+                OmValue::Number(24.0),
+                OmValue::Number(2.0),
+                OmValue::Number(2.0),
             ]
         );
     }
