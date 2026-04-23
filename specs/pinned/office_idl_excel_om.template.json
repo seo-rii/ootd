@@ -34,6 +34,23 @@
       ]
     },
     {
+      "name": "XlApplicationInternational",
+      "values": [
+        {
+          "name": "xlDecimalSeparator",
+          "value": 3
+        },
+        {
+          "name": "xlThousandsSeparator",
+          "value": 4
+        },
+        {
+          "name": "xlListSeparator",
+          "value": 5
+        }
+      ]
+    },
+    {
       "name": "XlFileFormat",
       "values": [
         {
@@ -839,6 +856,42 @@
                 "kind": "primitive",
                 "name": "string",
                 "aliasOf": "BSTR"
+              }
+            }
+          }
+        },
+        {
+          "name": "International",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "variant",
+            "name": "Variant",
+            "aliasOf": "VARIANT"
+          },
+          "params": [
+            {
+              "name": "Index",
+              "type": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlApplicationInternational"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Application",
+                  "sourceMember": "International"
+                }
+              ],
+              "typeInfo": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
               }
             }
           }

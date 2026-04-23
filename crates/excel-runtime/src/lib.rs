@@ -36,6 +36,9 @@ const XL_OPEN_XML_TEMPLATE: i32 = 54;
 const XL_OPEN_XML_STRICT_WORKBOOK: i32 = 61;
 const XL_COPY: i32 = 1;
 const XL_CUT: i32 = 2;
+const XL_DECIMAL_SEPARATOR: i32 = 3;
+const XL_THOUSANDS_SEPARATOR: i32 = 4;
+const XL_LIST_SEPARATOR: i32 = 5;
 const CONTENT_TYPES_PART_NAME: &str = "[Content_Types].xml";
 const WORKBOOK_PART_NAME: &str = "xl/workbook.xml";
 const WORKBOOK_RELS_PART_NAME: &str = "xl/_rels/workbook.xml.rels";
@@ -1406,7 +1409,13 @@ impl ExcelRuntime {
         if !args.is_empty()
             && !matches!(
                 member,
-                "Cells" | "Rows" | "Columns" | "Workbooks" | "Worksheets" | "Sheets"
+                "Cells"
+                    | "Rows"
+                    | "Columns"
+                    | "Workbooks"
+                    | "Worksheets"
+                    | "Sheets"
+                    | "International"
             )
         {
             return Err(OmError::invalid_argument(format!(
@@ -1618,6 +1627,42 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Text(self.thousands_separator.clone()))
+            }
+            "International" => {
+                let [index] = args else {
+                    return Err(OmError::invalid_argument(
+                        "Application.International expects one XlApplicationInternational index",
+                    ));
+                };
+                let OmValue::Number(index) = index else {
+                    return Err(OmError::type_mismatch(
+                        "Application.International index expects an XlApplicationInternational numeric value",
+                    ));
+                };
+                if !index.is_finite()
+                    || index.fract() != 0.0
+                    || *index < i32::MIN as f64
+                    || *index > i32::MAX as f64
+                {
+                    return Err(OmError::invalid_argument(
+                        "Application.International index expects an integral XlApplicationInternational value",
+                    ));
+                }
+                match *index as i32 {
+                    XL_DECIMAL_SEPARATOR => Ok(OmValue::Text(self.decimal_separator.clone())),
+                    XL_THOUSANDS_SEPARATOR => Ok(OmValue::Text(self.thousands_separator.clone())),
+                    XL_LIST_SEPARATOR => Ok(OmValue::Text(
+                        if self.decimal_separator == "," {
+                            ";"
+                        } else {
+                            ","
+                        }
+                        .to_string(),
+                    )),
+                    other => Err(OmError::unsupported(format!(
+                        "Application.International index {other} is not implemented"
+                    ))),
+                }
             }
             "ShowWindowsInTaskbar" => {
                 if !args.is_empty() {
@@ -6246,7 +6291,8 @@ fn column_to_letters(mut col: u32) -> String {
 mod tests {
     use super::{
         APPLICATION_NAME, APPLICATION_VERSION, ExcelRuntime, XL_CALCULATION_AUTOMATIC,
-        XL_CALCULATION_MANUAL, blank_workbook_bytes, supports_format,
+        XL_CALCULATION_MANUAL, XL_DECIMAL_SEPARATOR, XL_LIST_SEPARATOR, XL_THOUSANDS_SEPARATOR,
+        blank_workbook_bytes, supports_format,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -7829,6 +7875,136 @@ mod tests {
                 .expect_err("Application.ThousandsSeparator should reject index args")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn application_international_dispatch_reports_separator_settings() {
+        let mut runtime = ExcelRuntime::new();
+        let application = runtime.root_application();
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        application,
+                        "International",
+                        &[OmValue::Number(f64::from(XL_DECIMAL_SEPARATOR))]
+                    )
+                    .expect("Application.International(xlDecimalSeparator)")
+            ),
+            "."
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        application,
+                        "International",
+                        &[OmValue::Number(f64::from(XL_THOUSANDS_SEPARATOR))]
+                    )
+                    .expect("Application.International(xlThousandsSeparator)")
+            ),
+            ","
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        application,
+                        "International",
+                        &[OmValue::Number(f64::from(XL_LIST_SEPARATOR))]
+                    )
+                    .expect("Application.International(xlListSeparator)")
+            ),
+            ","
+        );
+
+        runtime
+            .dispatch_set(
+                application,
+                "DecimalSeparator",
+                OmValue::Text(",".to_string()),
+                &[],
+            )
+            .expect("Application.DecimalSeparator = comma");
+        runtime
+            .dispatch_set(
+                application,
+                "ThousandsSeparator",
+                OmValue::Text(".".to_string()),
+                &[],
+            )
+            .expect("Application.ThousandsSeparator = period");
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        application,
+                        "International",
+                        &[OmValue::Number(f64::from(XL_DECIMAL_SEPARATOR))]
+                    )
+                    .expect("Application.International decimal after set")
+            ),
+            ","
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        application,
+                        "International",
+                        &[OmValue::Number(f64::from(XL_THOUSANDS_SEPARATOR))]
+                    )
+                    .expect("Application.International thousands after set")
+            ),
+            "."
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        application,
+                        "International",
+                        &[OmValue::Number(f64::from(XL_LIST_SEPARATOR))]
+                    )
+                    .expect("Application.International list separator after set")
+            ),
+            ";"
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "International", &[])
+                .expect_err("Application.International should require an index")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    application,
+                    "International",
+                    &[OmValue::Text("bad".to_string())]
+                )
+                .expect_err("Application.International should reject non-numeric indexes")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "International", &[OmValue::Number(3.5)])
+                .expect_err("Application.International should reject fractional indexes")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "International", &[OmValue::Number(99.0)])
+                .expect_err("Application.International should reject unsupported indexes")
+                .code,
+            OmErrorCode::Unsupported
         );
     }
 
