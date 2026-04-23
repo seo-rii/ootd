@@ -113,6 +113,7 @@ pub struct ExcelRuntime {
     use_system_separators: bool,
     decimal_separator: String,
     thousands_separator: String,
+    show_windows_in_taskbar: bool,
     cut_copy_mode: Option<i32>,
     next_handle: u64,
     next_object_handle: u64,
@@ -150,6 +151,7 @@ impl ExcelRuntime {
             use_system_separators: true,
             decimal_separator: ".".to_string(),
             thousands_separator: ",".to_string(),
+            show_windows_in_taskbar: true,
             cut_copy_mode: None,
             next_handle: 1,
             next_object_handle: FIRST_DYNAMIC_OBJECT_HANDLE_VALUE,
@@ -604,6 +606,15 @@ impl ExcelRuntime {
                             ));
                         };
                         self.thousands_separator = thousands_separator;
+                        Ok(())
+                    }
+                    "ShowWindowsInTaskbar" => {
+                        let OmValue::Bool(show_windows_in_taskbar) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Application.ShowWindowsInTaskbar expects a boolean value",
+                            ));
+                        };
+                        self.show_windows_in_taskbar = show_windows_in_taskbar;
                         Ok(())
                     }
                     "CutCopyMode" => {
@@ -1558,6 +1569,14 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Text(self.thousands_separator.clone()))
+            }
+            "ShowWindowsInTaskbar" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.ShowWindowsInTaskbar does not accept index arguments",
+                    ));
+                }
+                Ok(OmValue::Bool(self.show_windows_in_taskbar))
             }
             "CutCopyMode" => {
                 if !args.is_empty() {
@@ -7701,6 +7720,66 @@ mod tests {
             runtime
                 .dispatch_get(application, "ThousandsSeparator", &[OmValue::Number(1.0)])
                 .expect_err("Application.ThousandsSeparator should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn application_show_windows_in_taskbar_dispatch_roundtrips_and_rejects_invalid_values() {
+        let mut runtime = ExcelRuntime::new();
+        let application = runtime.root_application();
+
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(application, "ShowWindowsInTaskbar", &[])
+                .expect("Application.ShowWindowsInTaskbar default")
+        ));
+
+        runtime
+            .dispatch_set(
+                application,
+                "ShowWindowsInTaskbar",
+                OmValue::Bool(false),
+                &[],
+            )
+            .expect("Application.ShowWindowsInTaskbar = false");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "ShowWindowsInTaskbar", &[])
+                .expect("Application.ShowWindowsInTaskbar after false")
+        ));
+
+        runtime
+            .dispatch_set(
+                application,
+                "ShowWindowsInTaskbar",
+                OmValue::Bool(true),
+                &[],
+            )
+            .expect("Application.ShowWindowsInTaskbar = true");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(application, "ShowWindowsInTaskbar", &[])
+                .expect("Application.ShowWindowsInTaskbar after true")
+        ));
+
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    application,
+                    "ShowWindowsInTaskbar",
+                    OmValue::Text("bad".to_string()),
+                    &[]
+                )
+                .expect_err("Application.ShowWindowsInTaskbar should reject non-bool values")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "ShowWindowsInTaskbar", &[OmValue::Bool(true)])
+                .expect_err("Application.ShowWindowsInTaskbar should reject index args")
                 .code,
             OmErrorCode::InvalidArgument
         );
