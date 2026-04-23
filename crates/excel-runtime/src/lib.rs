@@ -8645,6 +8645,7 @@ fn formula_eval_error_from_cell_error(error: CellError) -> FormulaEvalError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FormulaScalarFunction {
     Abs,
+    If,
     Int,
     Round,
     Power,
@@ -8655,6 +8656,8 @@ impl FormulaScalarFunction {
     fn from_name(name: &str) -> Option<Self> {
         if name.eq_ignore_ascii_case("ABS") {
             Some(Self::Abs)
+        } else if name.eq_ignore_ascii_case("IF") {
+            Some(Self::If)
         } else if name.eq_ignore_ascii_case("INT") {
             Some(Self::Int)
         } else if name.eq_ignore_ascii_case("ROUND") {
@@ -8675,6 +8678,16 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Value);
                 };
                 Ok(value.abs())
+            }
+            FormulaScalarFunction::If => {
+                let [condition, true_value, false_value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                Ok(if *condition != 0.0 {
+                    *true_value
+                } else {
+                    *false_value
+                })
             }
             FormulaScalarFunction::Int => {
                 let [value] = args else {
@@ -8727,6 +8740,29 @@ fn round_half_away_from_zero(value: f64) -> f64 {
         -((-value) + 0.5).floor()
     } else {
         (value + 0.5).floor()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormulaComparisonOperator {
+    Equal,
+    NotEqual,
+    LessThan,
+    LessThanOrEqual,
+    GreaterThan,
+    GreaterThanOrEqual,
+}
+
+impl FormulaComparisonOperator {
+    fn evaluate(self, left: f64, right: f64) -> bool {
+        match self {
+            FormulaComparisonOperator::Equal => left == right,
+            FormulaComparisonOperator::NotEqual => left != right,
+            FormulaComparisonOperator::LessThan => left < right,
+            FormulaComparisonOperator::LessThanOrEqual => left <= right,
+            FormulaComparisonOperator::GreaterThan => left > right,
+            FormulaComparisonOperator::GreaterThanOrEqual => left >= right,
+        }
     }
 }
 
@@ -8937,12 +8973,28 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
     }
 
     fn parse_formula(&mut self) -> Result<f64, FormulaEvalError> {
-        let value = self.parse_expression()?;
+        let value = self.parse_comparison()?;
         self.skip_whitespace();
         if self.index == self.input.len() {
             Ok(value)
         } else {
             Err(FormulaEvalError::Unsupported)
+        }
+    }
+
+    fn parse_comparison(&mut self) -> Result<f64, FormulaEvalError> {
+        let mut value = self.parse_expression()?;
+        loop {
+            self.skip_whitespace();
+            let Some(operator) = self.consume_comparison_operator() else {
+                return Ok(value);
+            };
+            let right = self.parse_expression()?;
+            value = if operator.evaluate(value, right) {
+                1.0
+            } else {
+                0.0
+            };
         }
     }
 
@@ -9052,7 +9104,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             if self.consume_char(')') {
                 return function.evaluate(args.as_slice());
             }
-            args.push(self.parse_expression()?);
+            args.push(self.parse_comparison()?);
             self.skip_whitespace();
             if self.consume_char(',') {
                 continue;
@@ -9074,7 +9126,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
         }
         self.index = checkpoint;
-        Ok(vec![self.parse_expression()?])
+        Ok(vec![self.parse_comparison()?])
     }
 
     fn parse_number(&mut self) -> Result<Option<f64>, FormulaEvalError> {
@@ -9218,6 +9270,24 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         } else {
             false
         }
+    }
+
+    fn consume_comparison_operator(&mut self) -> Option<FormulaComparisonOperator> {
+        let remaining = &self.input[self.index..];
+        for (token, operator) in [
+            ("<>", FormulaComparisonOperator::NotEqual),
+            ("<=", FormulaComparisonOperator::LessThanOrEqual),
+            (">=", FormulaComparisonOperator::GreaterThanOrEqual),
+            ("=", FormulaComparisonOperator::Equal),
+            ("<", FormulaComparisonOperator::LessThan),
+            (">", FormulaComparisonOperator::GreaterThan),
+        ] {
+            if remaining.starts_with(token) {
+                self.index += token.len();
+                return Some(operator);
+            }
+        }
+        None
     }
 
     fn peek_char(&self) -> Option<char> {
@@ -11640,6 +11710,88 @@ mod tests {
                 OmValue::Number(8.0),
                 OmValue::Number(9.0),
                 OmValue::Error(CellError::Num),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_basic_comparison_and_if_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A2".to_string())])
+                .expect("Range(A1:A2)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B5".to_string())])
+                .expect("Range(B1:B5)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(2, 1, vec![OmValue::Number(7.0), OmValue::Number(3.0)])
+                        .expect("source values"),
+                ),
+                &[],
+            )
+            .expect("set comparison source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        5,
+                        1,
+                        vec![
+                            OmValue::Text("=A1>A2".to_string()),
+                            OmValue::Text("=A1<A2".to_string()),
+                            OmValue::Text("=IF(A1>=7, 100, 0)".to_string()),
+                            OmValue::Text("=IF(A2<>3, 1, 9)".to_string()),
+                            OmValue::Text("=IF(A1=A2, 1, ROUND(2.25, 1))".to_string()),
+                        ],
+                    )
+                    .expect("comparison formulas"),
+                ),
+                &[],
+            )
+            .expect("set comparison formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("comparison values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected comparison value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(1.0),
+                OmValue::Number(0.0),
+                OmValue::Number(100.0),
+                OmValue::Number(9.0),
+                OmValue::Number(2.3),
             ]
         );
     }
