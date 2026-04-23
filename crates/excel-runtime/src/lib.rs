@@ -4633,6 +4633,26 @@ impl ExcelRuntime {
         }
     }
 
+    fn evaluate_formula_expression(
+        &self,
+        workbook: WorkbookHandle,
+        sheet_id: SheetId,
+        expression: &str,
+        context: &str,
+    ) -> OmResult<OmValue> {
+        let state = &self.runtime_workbook(workbook)?.loaded.state;
+        let mut evaluator = FormulaEvaluator::new(state);
+        match evaluator.evaluate_formula_text(sheet_id, expression) {
+            Ok(value) => Ok(OmValue::from(value)),
+            Err(error) => match error.into_cell_value() {
+                Some(value) => Ok(OmValue::from(value)),
+                None => Err(OmError::unsupported(format!(
+                    "{context} formula is not supported"
+                ))),
+            },
+        }
+    }
+
     fn dispatch_invoke_application(&mut self, member: &str, args: &[OmValue]) -> OmResult<OmValue> {
         self.focus_member_supported("Application", member, false)?;
 
@@ -4693,31 +4713,17 @@ impl ExcelRuntime {
                 Ok(OmValue::Empty)
             }
             "Evaluate" => {
-                let [OmValue::Text(expression)] = args else {
-                    if args.len() == 1 {
-                        return Err(OmError::type_mismatch(
-                            "Application.Evaluate expects a formula text argument",
-                        ));
-                    }
-                    return Err(OmError::invalid_argument(
-                        "Application.Evaluate expects one formula text argument",
-                    ));
-                };
+                let expression = coerce_evaluate_expression_arg(args, "Application.Evaluate")?;
                 let Some(active_workbook) = self.active_workbook else {
                     return Err(OmError::invalid_state("application has no active workbook"));
                 };
                 let sheet_id = self.active_sheet_id(active_workbook)?;
-                let state = &self.runtime_workbook(active_workbook)?.loaded.state;
-                let mut evaluator = FormulaEvaluator::new(state);
-                match evaluator.evaluate_formula_text(sheet_id, expression) {
-                    Ok(value) => Ok(OmValue::from(value)),
-                    Err(error) => match error.into_cell_value() {
-                        Some(value) => Ok(OmValue::from(value)),
-                        None => Err(OmError::unsupported(
-                            "Application.Evaluate formula is not supported",
-                        )),
-                    },
-                }
+                self.evaluate_formula_expression(
+                    active_workbook,
+                    sheet_id,
+                    expression,
+                    "Application.Evaluate",
+                )
             }
             "Goto" => {
                 if args.len() > 2 {
@@ -6490,6 +6496,15 @@ impl ExcelRuntime {
                 }
                 self.calculate_sheet_formulas(workbook, sheet_id, None)?;
                 Ok(OmValue::Empty)
+            }
+            "Evaluate" => {
+                let expression = coerce_evaluate_expression_arg(args, "Worksheet.Evaluate")?;
+                self.evaluate_formula_expression(
+                    workbook,
+                    sheet_id,
+                    expression,
+                    "Worksheet.Evaluate",
+                )
             }
             "Cells" => {
                 let (row, col) = parse_cells_args(args)?;
@@ -8574,6 +8589,20 @@ fn coerce_optional_reference_style_arg(value: &OmValue) -> OmResult<RangeAddress
         _ => Err(OmError::type_mismatch(
             "Range.Address ReferenceStyle expects a numeric XlReferenceStyle value when provided",
         )),
+    }
+}
+
+fn coerce_evaluate_expression_arg<'a>(args: &'a [OmValue], context: &str) -> OmResult<&'a str> {
+    let [value] = args else {
+        return Err(OmError::invalid_argument(format!(
+            "{context} expects one formula text argument"
+        )));
+    };
+    match value {
+        OmValue::Text(expression) => Ok(expression),
+        _ => Err(OmError::type_mismatch(format!(
+            "{context} expects a formula text argument"
+        ))),
     }
 }
 
@@ -11685,6 +11714,87 @@ mod tests {
                 .expect_err("Application.Evaluate should reject non-text arguments")
                 .code,
             OmErrorCode::TypeMismatch
+        );
+    }
+
+    #[test]
+    fn worksheet_evaluate_uses_target_sheet_context() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let first_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let first_a1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Sheet1.Range(A1)"),
+        );
+        runtime
+            .dispatch_set(first_a1, "Value2", OmValue::Number(10.0), &[])
+            .expect("set Sheet1 A1");
+
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let second_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Add", &[])
+                .expect("Worksheets.Add"),
+        );
+        let second_a1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(second_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Sheet2.Range(A1)"),
+        );
+        runtime
+            .dispatch_set(second_a1, "Value2", OmValue::Number(20.0), &[])
+            .expect("set Sheet2 A1");
+        runtime
+            .dispatch_invoke(first_sheet, "Activate", &[])
+            .expect("activate first sheet");
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        application,
+                        "Evaluate",
+                        &[OmValue::Text("=A1+1".to_string())],
+                    )
+                    .expect("Application.Evaluate active sheet"),
+            ),
+            11.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        second_sheet,
+                        "Evaluate",
+                        &[OmValue::Text("=A1+1".to_string())],
+                    )
+                    .expect("Worksheet.Evaluate target sheet"),
+            ),
+            21.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(second_sheet, "Evaluate", &[])
+                .expect_err("Worksheet.Evaluate should require one argument")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 
