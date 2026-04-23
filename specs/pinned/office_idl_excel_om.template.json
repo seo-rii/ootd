@@ -3370,6 +3370,22 @@
               ]
             }
           }
+        },
+        {
+          "name": "Clear",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Clear"
+                }
+              ]
+            }
+          }
         }
       ]
     }

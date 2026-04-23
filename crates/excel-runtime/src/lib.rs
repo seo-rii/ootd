@@ -1320,6 +1320,33 @@ impl ExcelRuntime {
                         runtime.loaded.state.clear_range_contents(&range)?;
                         Ok(OmValue::Empty)
                     }
+                    "Clear" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "Range.Clear does not accept arguments",
+                            ));
+                        }
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let worksheet = runtime
+                            .loaded
+                            .state
+                            .worksheet_data_for_sheet_mut(sheet_id)?;
+                        for row in rect.row_first..=rect.row_last {
+                            for col in rect.col_first..=rect.col_last {
+                                if worksheet.cells.remove(&(row, col)).is_some() {
+                                    worksheet.dirty = true;
+                                    worksheet.dirty_cells.insert((row, col));
+                                }
+                            }
+                        }
+                        Ok(OmValue::Empty)
+                    }
                     _ => Err(OmError::unsupported(format!(
                         "Range.{member} is not implemented as a method"
                     ))),
@@ -6300,7 +6327,7 @@ mod tests {
     use office_common::{
         CellValue, ExcelProfile, FileFormat, GetRangeValuesSpec, LoadOptions, ObjectHandle,
         OmArray, OmErrorCode, OmValue, OpenWorkbookSpec, RangeRef, Rect, SaveWorkbookSpec,
-        SetRangeValuesSpec, WorkbookId,
+        SetRangeValuesSpec, StyleId, WorkbookId,
     };
     use office_opc::{CompressionMethod, OpcPackage, OpcPart};
 
@@ -11704,6 +11731,180 @@ mod tests {
         assert!(reopened.state.cell(sheet_id, 1, 1).is_none());
         assert!(reopened.state.cell(sheet_id, 1, 2).is_none());
         assert!(reopened.state.cell(sheet_id, 1, 3).is_none());
+    }
+
+    #[test]
+    fn range_clear_removes_values_formulas_and_style_shells_without_changing_selection() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:C1".to_string())])
+                .expect("Range(A1:C1)"),
+        );
+        let formula_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(range, "Item", &[OmValue::Number(1.0), OmValue::Number(2.0)])
+                .expect("Range(A1:C1).Item(1, 2)"),
+        );
+        let sheet_id = runtime
+            .runtime_workbook(workbook)
+            .expect("runtime workbook")
+            .loaded
+            .state
+            .worksheets
+            .first()
+            .expect("worksheet")
+            .id;
+        {
+            let worksheet = runtime
+                .runtime_workbook_mut(workbook)
+                .expect("runtime workbook mut")
+                .loaded
+                .state
+                .worksheet_data_for_sheet_mut(sheet_id)
+                .expect("worksheet data");
+            for key in [(1, 1), (1, 2), (1, 3)] {
+                worksheet.cells.get_mut(&key).expect("seeded cell").style_id = Some(StyleId(0));
+            }
+        }
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(range, "Clear", &[])
+                .expect("Range.Clear"),
+            OmValue::Empty
+        ));
+
+        let selection = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after Clear"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection, "Address", &[])
+                    .expect("Selection address after Clear")
+            ),
+            "$A$1:$C$1"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(range, "Text", &[])
+                .expect("Range(A1:C1).Text after Clear"),
+            OmValue::Text(String::new())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(formula_cell, "Value", &[])
+                .expect("B1 Value after Clear"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(formula_cell, "Formula", &[])
+                .expect("B1 Formula after Clear"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(formula_cell, "HasFormula", &[])
+                .expect("B1 HasFormula after Clear"),
+            OmValue::Bool(false)
+        );
+        let worksheet = runtime
+            .runtime_workbook(workbook)
+            .expect("runtime workbook after Clear")
+            .loaded
+            .state
+            .worksheet_data_for_sheet(sheet_id)
+            .expect("worksheet data after Clear");
+        assert!(worksheet.cells.get(&(1, 1)).is_none());
+        assert!(worksheet.cells.get(&(1, 2)).is_none());
+        assert!(worksheet.cells.get(&(1, 3)).is_none());
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after Clear")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(range, "Clear", &[OmValue::Bool(true)])
+                .expect_err("Range.Clear args should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after Clear");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reload cleared workbook");
+        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        assert!(reopened.state.cell(reopened_sheet_id, 1, 1).is_none());
+        assert!(reopened.state.cell(reopened_sheet_id, 1, 2).is_none());
+        assert!(reopened.state.cell(reopened_sheet_id, 1, 3).is_none());
+
+        let mut read_only_runtime = ExcelRuntime::new();
+        let read_only_workbook = read_only_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook");
+        let read_only_application = read_only_runtime.root_application();
+        let read_only_sheet = expect_object_handle(
+            read_only_runtime
+                .dispatch_get(read_only_application, "ActiveSheet", &[])
+                .expect("read-only ActiveSheet"),
+        );
+        let read_only_range = expect_object_handle(
+            read_only_runtime
+                .dispatch_invoke(
+                    read_only_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:C1".to_string())],
+                )
+                .expect("read-only Range(A1:C1)"),
+        );
+        assert_eq!(
+            read_only_runtime
+                .dispatch_invoke(read_only_range, "Clear", &[])
+                .expect_err("Range.Clear should reject read-only workbooks")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert!(
+            read_only_runtime
+                .runtime_workbook(read_only_workbook)
+                .expect("read-only runtime workbook")
+                .read_only
+        );
     }
 
     #[test]
