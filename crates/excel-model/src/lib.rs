@@ -338,7 +338,8 @@ mod tests {
 
     use office_common::{
         CellValue, FileFormat, FormulaSource, ObjectHandle, OmArray, OmErrorCode, OmValue,
-        RangeRef, Rect, SheetId, SheetScope, StyleId, WorkbookId, WorkbookModel, WorksheetModel,
+        RangeRef, Rect, SheetId, SheetScope, SheetVisibility, StyleId, WorkbookId, WorkbookModel,
+        WorksheetModel,
     };
 
     fn sample_state() -> WorkbookState {
@@ -354,6 +355,7 @@ mod tests {
                 id: sheet_id,
                 workbook_id,
                 name: "Sheet1".to_string(),
+                visibility: SheetVisibility::Visible,
                 relationship_id: Some("rId1".to_string()),
                 part_uri: Some("xl/worksheets/sheet1.xml".to_string()),
             }],

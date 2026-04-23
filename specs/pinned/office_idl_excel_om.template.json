@@ -19,6 +19,23 @@
           "value": -4135
         }
       ]
+    },
+    {
+      "name": "XlSheetVisibility",
+      "values": [
+        {
+          "name": "xlSheetVisible",
+          "value": -1
+        },
+        {
+          "name": "xlSheetHidden",
+          "value": 0
+        },
+        {
+          "name": "xlSheetVeryHidden",
+          "value": 2
+        }
+      ]
     }
   ],
   "interfaces": [
@@ -1553,6 +1570,38 @@
                 "name": "Worksheet",
                 "nullable": true,
                 "aliasOf": "Excel.Worksheet"
+              }
+            }
+          }
+        },
+        {
+          "name": "Visible",
+          "memberKind": "property",
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "XlSheetVisibility"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "Visible"
+                },
+                {
+                  "kind": "property_set",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "Visible"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlSheetVisibility"
               }
             }
           }

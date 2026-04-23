@@ -4,8 +4,8 @@ use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_j
 use office_common::{
     ExcelProfile, FileFormat, GetRangeValuesSpec, LoadOptions, ObjectHandle, OmArray, OmError,
     OmErrorCode, OmResult, OmValue, OpaquePart, OpenWorkbookSpec, RangeHandle, RangeRef, Rect,
-    SaveOptions, SaveWorkbookSpec, SetRangeValuesSpec, SheetId, WorkbookHandle, WorkbookId,
-    WorkbookModel, WorksheetHandle, WorksheetModel,
+    SaveOptions, SaveWorkbookSpec, SetRangeValuesSpec, SheetId, SheetVisibility, WorkbookHandle,
+    WorkbookId, WorkbookModel, WorksheetHandle, WorksheetModel,
 };
 use office_idl::{AccessMode, SupportState};
 use office_opc::{CompressionMethod, OpcPackage, OpcPart};
@@ -24,6 +24,9 @@ const EXCEL_MAX_ROW_INDEX: u32 = 1_048_576;
 const EXCEL_MAX_COLUMN_INDEX: u32 = 16_384;
 const XL_CALCULATION_AUTOMATIC: i32 = -4105;
 const XL_CALCULATION_MANUAL: i32 = -4135;
+const XL_SHEET_VISIBLE: i32 = -1;
+const XL_SHEET_HIDDEN: i32 = 0;
+const XL_SHEET_VERY_HIDDEN: i32 = 2;
 const XL_SHEET_TYPE_WORKSHEET: i32 = -4167;
 const XL_WBA_TEMPLATE_WORKSHEET: i32 = -4167;
 const CONTENT_TYPES_PART_NAME: &str = "[Content_Types].xml";
@@ -576,6 +579,58 @@ impl ExcelRuntime {
                             })?;
                         if worksheet.name != new_name {
                             worksheet.name = new_name;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "Visible" => {
+                        let new_visibility = coerce_sheet_visibility(value)?;
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let current_visibility = runtime
+                            .loaded
+                            .state
+                            .worksheets
+                            .iter()
+                            .find(|worksheet| worksheet.id == sheet_id)
+                            .map(|worksheet| worksheet.visibility)
+                            .ok_or_else(|| {
+                                OmError::new(OmErrorCode::NotFound, "unknown worksheet")
+                            })?;
+                        if current_visibility == SheetVisibility::Visible
+                            && new_visibility != SheetVisibility::Visible
+                            && runtime
+                                .loaded
+                                .state
+                                .worksheets
+                                .iter()
+                                .filter(|worksheet| {
+                                    worksheet.visibility == SheetVisibility::Visible
+                                })
+                                .count()
+                                <= 1
+                        {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot hide the last visible worksheet in a workbook",
+                            ));
+                        }
+                        let worksheet = runtime
+                            .loaded
+                            .state
+                            .worksheets
+                            .iter_mut()
+                            .find(|worksheet| worksheet.id == sheet_id)
+                            .ok_or_else(|| {
+                                OmError::new(OmErrorCode::NotFound, "unknown worksheet")
+                            })?;
+                        if worksheet.visibility != new_visibility {
+                            worksheet.visibility = new_visibility;
                             runtime.dirty = true;
                         }
                         Ok(())
@@ -1335,6 +1390,17 @@ impl ExcelRuntime {
                         OmValue::Object(self.register_worksheet_handle(workbook, sheet_id).0)
                     })
                     .unwrap_or(OmValue::Empty))
+            }
+            "Visible" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Worksheet.Visible does not accept arguments",
+                    ));
+                }
+                let worksheet = self.worksheet_model(workbook, sheet_id)?;
+                Ok(OmValue::Number(f64::from(sheet_visibility_to_excel_value(
+                    worksheet.visibility,
+                ))))
             }
             "Type" => {
                 if !args.is_empty() {
@@ -2881,6 +2947,7 @@ impl ExcelRuntime {
                         id: sheet_id,
                         workbook_id: runtime.loaded.state.model.id,
                         name: worksheet_name,
+                        visibility: SheetVisibility::Visible,
                         relationship_id: Some(relationship_id),
                         part_uri: Some(part_uri.clone()),
                     },
@@ -2999,6 +3066,7 @@ impl ExcelRuntime {
         let result = (|| {
             let (
                 source_name,
+                source_visibility,
                 source_sheet_data,
                 source_support_parts,
                 source_relationships_part,
@@ -3108,6 +3176,7 @@ impl ExcelRuntime {
                     .collect::<OmResult<BTreeMap<_, _>>>()?;
                 (
                     worksheet.name.clone(),
+                    worksheet.visibility,
                     sheet_data,
                     support_parts,
                     relationships_part,
@@ -3324,6 +3393,15 @@ impl ExcelRuntime {
                     .state
                     .worksheet_data
                     .insert(added_sheet_id, source_sheet_data);
+                if let Some(worksheet) = runtime
+                    .loaded
+                    .state
+                    .worksheets
+                    .iter_mut()
+                    .find(|worksheet| worksheet.id == added_sheet_id)
+                {
+                    worksheet.visibility = source_visibility;
+                }
 
                 let mut copied_support_parts = source_support_parts;
                 copied_support_parts.worksheet_part_uri = Some(target_part_uri.clone());
@@ -4415,6 +4493,43 @@ fn xml_local_name(name: &[u8]) -> &[u8] {
 
 fn om_value_is_omitted(value: &OmValue) -> bool {
     matches!(value, OmValue::Missing | OmValue::Empty | OmValue::Null)
+}
+
+fn sheet_visibility_to_excel_value(visibility: SheetVisibility) -> i32 {
+    match visibility {
+        SheetVisibility::Visible => XL_SHEET_VISIBLE,
+        SheetVisibility::Hidden => XL_SHEET_HIDDEN,
+        SheetVisibility::VeryHidden => XL_SHEET_VERY_HIDDEN,
+    }
+}
+
+fn coerce_sheet_visibility(value: OmValue) -> OmResult<SheetVisibility> {
+    match value {
+        OmValue::Bool(true) => Ok(SheetVisibility::Visible),
+        OmValue::Bool(false) => Ok(SheetVisibility::Hidden),
+        OmValue::Number(number) => {
+            if !number.is_finite()
+                || number.fract() != 0.0
+                || number < i32::MIN as f64
+                || number > i32::MAX as f64
+            {
+                return Err(OmError::invalid_argument(
+                    "Worksheet.Visible expects an integral XlSheetVisibility value",
+                ));
+            }
+            match number as i32 {
+                XL_SHEET_VISIBLE => Ok(SheetVisibility::Visible),
+                XL_SHEET_HIDDEN => Ok(SheetVisibility::Hidden),
+                XL_SHEET_VERY_HIDDEN => Ok(SheetVisibility::VeryHidden),
+                _ => Err(OmError::invalid_argument(
+                    "Worksheet.Visible supports xlSheetVisible, xlSheetHidden, and xlSheetVeryHidden",
+                )),
+            }
+        }
+        _ => Err(OmError::type_mismatch(
+            "Worksheet.Visible expects a boolean or XlSheetVisibility numeric value",
+        )),
+    }
 }
 
 fn runtime_xml_error(error: impl std::fmt::Display) -> OmError {
@@ -11807,6 +11922,126 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["Sheet2".to_string(), "Sheet1".to_string()]
         );
+    }
+
+    #[test]
+    fn worksheet_visible_dispatch_roundtrips_and_rejects_invalid_values() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheet1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let sheet2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Add", &[])
+                .expect("Worksheets.Add"),
+        );
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheet1, "Visible", &[])
+                    .expect("Sheet1.Visible")
+            ),
+            f64::from(super::XL_SHEET_VISIBLE)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheet2, "Visible", &[])
+                    .expect("Sheet2.Visible")
+            ),
+            f64::from(super::XL_SHEET_VISIBLE)
+        );
+
+        runtime
+            .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
+            .expect("clear dirty state");
+        runtime
+            .dispatch_set(
+                sheet2,
+                "Visible",
+                OmValue::Number(f64::from(super::XL_SHEET_HIDDEN)),
+                &[],
+            )
+            .expect("hide Sheet2");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheet2, "Visible", &[])
+                    .expect("Sheet2.Visible after hide")
+            ),
+            f64::from(super::XL_SHEET_HIDDEN)
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved")
+        ));
+
+        runtime
+            .dispatch_set(
+                sheet2,
+                "Visible",
+                OmValue::Number(f64::from(super::XL_SHEET_VERY_HIDDEN)),
+                &[],
+            )
+            .expect("very hide Sheet2");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheet2, "Visible", &[])
+                    .expect("Sheet2.Visible after very hide")
+            ),
+            f64::from(super::XL_SHEET_VERY_HIDDEN)
+        );
+
+        runtime
+            .dispatch_set(sheet2, "Visible", OmValue::Bool(true), &[])
+            .expect("show Sheet2 from bool");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheet2, "Visible", &[])
+                    .expect("Sheet2.Visible after bool true")
+            ),
+            f64::from(super::XL_SHEET_VISIBLE)
+        );
+        runtime
+            .dispatch_set(sheet2, "Visible", OmValue::Bool(false), &[])
+            .expect("hide Sheet2 from bool");
+
+        let fractional = runtime
+            .dispatch_set(sheet1, "Visible", OmValue::Number(2.5), &[])
+            .expect_err("fractional visibility should fail");
+        assert_eq!(fractional.code, OmErrorCode::InvalidArgument);
+        let invalid_numeric = runtime
+            .dispatch_set(sheet1, "Visible", OmValue::Number(1.0), &[])
+            .expect_err("unsupported visibility should fail");
+        assert_eq!(invalid_numeric.code, OmErrorCode::InvalidArgument);
+        let invalid_type = runtime
+            .dispatch_set(sheet1, "Visible", OmValue::Text("hidden".to_string()), &[])
+            .expect_err("text visibility should fail");
+        assert_eq!(invalid_type.code, OmErrorCode::TypeMismatch);
+
+        let hide_last_visible = runtime
+            .dispatch_set(sheet1, "Visible", OmValue::Bool(false), &[])
+            .expect_err("hiding last visible sheet should fail");
+        assert_eq!(hide_last_visible.code, OmErrorCode::InvalidState);
     }
 
     #[test]

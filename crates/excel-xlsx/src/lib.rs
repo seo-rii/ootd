@@ -4,7 +4,8 @@ use std::io::{Cursor, Write};
 use excel_model::{CellData, WorkbookState, WorksheetData};
 use office_common::{
     CellError, CellValue, FileFormat, FormulaSource, LoadOptions, OmError, OmErrorCode, OmResult,
-    OpaquePart, SaveOptions, SheetId, StyleId, WorkbookId, WorkbookModel, WorksheetModel,
+    OpaquePart, SaveOptions, SheetId, SheetVisibility, StyleId, WorkbookId, WorkbookModel,
+    WorksheetModel,
 };
 use office_opc::OpcPackage;
 use quick_xml::escape::partial_escape;
@@ -671,7 +672,11 @@ impl XlsxCodec {
             || saved_worksheets
                 .iter()
                 .zip(&workbook.state.worksheets)
-                .any(|(saved, current)| saved.id != current.id || saved.name != current.name)
+                .any(|(saved, current)| {
+                    saved.id != current.id
+                        || saved.name != current.name
+                        || saved.visibility != current.visibility
+                })
         {
             let mut reader = Reader::from_reader(Cursor::new(workbook_xml.as_slice()));
             reader.config_mut().trim_text(false);
@@ -712,10 +717,16 @@ impl XlsxCodec {
                         has_name_attr = true;
                         continue;
                     }
+                    if key == "state" {
+                        continue;
+                    }
                     rewritten.push_attribute((key.as_str(), value.as_str()));
                 }
                 if !has_name_attr {
                     rewritten.push_attribute(("name", worksheet.name.as_str()));
+                }
+                if let Some(state) = format_sheet_visibility_state(worksheet.visibility) {
+                    rewritten.push_attribute(("state", state));
                 }
                 Ok(rewritten)
             };
@@ -969,6 +980,7 @@ fn parse_workbook(
                 let mut name = None;
                 let mut sheet_id = None;
                 let mut relationship_id = None;
+                let mut visibility = SheetVisibility::Visible;
                 for attr in element.attributes() {
                     let attr = attr.map_err(xml_error)?;
                     let value = attr
@@ -979,6 +991,7 @@ fn parse_workbook(
                         b"name" => name = Some(value),
                         b"sheetId" => sheet_id = value.parse::<u64>().ok(),
                         b"r:id" => relationship_id = Some(value),
+                        b"state" => visibility = parse_sheet_visibility_state(value.as_str())?,
                         _ => {}
                     }
                 }
@@ -991,6 +1004,7 @@ fn parse_workbook(
                     id: SheetId(next_id),
                     workbook_id: WorkbookId(0),
                     name: name.unwrap_or_else(|| format!("Sheet{}", worksheets.len() + 1)),
+                    visibility,
                     relationship_id,
                     part_uri,
                 });
@@ -1010,6 +1024,26 @@ fn parse_workbook(
     }
 
     Ok(worksheets)
+}
+
+fn parse_sheet_visibility_state(value: &str) -> OmResult<SheetVisibility> {
+    match value {
+        "visible" => Ok(SheetVisibility::Visible),
+        "hidden" => Ok(SheetVisibility::Hidden),
+        "veryHidden" => Ok(SheetVisibility::VeryHidden),
+        other => Err(OmError::new(
+            OmErrorCode::Parse,
+            format!("unsupported workbook sheet visibility state {other:?}"),
+        )),
+    }
+}
+
+fn format_sheet_visibility_state(visibility: SheetVisibility) -> Option<&'static str> {
+    match visibility {
+        SheetVisibility::Visible => None,
+        SheetVisibility::Hidden => Some("hidden"),
+        SheetVisibility::VeryHidden => Some("veryHidden"),
+    }
 }
 
 #[cfg(test)]
@@ -16258,11 +16292,12 @@ mod tests {
         WorksheetCommentSummary, WorksheetData, WorksheetHyperlinkBinding,
         WorksheetHyperlinkSummary, WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec,
         collect_support_part_dimension_coords, compute_dimension_ref,
-        compute_dimension_ref_with_preserved, parse_shared_strings, parse_workbook_relationships,
-        parse_worksheet_cells, rewrite_worksheet_xml,
+        compute_dimension_ref_with_preserved, parse_shared_strings, parse_workbook,
+        parse_workbook_relationships, parse_worksheet_cells, rewrite_worksheet_xml,
     };
     use office_common::{
-        CellError, CellValue, LoadOptions as CommonLoadOptions, OmErrorCode, StyleId, WorkbookId,
+        CellError, CellValue, LoadOptions as CommonLoadOptions, OmErrorCode, SheetVisibility,
+        StyleId, WorkbookId,
     };
     use office_opc::{CompressionMethod, OpcPart};
 
@@ -16660,6 +16695,80 @@ mod tests {
             Some("xl/worksheets/sheet1.xml")
         );
         assert!(!relationships.contains_key("rId2"));
+    }
+
+    #[test]
+    fn parses_workbook_sheet_visibility_states() {
+        let worksheets = parse_workbook(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Visible" sheetId="1" state="visible" r:id="rId1"/>
+    <sheet name="Hidden" sheetId="2" state="hidden" r:id="rId2"/>
+    <sheet name="VeryHidden" sheetId="3" state="veryHidden" r:id="rId3"/>
+    <sheet name="DefaultVisible" sheetId="4" r:id="rId4"/>
+  </sheets>
+</workbook>"#,
+            &BTreeMap::new(),
+        )
+        .expect("workbook sheets");
+
+        assert_eq!(worksheets[0].visibility, SheetVisibility::Visible);
+        assert_eq!(worksheets[1].visibility, SheetVisibility::Hidden);
+        assert_eq!(worksheets[2].visibility, SheetVisibility::VeryHidden);
+        assert_eq!(worksheets[3].visibility, SheetVisibility::Visible);
+    }
+
+    #[test]
+    fn save_rewrites_workbook_sheet_visibility_state_attributes() {
+        let codec = XlsxCodec;
+        let mut loaded = codec
+            .load(
+                synthetic_workbook_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        loaded.state.worksheets[0].visibility = SheetVisibility::Hidden;
+
+        let hidden_bytes = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("save hidden workbook");
+        let hidden_package =
+            OpcPackage::from_bytes(hidden_bytes.as_slice()).expect("hidden workbook package");
+        let workbook_xml = std::str::from_utf8(
+            hidden_package
+                .part("xl/workbook.xml")
+                .expect("hidden workbook.xml")
+                .bytes
+                .as_slice(),
+        )
+        .expect("hidden workbook.xml utf8");
+        assert!(workbook_xml.contains(r#"state="hidden""#));
+
+        let mut reopened = codec
+            .load(hidden_bytes.as_slice(), CommonLoadOptions::default())
+            .expect("reopen hidden workbook");
+        assert_eq!(
+            reopened.state.worksheets[0].visibility,
+            SheetVisibility::Hidden
+        );
+        reopened.state.worksheets[0].visibility = SheetVisibility::Visible;
+
+        let visible_bytes = codec
+            .save(&reopened, office_common::SaveOptions::default())
+            .expect("save visible workbook");
+        let visible_package =
+            OpcPackage::from_bytes(visible_bytes.as_slice()).expect("visible workbook package");
+        let workbook_xml = std::str::from_utf8(
+            visible_package
+                .part("xl/workbook.xml")
+                .expect("visible workbook.xml")
+                .bytes
+                .as_slice(),
+        )
+        .expect("visible workbook.xml utf8");
+        assert!(!workbook_xml.contains("state="));
     }
 
     #[test]

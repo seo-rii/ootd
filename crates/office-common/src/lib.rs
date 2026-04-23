@@ -286,11 +286,21 @@ pub struct WorkbookModel {
     pub format: FileFormat,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SheetVisibility {
+    #[default]
+    Visible,
+    Hidden,
+    VeryHidden,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorksheetModel {
     pub id: SheetId,
     pub workbook_id: WorkbookId,
     pub name: String,
+    #[serde(default)]
+    pub visibility: SheetVisibility,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relationship_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
