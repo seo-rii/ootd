@@ -104,6 +104,23 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
             "Excel._Worksheet".to_string()
         ])
     );
+    let workbooks = document
+        .interfaces
+        .iter()
+        .find(|interface| interface.name == "Workbooks")
+        .expect("Workbooks");
+    let workbooks_open = workbooks
+        .members
+        .iter()
+        .find(|member| member.name == "Open")
+        .expect("Workbooks.Open");
+    assert_eq!(workbooks_open.params.len(), 3);
+    assert_eq!(workbooks_open.params[0].name, "Filename");
+    assert!(!workbooks_open.params[0].optional);
+    assert_eq!(workbooks_open.params[1].name, "UpdateLinks");
+    assert!(workbooks_open.params[1].optional);
+    assert_eq!(workbooks_open.params[2].name, "ReadOnly");
+    assert!(workbooks_open.params[2].optional);
 }
 
 #[test]

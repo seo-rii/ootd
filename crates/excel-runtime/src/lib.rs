@@ -3004,9 +3004,9 @@ impl ExcelRuntime {
                 Ok(OmValue::Object(workbook.0))
             }
             "Open" => {
-                if args.len() != 1 {
+                if args.is_empty() || args.len() > 3 {
                     return Err(OmError::invalid_argument(
-                        "Workbooks.Open expects a single filename argument",
+                        "Workbooks.Open expects Filename and optional UpdateLinks and ReadOnly arguments",
                     ));
                 }
                 let path = match &args[0] {
@@ -3014,6 +3014,24 @@ impl ExcelRuntime {
                     _ => {
                         return Err(OmError::type_mismatch(
                             "Workbooks.Open expects a string filename",
+                        ));
+                    }
+                };
+                match args.get(1) {
+                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => {}
+                    Some(OmValue::Bool(_) | OmValue::Number(_)) => {}
+                    Some(_) => {
+                        return Err(OmError::type_mismatch(
+                            "Workbooks.Open UpdateLinks expects a boolean or numeric value when provided",
+                        ));
+                    }
+                }
+                let read_only = match args.get(2) {
+                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => false,
+                    Some(OmValue::Bool(read_only)) => *read_only,
+                    Some(_) => {
+                        return Err(OmError::type_mismatch(
+                            "Workbooks.Open ReadOnly expects a boolean value when provided",
                         ));
                     }
                 };
@@ -3033,7 +3051,7 @@ impl ExcelRuntime {
                             bytes,
                             format_hint: None,
                             profile: ExcelProfile::Excel365,
-                            read_only: false,
+                            read_only,
                         },
                         display_name,
                         Some(PathBuf::from(path)),
@@ -13811,6 +13829,117 @@ mod tests {
 
         assert_eq!(opened, active_workbook);
         assert_eq!(opened, workbook_item);
+
+        fs::remove_file(path).expect("cleanup fixture");
+    }
+
+    #[test]
+    fn workbooks_open_dispatch_honors_read_only_argument_and_validates_options() {
+        let mut runtime = ExcelRuntime::new();
+        let path = std::env::temp_dir().join(format!(
+            "ootd-runtime-open-readonly-{}-{}.xlsx",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        fs::write(&path, synthetic_workbook_bytes()).expect("write workbook fixture");
+
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+        let opened = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[
+                        OmValue::Text(path.to_string_lossy().into_owned()),
+                        OmValue::Missing,
+                        OmValue::Bool(true),
+                    ],
+                )
+                .expect("Workbooks.Open ReadOnly"),
+        );
+
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(opened, "ReadOnly", &[])
+                .expect("Workbook.ReadOnly")
+        ));
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    active_sheet,
+                    "Name",
+                    OmValue::Text("ReadOnlyRename".to_string()),
+                    &[],
+                )
+                .expect_err("read-only opened workbook should reject mutation")
+                .code,
+            OmErrorCode::InvalidState
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(workbooks, "Open", &[])
+                .expect_err("Workbooks.Open should require Filename")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[
+                        OmValue::Text(path.to_string_lossy().into_owned()),
+                        OmValue::Text("bad".to_string()),
+                    ],
+                )
+                .expect_err("Workbooks.Open should reject non-bool/non-numeric UpdateLinks")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[
+                        OmValue::Text(path.to_string_lossy().into_owned()),
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                    ],
+                )
+                .expect_err("Workbooks.Open should reject non-bool ReadOnly")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[
+                        OmValue::Text(path.to_string_lossy().into_owned()),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                    ],
+                )
+                .expect_err("Workbooks.Open should reject extra arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
 
         fs::remove_file(path).expect("cleanup fixture");
     }

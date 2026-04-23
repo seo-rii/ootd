@@ -1382,6 +1382,24 @@
                 "name": "string",
                 "aliasOf": "BSTR"
               }
+            },
+            {
+              "name": "UpdateLinks",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "ReadOnly",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
             }
           ],
           "support": "stub",
