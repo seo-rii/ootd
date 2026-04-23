@@ -2627,7 +2627,16 @@ impl ExcelRuntime {
                             for row in (rect.row_first + 1)..=rect.row_last {
                                 for (index, col) in (rect.col_first..=rect.col_last).enumerate() {
                                     match source_cells[index].clone() {
-                                        Some(cell) => {
+                                        Some(mut cell) => {
+                                            if let Some(formula) = cell.formula.as_mut() {
+                                                if !formula.is_r1c1 {
+                                                    formula.text = shift_formula_a1_references(
+                                                        &formula.text,
+                                                        i64::from(row) - i64::from(rect.row_first),
+                                                        0,
+                                                    );
+                                                }
+                                            }
                                             if worksheet.cells.get(&(row, col)) != Some(&cell) {
                                                 worksheet.cells.insert((row, col), cell);
                                                 worksheet.dirty = true;
@@ -2684,7 +2693,16 @@ impl ExcelRuntime {
                             for (index, row) in (rect.row_first..=rect.row_last).enumerate() {
                                 for col in (rect.col_first + 1)..=rect.col_last {
                                     match source_cells[index].clone() {
-                                        Some(cell) => {
+                                        Some(mut cell) => {
+                                            if let Some(formula) = cell.formula.as_mut() {
+                                                if !formula.is_r1c1 {
+                                                    formula.text = shift_formula_a1_references(
+                                                        &formula.text,
+                                                        0,
+                                                        i64::from(col) - i64::from(rect.col_first),
+                                                    );
+                                                }
+                                            }
                                             if worksheet.cells.get(&(row, col)) != Some(&cell) {
                                                 worksheet.cells.insert((row, col), cell);
                                                 worksheet.dirty = true;
@@ -2741,7 +2759,16 @@ impl ExcelRuntime {
                             for row in rect.row_first..rect.row_last {
                                 for (index, col) in (rect.col_first..=rect.col_last).enumerate() {
                                     match source_cells[index].clone() {
-                                        Some(cell) => {
+                                        Some(mut cell) => {
+                                            if let Some(formula) = cell.formula.as_mut() {
+                                                if !formula.is_r1c1 {
+                                                    formula.text = shift_formula_a1_references(
+                                                        &formula.text,
+                                                        i64::from(row) - i64::from(rect.row_last),
+                                                        0,
+                                                    );
+                                                }
+                                            }
                                             if worksheet.cells.get(&(row, col)) != Some(&cell) {
                                                 worksheet.cells.insert((row, col), cell);
                                                 worksheet.dirty = true;
@@ -2798,7 +2825,16 @@ impl ExcelRuntime {
                             for (index, row) in (rect.row_first..=rect.row_last).enumerate() {
                                 for col in rect.col_first..rect.col_last {
                                     match source_cells[index].clone() {
-                                        Some(cell) => {
+                                        Some(mut cell) => {
+                                            if let Some(formula) = cell.formula.as_mut() {
+                                                if !formula.is_r1c1 {
+                                                    formula.text = shift_formula_a1_references(
+                                                        &formula.text,
+                                                        0,
+                                                        i64::from(col) - i64::from(rect.col_last),
+                                                    );
+                                                }
+                                            }
                                             if worksheet.cells.get(&(row, col)) != Some(&cell) {
                                                 worksheet.cells.insert((row, col), cell);
                                                 worksheet.dirty = true;
@@ -17328,6 +17364,93 @@ mod tests {
     }
 
     #[test]
+    fn range_fill_dispatch_rewrites_relative_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let a1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        runtime
+            .dispatch_set(
+                a1,
+                "Formula",
+                OmValue::Text(r#"=B1+$B1+B$1+$B$1&"A1""#.to_string()),
+                &[],
+            )
+            .expect("seed A1 Formula");
+        let fill_down_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A3".to_string())])
+                .expect("Range(A1:A3)"),
+        );
+        runtime
+            .dispatch_invoke(fill_down_range, "FillDown", &[])
+            .expect("Range.FillDown formula");
+        let a3 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A3".to_string())])
+                .expect("Range(A3)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(a3, "Formula", &[])
+                    .expect("A3 Formula after FillDown")
+            ),
+            r#"=B3+$B3+B$1+$B$1&"A1""#
+        );
+
+        let d1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1".to_string())])
+                .expect("Range(D1)"),
+        );
+        runtime
+            .dispatch_set(
+                d1,
+                "Formula",
+                OmValue::Text("=D2+$D2+D$2+$D$2".to_string()),
+                &[],
+            )
+            .expect("seed D1 Formula");
+        let fill_right_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1:F1".to_string())])
+                .expect("Range(D1:F1)"),
+        );
+        runtime
+            .dispatch_invoke(fill_right_range, "FillRight", &[])
+            .expect("Range.FillRight formula");
+        let f1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("F1".to_string())])
+                .expect("Range(F1)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(f1, "Formula", &[])
+                    .expect("F1 Formula after FillRight")
+            ),
+            "=F2+$D2+F$2+$D$2"
+        );
+    }
+
+    #[test]
     fn range_fill_inverse_dispatch_copies_bottom_or_right_cells_across_range() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -17490,6 +17613,93 @@ mod tests {
                 .dispatch_get(workbook.0, "Saved", &[])
                 .expect("Workbook.Saved after inverse Range.Fill")
         ));
+    }
+
+    #[test]
+    fn range_fill_inverse_dispatch_rewrites_relative_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let a3 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A3".to_string())])
+                .expect("Range(A3)"),
+        );
+        runtime
+            .dispatch_set(
+                a3,
+                "Formula",
+                OmValue::Text(r#"=B3+$B3+B$3+$B$3&"A1""#.to_string()),
+                &[],
+            )
+            .expect("seed A3 Formula");
+        let fill_up_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A3".to_string())])
+                .expect("Range(A1:A3)"),
+        );
+        runtime
+            .dispatch_invoke(fill_up_range, "FillUp", &[])
+            .expect("Range.FillUp formula");
+        let a1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(a1, "Formula", &[])
+                    .expect("A1 Formula after FillUp")
+            ),
+            r#"=B1+$B1+B$3+$B$3&"A1""#
+        );
+
+        let f1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("F1".to_string())])
+                .expect("Range(F1)"),
+        );
+        runtime
+            .dispatch_set(
+                f1,
+                "Formula",
+                OmValue::Text("=F2+$F2+F$2+$F$2".to_string()),
+                &[],
+            )
+            .expect("seed F1 Formula");
+        let fill_left_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1:F1".to_string())])
+                .expect("Range(D1:F1)"),
+        );
+        runtime
+            .dispatch_invoke(fill_left_range, "FillLeft", &[])
+            .expect("Range.FillLeft formula");
+        let d1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1".to_string())])
+                .expect("Range(D1)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(d1, "Formula", &[])
+                    .expect("D1 Formula after FillLeft")
+            ),
+            "=D2+$F2+D$2+$F$2"
+        );
     }
 
     #[test]
