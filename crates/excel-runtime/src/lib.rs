@@ -2108,11 +2108,8 @@ impl ExcelRuntime {
                                 ));
                             }
                         };
-                        for (arg, name) in [
-                            (args.get(1), "Operation"),
-                            (args.get(2), "SkipBlanks"),
-                            (args.get(3), "Transpose"),
-                        ] {
+                        for (arg, name) in [(args.get(1), "Operation"), (args.get(3), "Transpose")]
+                        {
                             if let Some(arg) = arg {
                                 if !matches!(arg, OmValue::Missing | OmValue::Empty | OmValue::Null)
                                 {
@@ -2122,6 +2119,14 @@ impl ExcelRuntime {
                                 }
                             }
                         }
+                        let skip_blanks = match args.get(2) {
+                            None => false,
+                            Some(value) => coerce_optional_bool_arg(
+                                value,
+                                false,
+                                "Range.PasteSpecial SkipBlanks",
+                            )?,
+                        };
                         let clipboard = self.clipboard.ok_or_else(|| {
                             OmError::new(
                                 OmErrorCode::InvalidState,
@@ -2134,7 +2139,7 @@ impl ExcelRuntime {
                             clipboard.rect,
                         );
                         let destination = self.register_range_handle(workbook, sheet_id, rect);
-                        if paste_type == XL_PASTE_ALL {
+                        if paste_type == XL_PASTE_ALL && !skip_blanks {
                             return match clipboard.mode {
                                 XL_COPY => self.dispatch_invoke(
                                     source.0,
@@ -2217,6 +2222,25 @@ impl ExcelRuntime {
                                     let key = (row, col);
                                     let source_cell = source_cells[index].as_ref();
                                     index += 1;
+                                    let source_is_blank = match paste_type {
+                                        XL_PASTE_ALL => source_cell.is_none_or(|cell| {
+                                            cell.value == CellValue::Blank
+                                                && cell.formula.is_none()
+                                                && cell.style_id.is_none()
+                                        }),
+                                        XL_PASTE_VALUES | XL_PASTE_FORMULAS => source_cell
+                                            .is_none_or(|cell| {
+                                                cell.value == CellValue::Blank
+                                                    && cell.formula.is_none()
+                                            }),
+                                        XL_PASTE_FORMATS => {
+                                            source_cell.is_none_or(|cell| cell.style_id.is_none())
+                                        }
+                                        _ => unreachable!("unsupported paste type was rejected"),
+                                    };
+                                    if skip_blanks && source_is_blank {
+                                        continue;
+                                    }
                                     let existing = destination_worksheet.cells.get(&key).cloned();
                                     let mut next_cell =
                                         existing.clone().unwrap_or(excel_model::CellData {
@@ -2225,6 +2249,15 @@ impl ExcelRuntime {
                                             style_id: None,
                                         });
                                     match paste_type {
+                                        XL_PASTE_ALL => {
+                                            next_cell = source_cell.cloned().unwrap_or(
+                                                excel_model::CellData {
+                                                    value: CellValue::Blank,
+                                                    formula: None,
+                                                    style_id: None,
+                                                },
+                                            );
+                                        }
                                         XL_PASTE_VALUES => {
                                             next_cell.value = source_cell
                                                 .map(|cell| cell.value.clone())
@@ -15474,6 +15507,127 @@ mod tests {
                 .expect("F1 style-only cell")
                 .style_id,
             Some(StyleId(7))
+        );
+    }
+
+    #[test]
+    fn range_paste_special_skip_blanks_preserves_destination_values() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B2".to_string())])
+                .expect("Range(A1:B2)"),
+        );
+        let destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1".to_string())])
+                .expect("Range(D1)"),
+        );
+        let d2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D2".to_string())])
+                .expect("Range(D2)"),
+        );
+        let e2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E2".to_string())])
+                .expect("Range(E2)"),
+        );
+        runtime
+            .dispatch_set(d2, "Value", OmValue::Text("keep-left".to_string()), &[])
+            .expect("seed D2");
+        runtime
+            .dispatch_set(e2, "Value", OmValue::Text("keep-right".to_string()), &[])
+            .expect("seed E2");
+
+        runtime
+            .dispatch_invoke(source, "Copy", &[])
+            .expect("Range.Copy before SkipBlanks paste");
+        runtime
+            .dispatch_invoke(
+                destination,
+                "PasteSpecial",
+                &[
+                    OmValue::Number(f64::from(super::XL_PASTE_VALUES)),
+                    OmValue::Missing,
+                    OmValue::Bool(true),
+                ],
+            )
+            .expect("Range.PasteSpecial SkipBlanks");
+
+        let d1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1".to_string())])
+                .expect("Range(D1)"),
+        );
+        let e1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E1".to_string())])
+                .expect("Range(E1)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(d1, "Value", &[])
+                    .expect("D1 Value after SkipBlanks")
+            ),
+            42.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(e1, "Value", &[])
+                    .expect("E1 Value after SkipBlanks")
+            ),
+            "SHARED"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(d2, "Value", &[])
+                    .expect("D2 Value after SkipBlanks")
+            ),
+            "keep-left"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(e2, "Value", &[])
+                    .expect("E2 Value after SkipBlanks")
+            ),
+            "keep-right"
+        );
+
+        runtime
+            .dispatch_invoke(source, "Copy", &[])
+            .expect("Range.Copy before invalid SkipBlanks");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    destination,
+                    "PasteSpecial",
+                    &[
+                        OmValue::Number(f64::from(super::XL_PASTE_VALUES)),
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                    ],
+                )
+                .expect_err("Range.PasteSpecial should reject non-bool SkipBlanks")
+                .code,
+            OmErrorCode::TypeMismatch
         );
     }
 
