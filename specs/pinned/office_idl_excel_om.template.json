@@ -55,6 +55,19 @@
       ]
     },
     {
+      "name": "XlDeleteShiftDirection",
+      "values": [
+        {
+          "name": "xlShiftToLeft",
+          "value": -4159
+        },
+        {
+          "name": "xlShiftUp",
+          "value": -4162
+        }
+      ]
+    },
+    {
       "name": "XlApplicationInternational",
       "values": [
         {
@@ -3422,6 +3435,33 @@
                 "name": "Range",
                 "aliasOf": "Excel.Range"
               }
+            }
+          }
+        },
+        {
+          "name": "Delete",
+          "memberKind": "method",
+          "params": [
+            {
+              "name": "Shift",
+              "type": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlDeleteShiftDirection"
+              },
+              "optional": true
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Delete"
+                }
+              ]
             }
           }
         },

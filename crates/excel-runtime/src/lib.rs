@@ -38,6 +38,8 @@ const XL_DOWN: i32 = -4121;
 const XL_TO_LEFT: i32 = -4159;
 const XL_TO_RIGHT: i32 = -4161;
 const XL_UP: i32 = -4162;
+const XL_SHIFT_TO_LEFT: i32 = -4159;
+const XL_SHIFT_UP: i32 = -4162;
 const XL_COPY: i32 = 1;
 const XL_CUT: i32 = 2;
 const XL_DECIMAL_SEPARATOR: i32 = 3;
@@ -1230,6 +1232,151 @@ impl ExcelRuntime {
                             )
                             .0,
                         ))
+                    }
+                    "Delete" => {
+                        let shift = match args {
+                            [] | [OmValue::Missing] | [OmValue::Empty] | [OmValue::Null] => {
+                                XL_SHIFT_UP
+                            }
+                            [OmValue::Number(shift)] => {
+                                if !shift.is_finite()
+                                    || shift.fract() != 0.0
+                                    || *shift < i32::MIN as f64
+                                    || *shift > i32::MAX as f64
+                                {
+                                    return Err(OmError::invalid_argument(
+                                        "Range.Delete Shift expects an integral XlDeleteShiftDirection value",
+                                    ));
+                                }
+                                *shift as i32
+                            }
+                            [_] => {
+                                return Err(OmError::type_mismatch(
+                                    "Range.Delete Shift expects a numeric XlDeleteShiftDirection value when provided",
+                                ));
+                            }
+                            _ => {
+                                return Err(OmError::invalid_argument(
+                                    "Range.Delete accepts at most one Shift argument",
+                                ));
+                            }
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let worksheet = runtime
+                            .loaded
+                            .state
+                            .worksheet_data_for_sheet_mut(sheet_id)?;
+                        match shift {
+                            XL_SHIFT_UP => {
+                                let shift_height = rect.height();
+                                let affected_columns = worksheet
+                                    .cells
+                                    .keys()
+                                    .filter_map(|&(row, col)| {
+                                        (row >= rect.row_first
+                                            && (rect.col_first..=rect.col_last).contains(&col))
+                                        .then_some(col)
+                                    })
+                                    .collect::<BTreeSet<_>>();
+                                for col in affected_columns {
+                                    let Some(max_row) = worksheet
+                                        .cells
+                                        .keys()
+                                        .filter_map(|&(row, cell_col)| {
+                                            (cell_col == col && row >= rect.row_first)
+                                                .then_some(row)
+                                        })
+                                        .max()
+                                    else {
+                                        continue;
+                                    };
+                                    for row in rect.row_first..=max_row {
+                                        let key = (row, col);
+                                        let source_row = row.saturating_add(shift_height);
+                                        let source_key = (source_row, col);
+                                        let next_cell = if source_row <= max_row {
+                                            worksheet.cells.remove(&source_key)
+                                        } else {
+                                            None
+                                        };
+                                        match next_cell {
+                                            Some(cell) => {
+                                                worksheet.cells.insert(key, cell);
+                                                worksheet.dirty = true;
+                                                worksheet.dirty_cells.insert(key);
+                                                worksheet.dirty_cells.insert(source_key);
+                                            }
+                                            None => {
+                                                if worksheet.cells.remove(&key).is_some() {
+                                                    worksheet.dirty = true;
+                                                    worksheet.dirty_cells.insert(key);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Ok(OmValue::Empty)
+                            }
+                            XL_SHIFT_TO_LEFT => {
+                                let shift_width = rect.width();
+                                let affected_rows = worksheet
+                                    .cells
+                                    .keys()
+                                    .filter_map(|&(row, col)| {
+                                        ((rect.row_first..=rect.row_last).contains(&row)
+                                            && col >= rect.col_first)
+                                            .then_some(row)
+                                    })
+                                    .collect::<BTreeSet<_>>();
+                                for row in affected_rows {
+                                    let Some(max_col) = worksheet
+                                        .cells
+                                        .keys()
+                                        .filter_map(|&(cell_row, col)| {
+                                            (cell_row == row && col >= rect.col_first)
+                                                .then_some(col)
+                                        })
+                                        .max()
+                                    else {
+                                        continue;
+                                    };
+                                    for col in rect.col_first..=max_col {
+                                        let key = (row, col);
+                                        let source_col = col.saturating_add(shift_width);
+                                        let source_key = (row, source_col);
+                                        let next_cell = if source_col <= max_col {
+                                            worksheet.cells.remove(&source_key)
+                                        } else {
+                                            None
+                                        };
+                                        match next_cell {
+                                            Some(cell) => {
+                                                worksheet.cells.insert(key, cell);
+                                                worksheet.dirty = true;
+                                                worksheet.dirty_cells.insert(key);
+                                                worksheet.dirty_cells.insert(source_key);
+                                            }
+                                            None => {
+                                                if worksheet.cells.remove(&key).is_some() {
+                                                    worksheet.dirty = true;
+                                                    worksheet.dirty_cells.insert(key);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Ok(OmValue::Empty)
+                            }
+                            other => Err(OmError::unsupported(format!(
+                                "Range.Delete Shift {other} is not implemented"
+                            ))),
+                        }
                     }
                     "Copy" => {
                         let destination = match args {
@@ -10203,6 +10350,172 @@ mod tests {
                 .expect_err("Range.End should reject unsupported direction")
                 .code,
             OmErrorCode::Unsupported
+        );
+    }
+
+    #[test]
+    fn range_delete_dispatch_shifts_cells_up_or_left() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let b1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Range(B1)"),
+        );
+        let c1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1".to_string())])
+                .expect("Range(C1)"),
+        );
+        let b2_b4 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B2:B4".to_string())])
+                .expect("Range(B2:B4)"),
+        );
+        runtime
+            .dispatch_set(
+                b2_b4,
+                "Value",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        1,
+                        vec![
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(4.0),
+                        ],
+                    )
+                    .expect("B2:B4 values"),
+                ),
+                &[],
+            )
+            .expect("B2:B4.Value");
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(
+                    b1,
+                    "Delete",
+                    &[OmValue::Number(f64::from(super::XL_SHIFT_TO_LEFT))],
+                )
+                .expect("B1.Delete(xlShiftToLeft)"),
+            OmValue::Empty
+        ));
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(b1, "Value", &[])
+                    .expect("B1 after left shift")
+            ),
+            "shared"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(c1, "Value", &[])
+                .expect("C1 after left shift"),
+            OmValue::Empty
+        );
+
+        let b2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B2".to_string())])
+                .expect("Range(B2)"),
+        );
+        let b3 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B3".to_string())])
+                .expect("Range(B3)"),
+        );
+        let b4 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B4".to_string())])
+                .expect("Range(B4)"),
+        );
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(
+                    b2,
+                    "Delete",
+                    &[OmValue::Number(f64::from(super::XL_SHIFT_UP))],
+                )
+                .expect("B2.Delete(xlShiftUp)"),
+            OmValue::Empty
+        ));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(b2, "Value", &[])
+                    .expect("B2 after upward shift")
+            ),
+            3.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(b3, "Value", &[])
+                    .expect("B3 after upward shift")
+            ),
+            4.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(b4, "Value", &[])
+                .expect("B4 after upward shift"),
+            OmValue::Empty
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after Range.Delete")
+        ));
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(b2, "Delete", &[OmValue::Text("up".to_string())])
+                .expect_err("Range.Delete should reject non-numeric Shift")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(b2, "Delete", &[OmValue::Number(-4162.5)])
+                .expect_err("Range.Delete should reject fractional Shift")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(b2, "Delete", &[OmValue::Number(999.0)])
+                .expect_err("Range.Delete should reject unsupported Shift")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    b2,
+                    "Delete",
+                    &[
+                        OmValue::Number(f64::from(super::XL_SHIFT_UP)),
+                        OmValue::Missing,
+                    ],
+                )
+                .expect_err("Range.Delete should reject extra args")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 
