@@ -2707,7 +2707,7 @@ impl ExcelRuntime {
             Rect::single_cell(1, 1),
         )?;
         let result = (|| {
-            let (source_name, source_sheet_data, source_support_parts) = {
+            let (source_name, source_sheet_data, source_support_parts, source_relationships_part) = {
                 let runtime = self.runtime_workbook(snapshot)?;
                 let worksheet = runtime
                     .loaded
@@ -2732,15 +2732,37 @@ impl ExcelRuntime {
                             "worksheet support parts are missing",
                         )
                     })?;
-                (worksheet.name.clone(), sheet_data, support_parts)
+                let relationships_part = support_parts
+                    .relationships_part_uri
+                    .as_deref()
+                    .map(|part_uri| {
+                        let package_part = runtime.loaded.package.part(part_uri);
+                        let source_bytes = support_parts
+                            .relationships_part_source_bytes
+                            .clone()
+                            .or_else(|| package_part.map(|part| part.bytes.clone()))
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "worksheet relationships part is missing",
+                                )
+                            })?;
+                        Ok((
+                            source_bytes,
+                            package_part
+                                .map(|part| part.compression)
+                                .unwrap_or(CompressionMethod::Stored),
+                        ))
+                    })
+                    .transpose()?;
+                (
+                    worksheet.name.clone(),
+                    sheet_data,
+                    support_parts,
+                    relationships_part,
+                )
             };
-            if source_support_parts.relationships_part_uri.is_some()
-                || source_support_parts
-                    .relationships_part_source_bytes
-                    .is_some()
-                || source_support_parts.relationships_summary.is_some()
-                || source_support_parts.hyperlinks_part_summary.is_some()
-                || !source_support_parts.comment_part_uris.is_empty()
+            if !source_support_parts.comment_part_uris.is_empty()
                 || !source_support_parts.comment_anchor_refs.is_empty()
                 || !source_support_parts.comment_part_source_bytes.is_empty()
                 || !source_support_parts.comment_summaries.is_empty()
@@ -2749,10 +2771,6 @@ impl ExcelRuntime {
                     .vml_drawing_part_source_bytes
                     .is_empty()
                 || !source_support_parts.vml_drawing_summaries.is_empty()
-                || !source_support_parts.hyperlink_summaries.is_empty()
-                || !source_support_parts.hyperlink_refs.is_empty()
-                || !source_support_parts.hyperlink_bindings.is_empty()
-                || !source_support_parts.hyperlink_relationship_ids.is_empty()
                 || !source_support_parts.legacy_drawing_relationships.is_empty()
                 || !source_support_parts
                     .legacy_drawing_relationship_ids
@@ -2762,7 +2780,7 @@ impl ExcelRuntime {
                 || !source_support_parts.comment_relationship_ids.is_empty()
             {
                 return Err(OmError::unsupported(
-                    "worksheet placement copy currently only supports sheets without tracked worksheet support parts",
+                    "worksheet placement copy currently only supports sheets without tracked comment or legacy drawing support parts",
                 ));
             }
 
@@ -2816,6 +2834,37 @@ impl ExcelRuntime {
                     target_part_uri.as_str(),
                     source_sheet_data.source_xml.clone(),
                 )?;
+                let target_relationships_part_uri =
+                    if let Some((prefix, file_name)) = target_part_uri.rsplit_once('/') {
+                        format!("{prefix}/_rels/{file_name}.rels")
+                    } else {
+                        format!("_rels/{target_part_uri}.rels")
+                    };
+                let has_relationships_part = source_relationships_part.is_some();
+                if let Some((relationships_bytes, relationships_compression)) =
+                    source_relationships_part.as_ref()
+                {
+                    if runtime
+                        .loaded
+                        .package
+                        .contains(&target_relationships_part_uri)
+                    {
+                        runtime.loaded.package.replace_part_bytes(
+                            target_relationships_part_uri.as_str(),
+                            relationships_bytes.clone(),
+                        )?;
+                    } else {
+                        runtime.loaded.package.add_part(OpcPart {
+                            name: target_relationships_part_uri.clone(),
+                            content_type: Some(
+                                "application/vnd.openxmlformats-package.relationships+xml"
+                                    .to_string(),
+                            ),
+                            compression: *relationships_compression,
+                            bytes: relationships_bytes.clone(),
+                        })?;
+                    }
+                }
                 runtime
                     .loaded
                     .state
@@ -2824,6 +2873,8 @@ impl ExcelRuntime {
 
                 let mut copied_support_parts = source_support_parts;
                 copied_support_parts.worksheet_part_uri = Some(target_part_uri);
+                copied_support_parts.relationships_part_uri =
+                    has_relationships_part.then_some(target_relationships_part_uri);
                 runtime
                     .loaded
                     .worksheet_support_parts
@@ -10275,6 +10326,107 @@ mod tests {
     }
 
     #[test]
+    fn worksheets_add_supports_hyperlink_template_type_paths() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let fixture_dir =
+            std::env::temp_dir().join(format!("ootd-worksheets-add-hyperlink-template-{unique}"));
+        fs::create_dir_all(&fixture_dir).expect("create hyperlink template fixture dir");
+        let template_path = fixture_dir.join("hyperlink-template.xlsx");
+        fs::write(&template_path, synthetic_hyperlink_workbook_bytes())
+            .expect("write hyperlink template workbook");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open target workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+
+        let added = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheets,
+                    "Add",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                        OmValue::Missing,
+                        OmValue::Text(template_path.to_string_lossy().into_owned()),
+                    ],
+                )
+                .expect("Worksheets.Add hyperlink template"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(added, "Name", &[])
+                    .expect("added hyperlink sheet name")
+            ),
+            "Sheet1 (2)"
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen hyperlink template workbook");
+        let added_sheet_id = reopened.state.worksheets[1].id;
+        let support_parts = reopened
+            .worksheet_support_parts
+            .get(&added_sheet_id)
+            .expect("added hyperlink support parts");
+
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .map(|worksheet| worksheet.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["Sheet1".to_string(), "Sheet1 (2)".to_string()]
+        );
+        assert!(
+            reopened
+                .package
+                .contains("xl/worksheets/_rels/sheet2.xml.rels")
+        );
+        assert_eq!(
+            support_parts.relationships_part_uri.as_deref(),
+            Some("xl/worksheets/_rels/sheet2.xml.rels")
+        );
+        assert_eq!(support_parts.hyperlink_refs, vec!["C3".to_string()]);
+        assert_eq!(
+            support_parts.hyperlink_relationship_ids,
+            vec!["rId1".to_string()]
+        );
+        assert_eq!(support_parts.hyperlink_bindings.len(), 1);
+        assert_eq!(
+            support_parts.hyperlink_bindings[0].target,
+            "https://example.com"
+        );
+    }
+
+    #[test]
     fn worksheets_add_rejects_invalid_placement_arguments_and_read_only_workbooks() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -11283,6 +11435,85 @@ mod tests {
                 .cell(reopened.state.worksheets[2].id, 3, 3)
                 .map(|cell| cell.value.clone()),
             Some(CellValue::Text("copied".to_string()))
+        );
+    }
+
+    #[test]
+    fn worksheet_copy_supports_hyperlink_sheets_for_placement_copy() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_hyperlink_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open hyperlink workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheet1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(sheet1, "Copy", &[OmValue::Missing, OmValue::Number(1.0)])
+                .expect("Worksheet.Copy After:=1 on hyperlink sheet"),
+            OmValue::Empty
+        ));
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save hyperlink workbook");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen copied hyperlink workbook");
+        let copied_sheet_id = reopened.state.worksheets[1].id;
+        let support_parts = reopened
+            .worksheet_support_parts
+            .get(&copied_sheet_id)
+            .expect("copied hyperlink support parts");
+
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .map(|worksheet| worksheet.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["Sheet1".to_string(), "Sheet1 (2)".to_string()]
+        );
+        assert!(
+            reopened
+                .package
+                .contains("xl/worksheets/_rels/sheet2.xml.rels")
+        );
+        assert_eq!(
+            support_parts.relationships_part_uri.as_deref(),
+            Some("xl/worksheets/_rels/sheet2.xml.rels")
+        );
+        assert_eq!(support_parts.hyperlink_refs, vec!["C3".to_string()]);
+        assert_eq!(
+            support_parts.hyperlink_relationship_ids,
+            vec!["rId1".to_string()]
+        );
+        assert_eq!(support_parts.hyperlink_bindings.len(), 1);
+        assert_eq!(
+            support_parts.hyperlink_bindings[0].target,
+            "https://example.com"
         );
     }
 
@@ -12331,5 +12562,49 @@ mod tests {
         ]);
 
         package.to_bytes().expect("package bytes")
+    }
+
+    fn synthetic_hyperlink_workbook_bytes() -> Vec<u8> {
+        let mut package =
+            OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("base hyperlink package");
+        package
+            .replace_part_bytes(
+                "xl/worksheets/sheet1.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <dimension ref="A1:C3"/>
+  <sheetData>
+    <row r="1">
+      <c r="A1"><v>42</v></c>
+      <c r="B1" t="str"><f>UPPER("shared")</f><v>SHARED</v></c>
+      <c r="C1" t="s"><v>0</v></c>
+    </row>
+    <row r="3">
+      <c r="C3" t="str"><v>https://example.com</v></c>
+    </row>
+  </sheetData>
+  <hyperlinks>
+    <hyperlink ref="C3" r:id="rId1"/>
+  </hyperlinks>
+</worksheet>"#
+                    .to_vec(),
+            )
+            .expect("replace hyperlink worksheet xml");
+        package
+            .add_part(OpcPart {
+                name: "xl/worksheets/_rels/sheet1.xml.rels".to_string(),
+                content_type: Some(
+                    "application/vnd.openxmlformats-package.relationships+xml".to_string(),
+                ),
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com" TargetMode="External"/>
+</Relationships>"#
+                    .to_vec(),
+            })
+            .expect("add hyperlink relationships part");
+        package.to_bytes().expect("hyperlink package bytes")
     }
 }
