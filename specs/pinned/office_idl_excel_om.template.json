@@ -1372,6 +1372,38 @@
           }
         },
         {
+          "name": "IsAddin",
+          "memberKind": "property",
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "IsAddin"
+                },
+                {
+                  "kind": "property_set",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "IsAddin"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          }
+        },
+        {
           "name": "HasVBProject",
           "memberKind": "property",
           "returnType": {

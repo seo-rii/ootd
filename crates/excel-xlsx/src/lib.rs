@@ -588,6 +588,7 @@ impl XlsxCodec {
             .collect::<BTreeMap<_, _>>();
         let parsed_workbook = parse_workbook(workbook_part.bytes.as_slice(), &relationships)?;
         let date1904 = parsed_workbook.date1904;
+        let is_addin = parsed_workbook.is_addin;
         let worksheets = parsed_workbook.worksheets;
         let shared_strings = package
             .part("xl/sharedStrings.xml")
@@ -640,6 +641,7 @@ impl XlsxCodec {
                 display_name: "Workbook".to_string(),
                 format: detected_format,
                 date1904,
+                is_addin,
             },
             worksheets,
             worksheet_data,
@@ -672,6 +674,7 @@ impl XlsxCodec {
             .clone();
         let saved_workbook = parse_workbook(workbook_xml.as_slice(), &BTreeMap::new())?;
         if saved_workbook.date1904 != workbook.state.model.date1904
+            || saved_workbook.is_addin != workbook.state.model.is_addin
             || saved_workbook.worksheets.len() != workbook.state.worksheets.len()
             || saved_workbook
                 .worksheets
@@ -743,7 +746,7 @@ impl XlsxCodec {
                 for attr in element.attributes() {
                     let attr = attr.map_err(xml_error)?;
                     let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
-                    if key == "date1904" {
+                    if matches!(key.as_str(), "date1904" | "isAddin") {
                         continue;
                     }
                     let value = attr
@@ -755,6 +758,9 @@ impl XlsxCodec {
                 if workbook.state.model.date1904 {
                     rewritten.push_attribute(("date1904", "1"));
                 }
+                if workbook.state.model.is_addin {
+                    rewritten.push_attribute(("isAddin", "1"));
+                }
                 Ok(rewritten)
             };
 
@@ -764,9 +770,16 @@ impl XlsxCodec {
                         writer
                             .write_event(Event::Start(element.into_owned()))
                             .map_err(xml_error)?;
-                        if !saved_workbook.has_workbook_pr && workbook.state.model.date1904 {
+                        if !saved_workbook.has_workbook_pr
+                            && (workbook.state.model.date1904 || workbook.state.model.is_addin)
+                        {
                             let mut workbook_pr = BytesStart::new("workbookPr");
-                            workbook_pr.push_attribute(("date1904", "1"));
+                            if workbook.state.model.date1904 {
+                                workbook_pr.push_attribute(("date1904", "1"));
+                            }
+                            if workbook.state.model.is_addin {
+                                workbook_pr.push_attribute(("isAddin", "1"));
+                            }
                             writer
                                 .write_event(Event::Empty(workbook_pr))
                                 .map_err(xml_error)?;
@@ -1017,6 +1030,7 @@ fn detect_format(package: &OpcPackage) -> FileFormat {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedWorkbook {
     date1904: bool,
+    is_addin: bool,
     has_workbook_pr: bool,
     worksheets: Vec<WorksheetModel>,
 }
@@ -1029,6 +1043,7 @@ fn parse_workbook(
     reader.config_mut().trim_text(true);
     let mut buffer = Vec::new();
     let mut date1904 = false;
+    let mut is_addin = false;
     let mut has_workbook_pr = false;
     let mut worksheets = Vec::new();
 
@@ -1046,6 +1061,8 @@ fn parse_workbook(
                         .into_owned();
                     if attr.key.as_ref() == b"date1904" {
                         date1904 = parse_ooxml_bool(value.as_str())?;
+                    } else if attr.key.as_ref() == b"isAddin" {
+                        is_addin = parse_ooxml_bool(value.as_str())?;
                     }
                 }
             }
@@ -1100,6 +1117,7 @@ fn parse_workbook(
 
     Ok(ParsedWorkbook {
         date1904,
+        is_addin,
         has_workbook_pr,
         worksheets,
     })
@@ -16836,6 +16854,26 @@ mod tests {
     }
 
     #[test]
+    fn parses_workbook_is_addin_property() {
+        let workbook = parse_workbook(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <workbookPr isAddin="1"/>
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"#,
+            &BTreeMap::new(),
+        )
+        .expect("workbook isAddin");
+
+        assert!(workbook.has_workbook_pr);
+        assert!(workbook.is_addin);
+        assert_eq!(workbook.worksheets.len(), 1);
+    }
+
+    #[test]
     fn save_rewrites_workbook_date1904_property() {
         let codec = XlsxCodec;
         let mut loaded = codec
@@ -16889,6 +16927,62 @@ mod tests {
                 .state
                 .model
                 .date1904
+        );
+    }
+
+    #[test]
+    fn save_rewrites_workbook_is_addin_property() {
+        let codec = XlsxCodec;
+        let mut loaded = codec
+            .load(
+                synthetic_workbook_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        assert!(!loaded.state.model.is_addin);
+
+        loaded.state.model.is_addin = true;
+        let addin_bytes = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("save addin workbook");
+        let addin_package = OpcPackage::from_bytes(addin_bytes.as_slice()).expect("addin package");
+        let workbook_xml = std::str::from_utf8(
+            addin_package
+                .part("xl/workbook.xml")
+                .expect("addin workbook.xml")
+                .bytes
+                .as_slice(),
+        )
+        .expect("addin workbook.xml utf8");
+        assert!(workbook_xml.contains(r#"isAddin="1""#));
+
+        let mut reopened = codec
+            .load(addin_bytes.as_slice(), CommonLoadOptions::default())
+            .expect("reopen addin workbook");
+        assert!(reopened.state.model.is_addin);
+        reopened.state.model.is_addin = false;
+
+        let normal_bytes = codec
+            .save(&reopened, office_common::SaveOptions::default())
+            .expect("save non-addin workbook");
+        let normal_package =
+            OpcPackage::from_bytes(normal_bytes.as_slice()).expect("normal package");
+        let workbook_xml = std::str::from_utf8(
+            normal_package
+                .part("xl/workbook.xml")
+                .expect("normal workbook.xml")
+                .bytes
+                .as_slice(),
+        )
+        .expect("normal workbook.xml utf8");
+        assert!(!workbook_xml.contains("isAddin="));
+        assert!(
+            !codec
+                .load(normal_bytes.as_slice(), CommonLoadOptions::default())
+                .expect("reopen normal workbook")
+                .state
+                .model
+                .is_addin
         );
     }
 

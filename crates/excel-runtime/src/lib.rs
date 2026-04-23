@@ -587,6 +587,25 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
+                    "IsAddin" => {
+                        let OmValue::Bool(is_addin) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Workbook.IsAddin expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        if runtime.loaded.state.model.is_addin != is_addin {
+                            runtime.loaded.state.model.is_addin = is_addin;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     "Saved" => {
                         let OmValue::Bool(saved) = value else {
                             return Err(OmError::type_mismatch(
@@ -1367,6 +1386,7 @@ impl ExcelRuntime {
                 self.workbook_model(workbook)?.format,
             )))),
             "Date1904" => Ok(OmValue::Bool(self.workbook_model(workbook)?.date1904)),
+            "IsAddin" => Ok(OmValue::Bool(self.workbook_model(workbook)?.is_addin)),
             "HasVBProject" => Ok(OmValue::Bool(
                 self.runtime_workbook(workbook)?
                     .loaded
@@ -6334,6 +6354,91 @@ mod tests {
             runtime
                 .dispatch_set(read_only_workbook.0, "Date1904", OmValue::Bool(true), &[])
                 .expect_err("Workbook.Date1904 should reject read-only edits")
+                .code,
+            OmErrorCode::InvalidState
+        );
+    }
+
+    #[test]
+    fn workbook_is_addin_dispatch_roundtrips_and_marks_workbook_dirty() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "IsAddin", &[])
+                .expect("Workbook.IsAddin default")
+        ));
+
+        runtime
+            .dispatch_set(workbook.0, "IsAddin", OmValue::Bool(true), &[])
+            .expect("Workbook.IsAddin = true");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "IsAddin", &[])
+                .expect("Workbook.IsAddin after true")
+        ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after IsAddin")
+        ));
+
+        runtime
+            .dispatch_set(workbook.0, "IsAddin", OmValue::Bool(false), &[])
+            .expect("Workbook.IsAddin = false");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "IsAddin", &[])
+                .expect("Workbook.IsAddin after false")
+        ));
+
+        assert_eq!(
+            runtime
+                .dispatch_set(workbook.0, "IsAddin", OmValue::Number(1.0), &[])
+                .expect_err("Workbook.IsAddin should reject numeric values")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "IsAddin", &[OmValue::Number(1.0)])
+                .expect_err("Workbook.IsAddin should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    workbook.0,
+                    "IsAddin",
+                    OmValue::Bool(true),
+                    &[OmValue::Number(1.0)]
+                )
+                .expect_err("Workbook.IsAddin set should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+
+        let read_only_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook");
+        assert_eq!(
+            runtime
+                .dispatch_set(read_only_workbook.0, "IsAddin", OmValue::Bool(true), &[])
+                .expect_err("Workbook.IsAddin should reject read-only edits")
                 .code,
             OmErrorCode::InvalidState
         );
