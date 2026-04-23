@@ -1290,6 +1290,12 @@ impl ExcelRuntime {
             "FileFormat" => Ok(OmValue::Number(f64::from(file_format_to_excel_value(
                 self.workbook_model(workbook)?.format,
             )))),
+            "HasVBProject" => Ok(OmValue::Bool(
+                self.runtime_workbook(workbook)?
+                    .loaded
+                    .package
+                    .contains("xl/vbaProject.bin"),
+            )),
             "ReadOnly" => Ok(OmValue::Bool(self.runtime_workbook(workbook)?.read_only)),
             "Saved" => Ok(OmValue::Bool({
                 let runtime = self.runtime_workbook(workbook)?;
@@ -6138,6 +6144,64 @@ mod tests {
         assert_eq!(
             super::file_format_to_excel_value(FileFormat::StrictXlsx),
             super::XL_OPEN_XML_STRICT_WORKBOOK
+        );
+    }
+
+    #[test]
+    fn workbook_has_vbproject_dispatch_detects_vba_project_part() {
+        let mut plain_runtime = ExcelRuntime::new();
+        let plain_workbook = plain_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open plain workbook");
+        assert!(!expect_bool(
+            plain_runtime
+                .dispatch_get(plain_workbook.0, "HasVBProject", &[])
+                .expect("plain Workbook.HasVBProject")
+        ));
+
+        let mut package =
+            OpcPackage::from_bytes(synthetic_workbook_bytes().as_slice()).expect("package");
+        package
+            .add_part(OpcPart {
+                name: "xl/vbaProject.bin".to_string(),
+                content_type: Some("application/vnd.ms-office.vbaProject".to_string()),
+                compression: CompressionMethod::Stored,
+                bytes: vec![0x56, 0x42, 0x41],
+            })
+            .expect("add vba project part");
+        let mut macro_runtime = ExcelRuntime::new();
+        let macro_workbook = macro_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("macro workbook bytes"),
+                format_hint: None,
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open macro workbook");
+
+        assert!(expect_bool(
+            macro_runtime
+                .dispatch_get(macro_workbook.0, "HasVBProject", &[])
+                .expect("macro Workbook.HasVBProject")
+        ));
+        assert_eq!(
+            macro_runtime
+                .dispatch_get(macro_workbook.0, "HasVBProject", &[OmValue::Number(1.0)])
+                .expect_err("Workbook.HasVBProject args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            macro_runtime
+                .dispatch_set(macro_workbook.0, "HasVBProject", OmValue::Bool(false), &[])
+                .expect_err("Workbook.HasVBProject set")
+                .code,
+            OmErrorCode::Unsupported
         );
     }
 
