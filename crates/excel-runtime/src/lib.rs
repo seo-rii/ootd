@@ -34,6 +34,10 @@ const XL_OPEN_XML_WORKBOOK_MACRO_ENABLED: i32 = 52;
 const XL_OPEN_XML_TEMPLATE_MACRO_ENABLED: i32 = 53;
 const XL_OPEN_XML_TEMPLATE: i32 = 54;
 const XL_OPEN_XML_STRICT_WORKBOOK: i32 = 61;
+const XL_DOWN: i32 = -4121;
+const XL_TO_LEFT: i32 = -4159;
+const XL_TO_RIGHT: i32 = -4161;
+const XL_UP: i32 = -4162;
 const XL_COPY: i32 = 1;
 const XL_CUT: i32 = 2;
 const XL_DECIMAL_SEPARATOR: i32 = 3;
@@ -1136,6 +1140,93 @@ impl ExcelRuntime {
                                 sheet_id,
                                 resized_rect,
                                 projection,
+                            )
+                            .0,
+                        ))
+                    }
+                    "End" => {
+                        let [direction] = args else {
+                            return Err(OmError::invalid_argument(
+                                "Range.End expects a single XlDirection argument",
+                            ));
+                        };
+                        let OmValue::Number(direction) = direction else {
+                            return Err(OmError::type_mismatch(
+                                "Range.End Direction expects a numeric XlDirection value",
+                            ));
+                        };
+                        if !direction.is_finite()
+                            || direction.fract() != 0.0
+                            || *direction < i32::MIN as f64
+                            || *direction > i32::MAX as f64
+                        {
+                            return Err(OmError::invalid_argument(
+                                "Range.End Direction expects an integral XlDirection value",
+                            ));
+                        }
+                        let (row_delta, col_delta, row_limit, col_limit) = match *direction as i32 {
+                            XL_DOWN => (1i32, 0i32, EXCEL_MAX_ROW_INDEX, rect.col_first),
+                            XL_UP => (-1, 0, 1, rect.col_first),
+                            XL_TO_RIGHT => (0, 1, rect.row_first, EXCEL_MAX_COLUMN_INDEX),
+                            XL_TO_LEFT => (0, -1, rect.row_first, 1),
+                            other => {
+                                return Err(OmError::unsupported(format!(
+                                    "Range.End Direction {other} is not implemented"
+                                )));
+                            }
+                        };
+                        let (row, col) = {
+                            let worksheet = self
+                                .runtime_workbook(workbook)?
+                                .loaded
+                                .state
+                                .worksheet_data_for_sheet(sheet_id)?;
+                            let has_content = |row: u32, col: u32| {
+                                worksheet.cells.get(&(row, col)).is_some_and(|cell| {
+                                    cell.formula.is_some()
+                                        || !matches!(cell.value, CellValue::Blank)
+                                })
+                            };
+                            let start_has_content = has_content(rect.row_first, rect.col_first);
+                            let mut row = rect.row_first;
+                            let mut col = rect.col_first;
+
+                            loop {
+                                if (row_delta > 0 && row == row_limit)
+                                    || (row_delta < 0 && row == row_limit)
+                                    || (col_delta > 0 && col == col_limit)
+                                    || (col_delta < 0 && col == col_limit)
+                                {
+                                    break;
+                                }
+                                let next_row = if row_delta == 0 {
+                                    row
+                                } else {
+                                    (i64::from(row) + i64::from(row_delta)) as u32
+                                };
+                                let next_col = if col_delta == 0 {
+                                    col
+                                } else {
+                                    (i64::from(col) + i64::from(col_delta)) as u32
+                                };
+                                let next_has_content = has_content(next_row, next_col);
+                                if start_has_content && !next_has_content {
+                                    break;
+                                }
+                                row = next_row;
+                                col = next_col;
+                                if !start_has_content && next_has_content {
+                                    break;
+                                }
+                            }
+                            (row, col)
+                        };
+
+                        Ok(OmValue::Object(
+                            self.register_range_handle(
+                                workbook,
+                                sheet_id,
+                                Rect::single_cell(row, col),
                             )
                             .0,
                         ))
@@ -9943,6 +10034,175 @@ mod tests {
                 .expect_err("Range.Resize beyond max column should be rejected")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn range_end_dispatch_moves_to_contiguous_region_edge_or_next_content() {
+        let mut runtime = ExcelRuntime::new();
+        let _workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let b2_b3 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B2:B3".to_string())])
+                .expect("Range(B2:B3)"),
+        );
+        let b5 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B5".to_string())])
+                .expect("Range(B5)"),
+        );
+        runtime
+            .dispatch_set(b2_b3, "Value", OmValue::Text("filled".to_string()), &[])
+            .expect("B2:B3.Value");
+        runtime
+            .dispatch_set(b5, "Value", OmValue::Text("next".to_string()), &[])
+            .expect("B5.Value");
+
+        let a1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        let b1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Range(B1)"),
+        );
+        let b4 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B4".to_string())])
+                .expect("Range(B4)"),
+        );
+        let c1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1".to_string())])
+                .expect("Range(C1)"),
+        );
+        let d1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1".to_string())])
+                .expect("Range(D1)"),
+        );
+
+        let end_right = expect_object_handle(
+            runtime
+                .dispatch_invoke(a1, "End", &[OmValue::Number(f64::from(super::XL_TO_RIGHT))])
+                .expect("A1.End(xlToRight)"),
+        );
+        let end_down = expect_object_handle(
+            runtime
+                .dispatch_invoke(b1, "End", &[OmValue::Number(f64::from(super::XL_DOWN))])
+                .expect("B1.End(xlDown)"),
+        );
+        let blank_down = expect_object_handle(
+            runtime
+                .dispatch_invoke(b4, "End", &[OmValue::Number(f64::from(super::XL_DOWN))])
+                .expect("B4.End(xlDown)"),
+        );
+        let blank_up = expect_object_handle(
+            runtime
+                .dispatch_invoke(b4, "End", &[OmValue::Number(f64::from(super::XL_UP))])
+                .expect("B4.End(xlUp)"),
+        );
+        let end_left = expect_object_handle(
+            runtime
+                .dispatch_invoke(c1, "End", &[OmValue::Number(f64::from(super::XL_TO_LEFT))])
+                .expect("C1.End(xlToLeft)"),
+        );
+        let blank_left = expect_object_handle(
+            runtime
+                .dispatch_invoke(d1, "End", &[OmValue::Number(f64::from(super::XL_TO_LEFT))])
+                .expect("D1.End(xlToLeft)"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(end_right, "Address", &[])
+                    .expect("A1.End(xlToRight).Address")
+            ),
+            "$C$1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(end_down, "Address", &[])
+                    .expect("B1.End(xlDown).Address")
+            ),
+            "$B$3"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(blank_down, "Address", &[])
+                    .expect("B4.End(xlDown).Address")
+            ),
+            "$B$5"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(blank_up, "Address", &[])
+                    .expect("B4.End(xlUp).Address")
+            ),
+            "$B$3"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(end_left, "Address", &[])
+                    .expect("C1.End(xlToLeft).Address")
+            ),
+            "$A$1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(blank_left, "Address", &[])
+                    .expect("D1.End(xlToLeft).Address")
+            ),
+            "$C$1"
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(a1, "End", &[])
+                .expect_err("Range.End should require a direction")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(a1, "End", &[OmValue::Text("down".to_string())])
+                .expect_err("Range.End should reject non-numeric direction")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(a1, "End", &[OmValue::Number(-4121.5)])
+                .expect_err("Range.End should reject fractional direction")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(a1, "End", &[OmValue::Number(999.0)])
+                .expect_err("Range.End should reject unsupported direction")
+                .code,
+            OmErrorCode::Unsupported
         );
     }
 

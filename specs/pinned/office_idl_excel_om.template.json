@@ -34,6 +34,27 @@
       ]
     },
     {
+      "name": "XlDirection",
+      "values": [
+        {
+          "name": "xlDown",
+          "value": -4121
+        },
+        {
+          "name": "xlToLeft",
+          "value": -4159
+        },
+        {
+          "name": "xlToRight",
+          "value": -4161
+        },
+        {
+          "name": "xlUp",
+          "value": -4162
+        }
+      ]
+    },
+    {
       "name": "XlApplicationInternational",
       "values": [
         {
@@ -3358,6 +3379,42 @@
                   "kind": "method",
                   "sourceInterface": "Range",
                   "sourceMember": "Resize"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              }
+            }
+          }
+        },
+        {
+          "name": "End",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "interface",
+            "name": "Range",
+            "aliasOf": "Excel.Range"
+          },
+          "params": [
+            {
+              "name": "Direction",
+              "type": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlDirection"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Range",
+                  "sourceMember": "End"
                 }
               ],
               "typeInfo": {
