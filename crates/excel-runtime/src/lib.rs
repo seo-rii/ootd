@@ -8645,8 +8645,11 @@ fn formula_eval_error_from_cell_error(error: CellError) -> FormulaEvalError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FormulaScalarFunction {
     Abs,
+    And,
     If,
     Int,
+    Not,
+    Or,
     Round,
     Power,
     Sqrt,
@@ -8656,10 +8659,16 @@ impl FormulaScalarFunction {
     fn from_name(name: &str) -> Option<Self> {
         if name.eq_ignore_ascii_case("ABS") {
             Some(Self::Abs)
+        } else if name.eq_ignore_ascii_case("AND") {
+            Some(Self::And)
         } else if name.eq_ignore_ascii_case("IF") {
             Some(Self::If)
         } else if name.eq_ignore_ascii_case("INT") {
             Some(Self::Int)
+        } else if name.eq_ignore_ascii_case("NOT") {
+            Some(Self::Not)
+        } else if name.eq_ignore_ascii_case("OR") {
+            Some(Self::Or)
         } else if name.eq_ignore_ascii_case("ROUND") {
             Some(Self::Round)
         } else if name.eq_ignore_ascii_case("POWER") {
@@ -8679,6 +8688,16 @@ impl FormulaScalarFunction {
                 };
                 Ok(value.abs())
             }
+            FormulaScalarFunction::And => {
+                if args.is_empty() {
+                    return Err(FormulaEvalError::Value);
+                }
+                Ok(if args.iter().all(|value| *value != 0.0) {
+                    1.0
+                } else {
+                    0.0
+                })
+            }
             FormulaScalarFunction::If => {
                 let [condition, true_value, false_value] = args else {
                     return Err(FormulaEvalError::Value);
@@ -8694,6 +8713,22 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Value);
                 };
                 Ok(value.floor())
+            }
+            FormulaScalarFunction::Not => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                Ok(if *value == 0.0 { 1.0 } else { 0.0 })
+            }
+            FormulaScalarFunction::Or => {
+                if args.is_empty() {
+                    return Err(FormulaEvalError::Value);
+                }
+                Ok(if args.iter().any(|value| *value != 0.0) {
+                    1.0
+                } else {
+                    0.0
+                })
             }
             FormulaScalarFunction::Round => {
                 let [value, digits] = args else {
@@ -9064,6 +9099,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             self.skip_whitespace();
             if self.consume_char('(') {
                 return self.parse_function(identifier.as_str());
+            }
+            if identifier.eq_ignore_ascii_case("TRUE") {
+                return Ok(1.0);
+            }
+            if identifier.eq_ignore_ascii_case("FALSE") {
+                return Ok(0.0);
             }
             return Err(FormulaEvalError::Name);
         }
@@ -11792,6 +11833,82 @@ mod tests {
                 OmValue::Number(100.0),
                 OmValue::Number(9.0),
                 OmValue::Number(2.3),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_boolean_logic_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B6".to_string())])
+                .expect("Range(B1:B6)"),
+        );
+
+        runtime
+            .dispatch_set(source, "Value2", OmValue::Number(5.0), &[])
+            .expect("set boolean source value");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        6,
+                        1,
+                        vec![
+                            OmValue::Text("=TRUE".to_string()),
+                            OmValue::Text("=FALSE".to_string()),
+                            OmValue::Text("=NOT(FALSE)".to_string()),
+                            OmValue::Text("=AND(TRUE, A1=5, 1)".to_string()),
+                            OmValue::Text("=OR(FALSE, 0, A1<>5)".to_string()),
+                            OmValue::Text("=IF(AND(TRUE, A1>4), 99, 0)".to_string()),
+                        ],
+                    )
+                    .expect("boolean logic formulas"),
+                ),
+                &[],
+            )
+            .expect("set boolean logic formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("boolean logic values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected boolean logic value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(1.0),
+                OmValue::Number(0.0),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(0.0),
+                OmValue::Number(99.0),
             ]
         );
     }
