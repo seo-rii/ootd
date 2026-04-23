@@ -677,50 +677,48 @@ impl XlsxCodec {
             reader.config_mut().trim_text(false);
             let mut writer = Writer::new(Cursor::new(Vec::new()));
             let mut buffer = Vec::new();
-            let rewrite_sheet_element =
-                |element: &BytesStart<'_>,
-                 decoder: quick_xml::encoding::Decoder|
-                 -> OmResult<BytesStart<'static>> {
-                    let mut sheet_id = None::<u64>;
-                    let mut relationship_id = None::<String>;
-                    let mut attrs = Vec::<(String, String)>::new();
-                    for attr in element.attributes() {
-                        let attr = attr.map_err(xml_error)?;
-                        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
-                        let value = attr
-                            .decode_and_unescape_value(decoder)
-                            .map_err(xml_error)?
-                            .into_owned();
-                        if attr.key.as_ref() == b"sheetId" {
-                            sheet_id = value.parse::<u64>().ok();
-                        } else if attr.key.as_ref() == b"r:id" {
-                            relationship_id = Some(value.clone());
-                        }
-                        attrs.push((key, value));
+            let rewrite_sheet_element = |element: &BytesStart<'_>,
+                                         decoder: quick_xml::encoding::Decoder|
+             -> OmResult<BytesStart<'static>> {
+                let mut sheet_id = None::<u64>;
+                let mut relationship_id = None::<String>;
+                let mut attrs = Vec::<(String, String)>::new();
+                for attr in element.attributes() {
+                    let attr = attr.map_err(xml_error)?;
+                    let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+                    let value = attr
+                        .decode_and_unescape_value(decoder)
+                        .map_err(xml_error)?
+                        .into_owned();
+                    if attr.key.as_ref() == b"sheetId" {
+                        sheet_id = value.parse::<u64>().ok();
+                    } else if attr.key.as_ref() == b"r:id" {
+                        relationship_id = Some(value.clone());
                     }
-                    let Some(worksheet) = workbook.state.worksheets.iter().find(|worksheet| {
-                        sheet_id == Some(worksheet.id.0)
-                            || relationship_id.as_deref() == worksheet.relationship_id.as_deref()
-                    }) else {
-                        return Ok(element.to_owned());
-                    };
-                    let mut rewritten = BytesStart::new(
-                        String::from_utf8_lossy(element.name().as_ref()).into_owned(),
-                    );
-                    let mut has_name_attr = false;
-                    for (key, value) in attrs {
-                        if key == "name" {
-                            rewritten.push_attribute(("name", worksheet.name.as_str()));
-                            has_name_attr = true;
-                            continue;
-                        }
-                        rewritten.push_attribute((key.as_str(), value.as_str()));
-                    }
-                    if !has_name_attr {
-                        rewritten.push_attribute(("name", worksheet.name.as_str()));
-                    }
-                    Ok(rewritten)
+                    attrs.push((key, value));
+                }
+                let Some(worksheet) = workbook.state.worksheets.iter().find(|worksheet| {
+                    sheet_id == Some(worksheet.id.0)
+                        || relationship_id.as_deref() == worksheet.relationship_id.as_deref()
+                }) else {
+                    return Ok(element.to_owned());
                 };
+                let mut rewritten =
+                    BytesStart::new(String::from_utf8_lossy(element.name().as_ref()).into_owned());
+                let mut has_name_attr = false;
+                for (key, value) in attrs {
+                    if key == "name" {
+                        rewritten.push_attribute(("name", worksheet.name.as_str()));
+                        has_name_attr = true;
+                        continue;
+                    }
+                    rewritten.push_attribute((key.as_str(), value.as_str()));
+                }
+                if !has_name_attr {
+                    rewritten.push_attribute(("name", worksheet.name.as_str()));
+                }
+                Ok(rewritten)
+            };
 
             loop {
                 match reader.read_event_into(&mut buffer) {
@@ -737,9 +735,7 @@ impl XlsxCodec {
                         )?))
                         .map_err(xml_error)?,
                     Ok(Event::Eof) => break,
-                    Ok(event) => writer
-                        .write_event(event.into_owned())
-                        .map_err(xml_error)?,
+                    Ok(event) => writer.write_event(event.into_owned()).map_err(xml_error)?,
                     Err(error) => return Err(xml_error(error)),
                 }
                 buffer.clear();
@@ -1127,36 +1123,35 @@ fn parse_worksheet_relationships_part_summary(
     let mut current_root_extra_writer = None::<Writer<Cursor<Vec<u8>>>>;
     let mut current_root_extra_depth = 0usize;
     let mut element_depth = 0usize;
-    let parse_attrs =
-        |element: &BytesStart<'_>, decoder: quick_xml::encoding::Decoder| -> OmResult<_> {
-            let mut attr_map = BTreeMap::new();
-            let mut target = None::<String>;
-            let mut external = false;
-            for attr in element.attributes() {
-                let attr = attr.map_err(xml_error)?;
-                let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
-                let value = attr
-                    .decode_and_unescape_value(decoder)
-                    .map_err(xml_error)?
-                    .into_owned();
-                if attr.key.as_ref() == b"Target" {
-                    target = Some(value.clone());
-                } else if attr.key.as_ref() == b"TargetMode"
-                    && value.eq_ignore_ascii_case("External")
-                {
-                    external = true;
-                }
-                attr_map.insert(key, value);
+    let parse_attrs = |element: &BytesStart<'_>,
+                       decoder: quick_xml::encoding::Decoder|
+     -> OmResult<_> {
+        let mut attr_map = BTreeMap::new();
+        let mut target = None::<String>;
+        let mut external = false;
+        for attr in element.attributes() {
+            let attr = attr.map_err(xml_error)?;
+            let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+            let value = attr
+                .decode_and_unescape_value(decoder)
+                .map_err(xml_error)?
+                .into_owned();
+            if attr.key.as_ref() == b"Target" {
+                target = Some(value.clone());
+            } else if attr.key.as_ref() == b"TargetMode" && value.eq_ignore_ascii_case("External") {
+                external = true;
             }
-            if !external
-                && let Some(target) = target
-                && let Some(normalized_target) =
-                    normalize_relationship_target(target.as_str(), base_segments)
-            {
-                attr_map.insert("Target".to_string(), normalized_target);
-            }
-            Ok(attr_map)
-        };
+            attr_map.insert(key, value);
+        }
+        if !external
+            && let Some(target) = target
+            && let Some(normalized_target) =
+                normalize_relationship_target(target.as_str(), base_segments)
+        {
+            attr_map.insert("Target".to_string(), normalized_target);
+        }
+        Ok(attr_map)
+    };
 
     loop {
         match reader.read_event_into(&mut buffer) {
@@ -1293,7 +1288,8 @@ fn parse_worksheet_relationships_part_summary(
                             .write_event(Event::Empty(element.into_owned()))
                             .map_err(xml_error)?;
                         root_extra_child_xmls.push(
-                            String::from_utf8(writer.into_inner().into_inner()).map_err(xml_error)?,
+                            String::from_utf8(writer.into_inner().into_inner())
+                                .map_err(xml_error)?,
                         );
                     }
                 }
@@ -5254,8 +5250,7 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                     && element_stack.get(2).map(String::as_str) == Some("dxf")
                 {
                     append_summary_text(
-                        dxfs
-                            .last_mut()
+                        dxfs.last_mut()
                             .and_then(|dxf| dxf.child_texts.last_mut())
                             .ok_or_else(|| {
                                 OmError::new(
@@ -5710,8 +5705,7 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                     && element_stack.get(2).map(String::as_str) == Some("dxf")
                 {
                     append_summary_text(
-                        dxfs
-                            .last_mut()
+                        dxfs.last_mut()
                             .and_then(|dxf| dxf.child_texts.last_mut())
                             .ok_or_else(|| {
                                 OmError::new(
@@ -6456,8 +6450,7 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
     let mut extra_color_scheme_list_grandchild_names = Vec::<Vec<Vec<String>>>::new();
     let mut extra_color_scheme_list_grandchild_attr_maps =
         Vec::<Vec<Vec<BTreeMap<String, String>>>>::new();
-    let mut extra_color_scheme_list_grandchild_texts =
-        Vec::<Vec<Vec<Option<String>>>>::new();
+    let mut extra_color_scheme_list_grandchild_texts = Vec::<Vec<Vec<Option<String>>>>::new();
     let mut extra_color_scheme_list_great_grandchild_names = Vec::<Vec<Vec<Vec<String>>>>::new();
     let mut extra_color_scheme_list_great_grandchild_attr_maps =
         Vec::<Vec<Vec<Vec<BTreeMap<String, String>>>>>::new();
@@ -6757,7 +6750,8 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                     && element_stack.last().map(String::as_str) == Some("objectDefaults")
                 {
                     object_defaults_child_names.push(local_name.clone());
-                    object_defaults_child_attr_maps.push(read_attr_map(&element, reader.decoder())?);
+                    object_defaults_child_attr_maps
+                        .push(read_attr_map(&element, reader.decoder())?);
                     object_defaults_child_texts.push(None);
                 } else if element_stack.len() == 2
                     && element_stack.first().map(String::as_str) == Some("theme")
@@ -8965,7 +8959,8 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                     && element_stack.last().map(String::as_str) == Some("objectDefaults")
                 {
                     object_defaults_child_names.push(local_name.clone());
-                    object_defaults_child_attr_maps.push(read_attr_map(&element, reader.decoder())?);
+                    object_defaults_child_attr_maps
+                        .push(read_attr_map(&element, reader.decoder())?);
                     object_defaults_child_texts.push(None);
                 } else if element_stack.len() == 2
                     && element_stack.first().map(String::as_str) == Some("theme")
@@ -12610,8 +12605,7 @@ fn ensure_single_worksheet_support_parts_present_with_options(
                 OmErrorCode::InvalidState,
                 format!(
                     "explicit worksheet relationship id {relationship_id} in {rels_part} expected type {expected_relationship_type}, target {expected_target}, and TargetMode {:?} but found target {}",
-                    expected_target_mode,
-                    actual_relationship.target
+                    expected_target_mode, actual_relationship.target
                 ),
             )),
             None => Err(OmError::new(
@@ -12857,7 +12851,8 @@ fn parse_worksheet_hyperlinks_part_summary(
                             .write_event(Event::Empty(element.into_owned()))
                             .map_err(xml_error)?;
                         root_extra_child_xmls.push(
-                            String::from_utf8(writer.into_inner().into_inner()).map_err(xml_error)?,
+                            String::from_utf8(writer.into_inner().into_inner())
+                                .map_err(xml_error)?,
                         );
                     }
                 }
@@ -13264,7 +13259,10 @@ fn parse_worksheet_legacy_drawing_summaries(
                             .into_inner(),
                     )
                     .map_err(xml_error)?;
-                    summaries.push(WorksheetLegacyDrawingSummary { attr_map, inner_xml });
+                    summaries.push(WorksheetLegacyDrawingSummary {
+                        attr_map,
+                        inner_xml,
+                    });
                 } else {
                     current_writer
                         .as_mut()
@@ -13491,15 +13489,12 @@ fn parse_comment_part_summary(comments_xml: &[u8]) -> OmResult<CommentPartSummar
                     comment_text_xml_depth = 0;
                     current_comment_text_writer = None;
                     let attr_map = parse_attrs(&element, reader.decoder())?;
-                    let reference = attr_map
-                        .get("ref")
-                        .cloned()
-                        .ok_or_else(|| {
-                            OmError::new(
-                                OmErrorCode::InvalidState,
-                                "comments.xml <comment> is missing required ref",
-                            )
-                        })?;
+                    let reference = attr_map.get("ref").cloned().ok_or_else(|| {
+                        OmError::new(
+                            OmErrorCode::InvalidState,
+                            "comments.xml <comment> is missing required ref",
+                        )
+                    })?;
                     let author_id = attr_map
                         .get("authorId")
                         .map(|value| value.parse::<u32>().map_err(xml_error))
@@ -13611,7 +13606,8 @@ fn parse_comment_part_summary(comments_xml: &[u8]) -> OmResult<CommentPartSummar
                             .write_event(Event::Empty(element.into_owned()))
                             .map_err(xml_error)?;
                         root_extra_child_xmls.push(
-                            String::from_utf8(writer.into_inner().into_inner()).map_err(xml_error)?,
+                            String::from_utf8(writer.into_inner().into_inner())
+                                .map_err(xml_error)?,
                         );
                         buffer.clear();
                         continue;
@@ -13622,15 +13618,12 @@ fn parse_comment_part_summary(comments_xml: &[u8]) -> OmResult<CommentPartSummar
                     authors.push(String::new());
                 } else if local_name == "comment" && element_depth == 2 {
                     let attr_map = parse_attrs(&element, reader.decoder())?;
-                    let reference = attr_map
-                        .get("ref")
-                        .cloned()
-                        .ok_or_else(|| {
-                            OmError::new(
-                                OmErrorCode::InvalidState,
-                                "comments.xml <comment> is missing required ref",
-                            )
-                        })?;
+                    let reference = attr_map.get("ref").cloned().ok_or_else(|| {
+                        OmError::new(
+                            OmErrorCode::InvalidState,
+                            "comments.xml <comment> is missing required ref",
+                        )
+                    })?;
                     let author_id = attr_map
                         .get("authorId")
                         .map(|value| value.parse::<u32>().map_err(xml_error))
@@ -13734,14 +13727,15 @@ fn parse_comment_part_summary(comments_xml: &[u8]) -> OmResult<CommentPartSummar
                                 .take()
                                 .ok_or_else(|| {
                                     OmError::new(
-                                    OmErrorCode::InvalidState,
-                                    "comments.xml lost text subtree writer state",
-                                )
-                            })?
+                                        OmErrorCode::InvalidState,
+                                        "comments.xml lost text subtree writer state",
+                                    )
+                                })?
                                 .into_inner()
                                 .into_inner();
                             if let Some(comment) = current_comment.as_mut() {
-                                comment.text_xml = Some(String::from_utf8(bytes).map_err(xml_error)?);
+                                comment.text_xml =
+                                    Some(String::from_utf8(bytes).map_err(xml_error)?);
                             }
                         } else {
                             current_comment_text_writer
@@ -13787,11 +13781,11 @@ fn parse_comment_part_summary(comments_xml: &[u8]) -> OmResult<CommentPartSummar
                             .ok_or_else(|| {
                                 OmError::new(
                                     OmErrorCode::InvalidState,
-                                "comments.xml lost text subtree writer state",
-                            )
-                        })?
-                        .write_event(Event::End(element.into_owned()))
-                        .map_err(xml_error)?;
+                                    "comments.xml lost text subtree writer state",
+                                )
+                            })?
+                            .write_event(Event::End(element.into_owned()))
+                            .map_err(xml_error)?;
                     }
                 }
 
@@ -13987,7 +13981,9 @@ fn parse_vml_drawing_part_summary(vml_xml: &[u8]) -> OmResult<VmlDrawingPartSumm
                     shape_attr_maps.push(attr_map);
                     current_shape_depth = 1;
                     current_shape_writer = Some(Writer::new(Cursor::new(Vec::new())));
-                } else if element_depth == 1 && current_non_shape_depth == 0 && current_shape_depth == 0
+                } else if element_depth == 1
+                    && current_non_shape_depth == 0
+                    && current_shape_depth == 0
                 {
                     let mut writer = Writer::new(Cursor::new(Vec::new()));
                     writer
@@ -14065,7 +14061,9 @@ fn parse_vml_drawing_part_summary(vml_xml: &[u8]) -> OmResult<VmlDrawingPartSumm
                     }
                     shape_attr_maps.push(attr_map);
                     shape_inner_xmls.push(String::new());
-                } else if element_depth == 1 && current_shape_depth == 0 && current_non_shape_depth == 0
+                } else if element_depth == 1
+                    && current_shape_depth == 0
+                    && current_non_shape_depth == 0
                 {
                     let mut writer = Writer::new(Cursor::new(Vec::new()));
                     writer
@@ -16256,10 +16254,9 @@ mod tests {
     use super::{
         BorderSummary, COMMENTS_RELATIONSHIP_TYPE, CellData, CommentPartSummary, DxfSummary,
         FileFormat, FillSummary, FontSummary, HYPERLINK_RELATIONSHIP_TYPE, OpcPackage,
-        STYLES_RELATIONSHIP_TYPE,
-        THEME_RELATIONSHIP_TYPE, VML_DRAWING_RELATIONSHIP_TYPE, WorksheetCommentSummary,
-        WorksheetData, WorksheetHyperlinkBinding, WorksheetHyperlinkSummary,
-        WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec,
+        STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE, VML_DRAWING_RELATIONSHIP_TYPE,
+        WorksheetCommentSummary, WorksheetData, WorksheetHyperlinkBinding,
+        WorksheetHyperlinkSummary, WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec,
         collect_support_part_dimension_coords, compute_dimension_ref,
         compute_dimension_ref_with_preserved, parse_shared_strings, parse_workbook_relationships,
         parse_worksheet_cells, rewrite_worksheet_xml,
@@ -16349,7 +16346,10 @@ mod tests {
 
     #[test]
     fn parse_cell_reference_uses_current_row_when_row_digits_are_missing() {
-        assert_eq!(super::parse_cell_reference("BC", Some(7)).expect("cell reference"), (7, 55));
+        assert_eq!(
+            super::parse_cell_reference("BC", Some(7)).expect("cell reference"),
+            (7, 55)
+        );
     }
 
     #[test]
@@ -16358,9 +16358,11 @@ mod tests {
             .expect_err("parse should fail for invalid worksheet cell reference");
 
         assert_eq!(error.code, OmErrorCode::Parse);
-        assert!(error
-            .message
-            .contains("invalid worksheet cell reference: A0"));
+        assert!(
+            error
+                .message
+                .contains("invalid worksheet cell reference: A0")
+        );
     }
 
     #[test]
@@ -16406,9 +16408,11 @@ mod tests {
         .expect_err("parse should fail when worksheet cell reference is missing");
 
         assert_eq!(error.code, OmErrorCode::Parse);
-        assert!(error
-            .message
-            .contains("worksheet cell is missing an A1 reference"));
+        assert!(
+            error
+                .message
+                .contains("worksheet cell is missing an A1 reference")
+        );
     }
 
     #[test]
@@ -16455,9 +16459,11 @@ mod tests {
         .expect_err("parse should fail when shared string index is out of range");
 
         assert_eq!(error.code, OmErrorCode::Parse);
-        assert!(error
-            .message
-            .contains("shared string index out of range: 9"));
+        assert!(
+            error
+                .message
+                .contains("shared string index out of range: 9")
+        );
     }
 
     #[test]
@@ -16504,7 +16510,10 @@ mod tests {
         )
         .expect("worksheet cells");
 
-        assert_eq!(cells.get(&(4, 1)).expect("A4").value, CellValue::Bool(false));
+        assert_eq!(
+            cells.get(&(4, 1)).expect("A4").value,
+            CellValue::Bool(false)
+        );
         assert_eq!(
             cells.get(&(4, 2)).expect("B4").value,
             CellValue::Error(CellError::Unknown)
@@ -16513,9 +16522,15 @@ mod tests {
 
     #[test]
     fn parse_cell_error_maps_known_and_unknown_values() {
-        assert_eq!(super::parse_cell_error("#GETTING_DATA"), CellError::GettingData);
+        assert_eq!(
+            super::parse_cell_error("#GETTING_DATA"),
+            CellError::GettingData
+        );
         assert_eq!(super::parse_cell_error("#BLOCKED!"), CellError::Blocked);
-        assert_eq!(super::parse_cell_error("#NOT-A-REAL-ERROR!"), CellError::Unknown);
+        assert_eq!(
+            super::parse_cell_error("#NOT-A-REAL-ERROR!"),
+            CellError::Unknown
+        );
     }
 
     #[test]
@@ -16717,7 +16732,8 @@ mod tests {
 </Relationships>"#;
 
         let stripped = String::from_utf8(
-            super::strip_calc_chain_relationships(rels_xml).expect("strip calc chain relationships"),
+            super::strip_calc_chain_relationships(rels_xml)
+                .expect("strip calc chain relationships"),
         )
         .expect("relationships xml utf8");
 
@@ -16842,9 +16858,11 @@ mod tests {
             .expect_err("rewrite should fail when start cell reference is missing");
 
         assert_eq!(error.code, OmErrorCode::Parse);
-        assert!(error
-            .message
-            .contains("worksheet cell is missing an A1 reference"));
+        assert!(
+            error
+                .message
+                .contains("worksheet cell is missing an A1 reference")
+        );
     }
 
     #[test]
@@ -16868,9 +16886,11 @@ mod tests {
             .expect_err("rewrite should fail when empty cell reference is missing");
 
         assert_eq!(error.code, OmErrorCode::Parse);
-        assert!(error
-            .message
-            .contains("worksheet cell is missing an A1 reference"));
+        assert!(
+            error
+                .message
+                .contains("worksheet cell is missing an A1 reference")
+        );
     }
 
     #[test]
@@ -16894,15 +16914,18 @@ mod tests {
             .expect_err("rewrite should fail when template cell reference is invalid");
 
         assert_eq!(error.code, OmErrorCode::Parse);
-        assert!(error
-            .message
-            .contains("invalid worksheet cell reference: A0"));
+        assert!(
+            error
+                .message
+                .contains("invalid worksheet cell reference: A0")
+        );
     }
 
     #[test]
     fn should_strip_calc_chain_relationship_matches_by_type_or_normalized_target() {
         let rel_type_xml = br#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/calcChain" Target="worksheets/sheet1.xml"/>"#;
-        let mut rel_type_reader = quick_xml::Reader::from_reader(std::io::Cursor::new(rel_type_xml));
+        let mut rel_type_reader =
+            quick_xml::Reader::from_reader(std::io::Cursor::new(rel_type_xml));
         let mut rel_type_buffer = Vec::new();
         let rel_type_event = rel_type_reader
             .read_event_into(&mut rel_type_buffer)
@@ -16912,8 +16935,11 @@ mod tests {
             event => panic!("unexpected relationship event: {event:?}"),
         };
         assert!(
-            super::should_strip_calc_chain_relationship(&rel_type_element, rel_type_reader.decoder())
-                .expect("should strip by type")
+            super::should_strip_calc_chain_relationship(
+                &rel_type_element,
+                rel_type_reader.decoder()
+            )
+            .expect("should strip by type")
         );
 
         let rel_target_xml = br#"<Relationship Id="rId2" Type="https://example.com/opaque" Target="/xl/calcChain.xml"/>"#;
@@ -16941,7 +16967,9 @@ mod tests {
         let xml = br#"<Relationship Id="rId3" Type="https://example.com/opaque" Target="../styles.xml"/>"#;
         let mut reader = quick_xml::Reader::from_reader(std::io::Cursor::new(xml));
         let mut buffer = Vec::new();
-        let event = reader.read_event_into(&mut buffer).expect("relationship event");
+        let event = reader
+            .read_event_into(&mut buffer)
+            .expect("relationship event");
         let element = match event {
             quick_xml::events::Event::Empty(element) => element,
             event => panic!("unexpected relationship event: {event:?}"),
@@ -17007,7 +17035,8 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_tracked_hyperlink_relationship_targets_rewrites_bound_entries_and_preserves_others() {
+    fn rewrite_tracked_hyperlink_relationship_targets_rewrites_bound_entries_and_preserves_others()
+    {
         let rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Target="https://old.example" data-extra="1"/>
@@ -17099,7 +17128,7 @@ mod tests {
 
     #[test]
     fn rewrite_tracked_hyperlink_relationship_targets_rewrites_start_elements_and_preserves_inner_xml()
-    {
+     {
         let rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Target="https://old.example"><ext preserve="1"/></Relationship>
@@ -17312,7 +17341,10 @@ mod tests {
         let summary = super::parse_stylesheet_summary(styles_xml.as_bytes())
             .expect("parse stylesheet summary");
 
-        assert_eq!(summary.cell_styles[0].child_names, vec!["extLst".to_string()]);
+        assert_eq!(
+            summary.cell_styles[0].child_names,
+            vec!["extLst".to_string()]
+        );
         assert_eq!(
             summary.cell_styles[0].child_texts,
             vec![Some("alphabeta".to_string())]
@@ -17416,8 +17448,9 @@ mod tests {
 
     #[test]
     fn parse_theme_part_summary_collects_scheme_container_texts() {
-        let theme_xml =
-            theme_xml_string_from_workbook_bytes(&workbook_with_theme_scheme_container_text_bytes());
+        let theme_xml = theme_xml_string_from_workbook_bytes(
+            &workbook_with_theme_scheme_container_text_bytes(),
+        );
 
         let summary = super::parse_theme_part_summary(theme_xml.as_bytes())
             .expect("parse theme part summary");
@@ -17669,8 +17702,14 @@ mod tests {
             summary.root_attr_map,
             BTreeMap::from([
                 ("data-root".to_string(), "alpha".to_string()),
-                ("xmlns:o".to_string(), "urn:schemas-microsoft-com:office:office".to_string()),
-                ("xmlns:v".to_string(), "urn:schemas-microsoft-com:vml".to_string()),
+                (
+                    "xmlns:o".to_string(),
+                    "urn:schemas-microsoft-com:office:office".to_string()
+                ),
+                (
+                    "xmlns:v".to_string(),
+                    "urn:schemas-microsoft-com:vml".to_string()
+                ),
             ])
         );
         assert_eq!(
@@ -17692,7 +17731,10 @@ mod tests {
         assert_eq!(summary.shape_ids, vec!["CommentShape".to_string()]);
         assert_eq!(
             summary.shape_attr_maps,
-            vec![BTreeMap::from([("id".to_string(), "CommentShape".to_string())])]
+            vec![BTreeMap::from([(
+                "id".to_string(),
+                "CommentShape".to_string()
+            )])]
         );
         assert_eq!(summary.shape_inner_xmls, vec![String::new()]);
     }
@@ -17766,9 +17808,15 @@ mod tests {
             vec![
                 BTreeMap::from([
                     ("Id".to_string(), "rId9".to_string()),
-                    ("Target".to_string(), "https://opaque.example/preserve".to_string()),
+                    (
+                        "Target".to_string(),
+                        "https://opaque.example/preserve".to_string()
+                    ),
                     ("TargetMode".to_string(), "External".to_string()),
-                    ("Type".to_string(), "https://example.com/relationships/opaque".to_string()),
+                    (
+                        "Type".to_string(),
+                        "https://example.com/relationships/opaque".to_string()
+                    ),
                     ("data-extra".to_string(), "1".to_string()),
                 ]),
                 BTreeMap::from([
@@ -17785,20 +17833,21 @@ mod tests {
                 ]),
                 BTreeMap::from([
                     ("Id".to_string(), "rId2".to_string()),
-                    ("Target".to_string(), "xl/drawings/vmlDrawing1.vml".to_string()),
-                    ("Type".to_string(), VML_DRAWING_RELATIONSHIP_TYPE.to_string()),
+                    (
+                        "Target".to_string(),
+                        "xl/drawings/vmlDrawing1.vml".to_string()
+                    ),
+                    (
+                        "Type".to_string(),
+                        VML_DRAWING_RELATIONSHIP_TYPE.to_string()
+                    ),
                     ("data-order".to_string(), "vml".to_string()),
                 ]),
             ]
         );
         assert_eq!(
             summary.relationship_inner_xmls,
-            vec![
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-            ]
+            vec![String::new(), String::new(), String::new(), String::new(),]
         );
     }
 
@@ -17830,7 +17879,10 @@ mod tests {
             summary.root_extra_child_xmls,
             vec![r#"<Metadata preserve="1"><Tag>alpha</Tag></Metadata>"#.to_string()]
         );
-        assert_eq!(summary.relationship_ids, vec!["rId1".to_string(), "rId2".to_string()]);
+        assert_eq!(
+            summary.relationship_ids,
+            vec!["rId1".to_string(), "rId2".to_string()]
+        );
         assert_eq!(
             summary.relationship_attr_maps,
             vec![
@@ -17838,10 +17890,7 @@ mod tests {
                     ("Id".to_string(), "rId1".to_string()),
                     ("Target".to_string(), "https://example.com".to_string()),
                     ("TargetMode".to_string(), "External".to_string()),
-                    (
-                        "Type".to_string(),
-                        HYPERLINK_RELATIONSHIP_TYPE.to_string(),
-                    ),
+                    ("Type".to_string(), HYPERLINK_RELATIONSHIP_TYPE.to_string(),),
                 ]),
                 BTreeMap::from([
                     ("Id".to_string(), "rId2".to_string()),
@@ -17937,9 +17986,11 @@ mod tests {
             .expect_err("parse should fail when worksheet hyperlink ref is missing");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error
-            .message
-            .contains("worksheet <hyperlink> is missing required ref"));
+        assert!(
+            error
+                .message
+                .contains("worksheet <hyperlink> is missing required ref")
+        );
     }
 
     #[test]
@@ -18018,9 +18069,11 @@ mod tests {
             .expect_err("parse should fail when worksheet hyperlink ref is missing");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error
-            .message
-            .contains("worksheet <hyperlink> is missing required ref"));
+        assert!(
+            error
+                .message
+                .contains("worksheet <hyperlink> is missing required ref")
+        );
     }
 
     #[test]
@@ -18050,9 +18103,11 @@ mod tests {
             .expect_err("parse should fail when comment ref is missing");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error
-            .message
-            .contains("comments.xml <comment> is missing required ref"));
+        assert!(
+            error
+                .message
+                .contains("comments.xml <comment> is missing required ref")
+        );
     }
 
     #[test]
@@ -18069,9 +18124,11 @@ mod tests {
             .expect_err("parse should fail when empty comment ref is missing");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error
-            .message
-            .contains("comments.xml <comment> is missing required ref"));
+        assert!(
+            error
+                .message
+                .contains("comments.xml <comment> is missing required ref")
+        );
     }
 
     #[test]
@@ -18105,9 +18162,11 @@ mod tests {
             .expect_err("parse should fail when comment ref is missing");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error
-            .message
-            .contains("comments.xml <comment> is missing required ref"));
+        assert!(
+            error
+                .message
+                .contains("comments.xml <comment> is missing required ref")
+        );
     }
 
     #[test]
@@ -18776,9 +18835,11 @@ mod tests {
             .expect_err("ensure should fail when workbook relationships part is missing");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error
-            .message
-            .contains("explicit workbook relationships part is missing"));
+        assert!(
+            error
+                .message
+                .contains("explicit workbook relationships part is missing")
+        );
         assert!(error.message.contains("xl/_rels/workbook.xml.rels"));
     }
 
@@ -18883,9 +18944,7 @@ mod tests {
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(error.message.contains("rId2"));
         assert!(error.message.contains("xl/_rels/workbook.xml.rels"));
-        assert!(error
-            .message
-            .contains(super::CALC_CHAIN_RELATIONSHIP_TYPE));
+        assert!(error.message.contains(super::CALC_CHAIN_RELATIONSHIP_TYPE));
         assert!(error.message.contains("worksheet"));
     }
 
@@ -19411,8 +19470,7 @@ mod tests {
     }
 
     #[test]
-    fn load_collects_theme_extra_color_scheme_list_nested_child_container_texts_in_theme_summary()
-    {
+    fn load_collects_theme_extra_color_scheme_list_nested_child_container_texts_in_theme_summary() {
         let codec = XlsxCodec;
         let loaded = codec
             .load(
@@ -27310,7 +27368,10 @@ mod tests {
         );
         assert_eq!(
             theme_summary.object_defaults_child_attr_maps,
-            vec![BTreeMap::from([("custom".to_string(), "shape".to_string())])]
+            vec![BTreeMap::from([(
+                "custom".to_string(),
+                "shape".to_string()
+            )])]
         );
     }
 
@@ -37489,7 +37550,10 @@ mod tests {
 
         assert_eq!(
             theme_summary.color_scheme_child_texts,
-            vec![Some("alphabeta".to_string()), Some("gammadelta".to_string())]
+            vec![
+                Some("alphabeta".to_string()),
+                Some("gammadelta".to_string())
+            ]
         );
     }
 
@@ -49181,7 +49245,10 @@ mod tests {
     fn load_collects_xf_child_texts_in_styles_summary() {
         let codec = XlsxCodec;
         let loaded = codec
-            .load(&workbook_with_xf_child_text_bytes(), CommonLoadOptions::default())
+            .load(
+                &workbook_with_xf_child_text_bytes(),
+                CommonLoadOptions::default(),
+            )
             .expect("load workbook");
         let styles_summary = loaded
             .support_parts
@@ -51113,7 +51180,10 @@ mod tests {
             .expect("comment summary");
         assert_eq!(comment_summary.root_name, "comments");
         assert_eq!(
-            comment_summary.root_attr_map.get("xmlns").map(String::as_str),
+            comment_summary
+                .root_attr_map
+                .get("xmlns")
+                .map(String::as_str),
             Some("http://schemas.openxmlformats.org/spreadsheetml/2006/main")
         );
         assert_eq!(
@@ -51220,9 +51290,11 @@ mod tests {
             .expect_err("collect should fail when explicit worksheet comment part is missing");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error
-            .message
-            .contains("explicit worksheet comment part is missing"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet comment part is missing")
+        );
         assert!(error.message.contains("xl/comments1.xml"));
     }
 
@@ -51237,16 +51309,19 @@ mod tests {
             .expect_err("collect should fail when explicit worksheet VML drawing part is missing");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error
-            .message
-            .contains("explicit worksheet VML drawing part is missing"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet VML drawing part is missing")
+        );
         assert!(error.message.contains("xl/drawings/vmlDrawing1.vml"));
     }
 
     #[test]
     fn collect_worksheet_support_parts_rejects_missing_worksheet_part() {
-        let package = OpcPackage::from_bytes(&workbook_with_hyperlink_comment_and_calc_chain_bytes())
-            .expect("base workbook package");
+        let package =
+            OpcPackage::from_bytes(&workbook_with_hyperlink_comment_and_calc_chain_bytes())
+                .expect("base workbook package");
 
         let error = super::collect_worksheet_support_parts("xl/worksheets/missing.xml", &package)
             .expect_err("collect should fail when worksheet part is missing");
@@ -51267,22 +51342,26 @@ mod tests {
             .expect_err("collect should fail when tracked relationship ids lose their rels part");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error
-            .message
-            .contains("explicit worksheet hyperlink bindings changed"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet hyperlink bindings changed")
+        );
         assert!(error.message.contains("xl/worksheets/sheet1.xml"));
         assert!(error.message.contains("A1"));
         assert!(error.message.contains("rId1"));
     }
 
     #[test]
-    fn collect_worksheet_support_parts_returns_empty_support_parts_for_internal_hyperlinks_without_relationships_part(
-    ) {
-        let package = OpcPackage::from_bytes(&workbook_with_blank_internal_hyperlink_anchor_bytes())
-            .expect("base workbook package");
+    fn collect_worksheet_support_parts_returns_empty_support_parts_for_internal_hyperlinks_without_relationships_part()
+     {
+        let package =
+            OpcPackage::from_bytes(&workbook_with_blank_internal_hyperlink_anchor_bytes())
+                .expect("base workbook package");
 
-        let support_parts = super::collect_worksheet_support_parts("xl/worksheets/sheet1.xml", &package)
-            .expect("worksheet support parts");
+        let support_parts =
+            super::collect_worksheet_support_parts("xl/worksheets/sheet1.xml", &package)
+                .expect("worksheet support parts");
 
         assert_eq!(
             support_parts.worksheet_part_uri.as_deref(),
@@ -51332,10 +51411,16 @@ mod tests {
                 .expect_err("ensure should fail when worksheet relationships part is missing");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error
-            .message
-            .contains("explicit worksheet relationships part is missing"));
-        assert!(error.message.contains("xl/worksheets/_rels/sheet1.xml.rels"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet relationships part is missing")
+        );
+        assert!(
+            error
+                .message
+                .contains("xl/worksheets/_rels/sheet1.xml.rels")
+        );
     }
 
     #[test]
@@ -51361,9 +51446,11 @@ mod tests {
                 .expect_err("ensure should fail when worksheet comment part is missing");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error
-            .message
-            .contains("explicit worksheet comment part is missing"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet comment part is missing")
+        );
         assert!(error.message.contains("xl/comments1.xml"));
     }
 
@@ -51390,9 +51477,11 @@ mod tests {
                 .expect_err("ensure should fail when worksheet VML drawing part is missing");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error
-            .message
-            .contains("explicit worksheet VML drawing part is missing"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet VML drawing part is missing")
+        );
         assert!(error.message.contains("xl/drawings/vmlDrawing1.vml"));
     }
 
@@ -51478,9 +51567,15 @@ mod tests {
             vec![
                 BTreeMap::from([
                     ("Id".to_string(), "rId9".to_string()),
-                    ("Target".to_string(), "https://opaque.example/preserve".to_string()),
+                    (
+                        "Target".to_string(),
+                        "https://opaque.example/preserve".to_string()
+                    ),
                     ("TargetMode".to_string(), "External".to_string()),
-                    ("Type".to_string(), "https://example.com/relationships/opaque".to_string()),
+                    (
+                        "Type".to_string(),
+                        "https://example.com/relationships/opaque".to_string()
+                    ),
                     ("data-extra".to_string(), "1".to_string()),
                 ]),
                 BTreeMap::from([
@@ -51497,20 +51592,21 @@ mod tests {
                 ]),
                 BTreeMap::from([
                     ("Id".to_string(), "rId2".to_string()),
-                    ("Target".to_string(), "xl/drawings/vmlDrawing1.vml".to_string()),
-                    ("Type".to_string(), VML_DRAWING_RELATIONSHIP_TYPE.to_string()),
+                    (
+                        "Target".to_string(),
+                        "xl/drawings/vmlDrawing1.vml".to_string()
+                    ),
+                    (
+                        "Type".to_string(),
+                        VML_DRAWING_RELATIONSHIP_TYPE.to_string()
+                    ),
                     ("data-order".to_string(), "vml".to_string()),
                 ]),
             ]
         );
         assert_eq!(
             relationships_summary.relationship_inner_xmls,
-            vec![
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-            ]
+            vec![String::new(), String::new(), String::new(), String::new(),]
         );
         assert!(worksheet_support.hyperlink_summaries.is_empty());
         assert!(worksheet_support.hyperlink_refs.is_empty());
@@ -51535,7 +51631,10 @@ mod tests {
     fn load_collects_vml_shape_attr_maps_in_worksheet_support_parts() {
         let codec = XlsxCodec;
         let loaded = codec
-            .load(&workbook_with_vml_shape_attrs_bytes(), CommonLoadOptions::default())
+            .load(
+                &workbook_with_vml_shape_attrs_bytes(),
+                CommonLoadOptions::default(),
+            )
             .expect("load workbook");
         let sheet_id = loaded.state.worksheets[0].id;
         let worksheet_support = loaded
@@ -51662,7 +51761,10 @@ mod tests {
             .expect("comment summary");
         assert_eq!(comment_summary.root_name, "comments");
         assert_eq!(
-            comment_summary.root_attr_map.get("xmlns").map(String::as_str),
+            comment_summary
+                .root_attr_map
+                .get("xmlns")
+                .map(String::as_str),
             Some("http://schemas.openxmlformats.org/spreadsheetml/2006/main")
         );
         assert_eq!(
@@ -51752,7 +51854,10 @@ mod tests {
 
         assert_eq!(comment_summary.root_name, "comments");
         assert_eq!(
-            comment_summary.root_attr_map.get("data-root").map(String::as_str),
+            comment_summary
+                .root_attr_map
+                .get("data-root")
+                .map(String::as_str),
             Some("alpha")
         );
         assert_eq!(
@@ -51914,7 +52019,10 @@ mod tests {
             .get(&sheet_id)
             .expect("worksheet support parts");
 
-        assert_eq!(worksheet_support.legacy_drawing_relationship_ids, vec!["rId2".to_string()]);
+        assert_eq!(
+            worksheet_support.legacy_drawing_relationship_ids,
+            vec!["rId2".to_string()]
+        );
         assert_eq!(worksheet_support.legacy_drawing_summaries.len(), 1);
         assert_eq!(
             worksheet_support.legacy_drawing_summaries[0].attr_map,
@@ -52110,10 +52218,7 @@ mod tests {
     fn extend_dimension_coords_from_reference_ignores_blank_and_invalid_components() {
         let mut coords = BTreeSet::new();
 
-        super::extend_dimension_coords_from_reference(
-            &mut coords,
-            " , $A$1:$C$3, invalid, B2, : ",
-        );
+        super::extend_dimension_coords_from_reference(&mut coords, " , $A$1:$C$3, invalid, B2, : ");
 
         assert_eq!(coords, BTreeSet::from([(1, 1), (2, 2), (3, 3)]));
     }
@@ -53122,7 +53227,7 @@ mod tests {
 
     #[test]
     fn dirty_save_restores_comment_root_attrs_and_extra_children_for_blank_comment_anchor_without_hyperlink_summary_or_legacy_ref_lists()
-    {
+     {
         let codec = XlsxCodec;
         let input = workbook_with_blank_comment_root_attrs_and_extra_child_bytes();
         let original_package = OpcPackage::from_bytes(&input).expect("original package");
@@ -53191,7 +53296,7 @@ mod tests {
 
     #[test]
     fn dirty_save_restores_comment_rich_text_runs_for_blank_comment_anchor_without_hyperlink_summary_or_legacy_ref_lists()
-    {
+     {
         let codec = XlsxCodec;
         let input = workbook_with_blank_rich_text_comment_anchor_bytes();
         let original_package = OpcPackage::from_bytes(&input).expect("original package");
@@ -53296,7 +53401,11 @@ mod tests {
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when VML shape attrs drift");
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("explicit worksheet VML drawing semantics changed"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet VML drawing semantics changed")
+        );
         assert!(error.message.contains("xl/drawings/vmlDrawing1.vml"));
     }
 
@@ -53326,7 +53435,11 @@ mod tests {
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when VML root attrs drift");
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("explicit worksheet VML drawing semantics changed"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet VML drawing semantics changed")
+        );
         assert!(error.message.contains("xl/drawings/vmlDrawing1.vml"));
     }
 
@@ -53359,7 +53472,11 @@ mod tests {
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when VML root child order drifts");
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("explicit worksheet VML drawing semantics changed"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet VML drawing semantics changed")
+        );
         assert!(error.message.contains("xl/drawings/vmlDrawing1.vml"));
     }
 
@@ -53389,7 +53506,11 @@ mod tests {
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when VML non-shape child drifts");
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("explicit worksheet VML drawing semantics changed"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet VML drawing semantics changed")
+        );
         assert!(error.message.contains("xl/drawings/vmlDrawing1.vml"));
     }
 
@@ -53422,7 +53543,11 @@ mod tests {
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when hyperlink relationship type drifts");
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("explicit worksheet relationship id rId1"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet relationship id rId1")
+        );
         assert!(error.message.contains(HYPERLINK_RELATIONSHIP_TYPE));
     }
 
@@ -53455,7 +53580,11 @@ mod tests {
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when hyperlink relationship TargetMode drifts");
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("explicit worksheet relationship id rId1"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet relationship id rId1")
+        );
         assert!(error.message.contains("TargetMode"));
     }
 
@@ -53485,7 +53614,11 @@ mod tests {
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when worksheet hyperlinks container attrs drift");
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("explicit worksheet hyperlinks structure changed"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet hyperlinks structure changed")
+        );
         assert!(error.message.contains("xl/worksheets/sheet1.xml"));
     }
 
@@ -53515,7 +53648,11 @@ mod tests {
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when worksheet hyperlink attrs drift");
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("explicit worksheet hyperlinks structure changed"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet hyperlinks structure changed")
+        );
         assert!(error.message.contains("xl/worksheets/sheet1.xml"));
     }
 
@@ -53545,14 +53682,20 @@ mod tests {
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when worksheet legacyDrawing attrs drift");
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("explicit worksheet legacyDrawing structure changed"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet legacyDrawing structure changed")
+        );
         assert!(error.message.contains("xl/worksheets/sheet1.xml"));
     }
 
     #[test]
     fn save_rejects_explicit_worksheet_relationship_root_attr_drift() {
         let codec = XlsxCodec;
-        let input = workbook_with_blank_comment_anchor_and_relationship_root_attrs_extra_relationship_bytes();
+        let input =
+            workbook_with_blank_comment_anchor_and_relationship_root_attrs_extra_relationship_bytes(
+            );
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
@@ -53578,14 +53721,24 @@ mod tests {
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when worksheet relationships root attrs drift");
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("explicit worksheet relationships semantics changed"));
-        assert!(error.message.contains("xl/worksheets/_rels/sheet1.xml.rels"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet relationships semantics changed")
+        );
+        assert!(
+            error
+                .message
+                .contains("xl/worksheets/_rels/sheet1.xml.rels")
+        );
     }
 
     #[test]
     fn save_rejects_explicit_worksheet_relationship_order_drift() {
         let codec = XlsxCodec;
-        let input = workbook_with_blank_comment_anchor_and_relationship_root_attrs_extra_relationship_bytes();
+        let input =
+            workbook_with_blank_comment_anchor_and_relationship_root_attrs_extra_relationship_bytes(
+            );
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
@@ -53620,14 +53773,24 @@ mod tests {
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when worksheet relationships order drifts");
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("explicit worksheet relationships semantics changed"));
-        assert!(error.message.contains("xl/worksheets/_rels/sheet1.xml.rels"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet relationships semantics changed")
+        );
+        assert!(
+            error
+                .message
+                .contains("xl/worksheets/_rels/sheet1.xml.rels")
+        );
     }
 
     #[test]
     fn save_rejects_explicit_worksheet_relationship_tracked_attr_drift() {
         let codec = XlsxCodec;
-        let input = workbook_with_blank_comment_anchor_and_relationship_root_attrs_extra_relationship_bytes();
+        let input =
+            workbook_with_blank_comment_anchor_and_relationship_root_attrs_extra_relationship_bytes(
+            );
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
@@ -53653,14 +53816,24 @@ mod tests {
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when worksheet tracked relationship attrs drift");
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("explicit worksheet relationships semantics changed"));
-        assert!(error.message.contains("xl/worksheets/_rels/sheet1.xml.rels"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet relationships semantics changed")
+        );
+        assert!(
+            error
+                .message
+                .contains("xl/worksheets/_rels/sheet1.xml.rels")
+        );
     }
 
     #[test]
     fn save_rejects_explicit_worksheet_relationship_extra_relationship_drift() {
         let codec = XlsxCodec;
-        let input = workbook_with_blank_comment_anchor_and_relationship_root_attrs_extra_relationship_bytes();
+        let input =
+            workbook_with_blank_comment_anchor_and_relationship_root_attrs_extra_relationship_bytes(
+            );
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
@@ -53686,8 +53859,16 @@ mod tests {
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when extra worksheet relationship drifts");
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("explicit worksheet relationships semantics changed"));
-        assert!(error.message.contains("xl/worksheets/_rels/sheet1.xml.rels"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet relationships semantics changed")
+        );
+        assert!(
+            error
+                .message
+                .contains("xl/worksheets/_rels/sheet1.xml.rels")
+        );
     }
 
     #[test]
@@ -53716,7 +53897,11 @@ mod tests {
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when comments root attrs drift");
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("explicit worksheet comment semantics changed"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet comment semantics changed")
+        );
         assert!(error.message.contains("xl/comments1.xml"));
     }
 
@@ -53746,7 +53931,11 @@ mod tests {
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when comments authors attrs drift");
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("explicit worksheet comment semantics changed"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet comment semantics changed")
+        );
         assert!(error.message.contains("xl/comments1.xml"));
     }
 
@@ -53776,7 +53965,11 @@ mod tests {
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when comments commentList attrs drift");
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("explicit worksheet comment semantics changed"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet comment semantics changed")
+        );
         assert!(error.message.contains("xl/comments1.xml"));
     }
 
@@ -53809,7 +54002,11 @@ mod tests {
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when comments root child order drifts");
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("explicit worksheet comment semantics changed"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet comment semantics changed")
+        );
         assert!(error.message.contains("xl/comments1.xml"));
     }
 
@@ -53839,7 +54036,11 @@ mod tests {
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when comments extra child drifts");
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("explicit worksheet comment semantics changed"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet comment semantics changed")
+        );
         assert!(error.message.contains("xl/comments1.xml"));
     }
 
@@ -53872,7 +54073,11 @@ mod tests {
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when comment rich-text runs drift");
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("explicit worksheet comment semantics changed"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet comment semantics changed")
+        );
         assert!(error.message.contains("xl/comments1.xml"));
     }
 
@@ -53902,7 +54107,11 @@ mod tests {
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when VML shape child subtree drifts");
         assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("explicit worksheet VML drawing semantics changed"));
+        assert!(
+            error
+                .message
+                .contains("explicit worksheet VML drawing semantics changed")
+        );
         assert!(error.message.contains("xl/drawings/vmlDrawing1.vml"));
     }
 
@@ -54706,7 +54915,9 @@ mod tests {
     fn dirty_save_restores_worksheet_relationships_summary_for_blank_comment_anchor_without_hyperlink_summary_or_legacy_ref_lists()
      {
         let codec = XlsxCodec;
-        let input = workbook_with_blank_comment_anchor_and_relationship_root_attrs_extra_relationship_bytes();
+        let input =
+            workbook_with_blank_comment_anchor_and_relationship_root_attrs_extra_relationship_bytes(
+            );
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
@@ -54769,8 +54980,8 @@ mod tests {
             .expect("saved sheet rels")
             .bytes
             .as_slice();
-        let saved_sheet_rels_xml = String::from_utf8(saved_sheet_rels_bytes.to_vec())
-            .expect("saved sheet rels utf8");
+        let saved_sheet_rels_xml =
+            String::from_utf8(saved_sheet_rels_bytes.to_vec()).expect("saved sheet rels utf8");
         let saved_summary = crate::parse_worksheet_relationships_part_summary(
             saved_sheet_rels_bytes,
             &["xl", "worksheets"],
@@ -55879,7 +56090,8 @@ mod tests {
     fn dirty_save_restores_worksheet_hyperlinks_part_summary_for_blank_external_hyperlink_anchor_without_legacy_ref_lists()
      {
         let codec = XlsxCodec;
-        let input = workbook_with_blank_external_hyperlink_anchor_and_hyperlinks_container_attrs_bytes();
+        let input =
+            workbook_with_blank_external_hyperlink_anchor_and_hyperlinks_container_attrs_bytes();
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
@@ -57230,7 +57442,9 @@ mod tests {
 
     #[test]
     fn dirty_save_preserves_dxf_child_texts() {
-        assert_dirty_save_preserves_styles_xml_for_mutated_input(workbook_with_dxf_child_text_bytes());
+        assert_dirty_save_preserves_styles_xml_for_mutated_input(
+            workbook_with_dxf_child_text_bytes(),
+        );
     }
 
     #[test]
@@ -72926,8 +73140,9 @@ mod tests {
 
     #[test]
     fn dirty_save_preserves_theme_color_scheme_child_attr_maps() {
-        let mut package = OpcPackage::from_bytes(&workbook_with_theme_color_scheme_children_bytes())
-            .expect("base workbook package");
+        let mut package =
+            OpcPackage::from_bytes(&workbook_with_theme_color_scheme_children_bytes())
+                .expect("base workbook package");
         let theme_xml = String::from_utf8(
             package
                 .part("xl/theme/theme1.xml")
@@ -76342,7 +76557,10 @@ mod tests {
                 .clone(),
         )
         .expect("styles xml utf8")
-        .replace(">alpha<![CDATA[beta]]></alignment>", ">changed<![CDATA[beta]]></alignment>");
+        .replace(
+            ">alpha<![CDATA[beta]]></alignment>",
+            ">changed<![CDATA[beta]]></alignment>",
+        );
         loaded
             .package
             .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
@@ -93694,8 +93912,8 @@ mod tests {
     }
 
     #[test]
-    fn save_rejects_theme_part_when_extra_color_scheme_list_nested_child_container_cdata_text_drifts(
-    ) {
+    fn save_rejects_theme_part_when_extra_color_scheme_list_nested_child_container_cdata_text_drifts()
+     {
         let codec = XlsxCodec;
         let input = workbook_with_theme_extra_color_scheme_list_nested_child_container_text_bytes();
         let mut loaded = codec
@@ -93987,8 +94205,7 @@ mod tests {
     }
 
     #[test]
-    fn save_rejects_theme_part_when_extra_color_scheme_list_accent1_srgb_grandchild_text_drifts()
-    {
+    fn save_rejects_theme_part_when_extra_color_scheme_list_accent1_srgb_grandchild_text_drifts() {
         let codec = XlsxCodec;
         let input = workbook_with_theme_extra_color_scheme_list_nested_child_text_bytes();
         let mut loaded = codec
@@ -94032,8 +94249,7 @@ mod tests {
     }
 
     #[test]
-    fn save_rejects_theme_part_when_extra_color_scheme_list_sysclr_grandchild_cdata_text_drifts()
-    {
+    fn save_rejects_theme_part_when_extra_color_scheme_list_sysclr_grandchild_cdata_text_drifts() {
         let codec = XlsxCodec;
         let input = workbook_with_theme_extra_color_scheme_list_nested_child_text_bytes();
         let mut loaded = codec
@@ -94115,8 +94331,8 @@ mod tests {
     }
 
     #[test]
-    fn save_rejects_theme_part_when_extra_color_scheme_list_accent1_srgb_grandchild_cdata_text_drifts(
-    ) {
+    fn save_rejects_theme_part_when_extra_color_scheme_list_accent1_srgb_grandchild_cdata_text_drifts()
+     {
         let codec = XlsxCodec;
         let input = workbook_with_theme_extra_color_scheme_list_nested_child_text_bytes();
         let mut loaded = codec
@@ -99079,7 +99295,10 @@ mod tests {
                 .clone(),
         )
         .expect("styles xml utf8")
-        .replace(">alpha<![CDATA[beta]]></extLst>", ">changed<![CDATA[beta]]></extLst>");
+        .replace(
+            ">alpha<![CDATA[beta]]></extLst>",
+            ">changed<![CDATA[beta]]></extLst>",
+        );
         loaded
             .package
             .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
@@ -104370,7 +104589,10 @@ mod tests {
                 .clone(),
         )
         .expect("styles xml utf8")
-        .replace(r#"<leaf custom="x">gamma</leaf>"#, r#"<leaf custom="x">changed</leaf>"#);
+        .replace(
+            r#"<leaf custom="x">gamma</leaf>"#,
+            r#"<leaf custom="x">changed</leaf>"#,
+        );
         loaded
             .package
             .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
@@ -105686,8 +105908,9 @@ mod tests {
     }
 
     fn workbook_with_theme_object_defaults_child_text_bytes() -> Vec<u8> {
-        let mut package = OpcPackage::from_bytes(&workbook_with_theme_object_defaults_child_bytes())
-            .expect("base workbook package");
+        let mut package =
+            OpcPackage::from_bytes(&workbook_with_theme_object_defaults_child_bytes())
+                .expect("base workbook package");
         let theme_xml = String::from_utf8(
             package
                 .part("xl/theme/theme1.xml")
@@ -108864,8 +109087,9 @@ mod tests {
     }
 
     fn workbook_with_vml_shape_attrs_bytes() -> Vec<u8> {
-        let mut package = OpcPackage::from_bytes(&workbook_with_hyperlink_comment_and_calc_chain_bytes())
-            .expect("base workbook package");
+        let mut package =
+            OpcPackage::from_bytes(&workbook_with_hyperlink_comment_and_calc_chain_bytes())
+                .expect("base workbook package");
         package
             .replace_part_bytes(
                 "xl/drawings/vmlDrawing1.vml",
@@ -109391,10 +109615,7 @@ mod tests {
 </Relationships>"#
         );
         package
-            .replace_part_bytes(
-                "xl/worksheets/_rels/sheet1.xml.rels",
-                rels_xml.into_bytes(),
-            )
+            .replace_part_bytes("xl/worksheets/_rels/sheet1.xml.rels", rels_xml.into_bytes())
             .expect("replace sheet rels");
         package.to_bytes().expect("package bytes")
     }
@@ -109605,8 +109826,9 @@ mod tests {
 
     fn workbook_with_blank_external_hyperlink_anchor_and_hyperlinks_container_attrs_bytes()
     -> Vec<u8> {
-        let mut package = OpcPackage::from_bytes(&workbook_with_absolute_ref_hyperlink_anchor_bytes())
-            .expect("base workbook package");
+        let mut package =
+            OpcPackage::from_bytes(&workbook_with_absolute_ref_hyperlink_anchor_bytes())
+                .expect("base workbook package");
         package
             .replace_part_bytes(
                 "xl/worksheets/sheet1.xml",
