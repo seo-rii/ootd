@@ -8573,6 +8573,63 @@ impl FormulaEvalError {
     }
 }
 
+fn formula_eval_error_from_cell_error(error: CellError) -> FormulaEvalError {
+    match error {
+        CellError::Div0 => FormulaEvalError::Div0,
+        CellError::Ref => FormulaEvalError::Ref,
+        CellError::Name => FormulaEvalError::Name,
+        CellError::Calc => FormulaEvalError::Calc,
+        _ => FormulaEvalError::Value,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormulaAggregateFunction {
+    Sum,
+    Min,
+    Max,
+    Average,
+    Count,
+}
+
+impl FormulaAggregateFunction {
+    fn from_name(name: &str) -> Option<Self> {
+        if name.eq_ignore_ascii_case("SUM") {
+            Some(Self::Sum)
+        } else if name.eq_ignore_ascii_case("MIN") {
+            Some(Self::Min)
+        } else if name.eq_ignore_ascii_case("MAX") {
+            Some(Self::Max)
+        } else if name.eq_ignore_ascii_case("AVERAGE") {
+            Some(Self::Average)
+        } else if name.eq_ignore_ascii_case("COUNT") {
+            Some(Self::Count)
+        } else {
+            None
+        }
+    }
+
+    fn evaluate(self, values: &[f64]) -> Result<f64, FormulaEvalError> {
+        match self {
+            FormulaAggregateFunction::Sum => Ok(values.iter().sum()),
+            FormulaAggregateFunction::Min => {
+                Ok(values.iter().copied().reduce(f64::min).unwrap_or(0.0))
+            }
+            FormulaAggregateFunction::Max => {
+                Ok(values.iter().copied().reduce(f64::max).unwrap_or(0.0))
+            }
+            FormulaAggregateFunction::Average => {
+                if values.is_empty() {
+                    Err(FormulaEvalError::Div0)
+                } else {
+                    Ok(values.iter().sum::<f64>() / values.len() as f64)
+                }
+            }
+            FormulaAggregateFunction::Count => Ok(values.len() as f64),
+        }
+    }
+}
+
 struct FormulaEvaluator<'a> {
     state: &'a WorkbookState,
     visiting: BTreeSet<(SheetId, u32, u32)>,
@@ -8641,13 +8698,7 @@ impl<'a> FormulaEvaluator<'a> {
             Ok(CellValue::Number(number)) => Ok(number),
             Ok(CellValue::Bool(value)) => Ok(if value { 1.0 } else { 0.0 }),
             Ok(CellValue::Text(_)) => Err(FormulaEvalError::Value),
-            Ok(CellValue::Error(error)) => Err(match error {
-                CellError::Div0 => FormulaEvalError::Div0,
-                CellError::Ref => FormulaEvalError::Ref,
-                CellError::Name => FormulaEvalError::Name,
-                CellError::Calc => FormulaEvalError::Calc,
-                _ => FormulaEvalError::Value,
-            }),
+            Ok(CellValue::Error(error)) => Err(formula_eval_error_from_cell_error(error)),
             Err(FormulaEvalError::Unsupported) => self
                 .state
                 .worksheet_data
@@ -8658,18 +8709,18 @@ impl<'a> FormulaEvaluator<'a> {
                     CellValue::Number(number) => Ok(*number),
                     CellValue::Bool(value) => Ok(if *value { 1.0 } else { 0.0 }),
                     CellValue::Text(_) => Err(FormulaEvalError::Value),
-                    CellValue::Error(CellError::Div0) => Err(FormulaEvalError::Div0),
-                    CellValue::Error(CellError::Ref) => Err(FormulaEvalError::Ref),
-                    CellValue::Error(CellError::Name) => Err(FormulaEvalError::Name),
-                    CellValue::Error(CellError::Calc) => Err(FormulaEvalError::Calc),
-                    CellValue::Error(_) => Err(FormulaEvalError::Value),
+                    CellValue::Error(error) => Err(formula_eval_error_from_cell_error(*error)),
                 })
                 .unwrap_or(Ok(0.0)),
             Err(error) => Err(error),
         }
     }
 
-    fn sum_rect(&mut self, sheet_id: SheetId, rect: Rect) -> Result<f64, FormulaEvalError> {
+    fn numeric_values_in_rect(
+        &mut self,
+        sheet_id: SheetId,
+        rect: Rect,
+    ) -> Result<Vec<f64>, FormulaEvalError> {
         let Some(worksheet) = self.state.worksheet_data.get(&sheet_id) else {
             return Err(FormulaEvalError::Ref);
         };
@@ -8682,11 +8733,34 @@ impl<'a> FormulaEvaluator<'a> {
                     && (rect.col_first..=rect.col_last).contains(col)
             })
             .collect::<Vec<_>>();
-        let mut total = 0.0;
+        let mut values = Vec::new();
         for (row, col) in keys {
-            total += self.numeric_cell_value(sheet_id, row, col)?;
+            match self.evaluate_cell(sheet_id, row, col) {
+                Ok(CellValue::Number(number)) => values.push(number),
+                Ok(CellValue::Error(error)) => {
+                    return Err(formula_eval_error_from_cell_error(error));
+                }
+                Ok(CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_)) => {}
+                Err(FormulaEvalError::Unsupported) => {
+                    if let Some(cell) = self
+                        .state
+                        .worksheet_data
+                        .get(&sheet_id)
+                        .and_then(|worksheet| worksheet.cells.get(&(row, col)))
+                    {
+                        match cell.value {
+                            CellValue::Number(number) => values.push(number),
+                            CellValue::Error(error) => {
+                                return Err(formula_eval_error_from_cell_error(error));
+                            }
+                            CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {}
+                        }
+                    }
+                }
+                Err(error) => return Err(error),
+            }
         }
-        Ok(total)
+        Ok(values)
     }
 }
 
@@ -8790,38 +8864,37 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
     }
 
     fn parse_function(&mut self, name: &str) -> Result<f64, FormulaEvalError> {
-        if !name.eq_ignore_ascii_case("SUM") {
-            return Err(FormulaEvalError::Unsupported);
-        }
-        let mut total = 0.0;
+        let function =
+            FormulaAggregateFunction::from_name(name).ok_or(FormulaEvalError::Unsupported)?;
+        let mut values = Vec::new();
         loop {
             self.skip_whitespace();
             if self.consume_char(')') {
-                return Ok(total);
+                return function.evaluate(values.as_slice());
             }
-            total += self.parse_sum_argument()?;
+            values.extend(self.parse_aggregate_argument()?);
             self.skip_whitespace();
             if self.consume_char(',') {
                 continue;
             }
             if self.consume_char(')') {
-                return Ok(total);
+                return function.evaluate(values.as_slice());
             }
             return Err(FormulaEvalError::Unsupported);
         }
     }
 
-    fn parse_sum_argument(&mut self) -> Result<f64, FormulaEvalError> {
+    fn parse_aggregate_argument(&mut self) -> Result<Vec<f64>, FormulaEvalError> {
         let checkpoint = self.index;
         if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
             self.index = next_index;
             self.skip_whitespace();
             if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
-                return self.evaluator.sum_rect(target_sheet_id, rect);
+                return self.evaluator.numeric_values_in_rect(target_sheet_id, rect);
             }
         }
         self.index = checkpoint;
-        self.parse_expression()
+        Ok(vec![self.parse_expression()?])
     }
 
     fn parse_number(&mut self) -> Result<Option<f64>, FormulaEvalError> {
@@ -11232,6 +11305,95 @@ mod tests {
                 .dispatch_get(workbook.0, "Saved", &[])
                 .expect("Workbook.Saved remains dirty after formula edits")
         ));
+    }
+
+    #[test]
+    fn application_calculate_updates_basic_aggregate_functions() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A4".to_string())])
+                .expect("Range(A1:A4)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B4".to_string())])
+                .expect("Range(B1:B4)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        1,
+                        vec![
+                            OmValue::Number(2.0),
+                            OmValue::Number(8.0),
+                            OmValue::Number(5.0),
+                            OmValue::Text("ignored".to_string()),
+                        ],
+                    )
+                    .expect("source values"),
+                ),
+                &[],
+            )
+            .expect("set aggregate source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        1,
+                        vec![
+                            OmValue::Text("=MIN(A1:A4)".to_string()),
+                            OmValue::Text("=MAX(A1:A4)".to_string()),
+                            OmValue::Text("=AVERAGE(A1:A4)".to_string()),
+                            OmValue::Text("=COUNT(A1:A4)".to_string()),
+                        ],
+                    )
+                    .expect("aggregate formulas"),
+                ),
+                &[],
+            )
+            .expect("set aggregate formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("aggregate values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected aggregate value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(2.0),
+                OmValue::Number(8.0),
+                OmValue::Number(5.0),
+                OmValue::Number(3.0),
+            ]
+        );
     }
 
     #[test]
