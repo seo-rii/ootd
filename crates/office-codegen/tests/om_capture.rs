@@ -76,8 +76,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 84);
-    assert_eq!(summary.stub_member_count, 84);
+    assert_eq!(summary.member_count, 85);
+    assert_eq!(summary.stub_member_count, 85);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1275,7 +1275,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .expect("Range");
 
     assert_eq!(application.member_count, 20);
-    assert_eq!(workbook.member_count, 13);
+    assert_eq!(workbook.member_count, 14);
     assert_eq!(worksheet.member_count, 16);
     assert_eq!(range.member_count, 24);
     assert_eq!(
@@ -1798,8 +1798,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 84);
-    assert_eq!(coverage.support_counts.stub, 84);
+    assert_eq!(coverage.member_count, 85);
+    assert_eq!(coverage.support_counts.stub, 85);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -1851,13 +1851,14 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(workbook_coverage.member_count, 13);
-    assert_eq!(workbook_coverage.support_counts.stub, 13);
+    assert_eq!(workbook_coverage.member_count, 14);
+    assert_eq!(workbook_coverage.support_counts.stub, 14);
     assert_eq!(
         workbook_coverage.stub_members,
         vec![
             "Worksheets".to_string(),
             "ActiveSheet".to_string(),
+            "Activate".to_string(),
             "Name".to_string(),
             "Parent".to_string(),
             "Application".to_string(),

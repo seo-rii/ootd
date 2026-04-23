@@ -885,6 +885,22 @@
           }
         },
         {
+          "name": "Activate",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "Activate"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "Name",
           "memberKind": "property",
           "returnType": {

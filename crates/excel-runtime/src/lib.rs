@@ -1837,6 +1837,16 @@ impl ExcelRuntime {
         self.focus_member_supported("Workbook", member, false)?;
 
         match member {
+            "Activate" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Workbook.Activate does not accept arguments",
+                    ));
+                }
+                self.active_workbook = Some(workbook);
+                self.selection = Some(self.default_selection(workbook)?);
+                Ok(OmValue::Empty)
+            }
             "Save" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(
@@ -6693,6 +6703,40 @@ mod tests {
                     .expect("ActiveCell after Activate address")
             ),
             "$A$1"
+        );
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(workbook2.0, "Activate", &[])
+                .expect("Workbook.Activate"),
+            OmValue::Empty
+        ));
+        assert_eq!(
+            expect_object_handle(
+                runtime
+                    .dispatch_get(application, "ActiveWorkbook", &[])
+                    .expect("ActiveWorkbook after Workbook.Activate")
+            ),
+            workbook2.0
+        );
+        let active_sheet_after_workbook_activate = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after Workbook.Activate"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet_after_workbook_activate, "Name", &[])
+                    .expect("ActiveSheet after Workbook.Activate name")
+            ),
+            "SecondSheet"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(workbook2.0, "Activate", &[OmValue::Bool(true)])
+                .expect_err("Workbook.Activate args should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
         );
         assert_eq!(
             runtime
