@@ -3592,6 +3592,38 @@
           }
         },
         {
+          "name": "FillUp",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Range",
+                  "sourceMember": "FillUp"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "FillLeft",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Range",
+                  "sourceMember": "FillLeft"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "Select",
           "memberKind": "method",
           "support": "stub",
