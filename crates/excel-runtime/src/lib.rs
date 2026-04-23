@@ -8648,9 +8648,13 @@ enum FormulaScalarFunction {
     And,
     If,
     Int,
+    Mod,
     Not,
     Or,
+    RoundDown,
     Round,
+    RoundUp,
+    Sign,
     Power,
     Sqrt,
 }
@@ -8665,12 +8669,20 @@ impl FormulaScalarFunction {
             Some(Self::If)
         } else if name.eq_ignore_ascii_case("INT") {
             Some(Self::Int)
+        } else if name.eq_ignore_ascii_case("MOD") {
+            Some(Self::Mod)
         } else if name.eq_ignore_ascii_case("NOT") {
             Some(Self::Not)
         } else if name.eq_ignore_ascii_case("OR") {
             Some(Self::Or)
+        } else if name.eq_ignore_ascii_case("ROUNDDOWN") {
+            Some(Self::RoundDown)
         } else if name.eq_ignore_ascii_case("ROUND") {
             Some(Self::Round)
+        } else if name.eq_ignore_ascii_case("ROUNDUP") {
+            Some(Self::RoundUp)
+        } else if name.eq_ignore_ascii_case("SIGN") {
+            Some(Self::Sign)
         } else if name.eq_ignore_ascii_case("POWER") {
             Some(Self::Power)
         } else if name.eq_ignore_ascii_case("SQRT") {
@@ -8714,6 +8726,15 @@ impl FormulaScalarFunction {
                 };
                 Ok(value.floor())
             }
+            FormulaScalarFunction::Mod => {
+                let [number, divisor] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if *divisor == 0.0 {
+                    return Err(FormulaEvalError::Div0);
+                }
+                Ok(number - divisor * (number / divisor).floor())
+            }
             FormulaScalarFunction::Not => {
                 let [value] = args else {
                     return Err(FormulaEvalError::Value);
@@ -8734,17 +8755,34 @@ impl FormulaScalarFunction {
                 let [value, digits] = args else {
                     return Err(FormulaEvalError::Value);
                 };
-                if !digits.is_finite() || digits.fract() != 0.0 {
-                    return Err(FormulaEvalError::Value);
-                }
-                if *digits < i32::MIN as f64 || *digits > i32::MAX as f64 {
-                    return Err(FormulaEvalError::Num);
-                }
-                let factor = 10_f64.powi(*digits as i32);
-                if !factor.is_finite() || factor == 0.0 {
-                    return Err(FormulaEvalError::Num);
-                }
+                let factor = formula_round_factor(*digits)?;
                 Ok(round_half_away_from_zero(value * factor) / factor)
+            }
+            FormulaScalarFunction::RoundDown => {
+                let [value, digits] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                let factor = formula_round_factor(*digits)?;
+                Ok(round_toward_zero(value * factor) / factor)
+            }
+            FormulaScalarFunction::RoundUp => {
+                let [value, digits] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                let factor = formula_round_factor(*digits)?;
+                Ok(round_away_from_zero(value * factor) / factor)
+            }
+            FormulaScalarFunction::Sign => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                Ok(if *value > 0.0 {
+                    1.0
+                } else if *value < 0.0 {
+                    -1.0
+                } else {
+                    0.0
+                })
             }
             FormulaScalarFunction::Power => {
                 let [base, exponent] = args else {
@@ -8776,6 +8814,36 @@ fn round_half_away_from_zero(value: f64) -> f64 {
     } else {
         (value + 0.5).floor()
     }
+}
+
+fn round_away_from_zero(value: f64) -> f64 {
+    if value.is_sign_negative() {
+        value.floor()
+    } else {
+        value.ceil()
+    }
+}
+
+fn round_toward_zero(value: f64) -> f64 {
+    if value.is_sign_negative() {
+        value.ceil()
+    } else {
+        value.floor()
+    }
+}
+
+fn formula_round_factor(digits: f64) -> Result<f64, FormulaEvalError> {
+    if !digits.is_finite() || digits.fract() != 0.0 {
+        return Err(FormulaEvalError::Value);
+    }
+    if digits < i32::MIN as f64 || digits > i32::MAX as f64 {
+        return Err(FormulaEvalError::Num);
+    }
+    let factor = 10_f64.powi(digits as i32);
+    if !factor.is_finite() || factor == 0.0 {
+        return Err(FormulaEvalError::Num);
+    }
+    Ok(factor)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -11751,6 +11819,76 @@ mod tests {
                 OmValue::Number(8.0),
                 OmValue::Number(9.0),
                 OmValue::Error(CellError::Num),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_additional_math_helper_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A7".to_string())])
+                .expect("Range(A1:A7)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        7,
+                        1,
+                        vec![
+                            OmValue::Text("=MOD(10, 3)".to_string()),
+                            OmValue::Text("=MOD(-3, 2)".to_string()),
+                            OmValue::Text("=SIGN(-9)".to_string()),
+                            OmValue::Text("=ROUNDUP(1.21, 1)".to_string()),
+                            OmValue::Text("=ROUNDUP(-1.21, 1)".to_string()),
+                            OmValue::Text("=ROUNDDOWN(-1.29, 1)".to_string()),
+                            OmValue::Text("=ROUNDUP(123, -1)".to_string()),
+                        ],
+                    )
+                    .expect("math helper formulas"),
+                ),
+                &[],
+            )
+            .expect("set math helper formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("math helper values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected math helper value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(-1.0),
+                OmValue::Number(1.3),
+                OmValue::Number(-1.3),
+                OmValue::Number(-1.2),
+                OmValue::Number(130.0),
             ]
         );
     }
