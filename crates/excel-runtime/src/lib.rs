@@ -4020,11 +4020,21 @@ impl ExcelRuntime {
                     .map(|value| coerce_optional_bool_arg(value, false, "Range.Address external"))
                     .transpose()?
                     .unwrap_or(false);
-                if external {
-                    return Err(OmError::unsupported(
-                        "Range.Address External:=True is not implemented",
-                    ));
-                }
+                let external_prefix = if external {
+                    let workbook_name = self.workbook_model(workbook)?.display_name.clone();
+                    let worksheet_name = self
+                        .worksheets(workbook)?
+                        .iter()
+                        .find(|worksheet| worksheet.id == sheet_id)
+                        .map(|worksheet| worksheet.name.clone())
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?;
+                    Some(format_external_address_qualifier(
+                        &workbook_name,
+                        &worksheet_name,
+                    ))
+                } else {
+                    None
+                };
                 let relative_to = match args.get(4) {
                     None => None,
                     Some(value) if om_value_is_omitted(value) => None,
@@ -4045,7 +4055,7 @@ impl ExcelRuntime {
                         ));
                     }
                 };
-                let address = match reference_style {
+                let mut address = match reference_style {
                     RangeAddressReferenceStyle::A1 => {
                         format_rect_address_with_flags(rect, row_absolute, column_absolute)
                     }
@@ -4061,6 +4071,9 @@ impl ExcelRuntime {
                         )
                     }
                 };
+                if let Some(prefix) = external_prefix {
+                    address.insert_str(0, prefix.as_str());
+                }
                 Ok(OmValue::Text(address))
             }
             "Parent" => Ok(OmValue::Object(
@@ -8283,6 +8296,24 @@ fn format_cell_address(row: u32, col: u32, row_absolute: bool, column_absolute: 
     }
     address.push_str(&row.to_string());
     address
+}
+
+fn format_external_address_qualifier(workbook_name: &str, worksheet_name: &str) -> String {
+    let qualifier = format!("[{workbook_name}]{worksheet_name}");
+    if excel_reference_qualifier_needs_quotes(workbook_name)
+        || excel_reference_qualifier_needs_quotes(worksheet_name)
+    {
+        format!("'{}'!", qualifier.replace('\'', "''"))
+    } else {
+        format!("{qualifier}!")
+    }
+}
+
+fn excel_reference_qualifier_needs_quotes(value: &str) -> bool {
+    value.is_empty()
+        || value
+            .chars()
+            .any(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.')
 }
 
 fn convert_formula_a1_to_r1c1(formula: &str, base_row: u32, base_col: u32) -> String {
@@ -13397,20 +13428,64 @@ mod tests {
             OmErrorCode::InvalidArgument
         );
         assert_eq!(
-            runtime
-                .dispatch_get(
-                    range,
-                    "Address",
-                    &[
-                        OmValue::Missing,
-                        OmValue::Missing,
-                        OmValue::Number(XL_A1 as f64),
-                        OmValue::Bool(true)
-                    ],
-                )
-                .expect_err("Address should reject External true until implemented")
-                .code,
-            OmErrorCode::Unsupported
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        range,
+                        "Address",
+                        &[
+                            OmValue::Missing,
+                            OmValue::Missing,
+                            OmValue::Number(XL_A1 as f64),
+                            OmValue::Bool(true)
+                        ],
+                    )
+                    .expect("Address external A1")
+            ),
+            "[Workbook]Sheet1!$A$1:$B$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        range,
+                        "Address",
+                        &[
+                            OmValue::Bool(false),
+                            OmValue::Bool(false),
+                            OmValue::Number(XL_R1C1 as f64),
+                            OmValue::Bool(true),
+                            OmValue::Object(relative_to)
+                        ],
+                    )
+                    .expect("Address external R1C1")
+            ),
+            "[Workbook]Sheet1!R[-2]C[-2]:R[-1]C[-1]"
+        );
+        runtime
+            .dispatch_set(
+                active_sheet,
+                "Name",
+                OmValue::Text("Data 1".to_string()),
+                &[],
+            )
+            .expect("rename sheet for quoted external address");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        range,
+                        "Address",
+                        &[
+                            OmValue::Missing,
+                            OmValue::Missing,
+                            OmValue::Number(XL_A1 as f64),
+                            OmValue::Bool(true)
+                        ],
+                    )
+                    .expect("Address external quoted sheet")
+            ),
+            "'[Workbook]Data 1'!$A$1:$B$2"
         );
         assert_eq!(
             runtime
