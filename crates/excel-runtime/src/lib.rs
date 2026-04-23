@@ -4692,6 +4692,33 @@ impl ExcelRuntime {
                 }
                 Ok(OmValue::Empty)
             }
+            "Evaluate" => {
+                let [OmValue::Text(expression)] = args else {
+                    if args.len() == 1 {
+                        return Err(OmError::type_mismatch(
+                            "Application.Evaluate expects a formula text argument",
+                        ));
+                    }
+                    return Err(OmError::invalid_argument(
+                        "Application.Evaluate expects one formula text argument",
+                    ));
+                };
+                let Some(active_workbook) = self.active_workbook else {
+                    return Err(OmError::invalid_state("application has no active workbook"));
+                };
+                let sheet_id = self.active_sheet_id(active_workbook)?;
+                let state = &self.runtime_workbook(active_workbook)?.loaded.state;
+                let mut evaluator = FormulaEvaluator::new(state);
+                match evaluator.evaluate_formula_text(sheet_id, expression) {
+                    Ok(value) => Ok(OmValue::from(value)),
+                    Err(error) => match error.into_cell_value() {
+                        Some(value) => Ok(OmValue::from(value)),
+                        None => Err(OmError::unsupported(
+                            "Application.Evaluate formula is not supported",
+                        )),
+                    },
+                }
+            }
             "Goto" => {
                 if args.len() > 2 {
                     return Err(OmError::invalid_argument(
@@ -8771,11 +8798,19 @@ impl<'a> FormulaEvaluator<'a> {
         } else {
             formula.text.clone()
         };
-        let result = FormulaParser::new(&formula_text, self, sheet_id)
-            .parse_formula()
-            .map(CellValue::Number);
+        let result = self.evaluate_formula_text(sheet_id, &formula_text);
         self.visiting.remove(&(sheet_id, row, col));
         result
+    }
+
+    fn evaluate_formula_text(
+        &mut self,
+        sheet_id: SheetId,
+        formula_text: &str,
+    ) -> Result<CellValue, FormulaEvalError> {
+        FormulaParser::new(formula_text, self, sheet_id)
+            .parse_formula()
+            .map(CellValue::Number)
     }
 
     fn numeric_cell_value(
@@ -11577,6 +11612,79 @@ mod tests {
                 OmValue::Number(9.0),
                 OmValue::Error(CellError::Num),
             ]
+        );
+    }
+
+    #[test]
+    fn application_evaluate_calculates_expression_against_active_sheet() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A2".to_string())])
+                .expect("Range(A1:A2)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(2, 1, vec![OmValue::Number(4.0), OmValue::Number(6.0)])
+                        .expect("source values"),
+                ),
+                &[],
+            )
+            .expect("set evaluate source values");
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        application,
+                        "Evaluate",
+                        &[OmValue::Text("=SUM(A1:A2)+POWER(2, 3)".to_string())],
+                    )
+                    .expect("Application.Evaluate"),
+            ),
+            18.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    application,
+                    "Evaluate",
+                    &[OmValue::Text("SQRT(-1)".to_string())],
+                )
+                .expect("Application.Evaluate error value"),
+            OmValue::Error(CellError::Num)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(application, "Evaluate", &[])
+                .expect_err("Application.Evaluate should require one argument")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(application, "Evaluate", &[OmValue::Number(1.0)])
+                .expect_err("Application.Evaluate should reject non-text arguments")
+                .code,
+            OmErrorCode::TypeMismatch
         );
     }
 
