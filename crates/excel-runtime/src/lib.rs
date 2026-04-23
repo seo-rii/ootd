@@ -18,6 +18,8 @@ use std::path::{Path, PathBuf};
 
 const ROOT_APPLICATION_HANDLE_VALUE: u64 = 0;
 const FIRST_DYNAMIC_OBJECT_HANDLE_VALUE: u64 = 1_000_000;
+const APPLICATION_NAME: &str = "Microsoft Excel";
+const APPLICATION_VERSION: &str = "16.0";
 const EXCEL_MAX_ROW_INDEX: u32 = 1_048_576;
 const EXCEL_MAX_COLUMN_INDEX: u32 = 16_384;
 const XL_CALCULATION_AUTOMATIC: i32 = -4105;
@@ -1040,6 +1042,22 @@ impl ExcelRuntime {
                     self.register_range_handle(active_workbook, selection.sheet_id, selection.rect)
                         .0,
                 ))
+            }
+            "Name" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.Name does not accept index arguments",
+                    ));
+                }
+                Ok(OmValue::Text(APPLICATION_NAME.to_string()))
+            }
+            "Version" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.Version does not accept index arguments",
+                    ));
+                }
+                Ok(OmValue::Text(APPLICATION_VERSION.to_string()))
             }
             "DisplayAlerts" => {
                 if !args.is_empty() {
@@ -5348,8 +5366,8 @@ fn column_to_letters(mut col: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ExcelRuntime, XL_CALCULATION_AUTOMATIC, XL_CALCULATION_MANUAL, blank_workbook_bytes,
-        supports_format,
+        APPLICATION_NAME, APPLICATION_VERSION, ExcelRuntime, XL_CALCULATION_AUTOMATIC,
+        XL_CALCULATION_MANUAL, blank_workbook_bytes, supports_format,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -6236,6 +6254,49 @@ mod tests {
                 .expect_err("Application.DisplayAlerts set should reject index args")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn application_identity_properties_return_pinned_excel_identity() {
+        let mut runtime = ExcelRuntime::new();
+        let application = runtime.root_application();
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(application, "Name", &[])
+                    .expect("Application.Name")
+            ),
+            APPLICATION_NAME
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(application, "Version", &[])
+                    .expect("Application.Version")
+            ),
+            APPLICATION_VERSION
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "Name", &[OmValue::Number(1.0)])
+                .expect_err("Application.Name should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    application,
+                    "Version",
+                    OmValue::Text("17.0".to_string()),
+                    &[],
+                )
+                .expect_err("Application.Version should be read-only")
+                .code,
+            OmErrorCode::Unsupported
         );
     }
 
