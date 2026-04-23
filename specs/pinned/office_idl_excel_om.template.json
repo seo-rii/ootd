@@ -869,6 +869,32 @@
           }
         },
         {
+          "name": "Application",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          }
+        },
+        {
           "name": "Path",
           "memberKind": "property",
           "returnType": {
@@ -1267,6 +1293,32 @@
                 "kind": "interface",
                 "name": "Workbook",
                 "aliasOf": "Excel.Workbook"
+              }
+            }
+          }
+        },
+        {
+          "name": "Application",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
               }
             }
           }
@@ -1816,6 +1868,32 @@
                 "kind": "interface",
                 "name": "Worksheet",
                 "aliasOf": "Excel.Worksheet"
+              }
+            }
+          }
+        },
+        {
+          "name": "Application",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
               }
             }
           }

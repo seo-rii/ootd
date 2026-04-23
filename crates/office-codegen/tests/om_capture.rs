@@ -76,8 +76,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 73);
-    assert_eq!(summary.stub_member_count, 73);
+    assert_eq!(summary.member_count, 76);
+    assert_eq!(summary.stub_member_count, 76);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1275,9 +1275,9 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .expect("Range");
 
     assert_eq!(application.member_count, 20);
-    assert_eq!(workbook.member_count, 10);
-    assert_eq!(worksheet.member_count, 13);
-    assert_eq!(range.member_count, 22);
+    assert_eq!(workbook.member_count, 11);
+    assert_eq!(worksheet.member_count, 14);
+    assert_eq!(range.member_count, 23);
     assert_eq!(
         application.default_coclasses,
         vec!["Application".to_string()]
@@ -1798,8 +1798,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 73);
-    assert_eq!(coverage.support_counts.stub, 73);
+    assert_eq!(coverage.member_count, 76);
+    assert_eq!(coverage.support_counts.stub, 76);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -1851,14 +1851,15 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(workbook_coverage.member_count, 10);
-    assert_eq!(workbook_coverage.support_counts.stub, 10);
+    assert_eq!(workbook_coverage.member_count, 11);
+    assert_eq!(workbook_coverage.support_counts.stub, 11);
     assert_eq!(
         workbook_coverage.stub_members,
         vec![
             "Worksheets".to_string(),
             "Name".to_string(),
             "Parent".to_string(),
+            "Application".to_string(),
             "Path".to_string(),
             "FullName".to_string(),
             "ReadOnly".to_string(),
@@ -1869,13 +1870,14 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(worksheet_coverage.member_count, 13);
-    assert_eq!(worksheet_coverage.support_counts.stub, 13);
+    assert_eq!(worksheet_coverage.member_count, 14);
+    assert_eq!(worksheet_coverage.support_counts.stub, 14);
     assert_eq!(
         worksheet_coverage.stub_members,
         vec![
             "Name".to_string(),
             "Parent".to_string(),
+            "Application".to_string(),
             "Index".to_string(),
             "Type".to_string(),
             "Range".to_string(),
@@ -1890,8 +1892,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(range_coverage.member_count, 22);
-    assert_eq!(range_coverage.support_counts.stub, 22);
+    assert_eq!(range_coverage.member_count, 23);
+    assert_eq!(range_coverage.support_counts.stub, 23);
     assert_eq!(
         range_coverage.stub_members,
         vec![
@@ -1902,6 +1904,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "HasFormula".to_string(),
             "Address".to_string(),
             "Parent".to_string(),
+            "Application".to_string(),
             "Row".to_string(),
             "Column".to_string(),
             "Count".to_string(),

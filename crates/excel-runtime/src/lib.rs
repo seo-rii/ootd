@@ -1133,6 +1133,7 @@ impl ExcelRuntime {
                 self.workbook_model(workbook)?.display_name.clone(),
             )),
             "Parent" => Ok(OmValue::Object(self.root_application())),
+            "Application" => Ok(OmValue::Object(self.root_application())),
             "Path" => Ok(OmValue::Text(
                 self.runtime_workbook(workbook)?
                     .source_path
@@ -1264,6 +1265,14 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Object(workbook.0))
+            }
+            "Application" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Worksheet.Application does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Object(self.root_application()))
             }
             "Index" => {
                 if !args.is_empty() {
@@ -1635,6 +1644,7 @@ impl ExcelRuntime {
             "Parent" => Ok(OmValue::Object(
                 self.register_worksheet_handle(workbook, sheet_id).0,
             )),
+            "Application" => Ok(OmValue::Object(self.root_application())),
             "Row" => Ok(OmValue::Number(rect.row_first as f64)),
             "Column" => Ok(OmValue::Number(rect.col_first as f64)),
             "Rows" => {
@@ -13688,10 +13698,26 @@ mod tests {
         assert_eq!(
             expect_object_handle(
                 runtime
+                    .dispatch_get(workbook.0, "Application", &[])
+                    .expect("Workbook.Application")
+            ),
+            application
+        );
+        assert_eq!(
+            expect_object_handle(
+                runtime
                     .dispatch_get(active_sheet, "Parent", &[])
                     .expect("Worksheet.Parent")
             ),
             workbook.0
+        );
+        assert_eq!(
+            expect_object_handle(
+                runtime
+                    .dispatch_get(active_sheet, "Application", &[])
+                    .expect("Worksheet.Application")
+            ),
+            application
         );
         let range_parent = expect_object_handle(
             runtime
@@ -13717,6 +13743,14 @@ mod tests {
                     .expect("Range.Parent.Parent")
             ),
             workbook.0
+        );
+        assert_eq!(
+            expect_object_handle(
+                runtime
+                    .dispatch_get(range, "Application", &[])
+                    .expect("Range.Application")
+            ),
+            application
         );
     }
 
