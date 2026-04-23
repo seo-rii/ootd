@@ -1118,6 +1118,22 @@
           }
         },
         {
+          "name": "CalculateFull",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Application",
+                  "sourceMember": "CalculateFull"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "CalculateFullRebuild",
           "memberKind": "method",
           "support": "stub",
