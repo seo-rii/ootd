@@ -671,9 +671,9 @@ impl ExcelRuntime {
                             }
                         };
                         let translate_axis =
-                            |value: u32, offset: i32, label: &str| -> OmResult<u32> {
+                            |value: u32, offset: i32, max: u32, label: &str| -> OmResult<u32> {
                                 let translated = i64::from(value) + i64::from(offset);
-                                if !(1..=i64::from(u32::MAX)).contains(&translated) {
+                                if !(1..=i64::from(max)).contains(&translated) {
                                     return Err(OmError::invalid_argument(format!(
                                         "{label} moves the range outside worksheet bounds"
                                     )));
@@ -700,21 +700,25 @@ impl ExcelRuntime {
                             row_first: translate_axis(
                                 rect.row_first,
                                 row_offset,
+                                EXCEL_MAX_ROW_INDEX,
                                 "Range.Offset row offset",
                             )?,
                             row_last: translate_axis(
                                 rect.row_last,
                                 row_offset,
+                                EXCEL_MAX_ROW_INDEX,
                                 "Range.Offset row offset",
                             )?,
                             col_first: translate_axis(
                                 rect.col_first,
                                 column_offset,
+                                EXCEL_MAX_COLUMN_INDEX,
                                 "Range.Offset column offset",
                             )?,
                             col_last: translate_axis(
                                 rect.col_last,
                                 column_offset,
+                                EXCEL_MAX_COLUMN_INDEX,
                                 "Range.Offset column offset",
                             )?,
                         };
@@ -758,23 +762,33 @@ impl ExcelRuntime {
                                 ));
                             }
                         };
+                        let row_last =
+                            rect.row_first.checked_add(row_size - 1).ok_or_else(|| {
+                                OmError::invalid_argument(
+                                    "Range.Resize row size overflows worksheet bounds",
+                                )
+                            })?;
+                        if row_last > EXCEL_MAX_ROW_INDEX {
+                            return Err(OmError::invalid_argument(
+                                "Range.Resize row size overflows worksheet bounds",
+                            ));
+                        }
+                        let col_last =
+                            rect.col_first.checked_add(column_size - 1).ok_or_else(|| {
+                                OmError::invalid_argument(
+                                    "Range.Resize column size overflows worksheet bounds",
+                                )
+                            })?;
+                        if col_last > EXCEL_MAX_COLUMN_INDEX {
+                            return Err(OmError::invalid_argument(
+                                "Range.Resize column size overflows worksheet bounds",
+                            ));
+                        }
                         let resized_rect = Rect {
                             row_first: rect.row_first,
-                            row_last: rect.row_first.checked_add(row_size - 1).ok_or_else(
-                                || {
-                                    OmError::invalid_argument(
-                                        "Range.Resize row size overflows worksheet bounds",
-                                    )
-                                },
-                            )?,
+                            row_last,
                             col_first: rect.col_first,
-                            col_last: rect.col_first.checked_add(column_size - 1).ok_or_else(
-                                || {
-                                    OmError::invalid_argument(
-                                        "Range.Resize column size overflows worksheet bounds",
-                                    )
-                                },
-                            )?,
+                            col_last,
                         };
                         Ok(OmValue::Object(
                             self.register_projected_range_handle(
@@ -7029,6 +7043,15 @@ mod tests {
                 .dispatch_invoke(rows, "Resize", &[OmValue::Number(3.0)])
                 .expect("Rows.Resize(3)"),
         );
+        let bottom_right = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("XFD1048576".to_string())],
+                )
+                .expect("Range(XFD1048576)"),
+        );
 
         assert_eq!(
             expect_text(
@@ -7119,8 +7142,44 @@ mod tests {
         );
         assert_eq!(
             runtime
+                .dispatch_invoke(bottom_right, "Offset", &[OmValue::Number(1.0)])
+                .expect_err("Range.Offset beyond max row should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    bottom_right,
+                    "Offset",
+                    &[OmValue::Missing, OmValue::Number(1.0)],
+                )
+                .expect_err("Range.Offset beyond max column should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
                 .dispatch_invoke(range, "Resize", &[OmValue::Number(0.0)])
                 .expect_err("Range.Resize(0) should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(bottom_right, "Resize", &[OmValue::Number(2.0)])
+                .expect_err("Range.Resize beyond max row should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    bottom_right,
+                    "Resize",
+                    &[OmValue::Missing, OmValue::Number(2.0)],
+                )
+                .expect_err("Range.Resize beyond max column should be rejected")
                 .code,
             OmErrorCode::InvalidArgument
         );
