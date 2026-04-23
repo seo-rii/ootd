@@ -2292,6 +2292,23 @@ impl ExcelRuntime {
                 ))
             }
             "Item" => self.resolve_workbook_item(args),
+            "Close" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Workbooks.Close does not accept arguments",
+                    ));
+                }
+                let workbook_handles = self
+                    .workbooks
+                    .keys()
+                    .copied()
+                    .map(|id| WorkbookHandle(ObjectHandle(id)))
+                    .collect::<Vec<_>>();
+                for workbook in workbook_handles {
+                    self.close_workbook(workbook)?;
+                }
+                Ok(OmValue::Empty)
+            }
             _ => Err(OmError::unsupported(format!(
                 "Workbooks.{member} is not implemented as a method"
             ))),
@@ -14530,6 +14547,68 @@ mod tests {
                     .expect("Workbooks.Count after close")
             ),
             1.0
+        );
+    }
+
+    #[test]
+    fn workbooks_close_dispatch_closes_all_open_workbooks() {
+        let mut runtime = ExcelRuntime::new();
+        let first = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open first workbook");
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open second workbook");
+        let application = runtime.root_application();
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(workbooks, "Close", &[])
+                .expect("Workbooks.Close"),
+            OmValue::Empty
+        ));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbooks, "Count", &[])
+                    .expect("Workbooks.Count after close")
+            ),
+            0.0
+        );
+        assert!(matches!(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after Workbooks.Close"),
+            OmValue::Empty
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_get(first.0, "Name", &[])
+                .expect_err("closed workbook handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(workbooks, "Close", &[OmValue::Bool(false)])
+                .expect_err("Workbooks.Close should reject arguments")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 

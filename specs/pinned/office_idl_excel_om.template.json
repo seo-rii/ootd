@@ -804,6 +804,22 @@
               }
             }
           }
+        },
+        {
+          "name": "Close",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Workbooks",
+                  "sourceMember": "Close"
+                }
+              ]
+            }
+          }
         }
       ]
     },

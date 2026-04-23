@@ -76,8 +76,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 83);
-    assert_eq!(summary.stub_member_count, 83);
+    assert_eq!(summary.member_count, 84);
+    assert_eq!(summary.stub_member_count, 84);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1798,8 +1798,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 83);
-    assert_eq!(coverage.support_counts.stub, 83);
+    assert_eq!(coverage.member_count, 84);
+    assert_eq!(coverage.support_counts.stub, 84);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
