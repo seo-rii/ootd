@@ -1751,6 +1751,32 @@
           }
         },
         {
+          "name": "CountLarge",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Range",
+                  "sourceMember": "CountLarge"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
           "name": "CurrentRegion",
           "memberKind": "property",
           "returnType": {

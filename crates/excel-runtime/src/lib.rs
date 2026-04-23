@@ -1615,7 +1615,7 @@ impl ExcelRuntime {
                 )
                 .0,
             )),
-            "Count" => Ok(OmValue::Number(match projection {
+            "Count" | "CountLarge" => Ok(OmValue::Number(match projection {
                 RangeProjection::Cells => u64::from(rect.width()) * u64::from(rect.height()),
                 RangeProjection::Rows => u64::from(rect.height()),
                 RangeProjection::Columns => u64::from(rect.width()),
@@ -7847,6 +7847,14 @@ mod tests {
                     .expect("Cells.Rows.Count")
             ),
             1048576.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(full_cells, "CountLarge", &[])
+                    .expect("Cells.CountLarge")
+            ),
+            17179869184.0
         );
         assert_eq!(
             expect_number(
