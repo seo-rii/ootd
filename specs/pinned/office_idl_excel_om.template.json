@@ -1951,6 +1951,32 @@
           }
         },
         {
+          "name": "Worksheet",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Worksheet",
+            "aliasOf": "Excel.Worksheet"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Worksheet"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Worksheet",
+                "aliasOf": "Excel.Worksheet"
+              }
+            }
+          }
+        },
+        {
           "name": "Row",
           "memberKind": "property",
           "returnType": {

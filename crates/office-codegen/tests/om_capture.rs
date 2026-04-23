@@ -76,8 +76,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 1);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 78);
-    assert_eq!(summary.stub_member_count, 78);
+    assert_eq!(summary.member_count, 79);
+    assert_eq!(summary.stub_member_count, 79);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1277,7 +1277,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(application.member_count, 20);
     assert_eq!(workbook.member_count, 11);
     assert_eq!(worksheet.member_count, 14);
-    assert_eq!(range.member_count, 23);
+    assert_eq!(range.member_count, 24);
     assert_eq!(
         application.default_coclasses,
         vec!["Application".to_string()]
@@ -1798,8 +1798,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 78);
-    assert_eq!(coverage.support_counts.stub, 78);
+    assert_eq!(coverage.member_count, 79);
+    assert_eq!(coverage.support_counts.stub, 79);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -1892,8 +1892,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(range_coverage.member_count, 23);
-    assert_eq!(range_coverage.support_counts.stub, 23);
+    assert_eq!(range_coverage.member_count, 24);
+    assert_eq!(range_coverage.support_counts.stub, 24);
     assert_eq!(
         range_coverage.stub_members,
         vec![
@@ -1905,6 +1905,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Address".to_string(),
             "Parent".to_string(),
             "Application".to_string(),
+            "Worksheet".to_string(),
             "Row".to_string(),
             "Column".to_string(),
             "Count".to_string(),

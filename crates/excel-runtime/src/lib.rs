@@ -1661,6 +1661,9 @@ impl ExcelRuntime {
                 self.register_worksheet_handle(workbook, sheet_id).0,
             )),
             "Application" => Ok(OmValue::Object(self.root_application())),
+            "Worksheet" => Ok(OmValue::Object(
+                self.register_worksheet_handle(workbook, sheet_id).0,
+            )),
             "Row" => Ok(OmValue::Number(rect.row_first as f64)),
             "Column" => Ok(OmValue::Number(rect.col_first as f64)),
             "Rows" => {
@@ -13765,6 +13768,23 @@ mod tests {
             runtime
                 .dispatch_get(range, "Parent", &[])
                 .expect("Range.Parent"),
+        );
+        let range_worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(range, "Worksheet", &[])
+                .expect("Range.Worksheet"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(range_worksheet, "Name", &[])
+                    .expect("Range.Worksheet.Name")
+            ),
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("ActiveSheet.Name")
+            )
         );
         assert_eq!(
             expect_text(
