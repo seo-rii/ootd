@@ -1934,6 +1934,120 @@ impl ExcelRuntime {
                         self.cut_copy_mode = None;
                         Ok(OmValue::Empty)
                     }
+                    "FillDown" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "Range.FillDown does not accept arguments",
+                            ));
+                        }
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let worksheet = runtime
+                            .loaded
+                            .state
+                            .worksheet_data_for_sheet_mut(sheet_id)?;
+                        let mut source_cells = Vec::with_capacity(rect.width() as usize);
+                        for col in rect.col_first..=rect.col_last {
+                            source_cells.push(worksheet.cells.get(&(rect.row_first, col)).cloned());
+                        }
+                        if rect.height() > 1 {
+                            for row in (rect.row_first + 1)..=rect.row_last {
+                                for (index, col) in (rect.col_first..=rect.col_last).enumerate() {
+                                    match source_cells[index].clone() {
+                                        Some(cell) => {
+                                            if worksheet.cells.get(&(row, col)) != Some(&cell) {
+                                                worksheet.cells.insert((row, col), cell);
+                                                worksheet.dirty = true;
+                                                worksheet.dirty_cells.insert((row, col));
+                                            }
+                                        }
+                                        None => match worksheet.cells.get_mut(&(row, col)) {
+                                            Some(existing) if existing.style_id.is_some() => {
+                                                if existing.value != office_common::CellValue::Blank
+                                                    || existing.formula.is_some()
+                                                {
+                                                    existing.value =
+                                                        office_common::CellValue::Blank;
+                                                    existing.formula = None;
+                                                    worksheet.dirty = true;
+                                                    worksheet.dirty_cells.insert((row, col));
+                                                }
+                                            }
+                                            Some(_) => {
+                                                worksheet.cells.remove(&(row, col));
+                                                worksheet.dirty = true;
+                                                worksheet.dirty_cells.insert((row, col));
+                                            }
+                                            None => {}
+                                        },
+                                    }
+                                }
+                            }
+                        }
+                        Ok(OmValue::Empty)
+                    }
+                    "FillRight" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "Range.FillRight does not accept arguments",
+                            ));
+                        }
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let worksheet = runtime
+                            .loaded
+                            .state
+                            .worksheet_data_for_sheet_mut(sheet_id)?;
+                        let mut source_cells = Vec::with_capacity(rect.height() as usize);
+                        for row in rect.row_first..=rect.row_last {
+                            source_cells.push(worksheet.cells.get(&(row, rect.col_first)).cloned());
+                        }
+                        if rect.width() > 1 {
+                            for (index, row) in (rect.row_first..=rect.row_last).enumerate() {
+                                for col in (rect.col_first + 1)..=rect.col_last {
+                                    match source_cells[index].clone() {
+                                        Some(cell) => {
+                                            if worksheet.cells.get(&(row, col)) != Some(&cell) {
+                                                worksheet.cells.insert((row, col), cell);
+                                                worksheet.dirty = true;
+                                                worksheet.dirty_cells.insert((row, col));
+                                            }
+                                        }
+                                        None => match worksheet.cells.get_mut(&(row, col)) {
+                                            Some(existing) if existing.style_id.is_some() => {
+                                                if existing.value != office_common::CellValue::Blank
+                                                    || existing.formula.is_some()
+                                                {
+                                                    existing.value =
+                                                        office_common::CellValue::Blank;
+                                                    existing.formula = None;
+                                                    worksheet.dirty = true;
+                                                    worksheet.dirty_cells.insert((row, col));
+                                                }
+                                            }
+                                            Some(_) => {
+                                                worksheet.cells.remove(&(row, col));
+                                                worksheet.dirty = true;
+                                                worksheet.dirty_cells.insert((row, col));
+                                            }
+                                            None => {}
+                                        },
+                                    }
+                                }
+                            }
+                        }
+                        Ok(OmValue::Empty)
+                    }
                     "Select" => {
                         if !args.is_empty() {
                             return Err(OmError::invalid_argument(
@@ -13773,6 +13887,226 @@ mod tests {
                     &[OmValue::Object(read_only_destination)]
                 )
                 .expect_err("Range.Cut should reject read-only workbooks")
+                .code,
+            OmErrorCode::InvalidState
+        );
+    }
+
+    #[test]
+    fn range_fill_dispatch_copies_top_or_left_cells_across_range() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let fill_down_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Range(A1:B3)"),
+        );
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(fill_down_range, "FillDown", &[])
+                .expect("Range.FillDown"),
+            OmValue::Empty
+        ));
+
+        let a3 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A3".to_string())])
+                .expect("Range(A3)"),
+        );
+        let b3 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B3".to_string())])
+                .expect("Range(B3)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(a3, "Value", &[])
+                    .expect("A3 after FillDown")
+            ),
+            42.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(b3, "Formula", &[])
+                    .expect("B3 formula after FillDown")
+            ),
+            r#"=UPPER("shared")"#
+        );
+
+        let d1_d2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1:D2".to_string())])
+                .expect("Range(D1:D2)"),
+        );
+        runtime
+            .dispatch_set(
+                d1_d2,
+                "Value",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        1,
+                        vec![OmValue::Number(5.0), OmValue::Text("left".to_string())],
+                    )
+                    .expect("D1:D2 values"),
+                ),
+                &[],
+            )
+            .expect("D1:D2.Value");
+        let fill_right_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1:F2".to_string())])
+                .expect("Range(D1:F2)"),
+        );
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(fill_right_range, "FillRight", &[])
+                .expect("Range.FillRight"),
+            OmValue::Empty
+        ));
+        let f1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("F1".to_string())])
+                .expect("Range(F1)"),
+        );
+        let f2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("F2".to_string())])
+                .expect("Range(F2)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(f1, "Value", &[])
+                    .expect("F1 after FillRight")
+            ),
+            5.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(f2, "Value", &[])
+                    .expect("F2 after FillRight")
+            ),
+            "left"
+        );
+
+        let i1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("I1".to_string())])
+                .expect("Range(I1)"),
+        );
+        runtime
+            .dispatch_set(i1, "Value", OmValue::Number(10.0), &[])
+            .expect("I1.Value");
+        let blank_fill_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("H1:I1".to_string())])
+                .expect("Range(H1:I1)"),
+        );
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(blank_fill_range, "FillRight", &[])
+                .expect("blank Range.FillRight"),
+            OmValue::Empty
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_get(i1, "Value", &[])
+                .expect("I1 after blank FillRight"),
+            OmValue::Empty
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after Range.Fill")
+        ));
+    }
+
+    #[test]
+    fn range_fill_dispatch_rejects_arguments_and_read_only_workbooks() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B2".to_string())])
+                .expect("Range(A1:B2)"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(range, "FillDown", &[OmValue::Missing])
+                .expect_err("Range.FillDown should reject arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(range, "FillRight", &[OmValue::Missing])
+                .expect_err("Range.FillRight should reject arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+
+        let mut read_only_runtime = ExcelRuntime::new();
+        read_only_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook");
+        let read_only_sheet = expect_object_handle(
+            read_only_runtime
+                .dispatch_get(read_only_runtime.root_application(), "ActiveSheet", &[])
+                .expect("read-only ActiveSheet"),
+        );
+        let read_only_range = expect_object_handle(
+            read_only_runtime
+                .dispatch_invoke(
+                    read_only_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:B2".to_string())],
+                )
+                .expect("read-only Range(A1:B2)"),
+        );
+        assert_eq!(
+            read_only_runtime
+                .dispatch_invoke(read_only_range, "FillDown", &[])
+                .expect_err("Range.FillDown should reject read-only workbooks")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            read_only_runtime
+                .dispatch_invoke(read_only_range, "FillRight", &[])
+                .expect_err("Range.FillRight should reject read-only workbooks")
                 .code,
             OmErrorCode::InvalidState
         );

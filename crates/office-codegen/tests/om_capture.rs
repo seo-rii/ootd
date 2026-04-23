@@ -76,8 +76,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 116);
-    assert_eq!(summary.stub_member_count, 116);
+    assert_eq!(summary.member_count, 118);
+    assert_eq!(summary.stub_member_count, 118);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1294,7 +1294,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(application.member_count, 37);
     assert_eq!(workbook.member_count, 19);
     assert_eq!(worksheet.member_count, 18);
-    assert_eq!(range.member_count, 31);
+    assert_eq!(range.member_count, 33);
     assert_eq!(
         application.default_coclasses,
         vec!["Application".to_string()]
@@ -2077,6 +2077,22 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(range_cut.params.len(), 1);
     assert!(range_cut.params[0].optional);
     assert!(range_cut.return_type.is_none());
+    let range_fill_down = range
+        .members
+        .iter()
+        .find(|member| member.name == "FillDown")
+        .expect("Range.FillDown");
+    assert_eq!(range_fill_down.access, AccessMode::Read);
+    assert_eq!(range_fill_down.params.len(), 0);
+    assert!(range_fill_down.return_type.is_none());
+    let range_fill_right = range
+        .members
+        .iter()
+        .find(|member| member.name == "FillRight")
+        .expect("Range.FillRight");
+    assert_eq!(range_fill_right.access, AccessMode::Read);
+    assert_eq!(range_fill_right.params.len(), 0);
+    assert!(range_fill_right.return_type.is_none());
     let range_select = range
         .members
         .iter()
@@ -2137,8 +2153,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 116);
-    assert_eq!(coverage.support_counts.stub, 116);
+    assert_eq!(coverage.member_count, 118);
+    assert_eq!(coverage.support_counts.stub, 118);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -2260,8 +2276,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(range_coverage.member_count, 31);
-    assert_eq!(range_coverage.support_counts.stub, 31);
+    assert_eq!(range_coverage.member_count, 33);
+    assert_eq!(range_coverage.support_counts.stub, 33);
     assert_eq!(
         range_coverage.stub_members,
         vec![
@@ -2292,6 +2308,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Insert".to_string(),
             "Copy".to_string(),
             "Cut".to_string(),
+            "FillDown".to_string(),
+            "FillRight".to_string(),
             "Select".to_string(),
             "ClearContents".to_string(),
             "Clear".to_string(),

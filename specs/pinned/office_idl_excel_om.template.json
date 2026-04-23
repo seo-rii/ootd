@@ -3560,6 +3560,38 @@
           }
         },
         {
+          "name": "FillDown",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Range",
+                  "sourceMember": "FillDown"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "FillRight",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Range",
+                  "sourceMember": "FillRight"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "Select",
           "memberKind": "method",
           "support": "stub",
