@@ -24,6 +24,7 @@ const EXCEL_MAX_ROW_INDEX: u32 = 1_048_576;
 const EXCEL_MAX_COLUMN_INDEX: u32 = 16_384;
 const XL_CALCULATION_AUTOMATIC: i32 = -4105;
 const XL_CALCULATION_MANUAL: i32 = -4135;
+const XL_CALCULATION_SEMIAUTOMATIC: i32 = 2;
 const XL_SHEET_VISIBLE: i32 = -1;
 const XL_SHEET_HIDDEN: i32 = 0;
 const XL_SHEET_VERY_HIDDEN: i32 = 2;
@@ -540,10 +541,12 @@ impl ExcelRuntime {
                         let calculation = calculation as i32;
                         if !matches!(
                             calculation,
-                            XL_CALCULATION_AUTOMATIC | XL_CALCULATION_MANUAL
+                            XL_CALCULATION_AUTOMATIC
+                                | XL_CALCULATION_MANUAL
+                                | XL_CALCULATION_SEMIAUTOMATIC
                         ) {
                             return Err(OmError::invalid_argument(
-                                "Application.Calculation currently supports xlCalculationAutomatic and xlCalculationManual",
+                                "Application.Calculation supports xlCalculationAutomatic, xlCalculationManual, and xlCalculationSemiautomatic",
                             ));
                         }
                         self.calculation = calculation;
@@ -9097,8 +9100,8 @@ fn column_to_letters(mut col: u32) -> String {
 mod tests {
     use super::{
         APPLICATION_NAME, APPLICATION_VERSION, ExcelRuntime, XL_A1, XL_CALCULATION_AUTOMATIC,
-        XL_CALCULATION_MANUAL, XL_DECIMAL_SEPARATOR, XL_LIST_SEPARATOR, XL_R1C1,
-        XL_THOUSANDS_SEPARATOR, blank_workbook_bytes, supports_format,
+        XL_CALCULATION_MANUAL, XL_CALCULATION_SEMIAUTOMATIC, XL_DECIMAL_SEPARATOR,
+        XL_LIST_SEPARATOR, XL_R1C1, XL_THOUSANDS_SEPARATOR, blank_workbook_bytes, supports_format,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -11393,9 +11396,26 @@ mod tests {
             f64::from(XL_CALCULATION_AUTOMATIC)
         );
 
+        runtime
+            .dispatch_set(
+                application,
+                "Calculation",
+                OmValue::Number(f64::from(XL_CALCULATION_SEMIAUTOMATIC)),
+                &[],
+            )
+            .expect("Application.Calculation = xlCalculationSemiautomatic");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "Calculation", &[])
+                    .expect("Application.Calculation after semiautomatic")
+            ),
+            f64::from(XL_CALCULATION_SEMIAUTOMATIC)
+        );
+
         assert_eq!(
             runtime
-                .dispatch_set(application, "Calculation", OmValue::Number(2.0), &[])
+                .dispatch_set(application, "Calculation", OmValue::Number(999.0), &[])
                 .expect_err("Application.Calculation should reject unsupported enum values")
                 .code,
             OmErrorCode::InvalidArgument
