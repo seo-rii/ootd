@@ -3866,10 +3866,42 @@ impl ExcelRuntime {
                         | "Formula2Local"
                         | "Formula2R1C1Local"
                 ) {
-                    self.get_range_formulas(GetRangeValuesSpec {
-                        workbook,
-                        range: self.range_ref(workbook, sheet_id, rect)?,
-                    })?
+                    let wants_r1c1 = matches!(
+                        member,
+                        "FormulaR1C1" | "Formula2R1C1" | "FormulaR1C1Local" | "Formula2R1C1Local"
+                    );
+                    let worksheet = self
+                        .runtime_workbook(workbook)?
+                        .loaded
+                        .state
+                        .worksheet_data_for_sheet(sheet_id)?;
+                    let mut values = Vec::with_capacity((rect.height() * rect.width()) as usize);
+                    for row in rect.row_first..=rect.row_last {
+                        for col in rect.col_first..=rect.col_last {
+                            let value = match worksheet.cells.get(&(row, col)) {
+                                Some(cell) => match &cell.formula {
+                                    Some(formula) => {
+                                        let text = if wants_r1c1 {
+                                            if formula.is_r1c1 {
+                                                formula.text.clone()
+                                            } else {
+                                                convert_formula_a1_to_r1c1(&formula.text, row, col)
+                                            }
+                                        } else if formula.is_r1c1 {
+                                            convert_formula_r1c1_to_a1(&formula.text, row, col)
+                                        } else {
+                                            formula.text.clone()
+                                        };
+                                        OmValue::Text(format!("={text}"))
+                                    }
+                                    None => OmValue::from(cell.value.clone()),
+                                },
+                                None => OmValue::Empty,
+                            };
+                            values.push(value);
+                        }
+                    }
+                    OmArray::new(rect.height() as usize, rect.width() as usize, values)?
                 } else {
                     self.get_range_values(GetRangeValuesSpec {
                         workbook,
@@ -8167,6 +8199,278 @@ fn format_cell_address(row: u32, col: u32, row_absolute: bool, column_absolute: 
     }
     address.push_str(&row.to_string());
     address
+}
+
+fn convert_formula_a1_to_r1c1(formula: &str, base_row: u32, base_col: u32) -> String {
+    let bytes = formula.as_bytes();
+    let mut output = String::with_capacity(formula.len());
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'"' {
+            let quoted_start = index;
+            index += 1;
+            while index < bytes.len() {
+                if bytes[index] == b'"' {
+                    index += 1;
+                    if index < bytes.len() && bytes[index] == b'"' {
+                        index += 1;
+                        continue;
+                    }
+                    break;
+                }
+                let ch = formula[index..]
+                    .chars()
+                    .next()
+                    .expect("valid formula char boundary");
+                index += ch.len_utf8();
+            }
+            output.push_str(&formula[quoted_start..index]);
+            continue;
+        }
+
+        let previous_is_boundary = formula[..index]
+            .chars()
+            .next_back()
+            .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.');
+        if previous_is_boundary {
+            let reference_start = index;
+            let mut cursor = index;
+            let column_absolute = if cursor < bytes.len() && bytes[cursor] == b'$' {
+                cursor += 1;
+                true
+            } else {
+                false
+            };
+            let letters_start = cursor;
+            while cursor < bytes.len()
+                && bytes[cursor].is_ascii_alphabetic()
+                && cursor - letters_start < 3
+            {
+                cursor += 1;
+            }
+            let letters_end = cursor;
+            if letters_end > letters_start
+                && (cursor >= bytes.len() || !bytes[cursor].is_ascii_alphabetic())
+            {
+                let row_absolute = if cursor < bytes.len() && bytes[cursor] == b'$' {
+                    cursor += 1;
+                    true
+                } else {
+                    false
+                };
+                let digits_start = cursor;
+                while cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
+                    cursor += 1;
+                }
+                if digits_start < cursor {
+                    let next_char = formula[cursor..].chars().next();
+                    let next_is_boundary = next_char.is_none_or(|ch| {
+                        !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.' && ch != '('
+                    });
+                    if next_is_boundary {
+                        let mut col = 0u32;
+                        for byte in &bytes[letters_start..letters_end] {
+                            col = col * 26 + (byte.to_ascii_uppercase() - b'A' + 1) as u32;
+                        }
+                        let row = formula[digits_start..cursor].parse::<u32>().ok();
+                        if let Some(row) = row {
+                            if row > 0
+                                && col > 0
+                                && row <= EXCEL_MAX_ROW_INDEX
+                                && col <= EXCEL_MAX_COLUMN_INDEX
+                            {
+                                output.push_str(&format_r1c1_reference(
+                                    row,
+                                    col,
+                                    row_absolute,
+                                    column_absolute,
+                                    base_row,
+                                    base_col,
+                                ));
+                                index = cursor;
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+            index = reference_start;
+        }
+
+        let ch = formula[index..]
+            .chars()
+            .next()
+            .expect("valid formula char boundary");
+        output.push(ch);
+        index += ch.len_utf8();
+    }
+    output
+}
+
+fn format_r1c1_reference(
+    row: u32,
+    col: u32,
+    row_absolute: bool,
+    column_absolute: bool,
+    base_row: u32,
+    base_col: u32,
+) -> String {
+    let mut reference = String::new();
+    if row_absolute {
+        reference.push_str(&format!("R{row}"));
+    } else {
+        let delta = i64::from(row) - i64::from(base_row);
+        if delta == 0 {
+            reference.push('R');
+        } else {
+            reference.push_str(&format!("R[{delta}]"));
+        }
+    }
+    if column_absolute {
+        reference.push_str(&format!("C{col}"));
+    } else {
+        let delta = i64::from(col) - i64::from(base_col);
+        if delta == 0 {
+            reference.push('C');
+        } else {
+            reference.push_str(&format!("C[{delta}]"));
+        }
+    }
+    reference
+}
+
+fn convert_formula_r1c1_to_a1(formula: &str, base_row: u32, base_col: u32) -> String {
+    let bytes = formula.as_bytes();
+    let mut output = String::with_capacity(formula.len());
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'"' {
+            let quoted_start = index;
+            index += 1;
+            while index < bytes.len() {
+                if bytes[index] == b'"' {
+                    index += 1;
+                    if index < bytes.len() && bytes[index] == b'"' {
+                        index += 1;
+                        continue;
+                    }
+                    break;
+                }
+                let ch = formula[index..]
+                    .chars()
+                    .next()
+                    .expect("valid formula char boundary");
+                index += ch.len_utf8();
+            }
+            output.push_str(&formula[quoted_start..index]);
+            continue;
+        }
+
+        let previous_is_boundary = formula[..index]
+            .chars()
+            .next_back()
+            .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.');
+        if previous_is_boundary && matches!(bytes[index], b'R' | b'r') {
+            if let Some((row, row_absolute, col, column_absolute, next_index)) =
+                parse_r1c1_reference(formula, index, base_row, base_col)
+            {
+                let next_char = formula[next_index..].chars().next();
+                let next_is_boundary = next_char.is_none_or(|ch| {
+                    !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.' && ch != '('
+                });
+                if next_is_boundary {
+                    if row < 1
+                        || row > i64::from(EXCEL_MAX_ROW_INDEX)
+                        || col < 1
+                        || col > i64::from(EXCEL_MAX_COLUMN_INDEX)
+                    {
+                        output.push_str("#REF!");
+                    } else {
+                        output.push_str(&format_cell_address(
+                            row as u32,
+                            col as u32,
+                            row_absolute,
+                            column_absolute,
+                        ));
+                    }
+                    index = next_index;
+                    continue;
+                }
+            }
+        }
+
+        let ch = formula[index..]
+            .chars()
+            .next()
+            .expect("valid formula char boundary");
+        output.push(ch);
+        index += ch.len_utf8();
+    }
+    output
+}
+
+fn parse_r1c1_reference(
+    formula: &str,
+    start: usize,
+    base_row: u32,
+    base_col: u32,
+) -> Option<(i64, bool, i64, bool, usize)> {
+    let bytes = formula.as_bytes();
+    let mut cursor = start;
+    if !matches!(bytes.get(cursor), Some(b'R' | b'r')) {
+        return None;
+    }
+    cursor += 1;
+    let (row, row_absolute, next_cursor) = parse_r1c1_axis(bytes, cursor, i64::from(base_row))?;
+    cursor = next_cursor;
+    if !matches!(bytes.get(cursor), Some(b'C' | b'c')) {
+        return None;
+    }
+    cursor += 1;
+    let (col, column_absolute, next_cursor) = parse_r1c1_axis(bytes, cursor, i64::from(base_col))?;
+    Some((row, row_absolute, col, column_absolute, next_cursor))
+}
+
+fn parse_r1c1_axis(bytes: &[u8], start: usize, base: i64) -> Option<(i64, bool, usize)> {
+    if bytes.get(start) == Some(&b'[') {
+        let mut cursor = start + 1;
+        let sign = if bytes.get(cursor) == Some(&b'-') {
+            cursor += 1;
+            -1
+        } else {
+            if bytes.get(cursor) == Some(&b'+') {
+                cursor += 1;
+            }
+            1
+        };
+        let digits_start = cursor;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
+            cursor += 1;
+        }
+        if digits_start == cursor || bytes.get(cursor) != Some(&b']') {
+            return None;
+        }
+        let value = std::str::from_utf8(&bytes[digits_start..cursor])
+            .ok()?
+            .parse::<i64>()
+            .ok()?;
+        Some((base + sign * value, false, cursor + 1))
+    } else {
+        let mut cursor = start;
+        let digits_start = cursor;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
+            cursor += 1;
+        }
+        if digits_start == cursor {
+            Some((base, false, cursor))
+        } else {
+            let value = std::str::from_utf8(&bytes[digits_start..cursor])
+                .ok()?
+                .parse::<i64>()
+                .ok()?;
+            Some((value, true, cursor))
+        }
+    }
 }
 
 fn shift_formula_a1_references(formula: &str, row_delta: i64, col_delta: i64) -> String {
@@ -14691,7 +14995,6 @@ mod tests {
                 .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C2:D2".to_string())])
                 .expect("Range(C2:D2)"),
         );
-
         assert_eq!(
             expect_text(
                 runtime
@@ -14779,6 +15082,73 @@ mod tests {
                 .code,
             OmErrorCode::InvalidState
         );
+    }
+
+    #[test]
+    fn range_formula_getters_convert_between_a1_and_r1c1_references() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let c2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C2".to_string())])
+                .expect("Range(C2)"),
+        );
+        let d3 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D3".to_string())])
+                .expect("Range(D3)"),
+        );
+
+        runtime
+            .dispatch_set(
+                c2,
+                "Formula",
+                OmValue::Text(r#"=A1+$B1+B$1+$B$1&"A1"&LOG10(A1)"#.to_string()),
+                &[],
+            )
+            .expect("set C2 Formula");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(c2, "FormulaR1C1", &[])
+                    .expect("C2 FormulaR1C1 from A1 formula")
+            ),
+            r#"=R[-1]C[-2]+R[-1]C2+R1C[-1]+R1C2&"A1"&LOG10(R[-1]C[-2])"#
+        );
+
+        runtime
+            .dispatch_set(
+                d3,
+                "FormulaR1C1",
+                OmValue::Text(r#"=RC[-2]+R1C1+R[-1]C&"R1C1"&ROW()"#.to_string()),
+                &[],
+            )
+            .expect("set D3 FormulaR1C1");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(d3, "Formula", &[])
+                    .expect("D3 Formula from R1C1 formula")
+            ),
+            r#"=B3+$A$1+D2&"R1C1"&ROW()"#
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after formula conversion set")
+        ));
     }
 
     #[test]
