@@ -76,8 +76,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 4);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 95);
-    assert_eq!(summary.stub_member_count, 95);
+    assert_eq!(summary.member_count, 96);
+    assert_eq!(summary.stub_member_count, 96);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1274,7 +1274,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|entry| entry.name == "Range")
         .expect("Range");
 
-    assert_eq!(application.member_count, 25);
+    assert_eq!(application.member_count, 26);
     assert_eq!(workbook.member_count, 17);
     assert_eq!(worksheet.member_count, 18);
     assert_eq!(range.member_count, 24);
@@ -1321,6 +1321,26 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             .as_ref()
             .and_then(|type_ref| type_ref.alias_of.as_deref()),
         Some("Excel.Range")
+    );
+    let application_user_name = application
+        .members
+        .iter()
+        .find(|member| member.name == "UserName")
+        .expect("Application.UserName");
+    assert_eq!(application_user_name.access, AccessMode::Readwrite);
+    assert_eq!(
+        application_user_name.capture_origin_kinds,
+        vec![
+            CaptureOriginKind::PropertyGet,
+            CaptureOriginKind::PropertySet
+        ]
+    );
+    assert_eq!(
+        application_user_name
+            .return_type
+            .as_ref()
+            .and_then(|type_ref| type_ref.alias_of.as_deref()),
+        Some("BSTR")
     );
 
     let worksheet_name = worksheet
@@ -1798,8 +1818,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 95);
-    assert_eq!(coverage.support_counts.stub, 95);
+    assert_eq!(coverage.member_count, 96);
+    assert_eq!(coverage.support_counts.stub, 96);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -1823,8 +1843,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|entry| entry.name == "Range")
         .expect("Range coverage");
 
-    assert_eq!(application_coverage.member_count, 25);
-    assert_eq!(application_coverage.support_counts.stub, 25);
+    assert_eq!(application_coverage.member_count, 26);
+    assert_eq!(application_coverage.support_counts.stub, 26);
     assert_eq!(
         application_coverage.stub_members,
         vec![
@@ -1837,6 +1857,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Selection".to_string(),
             "Name".to_string(),
             "Version".to_string(),
+            "UserName".to_string(),
             "DisplayAlerts".to_string(),
             "Calculation".to_string(),
             "ScreenUpdating".to_string(),

@@ -104,6 +104,7 @@ pub struct ExcelRuntime {
     calculation: i32,
     screen_updating: bool,
     enable_events: bool,
+    user_name: String,
     status_bar: Option<String>,
     display_status_bar: bool,
     cut_copy_mode: Option<i32>,
@@ -134,6 +135,7 @@ impl ExcelRuntime {
             calculation: XL_CALCULATION_AUTOMATIC,
             screen_updating: true,
             enable_events: true,
+            user_name: String::new(),
             status_bar: None,
             display_status_bar: true,
             cut_copy_mode: None,
@@ -502,6 +504,15 @@ impl ExcelRuntime {
                             ));
                         };
                         self.enable_events = enable_events;
+                        Ok(())
+                    }
+                    "UserName" => {
+                        let OmValue::Text(user_name) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Application.UserName expects a text value",
+                            ));
+                        };
+                        self.user_name = user_name;
                         Ok(())
                     }
                     "StatusBar" => match value {
@@ -1181,6 +1192,14 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Text(APPLICATION_VERSION.to_string()))
+            }
+            "UserName" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.UserName does not accept index arguments",
+                    ));
+                }
+                Ok(OmValue::Text(self.user_name.clone()))
             }
             "DisplayAlerts" => {
                 if !args.is_empty() {
@@ -7115,6 +7134,65 @@ mod tests {
                 .expect_err("Application.Version should be read-only")
                 .code,
             OmErrorCode::Unsupported
+        );
+    }
+
+    #[test]
+    fn application_user_name_dispatch_roundtrips_and_rejects_invalid_values() {
+        let mut runtime = ExcelRuntime::new();
+        let application = runtime.root_application();
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(application, "UserName", &[])
+                    .expect("Application.UserName default")
+            ),
+            ""
+        );
+
+        runtime
+            .dispatch_set(
+                application,
+                "UserName",
+                OmValue::Text("Analyst".to_string()),
+                &[],
+            )
+            .expect("Application.UserName = text");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(application, "UserName", &[])
+                    .expect("Application.UserName after set")
+            ),
+            "Analyst"
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_set(application, "UserName", OmValue::Number(1.0), &[])
+                .expect_err("Application.UserName should reject numeric values")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "UserName", &[OmValue::Number(1.0)])
+                .expect_err("Application.UserName should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    application,
+                    "UserName",
+                    OmValue::Text("Other".to_string()),
+                    &[OmValue::Number(1.0)],
+                )
+                .expect_err("Application.UserName set should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 

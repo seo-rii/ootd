@@ -332,6 +332,38 @@
           }
         },
         {
+          "name": "UserName",
+          "memberKind": "property",
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "string",
+            "aliasOf": "BSTR"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Application",
+                  "sourceMember": "UserName"
+                },
+                {
+                  "kind": "property_set",
+                  "sourceInterface": "Application",
+                  "sourceMember": "UserName"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "string",
+                "aliasOf": "BSTR"
+              }
+            }
+          }
+        },
+        {
           "name": "DisplayAlerts",
           "memberKind": "property",
           "access": "readwrite",
