@@ -8996,6 +8996,14 @@ fn shift_formula_a1_references(formula: &str, row_delta: i64, col_delta: i64) ->
             .next_back()
             .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.');
         if previous_is_boundary {
+            if let Some((reference, next_index)) =
+                shift_formula_a1_axis_reference(formula, index, row_delta, col_delta)
+            {
+                output.push_str(&reference);
+                index = next_index;
+                continue;
+            }
+
             let reference_start = index;
             let mut cursor = index;
             let column_absolute = if cursor < bytes.len() && bytes[cursor] == b'$' {
@@ -9084,6 +9092,129 @@ fn shift_formula_a1_references(formula: &str, row_delta: i64, col_delta: i64) ->
         index += ch.len_utf8();
     }
     output
+}
+
+fn shift_formula_a1_axis_reference(
+    formula: &str,
+    start: usize,
+    row_delta: i64,
+    col_delta: i64,
+) -> Option<(String, usize)> {
+    let bytes = formula.as_bytes();
+    let parse_column_endpoint = |mut cursor: usize| -> Option<(u32, bool, usize)> {
+        let absolute = if cursor < bytes.len() && bytes[cursor] == b'$' {
+            cursor += 1;
+            true
+        } else {
+            false
+        };
+        let letters_start = cursor;
+        while cursor < bytes.len()
+            && bytes[cursor].is_ascii_alphabetic()
+            && cursor - letters_start < 3
+        {
+            cursor += 1;
+        }
+        if letters_start == cursor || (cursor < bytes.len() && bytes[cursor].is_ascii_alphabetic())
+        {
+            return None;
+        }
+        let col = parse_column_label_a1(&formula[letters_start..cursor]).ok()?;
+        Some((col, absolute, cursor))
+    };
+    let parse_row_endpoint = |mut cursor: usize| -> Option<(u32, bool, usize)> {
+        let absolute = if cursor < bytes.len() && bytes[cursor] == b'$' {
+            cursor += 1;
+            true
+        } else {
+            false
+        };
+        let digits_start = cursor;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
+            cursor += 1;
+        }
+        if digits_start == cursor {
+            return None;
+        }
+        let row = formula[digits_start..cursor].parse::<u32>().ok()?;
+        if row == 0 || row > EXCEL_MAX_ROW_INDEX {
+            return None;
+        }
+        Some((row, absolute, cursor))
+    };
+    let next_is_boundary = |cursor: usize| {
+        formula[cursor..]
+            .chars()
+            .next()
+            .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.' && ch != '(')
+    };
+
+    if let Some((first_col, first_absolute, colon_index)) = parse_column_endpoint(start)
+        && bytes.get(colon_index) == Some(&b':')
+        && let Some((second_col, second_absolute, next_index)) =
+            parse_column_endpoint(colon_index + 1)
+        && next_is_boundary(next_index)
+    {
+        let first = if first_absolute {
+            i64::from(first_col)
+        } else {
+            i64::from(first_col) + col_delta
+        };
+        let second = if second_absolute {
+            i64::from(second_col)
+        } else {
+            i64::from(second_col) + col_delta
+        };
+        if first < 1
+            || first > i64::from(EXCEL_MAX_COLUMN_INDEX)
+            || second < 1
+            || second > i64::from(EXCEL_MAX_COLUMN_INDEX)
+        {
+            return Some(("#REF!".to_string(), next_index));
+        }
+        return Some((
+            format!(
+                "{}:{}",
+                format_column_address(first as u32, first_absolute),
+                format_column_address(second as u32, second_absolute)
+            ),
+            next_index,
+        ));
+    }
+
+    if let Some((first_row, first_absolute, colon_index)) = parse_row_endpoint(start)
+        && bytes.get(colon_index) == Some(&b':')
+        && let Some((second_row, second_absolute, next_index)) = parse_row_endpoint(colon_index + 1)
+        && next_is_boundary(next_index)
+    {
+        let first = if first_absolute {
+            i64::from(first_row)
+        } else {
+            i64::from(first_row) + row_delta
+        };
+        let second = if second_absolute {
+            i64::from(second_row)
+        } else {
+            i64::from(second_row) + row_delta
+        };
+        if first < 1
+            || first > i64::from(EXCEL_MAX_ROW_INDEX)
+            || second < 1
+            || second > i64::from(EXCEL_MAX_ROW_INDEX)
+        {
+            return Some(("#REF!".to_string(), next_index));
+        }
+        return Some((
+            format!(
+                "{}:{}",
+                format_row_address(first as u32, first_absolute),
+                format_row_address(second as u32, second_absolute)
+            ),
+            next_index,
+        ));
+    }
+
+    None
 }
 
 fn column_to_letters(mut col: u32) -> String {
@@ -16835,7 +16966,10 @@ mod tests {
             .dispatch_set(
                 source,
                 "Formula",
-                OmValue::Text(r#"=A1+$B1+C$1+$D$1+SUM(A1:B1)+LOG10(A1)&"A1""#.to_string()),
+                OmValue::Text(
+                    r#"=A1+$B1+C$1+$D$1+SUM(A1:B1)+LOG10(A1)+SUM(A:A)+SUM($B:$C)+SUM(1:1)+SUM($2:$3)&"A:A""#
+                        .to_string(),
+                ),
                 &[],
             )
             .expect("seed C1 Formula");
@@ -16850,7 +16984,7 @@ mod tests {
                     .dispatch_get(destination, "Formula", &[])
                     .expect("D2 Formula after Range.Copy")
             ),
-            r#"=B2+$B2+D$1+$D$1+SUM(B2:C2)+LOG10(B2)&"A1""#
+            r#"=B2+$B2+D$1+$D$1+SUM(B2:C2)+LOG10(B2)+SUM(B:B)+SUM($B:$C)+SUM(2:2)+SUM($2:$3)&"A:A""#
         );
     }
 
