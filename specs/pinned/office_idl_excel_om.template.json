@@ -706,6 +706,32 @@
           }
         },
         {
+          "name": "Application",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Workbooks",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          }
+        },
+        {
           "name": "Add",
           "memberKind": "method",
           "returnType": {
@@ -1122,6 +1148,32 @@
                 "kind": "interface",
                 "name": "Workbook",
                 "aliasOf": "Excel.Workbook"
+              }
+            }
+          }
+        },
+        {
+          "name": "Application",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Worksheets",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
               }
             }
           }
