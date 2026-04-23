@@ -110,6 +110,7 @@ pub struct ExcelRuntime {
     display_status_bar: bool,
     display_formula_bar: bool,
     display_scroll_bars: bool,
+    display_full_screen: bool,
     use_system_separators: bool,
     decimal_separator: String,
     thousands_separator: String,
@@ -148,6 +149,7 @@ impl ExcelRuntime {
             display_status_bar: true,
             display_formula_bar: true,
             display_scroll_bars: true,
+            display_full_screen: false,
             use_system_separators: true,
             decimal_separator: ".".to_string(),
             thousands_separator: ",".to_string(),
@@ -579,6 +581,15 @@ impl ExcelRuntime {
                             ));
                         };
                         self.display_scroll_bars = display_scroll_bars;
+                        Ok(())
+                    }
+                    "DisplayFullScreen" => {
+                        let OmValue::Bool(display_full_screen) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Application.DisplayFullScreen expects a boolean value",
+                            ));
+                        };
+                        self.display_full_screen = display_full_screen;
                         Ok(())
                     }
                     "UseSystemSeparators" => {
@@ -1545,6 +1556,14 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Bool(self.display_scroll_bars))
+            }
+            "DisplayFullScreen" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.DisplayFullScreen does not accept index arguments",
+                    ));
+                }
+                Ok(OmValue::Bool(self.display_full_screen))
             }
             "UseSystemSeparators" => {
                 if !args.is_empty() {
@@ -7597,6 +7616,56 @@ mod tests {
             runtime
                 .dispatch_get(application, "DisplayScrollBars", &[OmValue::Bool(true)])
                 .expect_err("Application.DisplayScrollBars should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn application_display_full_screen_dispatch_roundtrips_and_rejects_invalid_values() {
+        let mut runtime = ExcelRuntime::new();
+        let application = runtime.root_application();
+
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "DisplayFullScreen", &[])
+                .expect("Application.DisplayFullScreen default")
+        ));
+
+        runtime
+            .dispatch_set(application, "DisplayFullScreen", OmValue::Bool(true), &[])
+            .expect("Application.DisplayFullScreen = true");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(application, "DisplayFullScreen", &[])
+                .expect("Application.DisplayFullScreen after true")
+        ));
+
+        runtime
+            .dispatch_set(application, "DisplayFullScreen", OmValue::Bool(false), &[])
+            .expect("Application.DisplayFullScreen = false");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "DisplayFullScreen", &[])
+                .expect("Application.DisplayFullScreen after false")
+        ));
+
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    application,
+                    "DisplayFullScreen",
+                    OmValue::Text("bad".to_string()),
+                    &[]
+                )
+                .expect_err("Application.DisplayFullScreen should reject non-bool values")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "DisplayFullScreen", &[OmValue::Bool(true)])
+                .expect_err("Application.DisplayFullScreen should reject index args")
                 .code,
             OmErrorCode::InvalidArgument
         );
