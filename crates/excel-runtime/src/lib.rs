@@ -48,6 +48,11 @@ const XL_PASTE_ALL: i32 = -4104;
 const XL_PASTE_FORMATS: i32 = -4122;
 const XL_PASTE_FORMULAS: i32 = -4123;
 const XL_PASTE_VALUES: i32 = -4163;
+const XL_PASTE_SPECIAL_OPERATION_NONE: i32 = -4142;
+const XL_PASTE_SPECIAL_OPERATION_ADD: i32 = 2;
+const XL_PASTE_SPECIAL_OPERATION_SUBTRACT: i32 = 3;
+const XL_PASTE_SPECIAL_OPERATION_MULTIPLY: i32 = 4;
+const XL_PASTE_SPECIAL_OPERATION_DIVIDE: i32 = 5;
 const XL_DECIMAL_SEPARATOR: i32 = 3;
 const XL_THOUSANDS_SEPARATOR: i32 = 4;
 const XL_LIST_SEPARATOR: i32 = 5;
@@ -2108,15 +2113,45 @@ impl ExcelRuntime {
                                 ));
                             }
                         };
-                        if let Some(operation) = args.get(1) {
-                            if !matches!(
-                                operation,
-                                OmValue::Missing | OmValue::Empty | OmValue::Null
-                            ) {
-                                return Err(OmError::unsupported(
-                                    "Range.PasteSpecial Operation is not implemented",
+                        let operation = match args.get(1) {
+                            None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => {
+                                XL_PASTE_SPECIAL_OPERATION_NONE
+                            }
+                            Some(OmValue::Number(operation)) => {
+                                if !operation.is_finite()
+                                    || operation.fract() != 0.0
+                                    || *operation < i32::MIN as f64
+                                    || *operation > i32::MAX as f64
+                                {
+                                    return Err(OmError::invalid_argument(
+                                        "Range.PasteSpecial Operation expects an integral XlPasteSpecialOperation value",
+                                    ));
+                                }
+                                match *operation as i32 {
+                                    XL_PASTE_SPECIAL_OPERATION_NONE
+                                    | XL_PASTE_SPECIAL_OPERATION_ADD
+                                    | XL_PASTE_SPECIAL_OPERATION_SUBTRACT
+                                    | XL_PASTE_SPECIAL_OPERATION_MULTIPLY
+                                    | XL_PASTE_SPECIAL_OPERATION_DIVIDE => *operation as i32,
+                                    other => {
+                                        return Err(OmError::unsupported(format!(
+                                            "Range.PasteSpecial Operation {other} is not implemented",
+                                        )));
+                                    }
+                                }
+                            }
+                            Some(_) => {
+                                return Err(OmError::type_mismatch(
+                                    "Range.PasteSpecial Operation expects a numeric XlPasteSpecialOperation value when provided",
                                 ));
                             }
+                        };
+                        if operation != XL_PASTE_SPECIAL_OPERATION_NONE
+                            && !matches!(paste_type, XL_PASTE_ALL | XL_PASTE_VALUES)
+                        {
+                            return Err(OmError::unsupported(
+                                "Range.PasteSpecial Operation currently supports xlPasteAll and xlPasteValues",
+                            ));
                         }
                         let skip_blanks = match args.get(2) {
                             None => false,
@@ -2146,7 +2181,11 @@ impl ExcelRuntime {
                             clipboard.rect,
                         );
                         let destination = self.register_range_handle(workbook, sheet_id, rect);
-                        if paste_type == XL_PASTE_ALL && !skip_blanks && !transpose {
+                        if paste_type == XL_PASTE_ALL
+                            && operation == XL_PASTE_SPECIAL_OPERATION_NONE
+                            && !skip_blanks
+                            && !transpose
+                        {
                             return match clipboard.mode {
                                 XL_COPY => self.dispatch_invoke(
                                     source.0,
@@ -2232,92 +2271,156 @@ impl ExcelRuntime {
                             rect
                         };
 
-                        let apply_paste = |destination_worksheet: &mut WorksheetData| {
-                            for row in target_rect.row_first..=target_rect.row_last {
-                                for col in target_rect.col_first..=target_rect.col_last {
-                                    let key = (row, col);
-                                    let row_offset = row - target_rect.row_first;
-                                    let col_offset = col - target_rect.col_first;
-                                    let source_row_offset =
-                                        if transpose { col_offset } else { row_offset };
-                                    let source_col_offset =
-                                        if transpose { row_offset } else { col_offset };
-                                    let source_index = (source_row_offset * source_width
-                                        + source_col_offset)
-                                        as usize;
-                                    let source_cell = source_cells[source_index].as_ref();
-                                    let source_is_blank = match paste_type {
-                                        XL_PASTE_ALL => source_cell.is_none_or(|cell| {
-                                            cell.value == CellValue::Blank
-                                                && cell.formula.is_none()
-                                                && cell.style_id.is_none()
-                                        }),
-                                        XL_PASTE_VALUES | XL_PASTE_FORMULAS => source_cell
-                                            .is_none_or(|cell| {
+                        let apply_paste =
+                            |destination_worksheet: &mut WorksheetData| -> OmResult<()> {
+                                for row in target_rect.row_first..=target_rect.row_last {
+                                    for col in target_rect.col_first..=target_rect.col_last {
+                                        let key = (row, col);
+                                        let row_offset = row - target_rect.row_first;
+                                        let col_offset = col - target_rect.col_first;
+                                        let source_row_offset =
+                                            if transpose { col_offset } else { row_offset };
+                                        let source_col_offset =
+                                            if transpose { row_offset } else { col_offset };
+                                        let source_index = (source_row_offset * source_width
+                                            + source_col_offset)
+                                            as usize;
+                                        let source_cell = source_cells[source_index].as_ref();
+                                        let source_is_blank = match paste_type {
+                                            XL_PASTE_ALL => source_cell.is_none_or(|cell| {
                                                 cell.value == CellValue::Blank
                                                     && cell.formula.is_none()
+                                                    && cell.style_id.is_none()
                                             }),
-                                        XL_PASTE_FORMATS => {
-                                            source_cell.is_none_or(|cell| cell.style_id.is_none())
+                                            XL_PASTE_VALUES | XL_PASTE_FORMULAS => source_cell
+                                                .is_none_or(|cell| {
+                                                    cell.value == CellValue::Blank
+                                                        && cell.formula.is_none()
+                                                }),
+                                            XL_PASTE_FORMATS => source_cell
+                                                .is_none_or(|cell| cell.style_id.is_none()),
+                                            _ => {
+                                                unreachable!("unsupported paste type was rejected")
+                                            }
+                                        };
+                                        if skip_blanks && source_is_blank {
+                                            continue;
                                         }
-                                        _ => unreachable!("unsupported paste type was rejected"),
-                                    };
-                                    if skip_blanks && source_is_blank {
-                                        continue;
-                                    }
-                                    let existing = destination_worksheet.cells.get(&key).cloned();
-                                    let mut next_cell =
-                                        existing.clone().unwrap_or(excel_model::CellData {
-                                            value: CellValue::Blank,
-                                            formula: None,
-                                            style_id: None,
-                                        });
-                                    match paste_type {
-                                        XL_PASTE_ALL => {
-                                            next_cell = source_cell.cloned().unwrap_or(
-                                                excel_model::CellData {
-                                                    value: CellValue::Blank,
-                                                    formula: None,
-                                                    style_id: None,
-                                                },
-                                            );
+                                        let existing =
+                                            destination_worksheet.cells.get(&key).cloned();
+                                        let mut next_cell =
+                                            existing.clone().unwrap_or(excel_model::CellData {
+                                                value: CellValue::Blank,
+                                                formula: None,
+                                                style_id: None,
+                                            });
+                                        match paste_type {
+                                            XL_PASTE_ALL | XL_PASTE_VALUES => {
+                                                if operation == XL_PASTE_SPECIAL_OPERATION_NONE {
+                                                    if paste_type == XL_PASTE_ALL {
+                                                        next_cell = source_cell.cloned().unwrap_or(
+                                                            excel_model::CellData {
+                                                                value: CellValue::Blank,
+                                                                formula: None,
+                                                                style_id: None,
+                                                            },
+                                                        );
+                                                    } else {
+                                                        next_cell.value = source_cell
+                                                            .map(|cell| cell.value.clone())
+                                                            .unwrap_or(CellValue::Blank);
+                                                        next_cell.formula = None;
+                                                    }
+                                                } else {
+                                                    let source_value = source_cell
+                                                        .map(|cell| cell.value.clone())
+                                                        .unwrap_or(CellValue::Blank);
+                                                    let CellValue::Number(destination_value) =
+                                                        next_cell.value
+                                                    else {
+                                                        return Err(OmError::type_mismatch(
+                                                            "Range.PasteSpecial Operation requires numeric destination values",
+                                                        ));
+                                                    };
+                                                    let CellValue::Number(source_value) =
+                                                        source_value
+                                                    else {
+                                                        return Err(OmError::type_mismatch(
+                                                            "Range.PasteSpecial Operation requires numeric source values",
+                                                        ));
+                                                    };
+                                                    next_cell.value = match operation {
+                                                        XL_PASTE_SPECIAL_OPERATION_ADD => {
+                                                            CellValue::Number(
+                                                                destination_value + source_value,
+                                                            )
+                                                        }
+                                                        XL_PASTE_SPECIAL_OPERATION_SUBTRACT => {
+                                                            CellValue::Number(
+                                                                destination_value - source_value,
+                                                            )
+                                                        }
+                                                        XL_PASTE_SPECIAL_OPERATION_MULTIPLY => {
+                                                            CellValue::Number(
+                                                                destination_value * source_value,
+                                                            )
+                                                        }
+                                                        XL_PASTE_SPECIAL_OPERATION_DIVIDE => {
+                                                            if source_value == 0.0 {
+                                                                return Err(
+                                                                    OmError::invalid_argument(
+                                                                        "Range.PasteSpecial Operation cannot divide by zero",
+                                                                    ),
+                                                                );
+                                                            }
+                                                            CellValue::Number(
+                                                                destination_value / source_value,
+                                                            )
+                                                        }
+                                                        _ => unreachable!(
+                                                            "unsupported operation was rejected"
+                                                        ),
+                                                    };
+                                                    next_cell.formula = None;
+                                                    if paste_type == XL_PASTE_ALL {
+                                                        next_cell.style_id = source_cell
+                                                            .and_then(|cell| cell.style_id);
+                                                    }
+                                                }
+                                            }
+                                            XL_PASTE_FORMULAS => {
+                                                next_cell.value = source_cell
+                                                    .map(|cell| cell.value.clone())
+                                                    .unwrap_or(CellValue::Blank);
+                                                next_cell.formula = source_cell
+                                                    .and_then(|cell| cell.formula.clone());
+                                            }
+                                            XL_PASTE_FORMATS => {
+                                                next_cell.style_id =
+                                                    source_cell.and_then(|cell| cell.style_id);
+                                            }
+                                            _ => {
+                                                unreachable!("unsupported paste type was rejected")
+                                            }
                                         }
-                                        XL_PASTE_VALUES => {
-                                            next_cell.value = source_cell
-                                                .map(|cell| cell.value.clone())
-                                                .unwrap_or(CellValue::Blank);
-                                            next_cell.formula = None;
-                                        }
-                                        XL_PASTE_FORMULAS => {
-                                            next_cell.value = source_cell
-                                                .map(|cell| cell.value.clone())
-                                                .unwrap_or(CellValue::Blank);
-                                            next_cell.formula =
-                                                source_cell.and_then(|cell| cell.formula.clone());
-                                        }
-                                        XL_PASTE_FORMATS => {
-                                            next_cell.style_id =
-                                                source_cell.and_then(|cell| cell.style_id);
-                                        }
-                                        _ => unreachable!("unsupported paste type was rejected"),
-                                    }
-                                    if matches!(next_cell.value, CellValue::Blank)
-                                        && next_cell.formula.is_none()
-                                        && next_cell.style_id.is_none()
-                                    {
-                                        if existing.is_some() {
-                                            destination_worksheet.cells.remove(&key);
+                                        if matches!(next_cell.value, CellValue::Blank)
+                                            && next_cell.formula.is_none()
+                                            && next_cell.style_id.is_none()
+                                        {
+                                            if existing.is_some() {
+                                                destination_worksheet.cells.remove(&key);
+                                                destination_worksheet.dirty = true;
+                                                destination_worksheet.dirty_cells.insert(key);
+                                            }
+                                        } else if existing.as_ref() != Some(&next_cell) {
+                                            destination_worksheet.cells.insert(key, next_cell);
                                             destination_worksheet.dirty = true;
                                             destination_worksheet.dirty_cells.insert(key);
                                         }
-                                    } else if existing.as_ref() != Some(&next_cell) {
-                                        destination_worksheet.cells.insert(key, next_cell);
-                                        destination_worksheet.dirty = true;
-                                        destination_worksheet.dirty_cells.insert(key);
                                     }
                                 }
-                            }
-                        };
+                                Ok(())
+                            };
                         let clear_source =
                             |source_worksheet: &mut WorksheetData, skip_target_overlap: bool| {
                                 for row in clipboard.rect.row_first..=clipboard.rect.row_last {
@@ -2366,7 +2469,7 @@ impl ExcelRuntime {
                                     .loaded
                                     .state
                                     .worksheet_data_for_sheet_mut(sheet_id)?;
-                                apply_paste(destination_worksheet);
+                                apply_paste(destination_worksheet)?;
                             }
                             if clipboard.mode == XL_CUT {
                                 let source_worksheet = runtime
@@ -2391,7 +2494,7 @@ impl ExcelRuntime {
                                     .loaded
                                     .state
                                     .worksheet_data_for_sheet_mut(sheet_id)?;
-                                apply_paste(destination_worksheet);
+                                apply_paste(destination_worksheet)?;
                             }
                             if clipboard.mode == XL_CUT {
                                 let source_runtime =
@@ -15531,6 +15634,264 @@ mod tests {
                 .expect("F1 style-only cell")
                 .style_id,
             Some(StyleId(7))
+        );
+    }
+
+    #[test]
+    fn range_paste_special_operation_applies_numeric_arithmetic() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+
+        for (address, seed, operation, expected) in [
+            ("D1", 8.0, super::XL_PASTE_SPECIAL_OPERATION_ADD, 50.0),
+            (
+                "E1",
+                10.0,
+                super::XL_PASTE_SPECIAL_OPERATION_SUBTRACT,
+                -32.0,
+            ),
+            ("F1", 2.0, super::XL_PASTE_SPECIAL_OPERATION_MULTIPLY, 84.0),
+            ("G1", 84.0, super::XL_PASTE_SPECIAL_OPERATION_DIVIDE, 2.0),
+        ] {
+            let destination = expect_object_handle(
+                runtime
+                    .dispatch_invoke(active_sheet, "Range", &[OmValue::Text(address.to_string())])
+                    .expect("destination Range"),
+            );
+            runtime
+                .dispatch_set(destination, "Value", OmValue::Number(seed), &[])
+                .expect("seed destination value");
+            runtime
+                .dispatch_invoke(source, "Copy", &[])
+                .expect("Range.Copy before operation paste");
+            runtime
+                .dispatch_invoke(
+                    destination,
+                    "PasteSpecial",
+                    &[
+                        OmValue::Number(f64::from(super::XL_PASTE_VALUES)),
+                        OmValue::Number(f64::from(operation)),
+                    ],
+                )
+                .expect("Range.PasteSpecial xlPasteValues operation");
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(destination, "Value", &[])
+                        .expect("destination Value after operation")
+                ),
+                expected
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(destination, "HasFormula", &[])
+                    .expect("destination HasFormula after operation"),
+                OmValue::Bool(false)
+            );
+        }
+
+        let default_paste_destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("H1".to_string())])
+                .expect("Range(H1)"),
+        );
+        runtime
+            .dispatch_set(
+                default_paste_destination,
+                "Value",
+                OmValue::Number(8.0),
+                &[],
+            )
+            .expect("seed default Paste destination");
+        runtime
+            .dispatch_invoke(source, "Copy", &[])
+            .expect("Range.Copy before default Paste operation");
+        runtime
+            .dispatch_invoke(
+                default_paste_destination,
+                "PasteSpecial",
+                &[
+                    OmValue::Missing,
+                    OmValue::Number(f64::from(super::XL_PASTE_SPECIAL_OPERATION_ADD)),
+                ],
+            )
+            .expect("Range.PasteSpecial default Paste operation");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(default_paste_destination, "Value", &[])
+                    .expect("H1 Value after default Paste operation")
+            ),
+            50.0
+        );
+    }
+
+    #[test]
+    fn range_paste_special_operation_rejects_invalid_arguments() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let numeric_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        let text_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Range(B1)"),
+        );
+        let destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1".to_string())])
+                .expect("Range(D1)"),
+        );
+
+        runtime
+            .dispatch_invoke(numeric_source, "Copy", &[])
+            .expect("Range.Copy before string Operation");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    destination,
+                    "PasteSpecial",
+                    &[
+                        OmValue::Number(f64::from(super::XL_PASTE_VALUES)),
+                        OmValue::Text("add".to_string()),
+                    ],
+                )
+                .expect_err("Range.PasteSpecial should reject string Operation")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+
+        runtime
+            .dispatch_invoke(numeric_source, "Copy", &[])
+            .expect("Range.Copy before fractional Operation");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    destination,
+                    "PasteSpecial",
+                    &[
+                        OmValue::Number(f64::from(super::XL_PASTE_VALUES)),
+                        OmValue::Number(2.5),
+                    ],
+                )
+                .expect_err("Range.PasteSpecial should reject fractional Operation")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+
+        runtime
+            .dispatch_invoke(numeric_source, "Copy", &[])
+            .expect("Range.Copy before unsupported Operation");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    destination,
+                    "PasteSpecial",
+                    &[
+                        OmValue::Number(f64::from(super::XL_PASTE_VALUES)),
+                        OmValue::Number(99.0),
+                    ],
+                )
+                .expect_err("Range.PasteSpecial should reject unsupported Operation")
+                .code,
+            OmErrorCode::Unsupported
+        );
+
+        runtime
+            .dispatch_invoke(numeric_source, "Copy", &[])
+            .expect("Range.Copy before format Operation");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    destination,
+                    "PasteSpecial",
+                    &[
+                        OmValue::Number(f64::from(super::XL_PASTE_FORMATS)),
+                        OmValue::Number(f64::from(super::XL_PASTE_SPECIAL_OPERATION_ADD)),
+                    ],
+                )
+                .expect_err("Range.PasteSpecial should reject format Operation")
+                .code,
+            OmErrorCode::Unsupported
+        );
+
+        runtime
+            .dispatch_set(destination, "Value", OmValue::Number(1.0), &[])
+            .expect("seed numeric destination");
+        runtime
+            .dispatch_invoke(text_source, "Copy", &[])
+            .expect("Range.Copy before text source Operation");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    destination,
+                    "PasteSpecial",
+                    &[
+                        OmValue::Number(f64::from(super::XL_PASTE_VALUES)),
+                        OmValue::Number(f64::from(super::XL_PASTE_SPECIAL_OPERATION_ADD)),
+                    ],
+                )
+                .expect_err("Range.PasteSpecial should reject text source Operation")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+
+        runtime
+            .dispatch_set(
+                destination,
+                "Value",
+                OmValue::Text("not-number".to_string()),
+                &[],
+            )
+            .expect("seed text destination");
+        runtime
+            .dispatch_invoke(numeric_source, "Copy", &[])
+            .expect("Range.Copy before text destination Operation");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    destination,
+                    "PasteSpecial",
+                    &[
+                        OmValue::Number(f64::from(super::XL_PASTE_VALUES)),
+                        OmValue::Number(f64::from(super::XL_PASTE_SPECIAL_OPERATION_ADD)),
+                    ],
+                )
+                .expect_err("Range.PasteSpecial should reject text destination Operation")
+                .code,
+            OmErrorCode::TypeMismatch
         );
     }
 
