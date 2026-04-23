@@ -1402,6 +1402,62 @@
           }
         },
         {
+          "name": "Next",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Worksheet",
+            "nullable": true,
+            "aliasOf": "Excel.Worksheet"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "Next"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Worksheet",
+                "nullable": true,
+                "aliasOf": "Excel.Worksheet"
+              }
+            }
+          }
+        },
+        {
+          "name": "Previous",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Worksheet",
+            "nullable": true,
+            "aliasOf": "Excel.Worksheet"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "Previous"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Worksheet",
+                "nullable": true,
+                "aliasOf": "Excel.Worksheet"
+              }
+            }
+          }
+        },
+        {
           "name": "Type",
           "memberKind": "property",
           "returnType": {

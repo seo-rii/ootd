@@ -1306,6 +1306,32 @@ impl ExcelRuntime {
                     .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?;
                 Ok(OmValue::Number((index + 1) as f64))
             }
+            "Next" | "Previous" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "Worksheet.{member} does not accept arguments"
+                    )));
+                }
+                let adjacent_sheet_id = {
+                    let worksheets = &self.runtime_workbook(workbook)?.loaded.state.worksheets;
+                    let index = worksheets
+                        .iter()
+                        .position(|worksheet| worksheet.id == sheet_id)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?;
+                    if member == "Next" {
+                        worksheets.get(index + 1).map(|worksheet| worksheet.id)
+                    } else if index == 0 {
+                        None
+                    } else {
+                        worksheets.get(index - 1).map(|worksheet| worksheet.id)
+                    }
+                };
+                Ok(adjacent_sheet_id
+                    .map(|sheet_id| {
+                        OmValue::Object(self.register_worksheet_handle(workbook, sheet_id).0)
+                    })
+                    .unwrap_or(OmValue::Empty))
+            }
             "Type" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(
@@ -13680,6 +13706,93 @@ mod tests {
                     .expect("Worksheet.Index")
             ),
             1.0
+        );
+    }
+
+    #[test]
+    fn worksheet_next_and_previous_dispatch_follow_sheet_order() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheet1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let sheet2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheets,
+                    "Add",
+                    &[OmValue::Missing, OmValue::Object(sheet1)],
+                )
+                .expect("Worksheets.Add After:=Sheet1"),
+        );
+
+        let sheet1_next = expect_object_handle(
+            runtime
+                .dispatch_get(sheet1, "Next", &[])
+                .expect("Sheet1.Next"),
+        );
+        let sheet2_previous = expect_object_handle(
+            runtime
+                .dispatch_get(sheet2, "Previous", &[])
+                .expect("Sheet2.Previous"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(sheet1_next, "Name", &[])
+                    .expect("Sheet1.Next.Name")
+            ),
+            expect_text(
+                runtime
+                    .dispatch_get(sheet2, "Name", &[])
+                    .expect("Sheet2.Name")
+            )
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(sheet2_previous, "Name", &[])
+                    .expect("Sheet2.Previous.Name")
+            ),
+            expect_text(
+                runtime
+                    .dispatch_get(sheet1, "Name", &[])
+                    .expect("Sheet1.Name")
+            )
+        );
+        assert!(matches!(
+            runtime
+                .dispatch_get(sheet1, "Previous", &[])
+                .expect("Sheet1.Previous"),
+            OmValue::Empty
+        ));
+        assert!(matches!(
+            runtime
+                .dispatch_get(sheet2, "Next", &[])
+                .expect("Sheet2.Next"),
+            OmValue::Empty
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_get(sheet1, "Next", &[OmValue::Number(1.0)])
+                .expect_err("Worksheet.Next should reject arguments")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 
