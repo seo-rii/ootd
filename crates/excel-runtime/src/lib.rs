@@ -2643,6 +2643,7 @@ impl ExcelRuntime {
 
         let sheet_id = last_sheet_id.expect("Worksheets.Add count should be positive");
 
+        self.invalidate_workbook_calc_chain(workbook)?;
         self.set_selection(workbook, sheet_id, Rect::single_cell(1, 1));
         Ok(self.register_worksheet_handle(workbook, sheet_id))
     }
@@ -3579,15 +3580,6 @@ impl ExcelRuntime {
             if let Some(relationship_id) = removed_worksheet.relationship_id.as_ref() {
                 relationship_ids_to_strip.push(relationship_id.clone());
             }
-            if let Some(calc_chain_relationship_id) = runtime
-                .loaded
-                .support_parts
-                .calc_chain_relationship
-                .as_ref()
-                .map(|relationship| relationship.id.clone())
-            {
-                relationship_ids_to_strip.push(calc_chain_relationship_id);
-            }
             if !relationship_ids_to_strip.is_empty()
                 && let Some(workbook_rels_xml) = runtime
                     .loaded
@@ -3615,16 +3607,6 @@ impl ExcelRuntime {
             {
                 runtime.loaded.package.remove_part(relationships_part_uri);
             }
-            if let Some(calc_chain_part_uri) =
-                runtime.loaded.support_parts.calc_chain_part_uri.take()
-            {
-                runtime
-                    .loaded
-                    .package
-                    .remove_part(calc_chain_part_uri.as_str());
-                content_type_overrides_to_strip.push(calc_chain_part_uri);
-            }
-            runtime.loaded.support_parts.calc_chain_relationship = None;
             if !content_type_overrides_to_strip.is_empty()
                 && let Some(content_types_xml) = runtime
                     .loaded
@@ -3645,6 +3627,7 @@ impl ExcelRuntime {
             replacement_sheet_id
         };
 
+        self.invalidate_workbook_calc_chain(workbook)?;
         self.invalidate_sheet_object_handles(workbook, sheet_id);
         if deleted_was_active {
             self.set_selection(workbook, replacement_sheet_id, Rect::single_cell(1, 1));
@@ -3962,6 +3945,62 @@ impl ExcelRuntime {
             worksheet.dirty = false;
             worksheet.dirty_cells.clear();
         }
+        Ok(())
+    }
+
+    fn invalidate_workbook_calc_chain(&mut self, workbook: WorkbookHandle) -> OmResult<()> {
+        let runtime = self.runtime_workbook_mut(workbook)?;
+        let workbook_rels_part_name = runtime
+            .loaded
+            .support_parts
+            .workbook_relationships_part_uri
+            .clone()
+            .unwrap_or_else(|| WORKBOOK_RELS_PART_NAME.to_string());
+        let calc_chain_relationship_id = runtime
+            .loaded
+            .support_parts
+            .calc_chain_relationship
+            .take()
+            .map(|relationship| relationship.id);
+        let calc_chain_part_uri = runtime.loaded.support_parts.calc_chain_part_uri.take();
+
+        if let Some(calc_chain_relationship_id) = calc_chain_relationship_id
+            && let Some(workbook_rels_xml) = runtime
+                .loaded
+                .package
+                .part(workbook_rels_part_name.as_str())
+                .map(|part| part.bytes.clone())
+        {
+            runtime.loaded.package.replace_part_bytes(
+                workbook_rels_part_name.as_str(),
+                strip_relationship_entries_by_id(
+                    workbook_rels_xml.as_slice(),
+                    &[calc_chain_relationship_id],
+                )?,
+            )?;
+        }
+
+        if let Some(calc_chain_part_uri) = calc_chain_part_uri {
+            runtime
+                .loaded
+                .package
+                .remove_part(calc_chain_part_uri.as_str());
+            if let Some(content_types_xml) = runtime
+                .loaded
+                .package
+                .part(CONTENT_TYPES_PART_NAME)
+                .map(|part| part.bytes.clone())
+            {
+                runtime.loaded.package.replace_part_bytes(
+                    CONTENT_TYPES_PART_NAME,
+                    strip_content_type_overrides(
+                        content_types_xml.as_slice(),
+                        &[calc_chain_part_uri],
+                    )?,
+                )?;
+            }
+        }
+
         Ok(())
     }
 
@@ -10668,6 +10707,66 @@ mod tests {
     }
 
     #[test]
+    fn worksheets_add_invalidates_calc_chain_artifacts() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_calc_chain_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open calc chain workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+
+        runtime
+            .dispatch_invoke(worksheets, "Add", &[])
+            .expect("Worksheets.Add on calc chain workbook");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save calc chain workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved calc chain package");
+        let workbook_rels_xml = String::from_utf8(
+            saved_package
+                .part("xl/_rels/workbook.xml.rels")
+                .expect("saved workbook rels")
+                .bytes
+                .clone(),
+        )
+        .expect("workbook rels utf8");
+        let content_types_xml = String::from_utf8(
+            saved_package
+                .part("[Content_Types].xml")
+                .expect("saved content types")
+                .bytes
+                .clone(),
+        )
+        .expect("content types utf8");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen saved calc chain workbook");
+
+        assert!(!saved_package.contains("xl/calcChain.xml"));
+        assert!(!workbook_rels_xml.contains("calcChain"));
+        assert!(!content_types_xml.contains("/xl/calcChain.xml"));
+        assert!(reopened.support_parts.calc_chain_part_uri.is_none());
+        assert!(reopened.support_parts.calc_chain_relationship.is_none());
+    }
+
+    #[test]
     fn worksheets_add_supports_template_type_paths_with_count_and_persists_on_save() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -13359,6 +13458,59 @@ mod tests {
             })
             .expect("add hyperlink relationships part");
         package.to_bytes().expect("hyperlink package bytes")
+    }
+
+    fn synthetic_calc_chain_workbook_bytes() -> Vec<u8> {
+        let mut package =
+            OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("base calc chain package");
+        let content_types_xml = String::from_utf8(
+            package
+                .part("[Content_Types].xml")
+                .expect("base content types")
+                .bytes
+                .clone(),
+        )
+        .expect("content types utf8")
+        .replace(
+            "</Types>",
+            r#"  <Override PartName="/xl/calcChain.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.calcChain+xml"/>
+</Types>"#,
+        );
+        let workbook_rels_xml = String::from_utf8(
+            package
+                .part("xl/_rels/workbook.xml.rels")
+                .expect("base workbook rels")
+                .bytes
+                .clone(),
+        )
+        .expect("workbook rels utf8")
+        .replace(
+            "</Relationships>",
+            r#"  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/calcChain" Target="calcChain.xml"/>
+</Relationships>"#,
+        );
+        package
+            .replace_part_bytes("[Content_Types].xml", content_types_xml.into_bytes())
+            .expect("replace content types");
+        package
+            .replace_part_bytes("xl/_rels/workbook.xml.rels", workbook_rels_xml.into_bytes())
+            .expect("replace workbook rels");
+        package
+            .add_part(OpcPart {
+                name: "xl/calcChain.xml".to_string(),
+                content_type: Some(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.calcChain+xml"
+                        .to_string(),
+                ),
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<calcChain xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <c r="B1" i="1"/>
+</calcChain>"#
+                    .to_vec(),
+            })
+            .expect("add calc chain part");
+        package.to_bytes().expect("calc chain package bytes")
     }
 
     fn synthetic_comment_workbook_bytes() -> Vec<u8> {
