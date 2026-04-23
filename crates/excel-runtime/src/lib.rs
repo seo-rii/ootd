@@ -115,6 +115,7 @@ pub struct ExcelRuntime {
     decimal_separator: String,
     thousands_separator: String,
     show_windows_in_taskbar: bool,
+    interactive: bool,
     cut_copy_mode: Option<i32>,
     next_handle: u64,
     next_object_handle: u64,
@@ -154,6 +155,7 @@ impl ExcelRuntime {
             decimal_separator: ".".to_string(),
             thousands_separator: ",".to_string(),
             show_windows_in_taskbar: true,
+            interactive: true,
             cut_copy_mode: None,
             next_handle: 1,
             next_object_handle: FIRST_DYNAMIC_OBJECT_HANDLE_VALUE,
@@ -626,6 +628,15 @@ impl ExcelRuntime {
                             ));
                         };
                         self.show_windows_in_taskbar = show_windows_in_taskbar;
+                        Ok(())
+                    }
+                    "Interactive" => {
+                        let OmValue::Bool(interactive) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Application.Interactive expects a boolean value",
+                            ));
+                        };
+                        self.interactive = interactive;
                         Ok(())
                     }
                     "CutCopyMode" => {
@@ -1596,6 +1607,14 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Bool(self.show_windows_in_taskbar))
+            }
+            "Interactive" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.Interactive does not accept index arguments",
+                    ));
+                }
+                Ok(OmValue::Bool(self.interactive))
             }
             "CutCopyMode" => {
                 if !args.is_empty() {
@@ -7849,6 +7868,56 @@ mod tests {
             runtime
                 .dispatch_get(application, "ShowWindowsInTaskbar", &[OmValue::Bool(true)])
                 .expect_err("Application.ShowWindowsInTaskbar should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn application_interactive_dispatch_roundtrips_and_rejects_invalid_values() {
+        let mut runtime = ExcelRuntime::new();
+        let application = runtime.root_application();
+
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(application, "Interactive", &[])
+                .expect("Application.Interactive default")
+        ));
+
+        runtime
+            .dispatch_set(application, "Interactive", OmValue::Bool(false), &[])
+            .expect("Application.Interactive = false");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "Interactive", &[])
+                .expect("Application.Interactive after false")
+        ));
+
+        runtime
+            .dispatch_set(application, "Interactive", OmValue::Bool(true), &[])
+            .expect("Application.Interactive = true");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(application, "Interactive", &[])
+                .expect("Application.Interactive after true")
+        ));
+
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    application,
+                    "Interactive",
+                    OmValue::Text("bad".to_string()),
+                    &[]
+                )
+                .expect_err("Application.Interactive should reject non-bool values")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "Interactive", &[OmValue::Bool(true)])
+                .expect_err("Application.Interactive should reject index args")
                 .code,
             OmErrorCode::InvalidArgument
         );
