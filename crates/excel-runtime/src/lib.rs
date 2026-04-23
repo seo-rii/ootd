@@ -90,6 +90,8 @@ pub struct ExcelRuntime {
     root_application: ObjectHandle,
     display_alerts: bool,
     calculation: i32,
+    screen_updating: bool,
+    enable_events: bool,
     next_handle: u64,
     next_object_handle: u64,
     next_created_workbook_index: u64,
@@ -115,6 +117,8 @@ impl ExcelRuntime {
             root_application: ObjectHandle(ROOT_APPLICATION_HANDLE_VALUE),
             display_alerts: true,
             calculation: XL_CALCULATION_AUTOMATIC,
+            screen_updating: true,
+            enable_events: true,
             next_handle: 1,
             next_object_handle: FIRST_DYNAMIC_OBJECT_HANDLE_VALUE,
             next_created_workbook_index: 1,
@@ -461,6 +465,24 @@ impl ExcelRuntime {
                             ));
                         }
                         self.calculation = calculation;
+                        Ok(())
+                    }
+                    "ScreenUpdating" => {
+                        let OmValue::Bool(screen_updating) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Application.ScreenUpdating expects a boolean value",
+                            ));
+                        };
+                        self.screen_updating = screen_updating;
+                        Ok(())
+                    }
+                    "EnableEvents" => {
+                        let OmValue::Bool(enable_events) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Application.EnableEvents expects a boolean value",
+                            ));
+                        };
+                        self.enable_events = enable_events;
                         Ok(())
                     }
                     _ => Err(OmError::unsupported(format!(
@@ -1034,6 +1056,22 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Number(f64::from(self.calculation)))
+            }
+            "ScreenUpdating" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.ScreenUpdating does not accept index arguments",
+                    ));
+                }
+                Ok(OmValue::Bool(self.screen_updating))
+            }
+            "EnableEvents" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.EnableEvents does not accept index arguments",
+                    ));
+                }
+                Ok(OmValue::Bool(self.enable_events))
             }
             "Cells" => {
                 let Some(active_workbook) = self.active_workbook else {
@@ -6294,6 +6332,65 @@ mod tests {
                 .code,
             OmErrorCode::InvalidArgument
         );
+    }
+
+    #[test]
+    fn application_boolean_toggles_roundtrip_and_reject_invalid_values() {
+        for member in ["ScreenUpdating", "EnableEvents"] {
+            let mut runtime = ExcelRuntime::new();
+            let application = runtime.root_application();
+
+            assert!(expect_bool(
+                runtime
+                    .dispatch_get(application, member, &[])
+                    .expect("Application boolean toggle default")
+            ));
+
+            runtime
+                .dispatch_set(application, member, OmValue::Bool(false), &[])
+                .expect("Application boolean toggle = false");
+            assert!(!expect_bool(
+                runtime
+                    .dispatch_get(application, member, &[])
+                    .expect("Application boolean toggle after false")
+            ));
+
+            runtime
+                .dispatch_set(application, member, OmValue::Bool(true), &[])
+                .expect("Application boolean toggle = true");
+            assert!(expect_bool(
+                runtime
+                    .dispatch_get(application, member, &[])
+                    .expect("Application boolean toggle after true")
+            ));
+
+            assert_eq!(
+                runtime
+                    .dispatch_set(application, member, OmValue::Number(1.0), &[])
+                    .expect_err("Application boolean toggle should reject non-bool values")
+                    .code,
+                OmErrorCode::TypeMismatch
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(application, member, &[OmValue::Bool(true)])
+                    .expect_err("Application boolean toggle should reject index args")
+                    .code,
+                OmErrorCode::InvalidArgument
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_set(
+                        application,
+                        member,
+                        OmValue::Bool(true),
+                        &[OmValue::Bool(true)],
+                    )
+                    .expect_err("Application boolean toggle set should reject index args")
+                    .code,
+                OmErrorCode::InvalidArgument
+            );
+        }
     }
 
     #[test]
