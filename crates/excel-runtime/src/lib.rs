@@ -9215,7 +9215,48 @@ impl<'a> FormulaEvaluator<'a> {
         sum_sheet_id: SheetId,
         sum_rect: Rect,
     ) -> Result<f64, FormulaEvalError> {
+        Ok(self
+            .conditional_sum_and_count_in_rect(
+                criteria_sheet_id,
+                criteria_rect,
+                criteria,
+                sum_sheet_id,
+                sum_rect,
+            )?
+            .0)
+    }
+
+    fn averageif_values_in_rect(
+        &mut self,
+        criteria_sheet_id: SheetId,
+        criteria_rect: Rect,
+        criteria: &FormulaCriteria,
+        average_sheet_id: SheetId,
+        average_rect: Rect,
+    ) -> Result<f64, FormulaEvalError> {
+        let (total, count) = self.conditional_sum_and_count_in_rect(
+            criteria_sheet_id,
+            criteria_rect,
+            criteria,
+            average_sheet_id,
+            average_rect,
+        )?;
+        if count == 0 {
+            return Err(FormulaEvalError::Div0);
+        }
+        Ok(total / count as f64)
+    }
+
+    fn conditional_sum_and_count_in_rect(
+        &mut self,
+        criteria_sheet_id: SheetId,
+        criteria_rect: Rect,
+        criteria: &FormulaCriteria,
+        value_sheet_id: SheetId,
+        value_rect: Rect,
+    ) -> Result<(f64, u64), FormulaEvalError> {
         let mut total = 0.0;
+        let mut count = 0_u64;
         for row in criteria_rect.row_first..=criteria_rect.row_last {
             for col in criteria_rect.col_first..=criteria_rect.col_last {
                 let criteria_value = self.cell_value_or_blank(criteria_sheet_id, row, col)?;
@@ -9225,11 +9266,14 @@ impl<'a> FormulaEvaluator<'a> {
                 if !criteria.matches(&criteria_value) {
                     continue;
                 }
-                let sum_row = sum_rect.row_first + (row - criteria_rect.row_first);
-                let sum_col = sum_rect.col_first + (col - criteria_rect.col_first);
-                let sum_value = self.cell_value_or_blank(sum_sheet_id, sum_row, sum_col)?;
-                match sum_value {
-                    CellValue::Number(number) => total += number,
+                let value_row = value_rect.row_first + (row - criteria_rect.row_first);
+                let value_col = value_rect.col_first + (col - criteria_rect.col_first);
+                let value = self.cell_value_or_blank(value_sheet_id, value_row, value_col)?;
+                match value {
+                    CellValue::Number(number) => {
+                        total += number;
+                        count += 1;
+                    }
                     CellValue::Error(error) => {
                         return Err(formula_eval_error_from_cell_error(error));
                     }
@@ -9237,7 +9281,7 @@ impl<'a> FormulaEvaluator<'a> {
                 }
             }
         }
-        Ok(total)
+        Ok((total, count))
     }
 }
 
@@ -9378,6 +9422,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("SUMIF") {
             return self.parse_sumif_function();
         }
+        if name.eq_ignore_ascii_case("AVERAGEIF") {
+            return self.parse_averageif_function();
+        }
         let function =
             FormulaAggregateFunction::from_name(name).ok_or(FormulaEvalError::Unsupported)?;
         let mut values = Vec::new();
@@ -9445,6 +9492,40 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             &criteria,
             sum_sheet_id,
             sum_rect,
+        )
+    }
+
+    fn parse_averageif_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let (criteria_sheet_id, criteria_rect) = self.parse_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let criteria = self.parse_criteria_argument()?;
+        self.skip_whitespace();
+        if self.consume_char(')') {
+            return self.evaluator.averageif_values_in_rect(
+                criteria_sheet_id,
+                criteria_rect,
+                &criteria,
+                criteria_sheet_id,
+                criteria_rect,
+            );
+        }
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let (average_sheet_id, average_rect) = self.parse_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        self.evaluator.averageif_values_in_rect(
+            criteria_sheet_id,
+            criteria_rect,
+            &criteria,
+            average_sheet_id,
+            average_rect,
         )
     }
 
@@ -12314,6 +12395,124 @@ mod tests {
                 OmValue::Number(60.0),
                 OmValue::Number(20.0),
                 OmValue::Number(40.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_averageif_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let criteria_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A5".to_string())])
+                .expect("Range(A1:A5)"),
+        );
+        let average_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B5".to_string())])
+                .expect("Range(B1:B5)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1:C5".to_string())])
+                .expect("Range(C1:C5)"),
+        );
+
+        runtime
+            .dispatch_set(
+                criteria_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        5,
+                        1,
+                        vec![
+                            OmValue::Number(2.0),
+                            OmValue::Number(8.0),
+                            OmValue::Empty,
+                            OmValue::Text("skip".to_string()),
+                            OmValue::Number(2.0),
+                        ],
+                    )
+                    .expect("criteria values"),
+                ),
+                &[],
+            )
+            .expect("set averageif criteria values");
+        runtime
+            .dispatch_set(
+                average_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        5,
+                        1,
+                        vec![
+                            OmValue::Number(10.0),
+                            OmValue::Number(20.0),
+                            OmValue::Number(30.0),
+                            OmValue::Number(40.0),
+                            OmValue::Number(50.0),
+                        ],
+                    )
+                    .expect("average values"),
+                ),
+                &[],
+            )
+            .expect("set averageif source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        5,
+                        1,
+                        vec![
+                            OmValue::Text("=AVERAGEIF(A1:A5, 2)".to_string()),
+                            OmValue::Text("=AVERAGEIF(A1:A5, \">3\")".to_string()),
+                            OmValue::Text("=AVERAGEIF(A1:A5, 2, B1:B5)".to_string()),
+                            OmValue::Text("=AVERAGEIF(A1:A6, \"\", B1:B6)".to_string()),
+                            OmValue::Text("=AVERAGEIF(A1:A5, \"missing\", B1:B5)".to_string()),
+                        ],
+                    )
+                    .expect("averageif formulas"),
+                ),
+                &[],
+            )
+            .expect("set averageif formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("averageif values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected averageif value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(2.0),
+                OmValue::Number(8.0),
+                OmValue::Number(30.0),
+                OmValue::Number(30.0),
+                OmValue::Error(CellError::Div0),
             ]
         );
     }
