@@ -86,6 +86,7 @@ pub struct ExcelRuntime {
     codec: XlsxCodec,
     dispatch_registry: OmFocusSurfaceRegistry,
     root_application: ObjectHandle,
+    display_alerts: bool,
     next_handle: u64,
     next_object_handle: u64,
     next_created_workbook_index: u64,
@@ -109,6 +110,7 @@ impl ExcelRuntime {
             dispatch_registry: build_focus_surface_registry_from_json(PINNED_OM_TEMPLATE_JSON)
                 .expect("pinned OM focus registry"),
             root_application: ObjectHandle(ROOT_APPLICATION_HANDLE_VALUE),
+            display_alerts: true,
             next_handle: 1,
             next_object_handle: FIRST_DYNAMIC_OBJECT_HANDLE_VALUE,
             next_created_workbook_index: 1,
@@ -413,6 +415,28 @@ impl ExcelRuntime {
         args: &[OmValue],
     ) -> OmResult<()> {
         match self.runtime_object(handle)? {
+            RuntimeObjectKind::Application => {
+                self.focus_member_supported("Application", member, true)?;
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "Application.{member} does not accept index arguments"
+                    )));
+                }
+                match member {
+                    "DisplayAlerts" => {
+                        let OmValue::Bool(display_alerts) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Application.DisplayAlerts expects a boolean value",
+                            ));
+                        };
+                        self.display_alerts = display_alerts;
+                        Ok(())
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "Application.{member} is not writable"
+                    ))),
+                }
+            }
             RuntimeObjectKind::Workbook { workbook } => {
                 self.focus_member_supported("Workbook", member, true)?;
                 if !args.is_empty() {
@@ -512,8 +536,7 @@ impl ExcelRuntime {
                 rect,
                 projection,
             } => self.dispatch_set_range(workbook, sheet_id, rect, projection, member, value, args),
-            RuntimeObjectKind::Application
-            | RuntimeObjectKind::WorkbooksCollection
+            RuntimeObjectKind::WorkbooksCollection
             | RuntimeObjectKind::WorksheetsCollection { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
             ))),
@@ -950,6 +973,14 @@ impl ExcelRuntime {
                     self.register_range_handle(active_workbook, selection.sheet_id, selection.rect)
                         .0,
                 ))
+            }
+            "DisplayAlerts" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.DisplayAlerts does not accept index arguments",
+                    ));
+                }
+                Ok(OmValue::Bool(self.display_alerts))
             }
             "Cells" => {
                 let Some(active_workbook) = self.active_workbook else {
@@ -2692,7 +2723,7 @@ impl ExcelRuntime {
             .copied()
             .filter(|other_sheet_id| *other_sheet_id != sheet_id)
         {
-            self.delete_worksheet(copied_workbook, other_sheet_id)?;
+            self.delete_worksheet(copied_workbook, other_sheet_id, false)?;
         }
         self.runtime_workbook_mut(copied_workbook)?.dirty = true;
         self.set_selection(copied_workbook, sheet_id, selection_rect);
@@ -3237,7 +3268,7 @@ impl ExcelRuntime {
             self.spawn_single_sheet_workbook_from_source(workbook, sheet_id, selection_rect)?;
 
             if source_sheet_count > 1 {
-                self.delete_worksheet(workbook, sheet_id)?;
+                self.delete_worksheet(workbook, sheet_id, false)?;
             } else {
                 self.close_workbook(workbook)?;
             }
@@ -3264,7 +3295,7 @@ impl ExcelRuntime {
                 insertion_index,
             )?;
             if source_sheet_count > 1 {
-                self.delete_worksheet(workbook, sheet_id)?;
+                self.delete_worksheet(workbook, sheet_id, false)?;
             } else {
                 self.close_workbook(workbook)?;
             }
@@ -3495,7 +3526,9 @@ impl ExcelRuntime {
                         "Worksheet.Delete does not accept arguments",
                     ));
                 }
-                Ok(OmValue::Bool(self.delete_worksheet(workbook, sheet_id)?))
+                Ok(OmValue::Bool(
+                    self.delete_worksheet(workbook, sheet_id, true)?,
+                ))
             }
             _ => Err(OmError::unsupported(format!(
                 "Worksheet.{member} is not implemented as a method"
@@ -3503,13 +3536,18 @@ impl ExcelRuntime {
         }
     }
 
-    fn delete_worksheet(&mut self, workbook: WorkbookHandle, sheet_id: SheetId) -> OmResult<bool> {
+    fn delete_worksheet(
+        &mut self,
+        workbook: WorkbookHandle,
+        sheet_id: SheetId,
+        respect_display_alerts: bool,
+    ) -> OmResult<bool> {
         let deleted_was_active = self.active_workbook == Some(workbook)
             && self.selection.is_some_and(|selection| {
                 selection.workbook == workbook && selection.sheet_id == sheet_id
             });
         let replacement_sheet_id = {
-            let runtime = self.runtime_workbook_mut(workbook)?;
+            let runtime = self.runtime_workbook(workbook)?;
             if runtime.read_only {
                 return Err(OmError::new(
                     OmErrorCode::InvalidState,
@@ -3522,7 +3560,25 @@ impl ExcelRuntime {
                     "cannot delete the last worksheet in a workbook",
                 ));
             }
+            let worksheet_index = runtime
+                .loaded
+                .state
+                .worksheets
+                .iter()
+                .position(|worksheet| worksheet.id == sheet_id)
+                .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?;
+            if respect_display_alerts && self.display_alerts {
+                return Ok(false);
+            }
+            if worksheet_index < runtime.loaded.state.worksheets.len() - 1 {
+                runtime.loaded.state.worksheets[worksheet_index + 1].id
+            } else {
+                runtime.loaded.state.worksheets[worksheet_index - 1].id
+            }
+        };
 
+        {
+            let runtime = self.runtime_workbook_mut(workbook)?;
             let worksheet_index = runtime
                 .loaded
                 .state
@@ -3533,20 +3589,6 @@ impl ExcelRuntime {
             let removed_worksheet = runtime.loaded.state.worksheets.remove(worksheet_index);
             runtime.loaded.state.worksheet_data.remove(&sheet_id);
             let removed_support_parts = runtime.loaded.worksheet_support_parts.remove(&sheet_id);
-
-            let replacement_sheet_id = if worksheet_index < runtime.loaded.state.worksheets.len() {
-                runtime.loaded.state.worksheets[worksheet_index].id
-            } else {
-                runtime
-                    .loaded
-                    .state
-                    .worksheets
-                    .last()
-                    .map(|worksheet| worksheet.id)
-                    .ok_or_else(|| {
-                        OmError::new(OmErrorCode::NotFound, "workbook has no worksheets")
-                    })?
-            };
 
             let workbook_xml = runtime
                 .loaded
@@ -3623,8 +3665,7 @@ impl ExcelRuntime {
             }
 
             runtime.dirty = true;
-            replacement_sheet_id
-        };
+        }
 
         self.invalidate_workbook_calc_chain(workbook)?;
         self.invalidate_sheet_object_handles(workbook, sheet_id);
@@ -5942,6 +5983,68 @@ mod tests {
             runtime
                 .dispatch_invoke(application, "CalculateFullRebuild", &[OmValue::Bool(true)],)
                 .expect_err("CalculateFullRebuild arguments should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn application_displayalerts_dispatch_roundtrips_and_rejects_invalid_values() {
+        let mut runtime = ExcelRuntime::new();
+        let application = runtime.root_application();
+
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(application, "DisplayAlerts", &[])
+                .expect("Application.DisplayAlerts default")
+        ));
+
+        runtime
+            .dispatch_set(application, "DisplayAlerts", OmValue::Bool(false), &[])
+            .expect("Application.DisplayAlerts = false");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "DisplayAlerts", &[])
+                .expect("Application.DisplayAlerts after false")
+        ));
+
+        runtime
+            .dispatch_set(application, "DisplayAlerts", OmValue::Bool(true), &[])
+            .expect("Application.DisplayAlerts = true");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(application, "DisplayAlerts", &[])
+                .expect("Application.DisplayAlerts after true")
+        ));
+
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    application,
+                    "DisplayAlerts",
+                    OmValue::Text("bad".to_string()),
+                    &[]
+                )
+                .expect_err("Application.DisplayAlerts should reject non-bool values")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "DisplayAlerts", &[OmValue::Bool(true)])
+                .expect_err("Application.DisplayAlerts should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    application,
+                    "DisplayAlerts",
+                    OmValue::Bool(true),
+                    &[OmValue::Bool(true)],
+                )
+                .expect_err("Application.DisplayAlerts set should reject index args")
                 .code,
             OmErrorCode::InvalidArgument
         );
@@ -11523,10 +11626,35 @@ mod tests {
                 .expect("Sheet3.Range(B2)"),
         );
 
+        assert!(!expect_bool(
+            runtime
+                .dispatch_invoke(sheet3, "Delete", &[])
+                .expect("Worksheet.Delete with DisplayAlerts=true")
+        ));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(worksheets, "Count", &[])
+                    .expect("Worksheets.Count after canceled delete")
+            ),
+            3.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(sheet3, "Name", &[])
+                    .expect("Sheet3 should remain after canceled delete")
+            ),
+            "Sheet3"
+        );
+        runtime
+            .dispatch_set(application, "DisplayAlerts", OmValue::Bool(false), &[])
+            .expect("Application.DisplayAlerts = false");
+
         assert!(expect_bool(
             runtime
                 .dispatch_invoke(sheet3, "Delete", &[])
-                .expect("Worksheet.Delete")
+                .expect("Worksheet.Delete with DisplayAlerts=false")
         ));
         assert_eq!(
             expect_number(
