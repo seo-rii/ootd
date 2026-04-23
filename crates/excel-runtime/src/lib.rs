@@ -2171,6 +2171,14 @@ impl ExcelRuntime {
                         self.set_selection(workbook, sheet_id, rect);
                         Ok(OmValue::Empty)
                     }
+                    "Calculate" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "Range.Calculate does not accept arguments",
+                            ));
+                        }
+                        Ok(OmValue::Empty)
+                    }
                     "ClearContents" => {
                         if !args.is_empty() {
                             return Err(OmError::invalid_argument(
@@ -10059,6 +10067,70 @@ mod tests {
             runtime
                 .dispatch_invoke(range, "Select", &[OmValue::Bool(true)])
                 .expect_err("Range.Select args should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn range_calculate_is_noop_and_preserves_selection_and_saved_state() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let selection_seed = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:C1".to_string())])
+                .expect("Range(B1:C1)"),
+        );
+        let calculate_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        runtime
+            .dispatch_invoke(selection_seed, "Select", &[])
+            .expect("Range.Select");
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(calculate_range, "Calculate", &[])
+                .expect("Range.Calculate"),
+            OmValue::Empty
+        ));
+        let selection = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after Range.Calculate"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection, "Address", &[])
+                    .expect("Selection address after Range.Calculate")
+            ),
+            "$B$1:$C$1"
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after Range.Calculate")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(calculate_range, "Calculate", &[OmValue::Missing])
+                .expect_err("Range.Calculate args should be rejected")
                 .code,
             OmErrorCode::InvalidArgument
         );
