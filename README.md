@@ -22,12 +22,13 @@ Implemented today:
 - `excel-model` workbook, worksheet, and cell state,
 - `excel-xlsx` load/save support for a focused vertical slice,
 - `excel-runtime` orchestration for workbook/session and range access,
+- `excel-runtime` formula evaluation for arithmetic, aggregates, comparisons, logical functions, and `Application`/`Worksheet.Evaluate`,
 - `office-capture` support for Windows capture bundle planning and materialization.
 
 Not implemented yet:
 
 - a complete Excel object model facade,
-- a calculation engine,
+- full Excel calculation parity beyond the current formula subset,
 - a fully pinned real-world Windows capture bundle checked into the repository,
 - broader Office applications beyond the current Excel-first slice.
 
