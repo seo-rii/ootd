@@ -3001,6 +3001,70 @@
           }
         },
         {
+          "name": "Formula2Local",
+          "memberKind": "property",
+          "access": "readwrite",
+          "returnType": {
+            "kind": "variant",
+            "name": "Variant",
+            "aliasOf": "VARIANT"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Formula2Local"
+                },
+                {
+                  "kind": "property_set",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Formula2Local"
+                }
+              ],
+              "typeInfo": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          }
+        },
+        {
+          "name": "Formula2R1C1Local",
+          "memberKind": "property",
+          "access": "readwrite",
+          "returnType": {
+            "kind": "variant",
+            "name": "Variant",
+            "aliasOf": "VARIANT"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Formula2R1C1Local"
+                },
+                {
+                  "kind": "property_set",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Formula2R1C1Local"
+                }
+              ],
+              "typeInfo": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          }
+        },
+        {
           "name": "Text",
           "memberKind": "property",
           "access": "read",
