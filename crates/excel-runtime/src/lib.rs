@@ -78,6 +78,14 @@ struct RuntimeSelection {
 }
 
 #[derive(Debug, Clone, Copy)]
+struct RuntimeClipboard {
+    mode: i32,
+    workbook: WorkbookHandle,
+    sheet_id: SheetId,
+    rect: Rect,
+}
+
+#[derive(Debug, Clone, Copy)]
 enum RangeProjection {
     Cells,
     Rows,
@@ -129,6 +137,7 @@ pub struct ExcelRuntime {
     show_windows_in_taskbar: bool,
     interactive: bool,
     cut_copy_mode: Option<i32>,
+    clipboard: Option<RuntimeClipboard>,
     next_handle: u64,
     next_object_handle: u64,
     next_created_workbook_index: u64,
@@ -170,6 +179,7 @@ impl ExcelRuntime {
             show_windows_in_taskbar: true,
             interactive: true,
             cut_copy_mode: None,
+            clipboard: None,
             next_handle: 1,
             next_object_handle: FIRST_DYNAMIC_OBJECT_HANDLE_VALUE,
             next_created_workbook_index: 1,
@@ -372,6 +382,13 @@ impl ExcelRuntime {
             self.selection = self
                 .active_workbook
                 .and_then(|active_workbook| self.default_selection(active_workbook).ok());
+        }
+        if self
+            .clipboard
+            .is_some_and(|clipboard| clipboard.workbook == workbook)
+        {
+            self.clipboard = None;
+            self.cut_copy_mode = None;
         }
         Ok(())
     }
@@ -663,6 +680,7 @@ impl ExcelRuntime {
                     }
                     "CutCopyMode" => {
                         self.cut_copy_mode = coerce_cut_copy_mode(value)?;
+                        self.clipboard = None;
                         Ok(())
                     }
                     _ => Err(OmError::unsupported(format!(
@@ -1537,6 +1555,12 @@ impl ExcelRuntime {
 
                         let Some(destination) = destination else {
                             self.cut_copy_mode = Some(XL_COPY);
+                            self.clipboard = Some(RuntimeClipboard {
+                                mode: XL_COPY,
+                                workbook,
+                                sheet_id,
+                                rect,
+                            });
                             return Ok(OmValue::Empty);
                         };
 
@@ -1666,6 +1690,7 @@ impl ExcelRuntime {
                             }
                         }
                         self.cut_copy_mode = None;
+                        self.clipboard = None;
                         Ok(OmValue::Empty)
                     }
                     "Cut" => {
@@ -1686,6 +1711,12 @@ impl ExcelRuntime {
 
                         let Some(destination) = destination else {
                             self.cut_copy_mode = Some(XL_CUT);
+                            self.clipboard = Some(RuntimeClipboard {
+                                mode: XL_CUT,
+                                workbook,
+                                sheet_id,
+                                rect,
+                            });
                             return Ok(OmValue::Empty);
                         };
 
@@ -2034,7 +2065,49 @@ impl ExcelRuntime {
                         }
 
                         self.cut_copy_mode = None;
+                        self.clipboard = None;
                         Ok(OmValue::Empty)
+                    }
+                    "PasteSpecial" => {
+                        if args.len() > 4 {
+                            return Err(OmError::invalid_argument(
+                                "Range.PasteSpecial accepts at most Paste, Operation, SkipBlanks, and Transpose arguments",
+                            ));
+                        }
+                        if args.iter().any(|arg| {
+                            !matches!(arg, OmValue::Missing | OmValue::Empty | OmValue::Null)
+                        }) {
+                            return Err(OmError::unsupported(
+                                "Range.PasteSpecial currently supports omitted arguments only",
+                            ));
+                        }
+                        let clipboard = self.clipboard.ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "Range.PasteSpecial requires an active copy or cut range",
+                            )
+                        })?;
+                        let source = self.register_range_handle(
+                            clipboard.workbook,
+                            clipboard.sheet_id,
+                            clipboard.rect,
+                        );
+                        let destination = self.register_range_handle(workbook, sheet_id, rect);
+                        match clipboard.mode {
+                            XL_COPY => self.dispatch_invoke(
+                                source.0,
+                                "Copy",
+                                &[OmValue::Object(destination.0)],
+                            ),
+                            XL_CUT => self.dispatch_invoke(
+                                source.0,
+                                "Cut",
+                                &[OmValue::Object(destination.0)],
+                            ),
+                            _ => Err(OmError::invalid_state(
+                                "Range.PasteSpecial clipboard mode is invalid",
+                            )),
+                        }
                     }
                     "FillDown" => {
                         if !args.is_empty() {
@@ -14876,6 +14949,137 @@ mod tests {
     }
 
     #[test]
+    fn range_paste_special_pastes_copied_clipboard_across_workbooks() {
+        let mut runtime = ExcelRuntime::new();
+        let source_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open source workbook");
+        let destination_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open destination workbook");
+        let application = runtime.root_application();
+        let source_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(source_workbook.0, "Worksheets", &[])
+                .expect("source Workbook.Worksheets"),
+        );
+        let source_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(source_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("source Worksheets.Item(1)"),
+        );
+        let destination_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(destination_workbook.0, "Worksheets", &[])
+                .expect("destination Workbook.Worksheets"),
+        );
+        let destination_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(destination_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("destination Worksheets.Item(1)"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(source_sheet, "Range", &[OmValue::Text("A1:B1".to_string())])
+                .expect("source Range(A1:B1)"),
+        );
+        let destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    destination_sheet,
+                    "Range",
+                    &[OmValue::Text("C3".to_string())],
+                )
+                .expect("destination Range(C3)"),
+        );
+
+        runtime
+            .dispatch_invoke(source, "Copy", &[])
+            .expect("Range.Copy clipboard");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode after clipboard copy")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(destination, "PasteSpecial", &[])
+                .expect("Range.PasteSpecial copied clipboard"),
+            OmValue::Empty
+        ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after PasteSpecial")
+        ));
+
+        let pasted_value = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    destination_sheet,
+                    "Range",
+                    &[OmValue::Text("C3".to_string())],
+                )
+                .expect("destination Range(C3) after paste"),
+        );
+        let pasted_formula = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    destination_sheet,
+                    "Range",
+                    &[OmValue::Text("D3".to_string())],
+                )
+                .expect("destination Range(D3) after paste"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(pasted_value, "Value", &[])
+                    .expect("C3 Value after PasteSpecial")
+            ),
+            42.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(pasted_formula, "Formula", &[])
+                    .expect("D3 Formula after PasteSpecial")
+            ),
+            r#"=UPPER("shared")"#
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(source_workbook.0, "Saved", &[])
+                .expect("source Workbook.Saved after PasteSpecial")
+        ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(destination_workbook.0, "Saved", &[])
+                .expect("destination Workbook.Saved after PasteSpecial")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(destination, "PasteSpecial", &[])
+                .expect_err("Range.PasteSpecial should reject empty clipboard")
+                .code,
+            OmErrorCode::InvalidState
+        );
+    }
+
+    #[test]
     fn range_copy_rejects_invalid_destinations() {
         let mut runtime = ExcelRuntime::new();
         runtime
@@ -15179,6 +15383,131 @@ mod tests {
                 .dispatch_get(destination_workbook.0, "Saved", &[])
                 .expect("destination Workbook.Saved after Range.Cut")
         ));
+    }
+
+    #[test]
+    fn range_paste_special_moves_cut_clipboard_to_destination() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B1".to_string())])
+                .expect("Range(A1:B1)"),
+        );
+        let destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C3".to_string())])
+                .expect("Range(C3)"),
+        );
+
+        runtime
+            .dispatch_invoke(source, "Cut", &[])
+            .expect("Range.Cut clipboard");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode after clipboard cut")
+            ),
+            f64::from(super::XL_CUT)
+        );
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(
+                    destination,
+                    "PasteSpecial",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Empty,
+                        OmValue::Null,
+                        OmValue::Missing,
+                    ],
+                )
+                .expect("Range.PasteSpecial cut clipboard"),
+            OmValue::Empty
+        ));
+
+        let source_a1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        let source_b1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Range(B1)"),
+        );
+        let destination_c3 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C3".to_string())])
+                .expect("Range(C3) after paste"),
+        );
+        let destination_d3 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D3".to_string())])
+                .expect("Range(D3) after paste"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(source_a1, "Value", &[])
+                .expect("A1 Value after PasteSpecial cut"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(source_b1, "Value", &[])
+                .expect("B1 Value after PasteSpecial cut"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(destination_c3, "Value", &[])
+                    .expect("C3 Value after PasteSpecial cut")
+            ),
+            42.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(destination_d3, "Formula", &[])
+                    .expect("D3 Formula after PasteSpecial cut")
+            ),
+            r#"=UPPER("shared")"#
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after PasteSpecial cut")
+        ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after PasteSpecial cut")
+        ));
+        runtime
+            .dispatch_invoke(source, "Copy", &[])
+            .expect("Range.Copy before unsupported PasteSpecial args");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(destination, "PasteSpecial", &[OmValue::Number(1.0)])
+                .expect_err("Range.PasteSpecial should reject implemented options")
+                .code,
+            OmErrorCode::Unsupported
+        );
     }
 
     #[test]
