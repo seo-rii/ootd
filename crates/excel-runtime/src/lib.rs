@@ -1267,7 +1267,15 @@ impl ExcelRuntime {
                     "Delete" => {
                         let shift = match args {
                             [] | [OmValue::Missing] | [OmValue::Empty] | [OmValue::Null] => {
-                                XL_SHIFT_UP
+                                if rect.row_first == 1
+                                    && rect.row_last == EXCEL_MAX_ROW_INDEX
+                                    && (rect.col_first != 1
+                                        || rect.col_last != EXCEL_MAX_COLUMN_INDEX)
+                                {
+                                    XL_SHIFT_TO_LEFT
+                                } else {
+                                    XL_SHIFT_UP
+                                }
                             }
                             [OmValue::Number(shift)] => {
                                 if !shift.is_finite()
@@ -1412,7 +1420,15 @@ impl ExcelRuntime {
                     "Insert" => {
                         let shift = match args {
                             [] | [OmValue::Missing] | [OmValue::Empty] | [OmValue::Null] => {
-                                XL_SHIFT_DOWN
+                                if rect.row_first == 1
+                                    && rect.row_last == EXCEL_MAX_ROW_INDEX
+                                    && (rect.col_first != 1
+                                        || rect.col_last != EXCEL_MAX_COLUMN_INDEX)
+                                {
+                                    XL_SHIFT_TO_RIGHT
+                                } else {
+                                    XL_SHIFT_DOWN
+                                }
                             }
                             [OmValue::Number(shift)] => {
                                 if !shift.is_finite()
@@ -12621,6 +12637,95 @@ mod tests {
                 .expect_err("Range.Insert should reject extra args")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn range_insert_delete_default_shift_respects_entire_columns() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let b1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Range(B1)"),
+        );
+        let c1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1".to_string())])
+                .expect("Range(C1)"),
+        );
+        runtime
+            .dispatch_set(c1, "Value", OmValue::Text("right".to_string()), &[])
+            .expect("seed C1");
+        let b_column = expect_object_handle(
+            runtime
+                .dispatch_get(b1, "EntireColumn", &[])
+                .expect("B1.EntireColumn"),
+        );
+        runtime
+            .dispatch_invoke(b_column, "Delete", &[])
+            .expect("EntireColumn.Delete default shift");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(b1, "Value", &[])
+                    .expect("B1 after EntireColumn.Delete")
+            ),
+            "right"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(c1, "Value", &[])
+                .expect("C1 after EntireColumn.Delete"),
+            OmValue::Empty
+        );
+
+        let d1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1".to_string())])
+                .expect("Range(D1)"),
+        );
+        let e1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E1".to_string())])
+                .expect("Range(E1)"),
+        );
+        runtime
+            .dispatch_set(d1, "Value", OmValue::Text("middle".to_string()), &[])
+            .expect("seed D1");
+        let d_column = expect_object_handle(
+            runtime
+                .dispatch_get(d1, "EntireColumn", &[])
+                .expect("D1.EntireColumn"),
+        );
+        runtime
+            .dispatch_invoke(d_column, "Insert", &[])
+            .expect("EntireColumn.Insert default shift");
+        assert_eq!(
+            runtime
+                .dispatch_get(d1, "Value", &[])
+                .expect("D1 after EntireColumn.Insert"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(e1, "Value", &[])
+                    .expect("E1 after EntireColumn.Insert")
+            ),
+            "middle"
         );
     }
 
