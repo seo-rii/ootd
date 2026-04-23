@@ -1551,11 +1551,6 @@ impl ExcelRuntime {
                                 "Range.Copy Destination expects a Range object",
                             ));
                         };
-                        if destination_workbook != workbook {
-                            return Err(OmError::unsupported(
-                                "Range.Copy currently supports same-workbook destinations",
-                            ));
-                        }
 
                         let target_rect = if destination_rect.height() == 1
                             && destination_rect.width() == 1
@@ -1616,7 +1611,7 @@ impl ExcelRuntime {
                             cells
                         };
 
-                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        let runtime = self.runtime_workbook_mut(destination_workbook)?;
                         if runtime.read_only {
                             return Err(OmError::new(
                                 OmErrorCode::InvalidState,
@@ -14654,6 +14649,122 @@ mod tests {
             runtime
                 .dispatch_get(workbook.0, "Saved", &[])
                 .expect("Workbook.Saved after Range.Copy")
+        ));
+    }
+
+    #[test]
+    fn range_copy_destination_supports_cross_workbook_ranges() {
+        let mut runtime = ExcelRuntime::new();
+        let source_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open source workbook");
+        let destination_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open destination workbook");
+        let source_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(source_workbook.0, "Worksheets", &[])
+                .expect("source Workbook.Worksheets"),
+        );
+        let source_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(source_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("source Worksheets.Item(1)"),
+        );
+        let destination_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(destination_workbook.0, "Worksheets", &[])
+                .expect("destination Workbook.Worksheets"),
+        );
+        let destination_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(destination_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("destination Worksheets.Item(1)"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(source_sheet, "Range", &[OmValue::Text("A1:B1".to_string())])
+                .expect("source Range(A1:B1)"),
+        );
+        let destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    destination_sheet,
+                    "Range",
+                    &[OmValue::Text("C3".to_string())],
+                )
+                .expect("destination Range(C3)"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(source, "Copy", &[OmValue::Object(destination)])
+                .expect("Range.Copy cross-workbook Destination"),
+            OmValue::Empty
+        ));
+
+        let copied_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    destination_sheet,
+                    "Range",
+                    &[OmValue::Text("C3:D3".to_string())],
+                )
+                .expect("destination Range(C3:D3)"),
+        );
+        let copied_value = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    copied_range,
+                    "Item",
+                    &[OmValue::Number(1.0), OmValue::Number(1.0)],
+                )
+                .expect("destination C3"),
+        );
+        let copied_formula = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    copied_range,
+                    "Item",
+                    &[OmValue::Number(1.0), OmValue::Number(2.0)],
+                )
+                .expect("destination D3"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_value, "Value", &[])
+                    .expect("C3 Value")
+            ),
+            42.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(copied_formula, "Formula", &[])
+                    .expect("D3 Formula")
+            ),
+            r#"=UPPER("shared")"#
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(source_workbook.0, "Saved", &[])
+                .expect("source Workbook.Saved after Range.Copy")
+        ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(destination_workbook.0, "Saved", &[])
+                .expect("destination Workbook.Saved after Range.Copy")
         ));
     }
 
