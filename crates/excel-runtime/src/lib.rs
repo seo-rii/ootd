@@ -9056,6 +9056,25 @@ impl<'a> FormulaEvaluator<'a> {
         }
         Ok(values)
     }
+
+    fn counta_values_in_rect(
+        &self,
+        sheet_id: SheetId,
+        rect: Rect,
+    ) -> Result<u64, FormulaEvalError> {
+        let Some(worksheet) = self.state.worksheet_data.get(&sheet_id) else {
+            return Err(FormulaEvalError::Ref);
+        };
+        Ok(worksheet
+            .cells
+            .iter()
+            .filter(|((row, col), cell)| {
+                (rect.row_first..=rect.row_last).contains(row)
+                    && (rect.col_first..=rect.col_last).contains(col)
+                    && (cell.formula.is_some() || !matches!(cell.value, CellValue::Blank))
+            })
+            .count() as u64)
+    }
 }
 
 struct FormulaParser<'a, 'b, 'state> {
@@ -9183,6 +9202,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if let Some(function) = FormulaScalarFunction::from_name(name) {
             return self.parse_scalar_function(function);
         }
+        if name.eq_ignore_ascii_case("COUNTA") {
+            return self.parse_counta_function();
+        }
         let function =
             FormulaAggregateFunction::from_name(name).ok_or(FormulaEvalError::Unsupported)?;
         let mut values = Vec::new();
@@ -9198,6 +9220,25 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
             if self.consume_char(')') {
                 return function.evaluate(values.as_slice());
+            }
+            return Err(FormulaEvalError::Unsupported);
+        }
+    }
+
+    fn parse_counta_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let mut count = 0_u64;
+        loop {
+            self.skip_whitespace();
+            if self.consume_char(')') {
+                return Ok(count as f64);
+            }
+            count += self.parse_counta_argument()?;
+            self.skip_whitespace();
+            if self.consume_char(',') {
+                continue;
+            }
+            if self.consume_char(')') {
+                return Ok(count as f64);
             }
             return Err(FormulaEvalError::Unsupported);
         }
@@ -9236,6 +9277,20 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         self.index = checkpoint;
         Ok(vec![self.parse_comparison()?])
+    }
+
+    fn parse_counta_argument(&mut self) -> Result<u64, FormulaEvalError> {
+        let checkpoint = self.index;
+        if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
+            self.index = next_index;
+            self.skip_whitespace();
+            if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
+                return self.evaluator.counta_values_in_rect(target_sheet_id, rect);
+            }
+        }
+        self.index = checkpoint;
+        self.parse_comparison()?;
+        Ok(1)
     }
 
     fn parse_number(&mut self) -> Result<Option<f64>, FormulaEvalError> {
@@ -11751,6 +11806,93 @@ mod tests {
                 OmValue::Number(8.0),
                 OmValue::Number(5.0),
                 OmValue::Number(3.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_counta_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A4".to_string())])
+                .expect("Range(A1:A4)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B3".to_string())])
+                .expect("Range(B1:B3)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        1,
+                        vec![
+                            OmValue::Number(2.0),
+                            OmValue::Text("filled".to_string()),
+                            OmValue::Bool(false),
+                            OmValue::Empty,
+                        ],
+                    )
+                    .expect("counta source values"),
+                ),
+                &[],
+            )
+            .expect("set counta source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        1,
+                        vec![
+                            OmValue::Text("=COUNTA(A1:A4)".to_string()),
+                            OmValue::Text("=COUNTA(A1:A4, TRUE, 0)".to_string()),
+                            OmValue::Text("=COUNTA(A4, FALSE)".to_string()),
+                        ],
+                    )
+                    .expect("counta formulas"),
+                ),
+                &[],
+            )
+            .expect("set counta formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("counta values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected counta value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(3.0),
+                OmValue::Number(5.0),
+                OmValue::Number(1.0),
             ]
         );
     }
