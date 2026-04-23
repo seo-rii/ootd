@@ -3925,6 +3925,22 @@ impl ExcelRuntime {
                 .iter()
                 .position(|worksheet| worksheet.id == sheet_id)
                 .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?;
+            if runtime.loaded.state.worksheets[worksheet_index].visibility
+                == SheetVisibility::Visible
+                && runtime
+                    .loaded
+                    .state
+                    .worksheets
+                    .iter()
+                    .filter(|worksheet| worksheet.visibility == SheetVisibility::Visible)
+                    .count()
+                    <= 1
+            {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    "cannot delete the last visible worksheet in a workbook",
+                ));
+            }
             if respect_display_alerts && self.display_alerts {
                 return Ok(false);
             }
@@ -12042,6 +12058,60 @@ mod tests {
             .dispatch_set(sheet1, "Visible", OmValue::Bool(false), &[])
             .expect_err("hiding last visible sheet should fail");
         assert_eq!(hide_last_visible.code, OmErrorCode::InvalidState);
+    }
+
+    #[test]
+    fn worksheet_delete_rejects_removing_last_visible_sheet() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheet1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let sheet2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Add", &[])
+                .expect("Worksheets.Add"),
+        );
+        runtime
+            .dispatch_set(sheet2, "Visible", OmValue::Bool(false), &[])
+            .expect("hide Sheet2");
+
+        let delete_last_visible = runtime
+            .dispatch_invoke(sheet1, "Delete", &[])
+            .expect_err("deleting last visible sheet should fail");
+        assert_eq!(delete_last_visible.code, OmErrorCode::InvalidState);
+
+        runtime
+            .dispatch_set(application, "DisplayAlerts", OmValue::Bool(false), &[])
+            .expect("disable alerts");
+        assert!(expect_bool(
+            runtime
+                .dispatch_invoke(sheet2, "Delete", &[])
+                .expect("delete hidden Sheet2")
+        ));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(worksheets, "Count", &[])
+                    .expect("Worksheets.Count")
+            ),
+            1.0
+        );
     }
 
     #[test]
