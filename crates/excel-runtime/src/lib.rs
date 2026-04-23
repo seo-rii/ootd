@@ -102,6 +102,7 @@ pub struct ExcelRuntime {
     calculation: i32,
     screen_updating: bool,
     enable_events: bool,
+    status_bar: Option<String>,
     next_handle: u64,
     next_object_handle: u64,
     next_created_workbook_index: u64,
@@ -129,6 +130,7 @@ impl ExcelRuntime {
             calculation: XL_CALCULATION_AUTOMATIC,
             screen_updating: true,
             enable_events: true,
+            status_bar: None,
             next_handle: 1,
             next_object_handle: FIRST_DYNAMIC_OBJECT_HANDLE_VALUE,
             next_created_workbook_index: 1,
@@ -496,6 +498,22 @@ impl ExcelRuntime {
                         self.enable_events = enable_events;
                         Ok(())
                     }
+                    "StatusBar" => match value {
+                        OmValue::Text(text) => {
+                            self.status_bar = Some(text);
+                            Ok(())
+                        }
+                        OmValue::Bool(false) => {
+                            self.status_bar = None;
+                            Ok(())
+                        }
+                        OmValue::Bool(true) => Err(OmError::invalid_argument(
+                            "Application.StatusBar expects text or false",
+                        )),
+                        _ => Err(OmError::type_mismatch(
+                            "Application.StatusBar expects text or false",
+                        )),
+                    },
                     _ => Err(OmError::unsupported(format!(
                         "Application.{member} is not writable"
                     ))),
@@ -1176,6 +1194,18 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Bool(self.enable_events))
+            }
+            "StatusBar" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.StatusBar does not accept index arguments",
+                    ));
+                }
+                Ok(self
+                    .status_bar
+                    .as_ref()
+                    .map(|value| OmValue::Text(value.clone()))
+                    .unwrap_or(OmValue::Bool(false)))
             }
             "Cells" => {
                 let Some(active_workbook) = self.active_workbook else {
@@ -6669,6 +6699,66 @@ mod tests {
                     &[OmValue::Bool(true)],
                 )
                 .expect_err("Application.DisplayAlerts set should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn application_status_bar_dispatch_roundtrips_and_resets_with_false() {
+        let mut runtime = ExcelRuntime::new();
+        let application = runtime.root_application();
+
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "StatusBar", &[])
+                .expect("Application.StatusBar default")
+        ));
+
+        runtime
+            .dispatch_set(
+                application,
+                "StatusBar",
+                OmValue::Text("Calculating workbook".to_string()),
+                &[],
+            )
+            .expect("Application.StatusBar text");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(application, "StatusBar", &[])
+                    .expect("Application.StatusBar after text")
+            ),
+            "Calculating workbook"
+        );
+
+        runtime
+            .dispatch_set(application, "StatusBar", OmValue::Bool(false), &[])
+            .expect("Application.StatusBar false reset");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "StatusBar", &[])
+                .expect("Application.StatusBar after reset")
+        ));
+
+        assert_eq!(
+            runtime
+                .dispatch_set(application, "StatusBar", OmValue::Bool(true), &[])
+                .expect_err("Application.StatusBar should reject true")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(application, "StatusBar", OmValue::Number(1.0), &[])
+                .expect_err("Application.StatusBar should reject numeric values")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "StatusBar", &[OmValue::Bool(true)])
+                .expect_err("Application.StatusBar should reject index args")
                 .code,
             OmErrorCode::InvalidArgument
         );
