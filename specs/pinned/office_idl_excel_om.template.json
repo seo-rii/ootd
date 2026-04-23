@@ -231,6 +231,38 @@
           }
         },
         {
+          "name": "Calculation",
+          "memberKind": "property",
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "XlCalculation"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Application",
+                  "sourceMember": "Calculation"
+                },
+                {
+                  "kind": "property_set",
+                  "sourceInterface": "Application",
+                  "sourceMember": "Calculation"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlCalculation"
+              }
+            }
+          }
+        },
+        {
           "name": "Cells",
           "memberKind": "property",
           "returnType": {

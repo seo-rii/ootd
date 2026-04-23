@@ -20,6 +20,8 @@ const ROOT_APPLICATION_HANDLE_VALUE: u64 = 0;
 const FIRST_DYNAMIC_OBJECT_HANDLE_VALUE: u64 = 1_000_000;
 const EXCEL_MAX_ROW_INDEX: u32 = 1_048_576;
 const EXCEL_MAX_COLUMN_INDEX: u32 = 16_384;
+const XL_CALCULATION_AUTOMATIC: i32 = -4105;
+const XL_CALCULATION_MANUAL: i32 = -4135;
 const XL_SHEET_TYPE_WORKSHEET: i32 = -4167;
 const XL_WBA_TEMPLATE_WORKSHEET: i32 = -4167;
 const CONTENT_TYPES_PART_NAME: &str = "[Content_Types].xml";
@@ -87,6 +89,7 @@ pub struct ExcelRuntime {
     dispatch_registry: OmFocusSurfaceRegistry,
     root_application: ObjectHandle,
     display_alerts: bool,
+    calculation: i32,
     next_handle: u64,
     next_object_handle: u64,
     next_created_workbook_index: u64,
@@ -111,6 +114,7 @@ impl ExcelRuntime {
                 .expect("pinned OM focus registry"),
             root_application: ObjectHandle(ROOT_APPLICATION_HANDLE_VALUE),
             display_alerts: true,
+            calculation: XL_CALCULATION_AUTOMATIC,
             next_handle: 1,
             next_object_handle: FIRST_DYNAMIC_OBJECT_HANDLE_VALUE,
             next_created_workbook_index: 1,
@@ -430,6 +434,33 @@ impl ExcelRuntime {
                             ));
                         };
                         self.display_alerts = display_alerts;
+                        Ok(())
+                    }
+                    "Calculation" => {
+                        let OmValue::Number(calculation) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Application.Calculation expects an XlCalculation numeric value",
+                            ));
+                        };
+                        if !calculation.is_finite()
+                            || calculation.fract() != 0.0
+                            || calculation < i32::MIN as f64
+                            || calculation > i32::MAX as f64
+                        {
+                            return Err(OmError::invalid_argument(
+                                "Application.Calculation expects an integral XlCalculation value",
+                            ));
+                        }
+                        let calculation = calculation as i32;
+                        if !matches!(
+                            calculation,
+                            XL_CALCULATION_AUTOMATIC | XL_CALCULATION_MANUAL
+                        ) {
+                            return Err(OmError::invalid_argument(
+                                "Application.Calculation currently supports xlCalculationAutomatic and xlCalculationManual",
+                            ));
+                        }
+                        self.calculation = calculation;
                         Ok(())
                     }
                     _ => Err(OmError::unsupported(format!(
@@ -995,6 +1026,14 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Bool(self.display_alerts))
+            }
+            "Calculation" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.Calculation does not accept index arguments",
+                    ));
+                }
+                Ok(OmValue::Number(f64::from(self.calculation)))
             }
             "Cells" => {
                 let Some(active_workbook) = self.active_workbook else {
@@ -5270,7 +5309,10 @@ fn column_to_letters(mut col: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExcelRuntime, blank_workbook_bytes, supports_format};
+    use super::{
+        ExcelRuntime, XL_CALCULATION_AUTOMATIC, XL_CALCULATION_MANUAL, blank_workbook_bytes,
+        supports_format,
+    };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -6154,6 +6196,101 @@ mod tests {
                     &[OmValue::Bool(true)],
                 )
                 .expect_err("Application.DisplayAlerts set should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn application_calculation_dispatch_roundtrips_and_rejects_invalid_values() {
+        let mut runtime = ExcelRuntime::new();
+        let application = runtime.root_application();
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "Calculation", &[])
+                    .expect("Application.Calculation default")
+            ),
+            f64::from(XL_CALCULATION_AUTOMATIC)
+        );
+
+        runtime
+            .dispatch_set(
+                application,
+                "Calculation",
+                OmValue::Number(f64::from(XL_CALCULATION_MANUAL)),
+                &[],
+            )
+            .expect("Application.Calculation = xlCalculationManual");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "Calculation", &[])
+                    .expect("Application.Calculation after manual")
+            ),
+            f64::from(XL_CALCULATION_MANUAL)
+        );
+
+        runtime
+            .dispatch_set(
+                application,
+                "Calculation",
+                OmValue::Number(f64::from(XL_CALCULATION_AUTOMATIC)),
+                &[],
+            )
+            .expect("Application.Calculation = xlCalculationAutomatic");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "Calculation", &[])
+                    .expect("Application.Calculation after automatic")
+            ),
+            f64::from(XL_CALCULATION_AUTOMATIC)
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_set(application, "Calculation", OmValue::Number(2.0), &[])
+                .expect_err("Application.Calculation should reject unsupported enum values")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(application, "Calculation", OmValue::Number(-4105.5), &[])
+                .expect_err("Application.Calculation should reject fractional values")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    application,
+                    "Calculation",
+                    OmValue::Text("manual".to_string()),
+                    &[],
+                )
+                .expect_err("Application.Calculation should reject non-number values")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "Calculation", &[OmValue::Number(1.0)])
+                .expect_err("Application.Calculation should reject index args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    application,
+                    "Calculation",
+                    OmValue::Number(f64::from(XL_CALCULATION_MANUAL)),
+                    &[OmValue::Number(1.0)],
+                )
+                .expect_err("Application.Calculation set should reject index args")
                 .code,
             OmErrorCode::InvalidArgument
         );
