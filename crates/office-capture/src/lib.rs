@@ -2275,8 +2275,8 @@ mod tests {
         let template =
             resolved_template().replace("type_library_major = 16", "type_library_major = 0");
 
-        let error = CapturePlan::from_toml_str(&template)
-            .expect_err("zero type library major should fail");
+        let error =
+            CapturePlan::from_toml_str(&template).expect_err("zero type library major should fail");
         match error {
             CapturePlanError::InvalidField { field, .. } => {
                 assert_eq!(field, "excel.type_library_major");
@@ -2354,7 +2354,10 @@ mod tests {
 
         let plan = CapturePlan::from_toml_str(&template).expect("plan");
 
-        assert_eq!(plan.normalized_paths.output_dir, "\\\\server\\capture\\excel-om");
+        assert_eq!(
+            plan.normalized_paths.output_dir,
+            "\\\\server\\capture\\excel-om"
+        );
         assert_eq!(
             plan.normalized_paths.capture_root,
             "\\\\server\\capture\\excel-om\\excel_om_windows_capture"
@@ -2803,7 +2806,10 @@ mod tests {
             CaptureExecutionReceipt::from_json_path(&receipt_path).expect("execution receipt");
         assert_eq!(receipt.host.computer_name.as_deref(), Some("WIN-EXCEL"));
         assert_eq!(receipt.command_results[0].status, "completed");
-        assert_eq!(receipt.manual_step_results[0].name, "oleview_snapshot_export");
+        assert_eq!(
+            receipt.manual_step_results[0].name,
+            "oleview_snapshot_export"
+        );
     }
 
     #[test]

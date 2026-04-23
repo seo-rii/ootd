@@ -379,8 +379,8 @@ mod tests {
 
     #[test]
     fn om_array_rejects_invalid_dimensions() {
-        let error = OmArray::new(2, 2, vec![OmValue::Empty])
-            .expect_err("invalid dimensions should fail");
+        let error =
+            OmArray::new(2, 2, vec![OmValue::Empty]).expect_err("invalid dimensions should fail");
         assert_eq!(error.code, OmErrorCode::InvalidArgument);
     }
 

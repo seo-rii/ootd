@@ -386,7 +386,9 @@ fn loads_from_json_slice_and_reader_with_array_parameter_defaults() {
     assert_eq!(slice_document, reader_document);
     assert_eq!(slice_document, reparsed);
     assert_eq!(
-        slice_document.interfaces[0].members[0].params[0].type_ref.kind,
+        slice_document.interfaces[0].members[0].params[0]
+            .type_ref
+            .kind,
         TypeRefKind::Array
     );
     assert!(
@@ -402,9 +404,7 @@ fn loads_from_json_slice_and_reader_with_array_parameter_defaults() {
             .map(|type_ref| type_ref.kind.clone()),
         Some(TypeRefKind::Primitive)
     );
-    assert!(
-        slice_document.interfaces[0].members[0].params[0].optional
-    );
+    assert!(slice_document.interfaces[0].members[0].params[0].optional);
     assert!(slice_document.interfaces[0].members[0].params[0].by_ref);
     assert_eq!(
         slice_document.interfaces[0].members[0].params[0].default_value,
