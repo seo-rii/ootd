@@ -1819,6 +1819,17 @@ impl ExcelRuntime {
                         "Application.CalculateFullRebuild does not accept arguments",
                     ));
                 }
+                let workbooks = self
+                    .workbooks
+                    .keys()
+                    .copied()
+                    .map(|handle| WorkbookHandle(ObjectHandle(handle)))
+                    .collect::<Vec<_>>();
+                for workbook in workbooks {
+                    if self.invalidate_workbook_calc_chain(workbook)? {
+                        self.runtime_workbook_mut(workbook)?.dirty = true;
+                    }
+                }
                 Ok(OmValue::Empty)
             }
             "Goto" => {
@@ -4060,7 +4071,7 @@ impl ExcelRuntime {
         Ok(())
     }
 
-    fn invalidate_workbook_calc_chain(&mut self, workbook: WorkbookHandle) -> OmResult<()> {
+    fn invalidate_workbook_calc_chain(&mut self, workbook: WorkbookHandle) -> OmResult<bool> {
         let runtime = self.runtime_workbook_mut(workbook)?;
         let workbook_rels_part_name = runtime
             .loaded
@@ -4075,6 +4086,7 @@ impl ExcelRuntime {
             .take()
             .map(|relationship| relationship.id);
         let calc_chain_part_uri = runtime.loaded.support_parts.calc_chain_part_uri.take();
+        let changed = calc_chain_relationship_id.is_some() || calc_chain_part_uri.is_some();
 
         if let Some(calc_chain_relationship_id) = calc_chain_relationship_id
             && let Some(workbook_rels_xml) = runtime
@@ -4113,7 +4125,7 @@ impl ExcelRuntime {
             }
         }
 
-        Ok(())
+        Ok(changed)
     }
 
     fn invalidate_sheet_object_handles(&mut self, workbook: WorkbookHandle, sheet_id: SheetId) {
@@ -5971,7 +5983,7 @@ mod tests {
     }
 
     #[test]
-    fn application_calculate_full_rebuild_dispatch_is_a_noop_entrypoint() {
+    fn application_calculate_full_rebuild_preserves_selection() {
         let mut runtime = ExcelRuntime::new();
         let _workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -6019,6 +6031,70 @@ mod tests {
                 .code,
             OmErrorCode::InvalidArgument
         );
+    }
+
+    #[test]
+    fn application_calculate_full_rebuild_invalidates_calc_chain_artifacts() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_calc_chain_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open calc chain workbook");
+        let application = runtime.root_application();
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(application, "CalculateFullRebuild", &[])
+                .expect("Application.CalculateFullRebuild"),
+            OmValue::Empty
+        ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after CalculateFullRebuild")
+        ));
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save rebuilt workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved rebuilt package");
+        let workbook_rels_xml = String::from_utf8(
+            saved_package
+                .part("xl/_rels/workbook.xml.rels")
+                .expect("saved workbook rels")
+                .bytes
+                .clone(),
+        )
+        .expect("workbook rels utf8");
+        let content_types_xml = String::from_utf8(
+            saved_package
+                .part("[Content_Types].xml")
+                .expect("saved content types")
+                .bytes
+                .clone(),
+        )
+        .expect("content types utf8");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen rebuilt workbook");
+
+        assert!(!saved_package.contains("xl/calcChain.xml"));
+        assert!(!workbook_rels_xml.contains("calcChain"));
+        assert!(!content_types_xml.contains("/xl/calcChain.xml"));
+        assert!(reopened.support_parts.calc_chain_part_uri.is_none());
+        assert!(reopened.support_parts.calc_chain_relationship.is_none());
     }
 
     #[test]
