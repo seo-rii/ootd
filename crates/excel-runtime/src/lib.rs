@@ -9081,12 +9081,20 @@ enum FormulaXLookupMatchMode {
     Exact,
     ExactOrNextSmaller,
     ExactOrNextLarger,
+    Wildcard,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FormulaLookupOrientation {
     FirstColumn,
     FirstRow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormulaWildcardToken {
+    Literal(char),
+    AnyChar,
+    AnySequence,
 }
 
 fn formula_value_probe_from_cell_value(value: CellValue) -> FormulaValueProbe {
@@ -9199,6 +9207,7 @@ fn formula_xlookup_match_mode_argument(
         0 => Ok(FormulaXLookupMatchMode::Exact),
         -1 => Ok(FormulaXLookupMatchMode::ExactOrNextSmaller),
         1 => Ok(FormulaXLookupMatchMode::ExactOrNextLarger),
+        2 => Ok(FormulaXLookupMatchMode::Wildcard),
         _ => Err(FormulaEvalError::Value),
     }
 }
@@ -9455,11 +9464,23 @@ fn xlookup_match_index_in_values(
         (0..values.len()).collect::<Vec<_>>()
     };
     for index in indexes.iter().copied() {
-        if formula_value_probe_exact_match(lookup_value, &values[index])? {
+        if match mode {
+            FormulaXLookupMatchMode::Wildcard => {
+                formula_value_probe_wildcard_match(lookup_value, &values[index])?
+            }
+            FormulaXLookupMatchMode::Exact
+            | FormulaXLookupMatchMode::ExactOrNextSmaller
+            | FormulaXLookupMatchMode::ExactOrNextLarger => {
+                formula_value_probe_exact_match(lookup_value, &values[index])?
+            }
+        } {
             return Ok(index);
         }
     }
-    if matches!(mode, FormulaXLookupMatchMode::Exact) {
+    if matches!(
+        mode,
+        FormulaXLookupMatchMode::Exact | FormulaXLookupMatchMode::Wildcard
+    ) {
         return Err(FormulaEvalError::NA);
     }
 
@@ -9473,6 +9494,7 @@ fn xlookup_match_index_in_values(
             FormulaXLookupMatchMode::Exact => false,
             FormulaXLookupMatchMode::ExactOrNextSmaller => ordering == Ordering::Less,
             FormulaXLookupMatchMode::ExactOrNextLarger => ordering == Ordering::Greater,
+            FormulaXLookupMatchMode::Wildcard => false,
         };
         if !is_viable {
             continue;
@@ -9488,6 +9510,7 @@ fn xlookup_match_index_in_values(
                     FormulaXLookupMatchMode::ExactOrNextLarger => {
                         candidate_to_current == Ordering::Less
                     }
+                    FormulaXLookupMatchMode::Wildcard => false,
                 },
                 None => false,
             },
@@ -9520,6 +9543,24 @@ fn formula_value_probe_exact_match(
     })
 }
 
+fn formula_value_probe_wildcard_match(
+    lookup_value: &FormulaValueProbe,
+    candidate: &FormulaValueProbe,
+) -> Result<bool, FormulaEvalError> {
+    if let FormulaValueProbe::Error(error) = lookup_value {
+        return Err(*error);
+    }
+    if let FormulaValueProbe::Error(error) = candidate {
+        return Err(*error);
+    }
+    Ok(match (lookup_value, candidate) {
+        (FormulaValueProbe::Text(pattern), FormulaValueProbe::Text(value)) => {
+            formula_wildcard_matches(pattern, value, true)
+        }
+        _ => false,
+    })
+}
+
 fn formula_value_probe_ordering(
     left: &FormulaValueProbe,
     right: &FormulaValueProbe,
@@ -9543,6 +9584,137 @@ fn formula_value_probe_ordering(
         }
         _ => None,
     })
+}
+
+fn formula_wildcard_matches(pattern: &str, value: &str, case_insensitive: bool) -> bool {
+    let tokens = formula_wildcard_tokens(pattern, case_insensitive);
+    let chars = formula_wildcard_chars(value, case_insensitive);
+    formula_wildcard_tokens_match(tokens.as_slice(), chars.as_slice(), false)
+}
+
+fn formula_wildcard_find(
+    pattern: &str,
+    value: &str,
+    start: usize,
+    case_insensitive: bool,
+) -> Option<usize> {
+    let tokens = formula_wildcard_tokens(pattern, case_insensitive);
+    let chars = formula_wildcard_chars(value, case_insensitive);
+    for index in start.saturating_sub(1)..=chars.len() {
+        if formula_wildcard_tokens_match(tokens.as_slice(), &chars[index..], true) {
+            return Some(index + 1);
+        }
+    }
+    None
+}
+
+fn formula_wildcard_tokens(pattern: &str, case_insensitive: bool) -> Vec<FormulaWildcardToken> {
+    let mut tokens = Vec::new();
+    let mut chars = pattern.chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '*' => tokens.push(FormulaWildcardToken::AnySequence),
+            '?' => tokens.push(FormulaWildcardToken::AnyChar),
+            '~' => {
+                let literal = chars.next().unwrap_or('~');
+                tokens.push(FormulaWildcardToken::Literal(formula_wildcard_char(
+                    literal,
+                    case_insensitive,
+                )));
+            }
+            literal => tokens.push(FormulaWildcardToken::Literal(formula_wildcard_char(
+                literal,
+                case_insensitive,
+            ))),
+        }
+    }
+    tokens
+}
+
+fn formula_wildcard_chars(value: &str, case_insensitive: bool) -> Vec<char> {
+    value
+        .chars()
+        .map(|ch| formula_wildcard_char(ch, case_insensitive))
+        .collect()
+}
+
+fn formula_wildcard_char(ch: char, case_insensitive: bool) -> char {
+    if case_insensitive {
+        ch.to_ascii_lowercase()
+    } else {
+        ch
+    }
+}
+
+fn formula_wildcard_tokens_match(
+    tokens: &[FormulaWildcardToken],
+    chars: &[char],
+    accept_prefix: bool,
+) -> bool {
+    fn matches_from(
+        tokens: &[FormulaWildcardToken],
+        chars: &[char],
+        accept_prefix: bool,
+        token_index: usize,
+        char_index: usize,
+        memo: &mut [Vec<Option<bool>>],
+    ) -> bool {
+        if let Some(value) = memo[token_index][char_index] {
+            return value;
+        }
+        let matched = if token_index == tokens.len() {
+            accept_prefix || char_index == chars.len()
+        } else {
+            match tokens[token_index] {
+                FormulaWildcardToken::Literal(expected) => {
+                    char_index < chars.len()
+                        && chars[char_index] == expected
+                        && matches_from(
+                            tokens,
+                            chars,
+                            accept_prefix,
+                            token_index + 1,
+                            char_index + 1,
+                            memo,
+                        )
+                }
+                FormulaWildcardToken::AnyChar => {
+                    char_index < chars.len()
+                        && matches_from(
+                            tokens,
+                            chars,
+                            accept_prefix,
+                            token_index + 1,
+                            char_index + 1,
+                            memo,
+                        )
+                }
+                FormulaWildcardToken::AnySequence => {
+                    matches_from(
+                        tokens,
+                        chars,
+                        accept_prefix,
+                        token_index + 1,
+                        char_index,
+                        memo,
+                    ) || (char_index < chars.len()
+                        && matches_from(
+                            tokens,
+                            chars,
+                            accept_prefix,
+                            token_index,
+                            char_index + 1,
+                            memo,
+                        ))
+                }
+            }
+        };
+        memo[token_index][char_index] = Some(matched);
+        matched
+    }
+
+    let mut memo = vec![vec![None; chars.len() + 1]; tokens.len() + 1];
+    matches_from(tokens, chars, accept_prefix, 0, 0, &mut memo)
 }
 
 fn parse_formula_criteria_numeric_literal(input: &str) -> Option<(FormulaComparisonOperator, f64)> {
@@ -10740,12 +10912,15 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if start > haystack_len + 1 || (start > haystack_len && !needle.is_empty()) {
             return Err(FormulaEvalError::Value);
         }
+        if case_insensitive {
+            let Some(position) =
+                formula_wildcard_find(needle.as_str(), haystack.as_str(), start, true)
+            else {
+                return Err(FormulaEvalError::Value);
+            };
+            return Ok(position as f64);
+        }
         let searchable = haystack.chars().skip(start - 1).collect::<String>();
-        let (needle, searchable) = if case_insensitive {
-            (needle.to_lowercase(), searchable.to_lowercase())
-        } else {
-            (needle, searchable)
-        };
         let Some(byte_index) = searchable.find(needle.as_str()) else {
             return Err(FormulaEvalError::Value);
         };
@@ -16565,6 +16740,119 @@ mod tests {
                 )
                 .expect("Application.Evaluate XLOOKUP"),
             OmValue::Text("Gee".to_string())
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_wildcard_text_lookup_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B5".to_string())])
+                .expect("Range(A1:B5)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1:D9".to_string())])
+                .expect("Range(D1:D9)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        5,
+                        2,
+                        vec![
+                            OmValue::Text("alpha".to_string()),
+                            OmValue::Text("Aye".to_string()),
+                            OmValue::Text("beta".to_string()),
+                            OmValue::Text("Bee".to_string()),
+                            OmValue::Text("delta".to_string()),
+                            OmValue::Text("Dee".to_string()),
+                            OmValue::Text("gamma".to_string()),
+                            OmValue::Text("Gee".to_string()),
+                            OmValue::Text("beta?".to_string()),
+                            OmValue::Text("Bee literal".to_string()),
+                        ],
+                    )
+                    .expect("wildcard source values"),
+                ),
+                &[],
+            )
+            .expect("set wildcard source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        9,
+                        1,
+                        vec![
+                            OmValue::Text(r#"=SEARCH("a*e", "xxAbcde")"#.to_string()),
+                            OmValue::Text(r#"=SEARCH("b?d", "abcde")"#.to_string()),
+                            OmValue::Text(r#"=SEARCH("~?", "beta?")"#.to_string()),
+                            OmValue::Text(r#"=SEARCH("z*", "abc")"#.to_string()),
+                            OmValue::Text(
+                                r#"=XLOOKUP("be*", A1:A5, B1:B5, "missing", 2)"#.to_string(),
+                            ),
+                            OmValue::Text(
+                                r#"=XLOOKUP("be*", A1:A5, B1:B5, "missing", 2, -1)"#.to_string(),
+                            ),
+                            OmValue::Text(r#"=XMATCH("g?mma", A1:A5, 2)"#.to_string()),
+                            OmValue::Text(
+                                r#"=XLOOKUP("beta~?", A1:A5, B1:B5, "missing", 2)"#.to_string(),
+                            ),
+                            OmValue::Text(
+                                r#"=XLOOKUP("z*", A1:A5, B1:B5, "fallback", 2)"#.to_string(),
+                            ),
+                        ],
+                    )
+                    .expect("wildcard formulas"),
+                ),
+                &[],
+            )
+            .expect("set wildcard formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("wildcard values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected wildcard value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(3.0),
+                OmValue::Number(2.0),
+                OmValue::Number(5.0),
+                OmValue::Error(CellError::Value),
+                OmValue::Text("Bee".to_string()),
+                OmValue::Text("Bee literal".to_string()),
+                OmValue::Number(4.0),
+                OmValue::Text("Bee literal".to_string()),
+                OmValue::Text("fallback".to_string()),
+            ]
         );
     }
 
