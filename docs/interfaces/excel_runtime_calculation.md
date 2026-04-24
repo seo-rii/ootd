@@ -78,6 +78,22 @@ Lookup notes:
 - `VLOOKUP` and `HLOOKUP` support exact and ascending approximate table lookup.
 - Lookup comparisons support numbers, booleans, and case-insensitive text. Returned lookup values still flow through the numeric-first evaluator, so text results produce `#VALUE!`.
 
+### Date serial helpers
+
+- `DATE`
+- `YEAR`
+- `MONTH`
+- `DAY`
+- `DAYS`
+- `EDATE`
+- `EOMONTH`
+
+Date notes:
+
+- Date helpers use Excel's 1900 date system, including the compatibility serial `60` for `1900-02-29`.
+- `DATE` supports month and day rollover, such as month `13` and day `0`.
+- Time-of-day fractions, locale-sensitive date text parsing, and volatile clock functions are not implemented.
+
 Criteria notes:
 
 - `*IFS` family currently requires criteria ranges and value ranges to have the same shape.
@@ -97,7 +113,7 @@ Criteria notes:
 
 ## Current Boundaries
 
-- The evaluator is still numeric-first. General string semantics, date/time semantics, and richer coercion rules are not implemented.
+- The evaluator is still numeric-first. General string semantics, time-of-day semantics, date text parsing, and richer coercion rules are not implemented.
 - Dynamic array behavior and broader `Formula2` parity are not implemented.
 - Lookup/reference support is still a focused scalar subset. It does not model named ranges, array-returning `INDEX(..., 0, ...)`, external references, or broader lookup families such as `XLOOKUP` yet.
 - Named ranges, multi-area references, and 3D references are not implemented.

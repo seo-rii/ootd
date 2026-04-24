@@ -8650,11 +8650,17 @@ fn formula_eval_error_from_cell_error(error: CellError) -> FormulaEvalError {
 enum FormulaScalarFunction {
     Abs,
     And,
+    Date,
+    Day,
+    Days,
+    EDate,
+    EOMonth,
     If,
     IsEven,
     IsOdd,
     Int,
     Mod,
+    Month,
     Not,
     Or,
     RoundDown,
@@ -8663,6 +8669,7 @@ enum FormulaScalarFunction {
     Sign,
     Power,
     Sqrt,
+    Year,
 }
 
 impl FormulaScalarFunction {
@@ -8671,6 +8678,16 @@ impl FormulaScalarFunction {
             Some(Self::Abs)
         } else if name.eq_ignore_ascii_case("AND") {
             Some(Self::And)
+        } else if name.eq_ignore_ascii_case("DATE") {
+            Some(Self::Date)
+        } else if name.eq_ignore_ascii_case("DAY") {
+            Some(Self::Day)
+        } else if name.eq_ignore_ascii_case("DAYS") {
+            Some(Self::Days)
+        } else if name.eq_ignore_ascii_case("EDATE") {
+            Some(Self::EDate)
+        } else if name.eq_ignore_ascii_case("EOMONTH") {
+            Some(Self::EOMonth)
         } else if name.eq_ignore_ascii_case("IF") {
             Some(Self::If)
         } else if name.eq_ignore_ascii_case("ISEVEN") {
@@ -8681,6 +8698,8 @@ impl FormulaScalarFunction {
             Some(Self::Int)
         } else if name.eq_ignore_ascii_case("MOD") {
             Some(Self::Mod)
+        } else if name.eq_ignore_ascii_case("MONTH") {
+            Some(Self::Month)
         } else if name.eq_ignore_ascii_case("NOT") {
             Some(Self::Not)
         } else if name.eq_ignore_ascii_case("OR") {
@@ -8697,6 +8716,8 @@ impl FormulaScalarFunction {
             Some(Self::Power)
         } else if name.eq_ignore_ascii_case("SQRT") {
             Some(Self::Sqrt)
+        } else if name.eq_ignore_ascii_case("YEAR") {
+            Some(Self::Year)
         } else {
             None
         }
@@ -8719,6 +8740,37 @@ impl FormulaScalarFunction {
                 } else {
                     0.0
                 })
+            }
+            FormulaScalarFunction::Date => {
+                let [year, month, day] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                formula_date_serial_from_args(*year, *month, *day)
+            }
+            FormulaScalarFunction::Day => {
+                let [serial] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                let (_, _, day) = formula_ymd_from_serial(*serial)?;
+                Ok(day as f64)
+            }
+            FormulaScalarFunction::Days => {
+                let [end_date, start_date] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                Ok(end_date - start_date)
+            }
+            FormulaScalarFunction::EDate => {
+                let [serial, months] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                formula_edate(*serial, *months)
+            }
+            FormulaScalarFunction::EOMonth => {
+                let [serial, months] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                formula_eomonth(*serial, *months)
             }
             FormulaScalarFunction::If => {
                 let [condition, true_value, false_value] = args else {
@@ -8764,6 +8816,13 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Div0);
                 }
                 Ok(number - divisor * (number / divisor).floor())
+            }
+            FormulaScalarFunction::Month => {
+                let [serial] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                let (_, month, _) = formula_ymd_from_serial(*serial)?;
+                Ok(month as f64)
             }
             FormulaScalarFunction::Not => {
                 let [value] = args else {
@@ -8833,6 +8892,13 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Num);
                 }
                 Ok(value.sqrt())
+            }
+            FormulaScalarFunction::Year => {
+                let [serial] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                let (year, _, _) = formula_ymd_from_serial(*serial)?;
+                Ok(year as f64)
             }
         }
     }
@@ -9000,6 +9066,151 @@ fn formula_integer_argument(value: f64) -> Result<i64, FormulaEvalError> {
         return Err(FormulaEvalError::Num);
     }
     Ok(value as i64)
+}
+
+fn formula_date_serial_from_args(year: f64, month: f64, day: f64) -> Result<f64, FormulaEvalError> {
+    let mut year = formula_integer_argument(year)?;
+    let month = formula_integer_argument(month)?;
+    let day = formula_integer_argument(day)?;
+    if (0..=1899).contains(&year) {
+        year += 1900;
+    } else if !(1900..=9999).contains(&year) {
+        return Err(FormulaEvalError::Num);
+    }
+    let total_months = year
+        .checked_mul(12)
+        .and_then(|value| value.checked_add(month - 1))
+        .ok_or(FormulaEvalError::Num)?;
+    let normalized_year = div_floor(total_months, 12);
+    let normalized_month = total_months - normalized_year * 12 + 1;
+    if normalized_year == 1900 && normalized_month == 2 && day == 29 {
+        return Ok(60.0);
+    }
+    let days = days_from_civil(normalized_year, normalized_month as u32, 1)
+        .checked_add(day - 1)
+        .ok_or(FormulaEvalError::Num)?;
+    formula_serial_from_civil_days(days).map(|serial| serial as f64)
+}
+
+fn formula_ymd_from_serial(serial: f64) -> Result<(i64, u32, u32), FormulaEvalError> {
+    let serial = formula_serial_integer(serial)?;
+    if serial == 60 {
+        return Ok((1900, 2, 29));
+    }
+    let base_days = days_from_civil(1899, 12, 31);
+    let adjusted_serial = if serial > 60 { serial - 1 } else { serial };
+    let days = base_days
+        .checked_add(adjusted_serial)
+        .ok_or(FormulaEvalError::Num)?;
+    let (year, month, day) = civil_from_days(days);
+    if !(1900..=9999).contains(&year) {
+        return Err(FormulaEvalError::Num);
+    }
+    Ok((year, month, day))
+}
+
+fn formula_serial_integer(serial: f64) -> Result<i64, FormulaEvalError> {
+    if !serial.is_finite() {
+        return Err(FormulaEvalError::Value);
+    }
+    let serial = serial.floor();
+    if serial < 1.0 || serial > i64::MAX as f64 {
+        return Err(FormulaEvalError::Num);
+    }
+    Ok(serial as i64)
+}
+
+fn formula_edate(serial: f64, months: f64) -> Result<f64, FormulaEvalError> {
+    let (year, month, day) = formula_ymd_from_serial(serial)?;
+    let months = formula_integer_argument(months)?;
+    let (target_year, target_month) = normalize_year_month(year, i64::from(month) + months)?;
+    let target_day = i64::from(day.min(days_in_excel_month(target_year, target_month)));
+    formula_date_serial_from_args(target_year as f64, target_month as f64, target_day as f64)
+}
+
+fn formula_eomonth(serial: f64, months: f64) -> Result<f64, FormulaEvalError> {
+    let (year, month, _) = formula_ymd_from_serial(serial)?;
+    let months = formula_integer_argument(months)?;
+    let (target_year, target_month) = normalize_year_month(year, i64::from(month) + months)?;
+    let target_day = i64::from(days_in_excel_month(target_year, target_month));
+    formula_date_serial_from_args(target_year as f64, target_month as f64, target_day as f64)
+}
+
+fn normalize_year_month(year: i64, month: i64) -> Result<(i64, u32), FormulaEvalError> {
+    let total_months = year
+        .checked_mul(12)
+        .and_then(|value| value.checked_add(month - 1))
+        .ok_or(FormulaEvalError::Num)?;
+    let normalized_year = div_floor(total_months, 12);
+    let normalized_month = (total_months - normalized_year * 12 + 1) as u32;
+    if !(1900..=9999).contains(&normalized_year) {
+        return Err(FormulaEvalError::Num);
+    }
+    Ok((normalized_year, normalized_month))
+}
+
+fn formula_serial_from_civil_days(days: i64) -> Result<i64, FormulaEvalError> {
+    let min_days = days_from_civil(1900, 1, 1);
+    let max_days = days_from_civil(9999, 12, 31);
+    if days < min_days || days > max_days {
+        return Err(FormulaEvalError::Num);
+    }
+    let base_days = days_from_civil(1899, 12, 31);
+    let mut serial = days - base_days;
+    if days >= days_from_civil(1900, 3, 1) {
+        serial += 1;
+    }
+    Ok(serial)
+}
+
+fn days_in_excel_month(year: i64, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year == 1900 => 29,
+        2 if is_gregorian_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+fn is_gregorian_leap_year(year: i64) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+fn div_floor(value: i64, divisor: i64) -> i64 {
+    let quotient = value / divisor;
+    let remainder = value % divisor;
+    if remainder != 0 && ((remainder > 0) != (divisor > 0)) {
+        quotient - 1
+    } else {
+        quotient
+    }
+}
+
+fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let year = year - i64::from(month <= 2);
+    let era = div_floor(year, 400);
+    let year_of_era = year - era * 400;
+    let month = i64::from(month);
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let days = days + 719_468;
+    let era = div_floor(days, 146_097);
+    let day_of_era = days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    (year, month as u32, day as u32)
 }
 
 fn lookup_match_index_in_values(
@@ -14836,6 +15047,90 @@ mod tests {
                 OmValue::Number(2.0),
                 OmValue::Error(CellError::NA),
                 OmValue::Error(CellError::Ref),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_date_serial_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A12".to_string())],
+                )
+                .expect("Range(A1:A12)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        12,
+                        1,
+                        vec![
+                            OmValue::Text("=DATE(2024, 2, 29)".to_string()),
+                            OmValue::Text("=YEAR(DATE(2024, 2, 29))".to_string()),
+                            OmValue::Text("=MONTH(DATE(2024, 2, 29))".to_string()),
+                            OmValue::Text("=DAY(DATE(2024, 2, 29))".to_string()),
+                            OmValue::Text("=DAYS(DATE(2024, 3, 1), DATE(2024, 2, 28))".to_string()),
+                            OmValue::Text("=DATE(2024, 13, 15)".to_string()),
+                            OmValue::Text("=DATE(2024, 1, 0)".to_string()),
+                            OmValue::Text("=EDATE(DATE(2024, 1, 31), 1)".to_string()),
+                            OmValue::Text("=EOMONTH(DATE(2024, 2, 15), 1)".to_string()),
+                            OmValue::Text("=DATE(1900, 2, 29)".to_string()),
+                            OmValue::Text("=DAY(60)".to_string()),
+                            OmValue::Text("=YEAR(DATE(10000, 1, 1))".to_string()),
+                        ],
+                    )
+                    .expect("date formulas"),
+                ),
+                &[],
+            )
+            .expect("set date formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("date values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected date value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(45351.0),
+                OmValue::Number(2024.0),
+                OmValue::Number(2.0),
+                OmValue::Number(29.0),
+                OmValue::Number(2.0),
+                OmValue::Number(45672.0),
+                OmValue::Number(45291.0),
+                OmValue::Number(45351.0),
+                OmValue::Number(45382.0),
+                OmValue::Number(60.0),
+                OmValue::Number(29.0),
+                OmValue::Error(CellError::Num),
             ]
         );
     }

@@ -22,7 +22,7 @@ Implemented so far:
 - `excel-model` workbook, worksheet, and cell state,
 - `excel-xlsx` load/save support for a focused vertical slice,
 - `excel-runtime` orchestration for workbook/session and range access,
-- `excel-runtime` formula evaluation for arithmetic, comparisons, logical/control helpers, aggregates, criteria aggregates, lookup/reference helpers, error/info helpers, and `Application`/`Worksheet.Evaluate`,
+- `excel-runtime` formula evaluation for arithmetic, comparisons, logical/control helpers, aggregates, criteria aggregates, lookup/reference helpers, date serial helpers, error/info helpers, and `Application`/`Worksheet.Evaluate`,
 - `office-capture` support for Windows capture bundle planning and materialization.
 
 Not implemented yet:
