@@ -9103,6 +9103,9 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("UPPER")
         || name.eq_ignore_ascii_case("LOWER")
         || name.eq_ignore_ascii_case("TRIM")
+        || name.eq_ignore_ascii_case("REPT")
+        || name.eq_ignore_ascii_case("REPLACE")
+        || name.eq_ignore_ascii_case("SUBSTITUTE")
 }
 
 fn formula_text_from_number(value: f64) -> Result<String, FormulaEvalError> {
@@ -10249,6 +10252,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("EXACT") {
             return self.parse_exact_function();
         }
+        if name.eq_ignore_ascii_case("VALUE") {
+            return self.parse_value_function();
+        }
         if name.eq_ignore_ascii_case("NA") {
             return self.parse_na_function();
         }
@@ -10334,6 +10340,15 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return self.parse_unary_text_function(|text| {
                 text.split_whitespace().collect::<Vec<_>>().join(" ")
             });
+        }
+        if name.eq_ignore_ascii_case("REPT") {
+            return self.parse_rept_text_function();
+        }
+        if name.eq_ignore_ascii_case("REPLACE") {
+            return self.parse_replace_text_function();
+        }
+        if name.eq_ignore_ascii_case("SUBSTITUTE") {
+            return self.parse_substitute_text_function();
         }
         Err(FormulaEvalError::Unsupported)
     }
@@ -10429,6 +10444,103 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         Ok(count)
     }
 
+    fn parse_rept_text_function(&mut self) -> Result<String, FormulaEvalError> {
+        let text = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let count = formula_non_negative_count_argument(self.parse_comparison()?)?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let output_len = text
+            .chars()
+            .count()
+            .checked_mul(count)
+            .ok_or(FormulaEvalError::Value)?;
+        if output_len > 32_767 {
+            return Err(FormulaEvalError::Value);
+        }
+        Ok(text.repeat(count))
+    }
+
+    fn parse_replace_text_function(&mut self) -> Result<String, FormulaEvalError> {
+        let old_text = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let start = formula_positive_position_argument(self.parse_comparison()?)?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let count = formula_non_negative_count_argument(self.parse_comparison()?)?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let new_text = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let chars = old_text.chars().collect::<Vec<_>>();
+        if start > chars.len() + 1 {
+            return Err(FormulaEvalError::Value);
+        }
+        let start_index = start - 1;
+        let end_index = (start_index + count).min(chars.len());
+        let mut output = String::new();
+        output.extend(chars[..start_index].iter());
+        output.push_str(new_text.as_str());
+        output.extend(chars[end_index..].iter());
+        Ok(output)
+    }
+
+    fn parse_substitute_text_function(&mut self) -> Result<String, FormulaEvalError> {
+        let text = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let old_text = self.parse_text_value_argument()?;
+        if old_text.is_empty() {
+            return Err(FormulaEvalError::Value);
+        }
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let new_text = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if self.consume_char(')') {
+            return Ok(text.replace(old_text.as_str(), new_text.as_str()));
+        }
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let instance = formula_positive_position_argument(self.parse_comparison()?)?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let mut match_count = 0_usize;
+        for (byte_index, _) in text.match_indices(old_text.as_str()) {
+            match_count += 1;
+            if match_count == instance {
+                let mut output = String::new();
+                output.push_str(&text[..byte_index]);
+                output.push_str(new_text.as_str());
+                output.push_str(&text[byte_index + old_text.len()..]);
+                return Ok(output);
+            }
+        }
+        Ok(text)
+    }
+
     fn parse_len_function(&mut self) -> Result<f64, FormulaEvalError> {
         let text = self.parse_text_value_argument()?;
         self.skip_whitespace();
@@ -10487,6 +10599,32 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return Err(FormulaEvalError::Unsupported);
         }
         Ok(if left == right { 1.0 } else { 0.0 })
+    }
+
+    fn parse_value_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let text = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Err(FormulaEvalError::Value);
+        }
+        let (body, multiplier) = if let Some(value) = trimmed.strip_suffix('%') {
+            (value.trim(), 0.01)
+        } else {
+            (trimmed, 1.0)
+        };
+        if body.is_empty() {
+            return Err(FormulaEvalError::Value);
+        }
+        let value = body.parse::<f64>().map_err(|_| FormulaEvalError::Value)? * multiplier;
+        if value.is_finite() {
+            Ok(value)
+        } else {
+            Err(FormulaEvalError::Value)
+        }
     }
 
     fn parse_countif_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -15261,6 +15399,104 @@ mod tests {
                 )
                 .expect("Application.Evaluate text helper"),
             OmValue::Text("Eval7".to_string())
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_text_edit_and_value_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A11".to_string())],
+                )
+                .expect("Range(A1:A11)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        11,
+                        1,
+                        vec![
+                            OmValue::Text(r#"=REPT("ha", 3)"#.to_string()),
+                            OmValue::Text(r#"=REPT("x", 0)"#.to_string()),
+                            OmValue::Text(r#"=REPLACE("abcdef", 2, 3, "ZZ")"#.to_string()),
+                            OmValue::Text(r#"=REPLACE("abc", 4, 0, "!")"#.to_string()),
+                            OmValue::Text(
+                                r#"=SUBSTITUTE("one fish one fish", "fish", "cat")"#.to_string(),
+                            ),
+                            OmValue::Text(
+                                r#"=SUBSTITUTE("one fish one fish", "fish", "cat", 2)"#.to_string(),
+                            ),
+                            OmValue::Text(r#"=SUBSTITUTE("aaaa", "aa", "b")"#.to_string()),
+                            OmValue::Text(r#"=VALUE("12.5")"#.to_string()),
+                            OmValue::Text(r#"=VALUE("45%")"#.to_string()),
+                            OmValue::Text(r#"=VALUE(CONCAT("1", "2"))"#.to_string()),
+                            OmValue::Text(r#"=VALUE("bad")"#.to_string()),
+                        ],
+                    )
+                    .expect("text edit formulas"),
+                ),
+                &[],
+            )
+            .expect("set text edit formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("text edit values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected text edit value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Text("hahaha".to_string()),
+                OmValue::Text(String::new()),
+                OmValue::Text("aZZef".to_string()),
+                OmValue::Text("abc!".to_string()),
+                OmValue::Text("one cat one cat".to_string()),
+                OmValue::Text("one fish one cat".to_string()),
+                OmValue::Text("bb".to_string()),
+                OmValue::Number(12.5),
+                OmValue::Number(0.45),
+                OmValue::Number(12.0),
+                OmValue::Error(CellError::Value),
+            ]
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    runtime.root_application(),
+                    "Evaluate",
+                    &[OmValue::Text(
+                        r#"=SUBSTITUTE("abcabc", "ab", "X", 2)"#.to_string()
+                    )],
+                )
+                .expect("Application.Evaluate SUBSTITUTE"),
+            OmValue::Text("abcXc".to_string())
         );
     }
 

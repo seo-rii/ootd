@@ -132,15 +132,21 @@ Criteria notes:
 - `UPPER`
 - `LOWER`
 - `TRIM`
+- `REPT`
+- `REPLACE`
+- `SUBSTITUTE`
 - `LEN`
 - `FIND`
 - `SEARCH`
 - `EXACT`
+- `VALUE`
 
 Text notes:
 
 - text-returning helpers produce `CellValue::Text` and support scalar literals, booleans, numbers, single-cell references, and nested text helpers.
 - `FIND` is case-sensitive, `SEARCH` is case-insensitive, and both return 1-based character positions.
+- `VALUE` supports plain decimal numeric text and a trailing percent sign, but not currency symbols, date/time text, or locale-specific separators.
+- `REPT` returns `#VALUE!` for outputs beyond Excel's 32,767-character cell text limit.
 - Range flattening, wildcard matching in `SEARCH`, locale-aware formatting, and full Excel text coercion are not implemented yet.
 
 ## Current Boundaries
