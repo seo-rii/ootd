@@ -122,9 +122,30 @@ Criteria notes:
 - `ISNUMBER`
 - `ISTEXT`
 
+### Text helpers
+
+- `CONCAT`
+- `CONCATENATE`
+- `LEFT`
+- `RIGHT`
+- `MID`
+- `UPPER`
+- `LOWER`
+- `TRIM`
+- `LEN`
+- `FIND`
+- `SEARCH`
+- `EXACT`
+
+Text notes:
+
+- text-returning helpers produce `CellValue::Text` and support scalar literals, booleans, numbers, single-cell references, and nested text helpers.
+- `FIND` is case-sensitive, `SEARCH` is case-insensitive, and both return 1-based character positions.
+- Range flattening, wildcard matching in `SEARCH`, locale-aware formatting, and full Excel text coercion are not implemented yet.
+
 ## Current Boundaries
 
-- The evaluator is still numeric-first. General string semantics, date/time text parsing, and richer coercion rules are not implemented.
+- The evaluator is still numeric-first. It includes a focused scalar text helper subset, but broader string semantics, date/time text parsing, and richer coercion rules are not implemented.
 - Dynamic array behavior and broader `Formula2` parity are not implemented.
 - Lookup/reference support is still a focused scalar subset. It does not model named ranges, array-returning `INDEX(..., 0, ...)`, external references, or broader lookup families such as `XLOOKUP` yet.
 - Named ranges, multi-area references, and 3D references are not implemented.

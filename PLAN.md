@@ -69,7 +69,7 @@
 - `excel-runtime`
   - load/save orchestration, workbook/session lookup, object-handle dispatch, range get/set을 제공한다.
   - `Application.Calculate`, `Application.Evaluate`, `Worksheet.Evaluate`와 numeric-first formula evaluator를 제공한다.
-  - arithmetic/comparison/logical/math helper, aggregate/count helper, criteria aggregate, lookup/reference and reference metadata helper, date/time serial helper, error/info helper formula subset을 회귀 테스트와 함께 제공한다.
+  - arithmetic/comparison/logical/math helper, aggregate/count helper, criteria aggregate, lookup/reference and reference metadata helper, date/time serial helper, error/info helper, focused text helper formula subset을 회귀 테스트와 함께 제공한다.
 
 ## Implementation Order
 

@@ -9094,6 +9094,30 @@ fn formula_value_probe_from_cell_value(value: CellValue) -> FormulaValueProbe {
     }
 }
 
+fn formula_text_function_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("CONCAT")
+        || name.eq_ignore_ascii_case("CONCATENATE")
+        || name.eq_ignore_ascii_case("LEFT")
+        || name.eq_ignore_ascii_case("RIGHT")
+        || name.eq_ignore_ascii_case("MID")
+        || name.eq_ignore_ascii_case("UPPER")
+        || name.eq_ignore_ascii_case("LOWER")
+        || name.eq_ignore_ascii_case("TRIM")
+}
+
+fn formula_text_from_number(value: f64) -> Result<String, FormulaEvalError> {
+    if !value.is_finite() {
+        return Err(FormulaEvalError::Value);
+    }
+    if value == 0.0 {
+        return Ok("0".to_string());
+    }
+    if value.fract() == 0.0 && value >= i64::MIN as f64 && value <= i64::MAX as f64 {
+        return Ok((value as i64).to_string());
+    }
+    Ok(value.to_string())
+}
+
 fn formula_integer_argument(value: f64) -> Result<i64, FormulaEvalError> {
     if !value.is_finite() || value.fract() != 0.0 {
         return Err(FormulaEvalError::Value);
@@ -9102,6 +9126,22 @@ fn formula_integer_argument(value: f64) -> Result<i64, FormulaEvalError> {
         return Err(FormulaEvalError::Num);
     }
     Ok(value as i64)
+}
+
+fn formula_non_negative_count_argument(value: f64) -> Result<usize, FormulaEvalError> {
+    let count = formula_integer_argument(value)?;
+    if count < 0 {
+        return Err(FormulaEvalError::Value);
+    }
+    usize::try_from(count).map_err(|_| FormulaEvalError::Num)
+}
+
+fn formula_positive_position_argument(value: f64) -> Result<usize, FormulaEvalError> {
+    let position = formula_integer_argument(value)?;
+    if position < 1 {
+        return Err(FormulaEvalError::Value);
+    }
+    usize::try_from(position).map_err(|_| FormulaEvalError::Num)
 }
 
 fn formula_date_serial_from_args(year: f64, month: f64, day: f64) -> Result<f64, FormulaEvalError> {
@@ -9499,6 +9539,15 @@ impl<'a> FormulaEvaluator<'a> {
         formula_text: &str,
         current_position: Option<(u32, u32)>,
     ) -> Result<CellValue, FormulaEvalError> {
+        let text_result = {
+            let mut parser = FormulaParser::new(formula_text, self, sheet_id, current_position);
+            parser.parse_text_formula()
+        };
+        match text_result {
+            Ok(text) => return Ok(CellValue::Text(text)),
+            Err(FormulaEvalError::Unsupported) => {}
+            Err(error) => return Err(error),
+        }
         FormulaParser::new(formula_text, self, sheet_id, current_position)
             .parse_formula()
             .map(CellValue::Number)
@@ -10003,6 +10052,35 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
     }
 
+    fn parse_text_formula(&mut self) -> Result<String, FormulaEvalError> {
+        self.skip_whitespace();
+        if let Some(text) = self.parse_string_literal()? {
+            self.skip_whitespace();
+            return if self.index == self.input.len() {
+                Ok(text)
+            } else {
+                Err(FormulaEvalError::Unsupported)
+            };
+        }
+        let Some(identifier) = self.parse_identifier() else {
+            return Err(FormulaEvalError::Unsupported);
+        };
+        if !formula_text_function_name(identifier.as_str()) {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        self.skip_whitespace();
+        if !self.consume_char('(') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let value = self.parse_text_function(identifier.as_str())?;
+        self.skip_whitespace();
+        if self.index == self.input.len() {
+            Ok(value)
+        } else {
+            Err(FormulaEvalError::Unsupported)
+        }
+    }
+
     fn parse_formula(&mut self) -> Result<f64, FormulaEvalError> {
         let value = self.parse_comparison()?;
         self.skip_whitespace();
@@ -10159,6 +10237,18 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 matches!(value, FormulaValueProbe::Text(_))
             });
         }
+        if name.eq_ignore_ascii_case("LEN") {
+            return self.parse_len_function();
+        }
+        if name.eq_ignore_ascii_case("FIND") {
+            return self.parse_find_function(false);
+        }
+        if name.eq_ignore_ascii_case("SEARCH") {
+            return self.parse_find_function(true);
+        }
+        if name.eq_ignore_ascii_case("EXACT") {
+            return self.parse_exact_function();
+        }
         if name.eq_ignore_ascii_case("NA") {
             return self.parse_na_function();
         }
@@ -10219,6 +10309,184 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
             return Err(FormulaEvalError::Unsupported);
         }
+    }
+
+    fn parse_text_function(&mut self, name: &str) -> Result<String, FormulaEvalError> {
+        if name.eq_ignore_ascii_case("CONCAT") || name.eq_ignore_ascii_case("CONCATENATE") {
+            return self.parse_concat_text_function();
+        }
+        if name.eq_ignore_ascii_case("LEFT") {
+            return self.parse_left_text_function();
+        }
+        if name.eq_ignore_ascii_case("RIGHT") {
+            return self.parse_right_text_function();
+        }
+        if name.eq_ignore_ascii_case("MID") {
+            return self.parse_mid_text_function();
+        }
+        if name.eq_ignore_ascii_case("UPPER") {
+            return self.parse_unary_text_function(|text| text.to_uppercase());
+        }
+        if name.eq_ignore_ascii_case("LOWER") {
+            return self.parse_unary_text_function(|text| text.to_lowercase());
+        }
+        if name.eq_ignore_ascii_case("TRIM") {
+            return self.parse_unary_text_function(|text| {
+                text.split_whitespace().collect::<Vec<_>>().join(" ")
+            });
+        }
+        Err(FormulaEvalError::Unsupported)
+    }
+
+    fn parse_concat_text_function(&mut self) -> Result<String, FormulaEvalError> {
+        let mut output = String::new();
+        let mut saw_argument = false;
+        loop {
+            self.skip_whitespace();
+            if self.consume_char(')') {
+                return if saw_argument {
+                    Ok(output)
+                } else {
+                    Err(FormulaEvalError::Value)
+                };
+            }
+            output.push_str(self.parse_text_value_argument()?.as_str());
+            saw_argument = true;
+            self.skip_whitespace();
+            if self.consume_char(',') {
+                continue;
+            }
+            if self.consume_char(')') {
+                return Ok(output);
+            }
+            return Err(FormulaEvalError::Unsupported);
+        }
+    }
+
+    fn parse_left_text_function(&mut self) -> Result<String, FormulaEvalError> {
+        let text = self.parse_text_value_argument()?;
+        let count = self.parse_optional_text_count_argument(1)?;
+        Ok(text.chars().take(count).collect())
+    }
+
+    fn parse_right_text_function(&mut self) -> Result<String, FormulaEvalError> {
+        let text = self.parse_text_value_argument()?;
+        let count = self.parse_optional_text_count_argument(1)?;
+        let chars = text.chars().collect::<Vec<_>>();
+        Ok(chars
+            .iter()
+            .skip(chars.len().saturating_sub(count))
+            .collect())
+    }
+
+    fn parse_mid_text_function(&mut self) -> Result<String, FormulaEvalError> {
+        let text = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let start = formula_positive_position_argument(self.parse_comparison()?)?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let count = formula_non_negative_count_argument(self.parse_comparison()?)?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Ok(text.chars().skip(start - 1).take(count).collect())
+    }
+
+    fn parse_unary_text_function(
+        &mut self,
+        transform: impl FnOnce(String) -> String,
+    ) -> Result<String, FormulaEvalError> {
+        let text = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Ok(transform(text))
+    }
+
+    fn parse_optional_text_count_argument(
+        &mut self,
+        default: usize,
+    ) -> Result<usize, FormulaEvalError> {
+        self.skip_whitespace();
+        if self.consume_char(')') {
+            return Ok(default);
+        }
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let count = formula_non_negative_count_argument(self.parse_comparison()?)?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Ok(count)
+    }
+
+    fn parse_len_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let text = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Ok(text.chars().count() as f64)
+    }
+
+    fn parse_find_function(&mut self, case_insensitive: bool) -> Result<f64, FormulaEvalError> {
+        let needle = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let haystack = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        let start = if self.consume_char(')') {
+            1
+        } else {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let start = formula_positive_position_argument(self.parse_comparison()?)?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            start
+        };
+        let haystack_len = haystack.chars().count();
+        if start > haystack_len + 1 || (start > haystack_len && !needle.is_empty()) {
+            return Err(FormulaEvalError::Value);
+        }
+        let searchable = haystack.chars().skip(start - 1).collect::<String>();
+        let (needle, searchable) = if case_insensitive {
+            (needle.to_lowercase(), searchable.to_lowercase())
+        } else {
+            (needle, searchable)
+        };
+        let Some(byte_index) = searchable.find(needle.as_str()) else {
+            return Err(FormulaEvalError::Value);
+        };
+        Ok((start + searchable[..byte_index].chars().count()) as f64)
+    }
+
+    fn parse_exact_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let left = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let right = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Ok(if left == right { 1.0 } else { 0.0 })
     }
 
     fn parse_countif_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -10806,6 +11074,51 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
     }
 
+    fn parse_text_value_argument(&mut self) -> Result<String, FormulaEvalError> {
+        self.skip_whitespace();
+        if let Some(text) = self.parse_string_literal()? {
+            return Ok(text);
+        }
+        let checkpoint = self.index;
+        if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
+            self.index = next_index;
+            if rect.row_first != rect.row_last || rect.col_first != rect.col_last {
+                return Err(FormulaEvalError::Value);
+            }
+            let value = self.evaluator.cell_value_or_blank(
+                target_sheet_id,
+                rect.row_first,
+                rect.col_first,
+            )?;
+            return match formula_value_probe_from_cell_value(value) {
+                FormulaValueProbe::Blank => Ok(String::new()),
+                FormulaValueProbe::Bool(value) => Ok(if value { "TRUE" } else { "FALSE" }.into()),
+                FormulaValueProbe::Number(value) => formula_text_from_number(value),
+                FormulaValueProbe::Text(value) => Ok(value),
+                FormulaValueProbe::Error(error) => Err(error),
+            };
+        }
+        self.index = checkpoint;
+        if let Some(identifier) = self.parse_identifier() {
+            self.skip_whitespace();
+            if self.consume_char('(') {
+                if formula_text_function_name(identifier.as_str()) {
+                    return self.parse_text_function(identifier.as_str());
+                }
+                self.index = checkpoint;
+            } else {
+                if identifier.eq_ignore_ascii_case("TRUE") {
+                    return Ok("TRUE".to_string());
+                }
+                if identifier.eq_ignore_ascii_case("FALSE") {
+                    return Ok("FALSE".to_string());
+                }
+                self.index = checkpoint;
+            }
+        }
+        formula_text_from_number(self.parse_comparison()?)
+    }
+
     fn parse_value_probe_argument(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
         self.skip_whitespace();
         if let Some(text) = self.parse_string_literal()? {
@@ -10826,13 +11139,23 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         self.index = checkpoint;
         if let Some(identifier) = self.parse_identifier() {
-            if identifier.eq_ignore_ascii_case("TRUE") {
-                return Ok(FormulaValueProbe::Bool(true));
+            self.skip_whitespace();
+            if self.consume_char('(') {
+                if formula_text_function_name(identifier.as_str()) {
+                    return Ok(FormulaValueProbe::Text(
+                        self.parse_text_function(identifier.as_str())?,
+                    ));
+                }
+                self.index = checkpoint;
+            } else {
+                if identifier.eq_ignore_ascii_case("TRUE") {
+                    return Ok(FormulaValueProbe::Bool(true));
+                }
+                if identifier.eq_ignore_ascii_case("FALSE") {
+                    return Ok(FormulaValueProbe::Bool(false));
+                }
+                self.index = checkpoint;
             }
-            if identifier.eq_ignore_ascii_case("FALSE") {
-                return Ok(FormulaValueProbe::Bool(false));
-            }
-            self.index = checkpoint;
         }
         match self.parse_comparison() {
             Ok(value) => Ok(FormulaValueProbe::Number(value)),
@@ -14814,6 +15137,130 @@ mod tests {
                 OmValue::Number(0.0),
                 OmValue::Number(99.0),
             ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_text_helper_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A3".to_string())])
+                .expect("Range(A1:A3)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("B1:B14".to_string())],
+                )
+                .expect("Range(B1:B14)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        1,
+                        vec![
+                            OmValue::Text("mix".to_string()),
+                            OmValue::Number(42.0),
+                            OmValue::Bool(true),
+                        ],
+                    )
+                    .expect("text helper source values"),
+                ),
+                &[],
+            )
+            .expect("set text helper source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        14,
+                        1,
+                        vec![
+                            OmValue::Text(r#"=LEFT("abcdef", 3)"#.to_string()),
+                            OmValue::Text(r#"=RIGHT("abcdef", 2)"#.to_string()),
+                            OmValue::Text(r#"=MID("abcdef", 2, 3)"#.to_string()),
+                            OmValue::Text(r#"=CONCAT("Q", A2, "-", A3)"#.to_string()),
+                            OmValue::Text(
+                                r#"=CONCATENATE(LEFT("abcdef", 2), RIGHT("wxyz", 2))"#.to_string(),
+                            ),
+                            OmValue::Text("=UPPER(A1)".to_string()),
+                            OmValue::Text(r#"=LOWER("MiX")"#.to_string()),
+                            OmValue::Text(r#"=TRIM("  a   b  ")"#.to_string()),
+                            OmValue::Text(r#"=LEN("hello")"#.to_string()),
+                            OmValue::Text(r#"=LEN(CONCAT("a", "bc"))"#.to_string()),
+                            OmValue::Text(r#"=FIND("b", "abcabc", 3)"#.to_string()),
+                            OmValue::Text(r#"=SEARCH("B", "abcabc")"#.to_string()),
+                            OmValue::Text(r#"=EXACT("A", "a")"#.to_string()),
+                            OmValue::Text(r#"=EXACT(UPPER("a"), "A")"#.to_string()),
+                        ],
+                    )
+                    .expect("text helper formulas"),
+                ),
+                &[],
+            )
+            .expect("set text helper formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("text helper values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected text helper value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Text("abc".to_string()),
+                OmValue::Text("ef".to_string()),
+                OmValue::Text("bcd".to_string()),
+                OmValue::Text("Q42-TRUE".to_string()),
+                OmValue::Text("abyz".to_string()),
+                OmValue::Text("MIX".to_string()),
+                OmValue::Text("mix".to_string()),
+                OmValue::Text("a b".to_string()),
+                OmValue::Number(5.0),
+                OmValue::Number(3.0),
+                OmValue::Number(5.0),
+                OmValue::Number(2.0),
+                OmValue::Number(0.0),
+                OmValue::Number(1.0),
+            ]
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    runtime.root_application(),
+                    "Evaluate",
+                    &[OmValue::Text(r#"=CONCAT("Eval", 7)"#.to_string())],
+                )
+                .expect("Application.Evaluate text helper"),
+            OmValue::Text("Eval7".to_string())
         );
     }
 
