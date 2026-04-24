@@ -8655,10 +8655,12 @@ enum FormulaScalarFunction {
     Days,
     EDate,
     EOMonth,
+    Hour,
     If,
     IsEven,
     IsOdd,
     Int,
+    Minute,
     Mod,
     Month,
     Not,
@@ -8669,6 +8671,8 @@ enum FormulaScalarFunction {
     Sign,
     Power,
     Sqrt,
+    Second,
+    Time,
     Year,
 }
 
@@ -8688,6 +8692,8 @@ impl FormulaScalarFunction {
             Some(Self::EDate)
         } else if name.eq_ignore_ascii_case("EOMONTH") {
             Some(Self::EOMonth)
+        } else if name.eq_ignore_ascii_case("HOUR") {
+            Some(Self::Hour)
         } else if name.eq_ignore_ascii_case("IF") {
             Some(Self::If)
         } else if name.eq_ignore_ascii_case("ISEVEN") {
@@ -8696,6 +8702,8 @@ impl FormulaScalarFunction {
             Some(Self::IsOdd)
         } else if name.eq_ignore_ascii_case("INT") {
             Some(Self::Int)
+        } else if name.eq_ignore_ascii_case("MINUTE") {
+            Some(Self::Minute)
         } else if name.eq_ignore_ascii_case("MOD") {
             Some(Self::Mod)
         } else if name.eq_ignore_ascii_case("MONTH") {
@@ -8716,6 +8724,10 @@ impl FormulaScalarFunction {
             Some(Self::Power)
         } else if name.eq_ignore_ascii_case("SQRT") {
             Some(Self::Sqrt)
+        } else if name.eq_ignore_ascii_case("SECOND") {
+            Some(Self::Second)
+        } else if name.eq_ignore_ascii_case("TIME") {
+            Some(Self::Time)
         } else if name.eq_ignore_ascii_case("YEAR") {
             Some(Self::Year)
         } else {
@@ -8772,6 +8784,12 @@ impl FormulaScalarFunction {
                 };
                 formula_eomonth(*serial, *months)
             }
+            FormulaScalarFunction::Hour => {
+                let [serial] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                Ok(formula_time_parts_from_serial(*serial)?.0 as f64)
+            }
             FormulaScalarFunction::If => {
                 let [condition, true_value, false_value] = args else {
                     return Err(FormulaEvalError::Value);
@@ -8807,6 +8825,12 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Value);
                 };
                 Ok(value.floor())
+            }
+            FormulaScalarFunction::Minute => {
+                let [serial] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                Ok(formula_time_parts_from_serial(*serial)?.1 as f64)
             }
             FormulaScalarFunction::Mod => {
                 let [number, divisor] = args else {
@@ -8892,6 +8916,18 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Num);
                 }
                 Ok(value.sqrt())
+            }
+            FormulaScalarFunction::Second => {
+                let [serial] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                Ok(formula_time_parts_from_serial(*serial)?.2 as f64)
+            }
+            FormulaScalarFunction::Time => {
+                let [hour, minute, second] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                formula_time_serial_from_args(*hour, *minute, *second)
             }
             FormulaScalarFunction::Year => {
                 let [serial] = args else {
@@ -9134,6 +9170,52 @@ fn formula_eomonth(serial: f64, months: f64) -> Result<f64, FormulaEvalError> {
     let (target_year, target_month) = normalize_year_month(year, i64::from(month) + months)?;
     let target_day = i64::from(days_in_excel_month(target_year, target_month));
     formula_date_serial_from_args(target_year as f64, target_month as f64, target_day as f64)
+}
+
+fn formula_time_serial_from_args(
+    hour: f64,
+    minute: f64,
+    second: f64,
+) -> Result<f64, FormulaEvalError> {
+    let hour = formula_time_argument(hour)?;
+    let minute = formula_time_argument(minute)?;
+    let second = formula_time_argument(second)?;
+    let total_seconds = hour
+        .checked_mul(3600)
+        .and_then(|value| {
+            minute
+                .checked_mul(60)
+                .and_then(|minute| value.checked_add(minute))
+        })
+        .and_then(|value| value.checked_add(second))
+        .ok_or(FormulaEvalError::Num)?;
+    Ok((total_seconds.rem_euclid(86_400)) as f64 / 86_400.0)
+}
+
+fn formula_time_parts_from_serial(serial: f64) -> Result<(u32, u32, u32), FormulaEvalError> {
+    if !serial.is_finite() {
+        return Err(FormulaEvalError::Value);
+    }
+    if serial < 0.0 {
+        return Err(FormulaEvalError::Num);
+    }
+    let fraction = serial - serial.floor();
+    let mut total_seconds = (fraction * 86_400.0).round() as i64;
+    if total_seconds >= 86_400 {
+        total_seconds = 0;
+    }
+    let hour = total_seconds / 3600;
+    let minute = (total_seconds % 3600) / 60;
+    let second = total_seconds % 60;
+    Ok((hour as u32, minute as u32, second as u32))
+}
+
+fn formula_time_argument(value: f64) -> Result<i64, FormulaEvalError> {
+    let value = formula_integer_argument(value)?;
+    if !(0..=32_767).contains(&value) {
+        return Err(FormulaEvalError::Num);
+    }
+    Ok(value)
 }
 
 fn normalize_year_month(year: i64, month: i64) -> Result<(i64, u32), FormulaEvalError> {
@@ -15130,6 +15212,90 @@ mod tests {
                 OmValue::Number(45382.0),
                 OmValue::Number(60.0),
                 OmValue::Number(29.0),
+                OmValue::Error(CellError::Num),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_time_serial_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A10".to_string())],
+                )
+                .expect("Range(A1:A10)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        10,
+                        1,
+                        vec![
+                            OmValue::Text("=TIME(6, 0, 0)".to_string()),
+                            OmValue::Text("=HOUR(TIME(18, 45, 30))".to_string()),
+                            OmValue::Text("=MINUTE(TIME(18, 45, 30))".to_string()),
+                            OmValue::Text("=SECOND(TIME(18, 45, 30))".to_string()),
+                            OmValue::Text("=HOUR(DATE(2024, 2, 29)+TIME(23, 59, 59))".to_string()),
+                            OmValue::Text(
+                                "=MINUTE(DATE(2024, 2, 29)+TIME(23, 59, 59))".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=SECOND(DATE(2024, 2, 29)+TIME(23, 59, 59))".to_string(),
+                            ),
+                            OmValue::Text("=HOUR(TIME(27, 90, 0))".to_string()),
+                            OmValue::Text("=MINUTE(TIME(27, 90, 0))".to_string()),
+                            OmValue::Text("=TIME(-1, 0, 0)".to_string()),
+                        ],
+                    )
+                    .expect("time formulas"),
+                ),
+                &[],
+            )
+            .expect("set time formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("time values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected time value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(0.25),
+                OmValue::Number(18.0),
+                OmValue::Number(45.0),
+                OmValue::Number(30.0),
+                OmValue::Number(23.0),
+                OmValue::Number(59.0),
+                OmValue::Number(59.0),
+                OmValue::Number(4.0),
+                OmValue::Number(30.0),
                 OmValue::Error(CellError::Num),
             ]
         );

@@ -69,7 +69,7 @@
 - `excel-runtime`
   - load/save orchestration, workbook/session lookup, object-handle dispatch, range get/set을 제공한다.
   - `Application.Calculate`, `Application.Evaluate`, `Worksheet.Evaluate`와 numeric-first formula evaluator를 제공한다.
-  - arithmetic/comparison/logical/math helper, aggregate/count helper, criteria aggregate, lookup/reference helper, date serial helper, error/info helper formula subset을 회귀 테스트와 함께 제공한다.
+  - arithmetic/comparison/logical/math helper, aggregate/count helper, criteria aggregate, lookup/reference helper, date/time serial helper, error/info helper formula subset을 회귀 테스트와 함께 제공한다.
 
 ## Implementation Order
 
@@ -327,7 +327,7 @@
 
 - 상태
   - `Application.Calculate`, `Application.Evaluate`, `Worksheet.Evaluate`를 runtime dispatch에 연결했다.
-  - 수식 엔진은 arithmetic, comparison, logical, math helper, aggregate/count helper, criteria aggregate, lookup/reference helper, date serial helper, error/info helper subset을 현재 regression으로 고정했다.
+  - 수식 엔진은 arithmetic, comparison, logical, math helper, aggregate/count helper, criteria aggregate, lookup/reference helper, date/time serial helper, error/info helper subset을 현재 regression으로 고정했다.
   - A1 reference, sheet-qualified A1 reference, in-cell `FormulaR1C1` conversion 경로를 현재 계산 slice에 연결했다.
 - 목표
   - runtime mutation path에서 실제로 쓸 수 있는 numeric-first 계산 경로를 확보한다.
@@ -4294,7 +4294,7 @@
 
 ## Deferred Work
 
-- broader formula parity: string semantics, additional date/time and lookup/reference families, name resolution, richer coercion semantics
+- broader formula parity: string semantics, additional date/time and lookup/reference families, volatile functions, name resolution, richer coercion semantics
 - dynamic array / `Formula2` dialect
 - style/theme/drawing typed model
 - macro-preserving `.xlsm` specifics
