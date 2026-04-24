@@ -4643,7 +4643,7 @@ impl ExcelRuntime {
     ) -> OmResult<OmValue> {
         let state = &self.runtime_workbook(workbook)?.loaded.state;
         let mut evaluator = FormulaEvaluator::new(state);
-        match evaluator.evaluate_formula_text(sheet_id, expression) {
+        match evaluator.evaluate_formula_text(sheet_id, expression, None) {
             Ok(value) => Ok(OmValue::from(value)),
             Err(error) => match error.into_cell_value() {
                 Some(value) => Ok(OmValue::from(value)),
@@ -9488,7 +9488,7 @@ impl<'a> FormulaEvaluator<'a> {
         } else {
             formula.text.clone()
         };
-        let result = self.evaluate_formula_text(sheet_id, &formula_text);
+        let result = self.evaluate_formula_text(sheet_id, &formula_text, Some((row, col)));
         self.visiting.remove(&(sheet_id, row, col));
         result
     }
@@ -9497,8 +9497,9 @@ impl<'a> FormulaEvaluator<'a> {
         &mut self,
         sheet_id: SheetId,
         formula_text: &str,
+        current_position: Option<(u32, u32)>,
     ) -> Result<CellValue, FormulaEvalError> {
-        FormulaParser::new(formula_text, self, sheet_id)
+        FormulaParser::new(formula_text, self, sheet_id, current_position)
             .parse_formula()
             .map(CellValue::Number)
     }
@@ -9983,15 +9984,22 @@ struct FormulaParser<'a, 'b, 'state> {
     index: usize,
     evaluator: &'b mut FormulaEvaluator<'state>,
     sheet_id: SheetId,
+    current_position: Option<(u32, u32)>,
 }
 
 impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
-    fn new(input: &'a str, evaluator: &'b mut FormulaEvaluator<'state>, sheet_id: SheetId) -> Self {
+    fn new(
+        input: &'a str,
+        evaluator: &'b mut FormulaEvaluator<'state>,
+        sheet_id: SheetId,
+        current_position: Option<(u32, u32)>,
+    ) -> Self {
         Self {
             input: input.trim().strip_prefix('=').unwrap_or(input.trim()),
             index: 0,
             evaluator,
             sheet_id,
+            current_position,
         }
     }
 
@@ -10109,6 +10117,15 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("COUNTBLANK") {
             return self.parse_countblank_function();
         }
+        if name.eq_ignore_ascii_case("CHOOSE") {
+            return self.parse_choose_function();
+        }
+        if name.eq_ignore_ascii_case("COLUMN") {
+            return self.parse_column_function();
+        }
+        if name.eq_ignore_ascii_case("COLUMNS") {
+            return self.parse_columns_function();
+        }
         if name.eq_ignore_ascii_case("COUNTIF") {
             return self.parse_countif_function();
         }
@@ -10144,6 +10161,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         if name.eq_ignore_ascii_case("NA") {
             return self.parse_na_function();
+        }
+        if name.eq_ignore_ascii_case("ROW") {
+            return self.parse_row_function();
+        }
+        if name.eq_ignore_ascii_case("ROWS") {
+            return self.parse_rows_function();
         }
         if name.eq_ignore_ascii_case("INDEX") {
             return self.parse_index_function();
@@ -10214,6 +10237,58 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             .countif_values_in_rect(sheet_id, rect, &criteria)? as f64)
     }
 
+    fn parse_choose_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let selected_index = formula_integer_argument(self.parse_comparison()?)?;
+        if selected_index < 1 {
+            return Err(FormulaEvalError::Value);
+        }
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let mut argument_index = 1_i64;
+        let mut selected_value = None;
+        loop {
+            let value = self.parse_comparison()?;
+            if argument_index == selected_index {
+                selected_value = Some(value);
+            }
+            self.skip_whitespace();
+            if self.consume_char(')') {
+                return selected_value.ok_or(FormulaEvalError::Value);
+            }
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            argument_index += 1;
+        }
+    }
+
+    fn parse_column_function(&mut self) -> Result<f64, FormulaEvalError> {
+        self.skip_whitespace();
+        if self.consume_char(')') {
+            let Some((_, col)) = self.current_position else {
+                return Err(FormulaEvalError::Value);
+            };
+            return Ok(col as f64);
+        }
+        let (_, rect) = self.parse_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Ok(rect.col_first as f64)
+    }
+
+    fn parse_columns_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let (_, rect) = self.parse_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Ok(rect.width() as f64)
+    }
+
     fn parse_iferror_function(&mut self) -> Result<f64, FormulaEvalError> {
         self.parse_error_fallback_function(false)
     }
@@ -10280,6 +10355,31 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return Err(FormulaEvalError::Unsupported);
         }
         Err(FormulaEvalError::NA)
+    }
+
+    fn parse_row_function(&mut self) -> Result<f64, FormulaEvalError> {
+        self.skip_whitespace();
+        if self.consume_char(')') {
+            let Some((row, _)) = self.current_position else {
+                return Err(FormulaEvalError::Value);
+            };
+            return Ok(row as f64);
+        }
+        let (_, rect) = self.parse_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Ok(rect.row_first as f64)
+    }
+
+    fn parse_rows_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let (_, rect) = self.parse_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Ok(rect.height() as f64)
     }
 
     fn parse_index_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -15129,6 +15229,84 @@ mod tests {
                 OmValue::Number(2.0),
                 OmValue::Error(CellError::NA),
                 OmValue::Error(CellError::Ref),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_reference_metadata_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("E3:E11".to_string())],
+                )
+                .expect("Range(E3:E11)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        9,
+                        1,
+                        vec![
+                            OmValue::Text("=ROW()".to_string()),
+                            OmValue::Text("=COLUMN()".to_string()),
+                            OmValue::Text("=ROW(B7:D9)".to_string()),
+                            OmValue::Text("=COLUMN(C7:D9)".to_string()),
+                            OmValue::Text("=ROWS(B7:D9)".to_string()),
+                            OmValue::Text("=COLUMNS(B7:D9)".to_string()),
+                            OmValue::Text("=CHOOSE(2, 10, 20, 30)".to_string()),
+                            OmValue::Text("=CHOOSE(1+2, 10, 20, 30)".to_string()),
+                            OmValue::Text("=CHOOSE(4, 10, 20, 30)".to_string()),
+                        ],
+                    )
+                    .expect("reference metadata formulas"),
+                ),
+                &[],
+            )
+            .expect("set reference metadata formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("reference metadata values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected reference metadata value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(3.0),
+                OmValue::Number(5.0),
+                OmValue::Number(7.0),
+                OmValue::Number(3.0),
+                OmValue::Number(3.0),
+                OmValue::Number(3.0),
+                OmValue::Number(20.0),
+                OmValue::Number(30.0),
+                OmValue::Error(CellError::Value),
             ]
         );
     }
