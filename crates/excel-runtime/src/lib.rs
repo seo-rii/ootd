@@ -9094,6 +9094,38 @@ fn formula_value_probe_from_cell_value(value: CellValue) -> FormulaValueProbe {
     }
 }
 
+fn formula_number_from_value_probe(value: FormulaValueProbe) -> Result<f64, FormulaEvalError> {
+    match value {
+        FormulaValueProbe::Blank => Ok(0.0),
+        FormulaValueProbe::Bool(value) => Ok(if value { 1.0 } else { 0.0 }),
+        FormulaValueProbe::Number(value) => Ok(value),
+        FormulaValueProbe::Text(_) => Err(FormulaEvalError::Value),
+        FormulaValueProbe::Error(error) => Err(error),
+    }
+}
+
+fn formula_text_from_value_probe(value: FormulaValueProbe) -> Result<String, FormulaEvalError> {
+    match value {
+        FormulaValueProbe::Blank => Ok(String::new()),
+        FormulaValueProbe::Bool(value) => Ok(if value { "TRUE" } else { "FALSE" }.into()),
+        FormulaValueProbe::Number(value) => formula_text_from_number(value),
+        FormulaValueProbe::Text(value) => Ok(value),
+        FormulaValueProbe::Error(error) => Err(error),
+    }
+}
+
+fn formula_selected_text_from_value_probe(
+    value: FormulaValueProbe,
+) -> Result<String, FormulaEvalError> {
+    match value {
+        FormulaValueProbe::Text(value) => Ok(value),
+        FormulaValueProbe::Error(error) => Err(error),
+        FormulaValueProbe::Blank | FormulaValueProbe::Bool(_) | FormulaValueProbe::Number(_) => {
+            Err(FormulaEvalError::Unsupported)
+        }
+    }
+}
+
 fn formula_text_function_name(name: &str) -> bool {
     name.eq_ignore_ascii_case("CONCAT")
         || name.eq_ignore_ascii_case("CONCATENATE")
@@ -9106,6 +9138,11 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("REPT")
         || name.eq_ignore_ascii_case("REPLACE")
         || name.eq_ignore_ascii_case("SUBSTITUTE")
+        || name.eq_ignore_ascii_case("IF")
+        || name.eq_ignore_ascii_case("CHOOSE")
+        || name.eq_ignore_ascii_case("INDEX")
+        || name.eq_ignore_ascii_case("VLOOKUP")
+        || name.eq_ignore_ascii_case("HLOOKUP")
 }
 
 fn formula_text_from_number(value: f64) -> Result<String, FormulaEvalError> {
@@ -9709,19 +9746,15 @@ impl<'a> FormulaEvaluator<'a> {
         Ok(values)
     }
 
-    fn numeric_lookup_result_at(
+    fn lookup_result_at(
         &mut self,
         sheet_id: SheetId,
         row: u32,
         col: u32,
-    ) -> Result<f64, FormulaEvalError> {
-        match self.cell_value_or_blank(sheet_id, row, col)? {
-            CellValue::Blank => Ok(0.0),
-            CellValue::Bool(value) => Ok(if value { 1.0 } else { 0.0 }),
-            CellValue::Number(value) => Ok(value),
-            CellValue::Text(_) => Err(FormulaEvalError::Value),
-            CellValue::Error(error) => Err(formula_eval_error_from_cell_error(error)),
-        }
+    ) -> Result<FormulaValueProbe, FormulaEvalError> {
+        Ok(formula_value_probe_from_cell_value(
+            self.cell_value_or_blank(sheet_id, row, col)?,
+        ))
     }
 
     fn countif_values_in_rect(
@@ -10189,6 +10222,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
     }
 
     fn parse_function(&mut self, name: &str) -> Result<f64, FormulaEvalError> {
+        if name.eq_ignore_ascii_case("IF") {
+            return self.parse_if_function();
+        }
         if let Some(function) = FormulaScalarFunction::from_name(name) {
             return self.parse_scalar_function(function);
         }
@@ -10349,6 +10385,25 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         if name.eq_ignore_ascii_case("SUBSTITUTE") {
             return self.parse_substitute_text_function();
+        }
+        if name.eq_ignore_ascii_case("IF") {
+            return formula_selected_text_from_value_probe(self.parse_if_value_function()?);
+        }
+        if name.eq_ignore_ascii_case("CHOOSE") {
+            return formula_selected_text_from_value_probe(self.parse_choose_value_function()?);
+        }
+        if name.eq_ignore_ascii_case("INDEX") {
+            return formula_selected_text_from_value_probe(self.parse_index_value_function()?);
+        }
+        if name.eq_ignore_ascii_case("VLOOKUP") {
+            return formula_selected_text_from_value_probe(
+                self.parse_table_lookup_value_function(false)?,
+            );
+        }
+        if name.eq_ignore_ascii_case("HLOOKUP") {
+            return formula_selected_text_from_value_probe(
+                self.parse_table_lookup_value_function(true)?,
+            );
         }
         Err(FormulaEvalError::Unsupported)
     }
@@ -10643,7 +10698,45 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             .countif_values_in_rect(sheet_id, rect, &criteria)? as f64)
     }
 
+    fn parse_if_function(&mut self) -> Result<f64, FormulaEvalError> {
+        formula_number_from_value_probe(self.parse_if_value_function()?)
+    }
+
+    fn parse_if_value_function(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let condition = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let true_value = self.parse_value_probe_argument()?;
+        self.skip_whitespace();
+        if self.consume_char(')') {
+            return Ok(if condition != 0.0 {
+                true_value
+            } else {
+                FormulaValueProbe::Bool(false)
+            });
+        }
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let false_value = self.parse_value_probe_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Ok(if condition != 0.0 {
+            true_value
+        } else {
+            false_value
+        })
+    }
+
     fn parse_choose_function(&mut self) -> Result<f64, FormulaEvalError> {
+        formula_number_from_value_probe(self.parse_choose_value_function()?)
+    }
+
+    fn parse_choose_value_function(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
         let selected_index = formula_integer_argument(self.parse_comparison()?)?;
         if selected_index < 1 {
             return Err(FormulaEvalError::Value);
@@ -10655,7 +10748,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         let mut argument_index = 1_i64;
         let mut selected_value = None;
         loop {
-            let value = self.parse_comparison()?;
+            let value = self.parse_value_probe_argument()?;
             if argument_index == selected_index {
                 selected_value = Some(value);
             }
@@ -10789,6 +10882,10 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
     }
 
     fn parse_index_function(&mut self) -> Result<f64, FormulaEvalError> {
+        formula_number_from_value_probe(self.parse_index_value_function()?)
+    }
+
+    fn parse_index_value_function(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
         let (sheet_id, rect) = self.parse_reference_argument()?;
         self.skip_whitespace();
         if !self.consume_char(',') {
@@ -10815,7 +10912,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         let row = rect.row_first + row_index as u32 - 1;
         let col = rect.col_first + col_index as u32 - 1;
-        self.evaluator.numeric_lookup_result_at(sheet_id, row, col)
+        self.evaluator.lookup_result_at(sheet_id, row, col)
     }
 
     fn parse_match_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -10852,6 +10949,13 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
     }
 
     fn parse_table_lookup_function(&mut self, horizontal: bool) -> Result<f64, FormulaEvalError> {
+        formula_number_from_value_probe(self.parse_table_lookup_value_function(horizontal)?)
+    }
+
+    fn parse_table_lookup_value_function(
+        &mut self,
+        horizontal: bool,
+    ) -> Result<FormulaValueProbe, FormulaEvalError> {
         let lookup_value = self.parse_lookup_value_argument()?;
         self.skip_whitespace();
         if !self.consume_char(',') {
@@ -10896,7 +11000,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         } else {
             rect.col_first + result_index as u32 - 1
         };
-        self.evaluator.numeric_lookup_result_at(sheet_id, row, col)
+        self.evaluator.lookup_result_at(sheet_id, row, col)
     }
 
     fn parse_sumif_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -11228,22 +11332,21 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 rect.row_first,
                 rect.col_first,
             )?;
-            return match formula_value_probe_from_cell_value(value) {
-                FormulaValueProbe::Blank => Ok(String::new()),
-                FormulaValueProbe::Bool(value) => Ok(if value { "TRUE" } else { "FALSE" }.into()),
-                FormulaValueProbe::Number(value) => formula_text_from_number(value),
-                FormulaValueProbe::Text(value) => Ok(value),
-                FormulaValueProbe::Error(error) => Err(error),
-            };
+            return formula_text_from_value_probe(formula_value_probe_from_cell_value(value));
         }
         self.index = checkpoint;
         if let Some(identifier) = self.parse_identifier() {
             self.skip_whitespace();
             if self.consume_char('(') {
                 if formula_text_function_name(identifier.as_str()) {
-                    return self.parse_text_function(identifier.as_str());
+                    match self.parse_text_function(identifier.as_str()) {
+                        Ok(text) => return Ok(text),
+                        Err(FormulaEvalError::Unsupported) => self.index = checkpoint,
+                        Err(error) => return Err(error),
+                    }
+                } else {
+                    self.index = checkpoint;
                 }
-                self.index = checkpoint;
             } else {
                 if identifier.eq_ignore_ascii_case("TRUE") {
                     return Ok("TRUE".to_string());
@@ -11280,11 +11383,14 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             self.skip_whitespace();
             if self.consume_char('(') {
                 if formula_text_function_name(identifier.as_str()) {
-                    return Ok(FormulaValueProbe::Text(
-                        self.parse_text_function(identifier.as_str())?,
-                    ));
+                    match self.parse_text_function(identifier.as_str()) {
+                        Ok(text) => return Ok(FormulaValueProbe::Text(text)),
+                        Err(FormulaEvalError::Unsupported) => self.index = checkpoint,
+                        Err(error) => return Err(error),
+                    }
+                } else {
+                    self.index = checkpoint;
                 }
-                self.index = checkpoint;
             } else {
                 if identifier.eq_ignore_ascii_case("TRUE") {
                     return Ok(FormulaValueProbe::Bool(true));
@@ -15913,6 +16019,165 @@ mod tests {
                 OmValue::Error(CellError::NA),
                 OmValue::Error(CellError::Ref),
             ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_returns_text_from_lookup_and_control_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let vertical_table = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:C4".to_string())])
+                .expect("Range(A1:C4)"),
+        );
+        let horizontal_table = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E1:H3".to_string())])
+                .expect("Range(E1:H3)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("J1:J10".to_string())],
+                )
+                .expect("Range(J1:J10)"),
+        );
+
+        runtime
+            .dispatch_set(
+                vertical_table,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        3,
+                        vec![
+                            OmValue::Text("alpha".to_string()),
+                            OmValue::Text("Aye".to_string()),
+                            OmValue::Number(100.0),
+                            OmValue::Text("beta".to_string()),
+                            OmValue::Text("Bee".to_string()),
+                            OmValue::Number(200.0),
+                            OmValue::Text("delta".to_string()),
+                            OmValue::Text("Dee".to_string()),
+                            OmValue::Number(400.0),
+                            OmValue::Text("gamma".to_string()),
+                            OmValue::Text("Gee".to_string()),
+                            OmValue::Number(800.0),
+                        ],
+                    )
+                    .expect("text lookup vertical values"),
+                ),
+                &[],
+            )
+            .expect("set text lookup vertical table");
+        runtime
+            .dispatch_set(
+                horizontal_table,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        4,
+                        vec![
+                            OmValue::Text("Q1".to_string()),
+                            OmValue::Text("Q2".to_string()),
+                            OmValue::Text("Q3".to_string()),
+                            OmValue::Text("Q4".to_string()),
+                            OmValue::Text("first".to_string()),
+                            OmValue::Text("second".to_string()),
+                            OmValue::Text("third".to_string()),
+                            OmValue::Text("fourth".to_string()),
+                            OmValue::Number(10.0),
+                            OmValue::Number(20.0),
+                            OmValue::Number(30.0),
+                            OmValue::Number(40.0),
+                        ],
+                    )
+                    .expect("text lookup horizontal values"),
+                ),
+                &[],
+            )
+            .expect("set text lookup horizontal table");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        10,
+                        1,
+                        vec![
+                            OmValue::Text("=VLOOKUP(\"beta\", A1:C4, 2, FALSE)".to_string()),
+                            OmValue::Text("=HLOOKUP(\"Q3\", E1:H3, 2, FALSE)".to_string()),
+                            OmValue::Text("=INDEX(A1:C4, 4, 2)".to_string()),
+                            OmValue::Text("=CHOOSE(2, \"left\", \"right\", \"tail\")".to_string()),
+                            OmValue::Text("=IF(TRUE, \"yes\", \"no\")".to_string()),
+                            OmValue::Text("=IF(FALSE, \"yes\", \"no\")".to_string()),
+                            OmValue::Text(
+                                "=CONCAT(VLOOKUP(\"delta\", A1:C4, 2, FALSE), \"-\", INDEX(A1:C4, 2, 2))"
+                                    .to_string(),
+                            ),
+                            OmValue::Text("=CHOOSE(3, \"skip\", 20, \"done\")".to_string()),
+                            OmValue::Text("=IF(FALSE, \"skip\", 12)".to_string()),
+                            OmValue::Text("=CHOOSE(2, \"skip\", 22)".to_string()),
+                        ],
+                    )
+                    .expect("text lookup formulas"),
+                ),
+                &[],
+            )
+            .expect("set text lookup formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("text lookup values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected text lookup value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Text("Bee".to_string()),
+                OmValue::Text("third".to_string()),
+                OmValue::Text("Gee".to_string()),
+                OmValue::Text("right".to_string()),
+                OmValue::Text("yes".to_string()),
+                OmValue::Text("no".to_string()),
+                OmValue::Text("Dee-Bee".to_string()),
+                OmValue::Text("done".to_string()),
+                OmValue::Number(12.0),
+                OmValue::Number(22.0),
+            ]
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    runtime.root_application(),
+                    "Evaluate",
+                    &[OmValue::Text("=IF(TRUE, \"eval\", \"miss\")".to_string())],
+                )
+                .expect("Application.Evaluate text IF"),
+            OmValue::Text("eval".to_string())
         );
     }
 

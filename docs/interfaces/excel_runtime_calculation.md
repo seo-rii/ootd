@@ -82,7 +82,9 @@ Lookup notes:
 - `MATCH` supports exact match, ascending approximate match, and descending approximate match over one-dimensional ranges.
 - `VLOOKUP` and `HLOOKUP` support exact and ascending approximate table lookup.
 - `ROW()` and `COLUMN()` without arguments resolve against the formula cell position during recalculation.
-- Lookup comparisons support numbers, booleans, and case-insensitive text. Returned lookup values still flow through the numeric-first evaluator, so text results produce `#VALUE!`.
+- Lookup comparisons support numbers, booleans, and case-insensitive text.
+- `INDEX`, `VLOOKUP`, and `HLOOKUP` return scalar text results as `CellValue::Text`; numeric results still flow through the numeric evaluator.
+- `IF` and `CHOOSE` can return scalar text when the selected branch or argument is text.
 
 ### Date and time serial helpers
 
