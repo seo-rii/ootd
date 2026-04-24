@@ -99,7 +99,9 @@ Lookup notes:
 - `DAYS`
 - `EDATE`
 - `EOMONTH`
+- `DATEVALUE`
 - `TIME`
+- `TIMEVALUE`
 - `HOUR`
 - `MINUTE`
 - `SECOND`
@@ -109,7 +111,9 @@ Date/time notes:
 - Date helpers use Excel's 1900 date system, including the compatibility serial `60` for `1900-02-29`.
 - `DATE` supports month and day rollover, such as month `13` and day `0`.
 - `TIME` produces fractional-day serial values, with hour/minute/second rollover for non-negative arguments.
-- Locale-sensitive date/time text parsing and volatile clock functions are not implemented.
+- `DATEVALUE` supports ISO-like `yyyy-mm-dd`, `yyyy/m/d`, and numeric `m/d/yyyy` text.
+- `TIMEVALUE` supports `h:mm`, `h:mm:ss`, and `AM`/`PM` suffixes.
+- Locale-sensitive date/time text parsing beyond that focused subset and volatile clock functions are not implemented.
 
 Criteria notes:
 
@@ -158,7 +162,7 @@ Text notes:
 
 ## Current Boundaries
 
-- The evaluator is still numeric-first. It includes a focused scalar text helper subset, but broader string semantics, date/time text parsing, and richer coercion rules are not implemented.
+- The evaluator is still numeric-first. It includes focused scalar text and date/time text-parse subsets, but broader string semantics, locale-sensitive date/time parsing, and richer coercion rules are not implemented.
 - Dynamic array behavior and broader `Formula2` parity are not implemented.
 - Lookup/reference support is still a focused scalar subset. It does not model named ranges, array-returning `INDEX(..., 0, ...)` or `XLOOKUP`, binary search modes, external references, or broader lookup/reference families yet.
 - Named ranges, multi-area references, and 3D references are not implemented.
