@@ -9295,12 +9295,7 @@ impl<'a> FormulaEvaluator<'a> {
         &mut self,
         criteria_ranges: &[FormulaCriteriaRange],
     ) -> Result<u64, FormulaEvalError> {
-        let Some(base_rect) = criteria_ranges
-            .first()
-            .map(|criteria_range| criteria_range.rect)
-        else {
-            return Err(FormulaEvalError::Value);
-        };
+        let base_rect = self.validate_multi_criteria_shapes(None, criteria_ranges)?;
         let mut count = 0_u64;
         for row in base_rect.row_first..=base_rect.row_last {
             for col in base_rect.col_first..=base_rect.col_last {
@@ -9358,12 +9353,7 @@ impl<'a> FormulaEvaluator<'a> {
         value_rect: Rect,
         criteria_ranges: &[FormulaCriteriaRange],
     ) -> Result<(f64, u64), FormulaEvalError> {
-        let Some(base_rect) = criteria_ranges
-            .first()
-            .map(|criteria_range| criteria_range.rect)
-        else {
-            return Err(FormulaEvalError::Value);
-        };
+        let base_rect = self.validate_multi_criteria_shapes(Some(value_rect), criteria_ranges)?;
         let mut total = 0.0;
         let mut count = 0_u64;
         for row in base_rect.row_first..=base_rect.row_last {
@@ -9401,6 +9391,71 @@ impl<'a> FormulaEvaluator<'a> {
         Ok((total, count))
     }
 
+    fn minifs_values_in_rect(
+        &mut self,
+        min_sheet_id: SheetId,
+        min_rect: Rect,
+        criteria_ranges: &[FormulaCriteriaRange],
+    ) -> Result<f64, FormulaEvalError> {
+        self.multi_criteria_extreme_value_in_rect(min_sheet_id, min_rect, criteria_ranges, true)
+    }
+
+    fn maxifs_values_in_rect(
+        &mut self,
+        max_sheet_id: SheetId,
+        max_rect: Rect,
+        criteria_ranges: &[FormulaCriteriaRange],
+    ) -> Result<f64, FormulaEvalError> {
+        self.multi_criteria_extreme_value_in_rect(max_sheet_id, max_rect, criteria_ranges, false)
+    }
+
+    fn multi_criteria_extreme_value_in_rect(
+        &mut self,
+        value_sheet_id: SheetId,
+        value_rect: Rect,
+        criteria_ranges: &[FormulaCriteriaRange],
+        want_min: bool,
+    ) -> Result<f64, FormulaEvalError> {
+        let base_rect = self.validate_multi_criteria_shapes(Some(value_rect), criteria_ranges)?;
+        let mut best = None::<f64>;
+        for row in base_rect.row_first..=base_rect.row_last {
+            for col in base_rect.col_first..=base_rect.col_last {
+                let mut matches_all = true;
+                for criteria_range in criteria_ranges {
+                    if !self.criteria_range_matches_at_offset(
+                        base_rect,
+                        row,
+                        col,
+                        criteria_range,
+                    )? {
+                        matches_all = false;
+                        break;
+                    }
+                }
+                if !matches_all {
+                    continue;
+                }
+                let value_row = value_rect.row_first + (row - base_rect.row_first);
+                let value_col = value_rect.col_first + (col - base_rect.col_first);
+                let value = self.cell_value_or_blank(value_sheet_id, value_row, value_col)?;
+                match value {
+                    CellValue::Number(number) => {
+                        best = Some(match best {
+                            Some(current) if want_min => current.min(number),
+                            Some(current) => current.max(number),
+                            None => number,
+                        });
+                    }
+                    CellValue::Error(error) => {
+                        return Err(formula_eval_error_from_cell_error(error));
+                    }
+                    CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {}
+                }
+            }
+        }
+        Ok(best.unwrap_or(0.0))
+    }
+
     fn criteria_range_matches_at_offset(
         &mut self,
         base_rect: Rect,
@@ -9416,6 +9471,32 @@ impl<'a> FormulaEvaluator<'a> {
             return Err(formula_eval_error_from_cell_error(error));
         }
         Ok(criteria_range.criteria.matches(&value))
+    }
+
+    fn validate_multi_criteria_shapes(
+        &self,
+        value_rect: Option<Rect>,
+        criteria_ranges: &[FormulaCriteriaRange],
+    ) -> Result<Rect, FormulaEvalError> {
+        let Some(base_rect) = criteria_ranges
+            .first()
+            .map(|criteria_range| criteria_range.rect)
+        else {
+            return Err(FormulaEvalError::Value);
+        };
+        if criteria_ranges.iter().any(|criteria_range| {
+            criteria_range.rect.width() != base_rect.width()
+                || criteria_range.rect.height() != base_rect.height()
+        }) {
+            return Err(FormulaEvalError::Value);
+        }
+        if let Some(value_rect) = value_rect {
+            if value_rect.width() != base_rect.width() || value_rect.height() != base_rect.height()
+            {
+                return Err(FormulaEvalError::Value);
+            }
+        }
+        Ok(base_rect)
     }
 }
 
@@ -9568,6 +9649,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("AVERAGEIFS") {
             return self.parse_averageifs_function();
         }
+        if name.eq_ignore_ascii_case("MINIFS") {
+            return self.parse_minifs_function();
+        }
+        if name.eq_ignore_ascii_case("MAXIFS") {
+            return self.parse_maxifs_function();
+        }
         let function =
             FormulaAggregateFunction::from_name(name).ok_or(FormulaEvalError::Unsupported)?;
         let mut values = Vec::new();
@@ -9702,6 +9789,28 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             average_rect,
             criteria_ranges.as_slice(),
         )
+    }
+
+    fn parse_minifs_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let (min_sheet_id, min_rect) = self.parse_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let criteria_ranges = self.parse_criteria_ranges_arguments()?;
+        self.evaluator
+            .minifs_values_in_rect(min_sheet_id, min_rect, criteria_ranges.as_slice())
+    }
+
+    fn parse_maxifs_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let (max_sheet_id, max_rect) = self.parse_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let criteria_ranges = self.parse_criteria_ranges_arguments()?;
+        self.evaluator
+            .maxifs_values_in_rect(max_sheet_id, max_rect, criteria_ranges.as_slice())
     }
 
     fn parse_countblank_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -12885,8 +12994,8 @@ mod tests {
         );
         let average_source = expect_object_handle(
             runtime
-                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A6".to_string())])
-                .expect("Range(A1:A6)"),
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A7".to_string())])
+                .expect("Range(A1:A7)"),
         );
         let first_criteria_source = expect_object_handle(
             runtime
@@ -12910,7 +13019,7 @@ mod tests {
                 "Value2",
                 OmValue::Array(
                     OmArray::new(
-                        6,
+                        7,
                         1,
                         vec![
                             OmValue::Number(10.0),
@@ -12919,6 +13028,7 @@ mod tests {
                             OmValue::Number(40.0),
                             OmValue::Number(50.0),
                             OmValue::Number(60.0),
+                            OmValue::Empty,
                         ],
                     )
                     .expect("averageifs values"),
@@ -12986,7 +13096,7 @@ mod tests {
                                 "=AVERAGEIFS(A1:A6, B1:B6, \">1\", C1:C6, \"west\")".to_string(),
                             ),
                             OmValue::Text(
-                                "=AVERAGEIFS(A1:A6, B1:B7, \"\", C1:C7, \"east\")".to_string(),
+                                "=AVERAGEIFS(A1:A7, B1:B7, \"\", C1:C7, \"east\")".to_string(),
                             ),
                             OmValue::Text(
                                 "=AVERAGEIFS(A1:A6, B1:B6, 9, C1:C6, \"east\")".to_string(),
@@ -13016,6 +13126,161 @@ mod tests {
                 OmValue::Number(40.0),
                 OmValue::Number(50.0),
                 OmValue::Error(CellError::Div0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_minifs_and_maxifs_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let value_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A6".to_string())])
+                .expect("Range(A1:A6)"),
+        );
+        let first_criteria_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B7".to_string())])
+                .expect("Range(B1:B7)"),
+        );
+        let second_criteria_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1:C7".to_string())])
+                .expect("Range(C1:C7)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1:D6".to_string())])
+                .expect("Range(D1:D6)"),
+        );
+
+        runtime
+            .dispatch_set(
+                value_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        6,
+                        1,
+                        vec![
+                            OmValue::Number(10.0),
+                            OmValue::Number(20.0),
+                            OmValue::Number(30.0),
+                            OmValue::Number(40.0),
+                            OmValue::Number(50.0),
+                            OmValue::Number(60.0),
+                        ],
+                    )
+                    .expect("minifs/maxifs values"),
+                ),
+                &[],
+            )
+            .expect("set minifs/maxifs values");
+        runtime
+            .dispatch_set(
+                first_criteria_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        7,
+                        1,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(2.0),
+                            OmValue::Empty,
+                            OmValue::Number(1.0),
+                            OmValue::Empty,
+                        ],
+                    )
+                    .expect("first criteria values"),
+                ),
+                &[],
+            )
+            .expect("set first minifs/maxifs criteria values");
+        runtime
+            .dispatch_set(
+                second_criteria_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        7,
+                        1,
+                        vec![
+                            OmValue::Text("east".to_string()),
+                            OmValue::Text("west".to_string()),
+                            OmValue::Text("east".to_string()),
+                            OmValue::Text("west".to_string()),
+                            OmValue::Text("east".to_string()),
+                            OmValue::Text("east".to_string()),
+                            OmValue::Empty,
+                        ],
+                    )
+                    .expect("second criteria values"),
+                ),
+                &[],
+            )
+            .expect("set second minifs/maxifs criteria values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        6,
+                        1,
+                        vec![
+                            OmValue::Text("=MINIFS(A1:A6, B1:B6, 1, C1:C6, \"east\")".to_string()),
+                            OmValue::Text("=MAXIFS(A1:A6, B1:B6, 1, C1:C6, \"east\")".to_string()),
+                            OmValue::Text(
+                                "=MINIFS(A1:A6, B1:B6, \">1\", C1:C6, \"west\")".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=MAXIFS(A1:A6, B1:B6, \">1\", C1:C6, \"east\")".to_string(),
+                            ),
+                            OmValue::Text("=MINIFS(A1:A6, B1:B6, 9, C1:C6, \"east\")".to_string()),
+                            OmValue::Text("=MAXIFS(A1:A6, B1:B7, 1, C1:C7, \"east\")".to_string()),
+                        ],
+                    )
+                    .expect("minifs/maxifs formulas"),
+                ),
+                &[],
+            )
+            .expect("set minifs/maxifs formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("minifs/maxifs values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected minifs/maxifs value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(10.0),
+                OmValue::Number(60.0),
+                OmValue::Number(40.0),
+                OmValue::Number(30.0),
+                OmValue::Number(0.0),
+                OmValue::Error(CellError::Value),
             ]
         );
     }
