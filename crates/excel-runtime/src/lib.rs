@@ -8931,6 +8931,15 @@ struct FormulaCriteriaRange {
     criteria: FormulaCriteria,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum FormulaValueProbe {
+    Blank,
+    Bool(bool),
+    Number(f64),
+    Text(String),
+    Error(FormulaEvalError),
+}
+
 fn parse_formula_criteria_numeric_literal(input: &str) -> Option<(FormulaComparisonOperator, f64)> {
     for (prefix, operator) in [
         ("<>", FormulaComparisonOperator::NotEqual),
@@ -9652,6 +9661,21 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("ISNA") {
             return self.parse_error_test_function(false, true);
         }
+        if name.eq_ignore_ascii_case("ISBLANK") {
+            return self.parse_value_probe_test_function(|value| {
+                matches!(value, FormulaValueProbe::Blank)
+            });
+        }
+        if name.eq_ignore_ascii_case("ISNUMBER") {
+            return self.parse_value_probe_test_function(|value| {
+                matches!(value, FormulaValueProbe::Number(_))
+            });
+        }
+        if name.eq_ignore_ascii_case("ISTEXT") {
+            return self.parse_value_probe_test_function(|value| {
+                matches!(value, FormulaValueProbe::Text(_))
+            });
+        }
         if name.eq_ignore_ascii_case("NA") {
             return self.parse_na_function();
         }
@@ -9758,6 +9782,18 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             Err(_) => match_any_error || !match_only_na,
         };
         Ok(if is_match { 1.0 } else { 0.0 })
+    }
+
+    fn parse_value_probe_test_function(
+        &mut self,
+        predicate: impl Fn(&FormulaValueProbe) -> bool,
+    ) -> Result<f64, FormulaEvalError> {
+        let value = self.parse_value_probe_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Ok(if predicate(&value) { 1.0 } else { 0.0 })
     }
 
     fn parse_na_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -10045,6 +10081,49 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             Ok(value) => Ok(Ok(value)),
             Err(FormulaEvalError::Unsupported) => Err(FormulaEvalError::Unsupported),
             Err(error) => Ok(Err(error)),
+        }
+    }
+
+    fn parse_value_probe_argument(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
+        self.skip_whitespace();
+        if let Some(text) = self.parse_string_literal()? {
+            return Ok(FormulaValueProbe::Text(text));
+        }
+        let checkpoint = self.index;
+        if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
+            self.index = next_index;
+            if rect.row_first != rect.row_last || rect.col_first != rect.col_last {
+                return Err(FormulaEvalError::Value);
+            }
+            let value = self.evaluator.cell_value_or_blank(
+                target_sheet_id,
+                rect.row_first,
+                rect.col_first,
+            )?;
+            return Ok(match value {
+                CellValue::Blank => FormulaValueProbe::Blank,
+                CellValue::Bool(value) => FormulaValueProbe::Bool(value),
+                CellValue::Number(value) => FormulaValueProbe::Number(value),
+                CellValue::Text(value) => FormulaValueProbe::Text(value),
+                CellValue::Error(error) => {
+                    FormulaValueProbe::Error(formula_eval_error_from_cell_error(error))
+                }
+            });
+        }
+        self.index = checkpoint;
+        if let Some(identifier) = self.parse_identifier() {
+            if identifier.eq_ignore_ascii_case("TRUE") {
+                return Ok(FormulaValueProbe::Bool(true));
+            }
+            if identifier.eq_ignore_ascii_case("FALSE") {
+                return Ok(FormulaValueProbe::Bool(false));
+            }
+            self.index = checkpoint;
+        }
+        match self.parse_comparison() {
+            Ok(value) => Ok(FormulaValueProbe::Number(value)),
+            Err(FormulaEvalError::Unsupported) => Err(FormulaEvalError::Unsupported),
+            Err(error) => Ok(FormulaValueProbe::Error(error)),
         }
     }
 
@@ -13447,6 +13526,115 @@ mod tests {
                 OmValue::Error(CellError::Div0),
                 OmValue::Number(1.0),
                 OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(0.0),
+                OmValue::Number(0.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_type_check_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B4".to_string())])
+                .expect("Range(B1:B4)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A12".to_string())],
+                )
+                .expect("Range(A1:A12)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        1,
+                        vec![
+                            OmValue::Empty,
+                            OmValue::Number(5.0),
+                            OmValue::Text("hello".to_string()),
+                            OmValue::Bool(true),
+                        ],
+                    )
+                    .expect("type check source values"),
+                ),
+                &[],
+            )
+            .expect("set type check source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        12,
+                        1,
+                        vec![
+                            OmValue::Text("=ISBLANK(B1)".to_string()),
+                            OmValue::Text("=ISBLANK(B2)".to_string()),
+                            OmValue::Text("=ISNUMBER(B2)".to_string()),
+                            OmValue::Text("=ISNUMBER(B3)".to_string()),
+                            OmValue::Text("=ISTEXT(B3)".to_string()),
+                            OmValue::Text("=ISTEXT(\"literal\")".to_string()),
+                            OmValue::Text("=ISNUMBER(1+2)".to_string()),
+                            OmValue::Text("=ISNUMBER(1/0)".to_string()),
+                            OmValue::Text("=ISTEXT(B4)".to_string()),
+                            OmValue::Text("=ISBLANK(B5)".to_string()),
+                            OmValue::Text("=ISNUMBER(TRUE)".to_string()),
+                            OmValue::Text("=ISBLANK(\"\")".to_string()),
+                        ],
+                    )
+                    .expect("type check formulas"),
+                ),
+                &[],
+            )
+            .expect("set type check formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("type check values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected type check value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(1.0),
+                OmValue::Number(0.0),
+                OmValue::Number(1.0),
+                OmValue::Number(0.0),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(0.0),
+                OmValue::Number(0.0),
                 OmValue::Number(1.0),
                 OmValue::Number(0.0),
                 OmValue::Number(0.0),
