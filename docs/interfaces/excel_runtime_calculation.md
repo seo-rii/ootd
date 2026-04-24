@@ -65,7 +65,20 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `MINIFS`
 - `MAXIFS`
 
-Notes:
+### Lookup and reference helpers
+
+- `INDEX`
+- `MATCH`
+- `VLOOKUP`
+- `HLOOKUP`
+
+Lookup notes:
+
+- `MATCH` supports exact match, ascending approximate match, and descending approximate match over one-dimensional ranges.
+- `VLOOKUP` and `HLOOKUP` support exact and ascending approximate table lookup.
+- Lookup comparisons support numbers, booleans, and case-insensitive text. Returned lookup values still flow through the numeric-first evaluator, so text results produce `#VALUE!`.
+
+Criteria notes:
 
 - `*IFS` family currently requires criteria ranges and value ranges to have the same shape.
 - criteria strings support numeric comparison prefixes such as `">3"` and the blank-string criterion `""`.
@@ -86,7 +99,7 @@ Notes:
 
 - The evaluator is still numeric-first. General string semantics, date/time semantics, and richer coercion rules are not implemented.
 - Dynamic array behavior and broader `Formula2` parity are not implemented.
-- Lookup/reference families are still mostly absent beyond direct A1 and sheet-qualified references used by the current aggregate slices.
+- Lookup/reference support is still a focused scalar subset. It does not model named ranges, array-returning `INDEX(..., 0, ...)`, external references, or broader lookup families such as `XLOOKUP` yet.
 - Named ranges, multi-area references, and 3D references are not implemented.
 - Unsupported formulas should fail predictably, but the runtime does not yet aim for 1:1 compatibility with Excel's full calculation engine.
 

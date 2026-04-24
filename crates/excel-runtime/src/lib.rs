@@ -11,6 +11,7 @@ use office_idl::{AccessMode, SupportState};
 use office_opc::{CompressionMethod, OpcPackage, OpcPart};
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Cursor;
@@ -8966,6 +8967,110 @@ enum FormulaValueProbe {
     Error(FormulaEvalError),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormulaLookupMode {
+    Exact,
+    ApproxAscending,
+    ApproxDescending,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormulaLookupOrientation {
+    FirstColumn,
+    FirstRow,
+}
+
+fn formula_value_probe_from_cell_value(value: CellValue) -> FormulaValueProbe {
+    match value {
+        CellValue::Blank => FormulaValueProbe::Blank,
+        CellValue::Bool(value) => FormulaValueProbe::Bool(value),
+        CellValue::Number(value) => FormulaValueProbe::Number(value),
+        CellValue::Text(value) => FormulaValueProbe::Text(value),
+        CellValue::Error(error) => {
+            FormulaValueProbe::Error(formula_eval_error_from_cell_error(error))
+        }
+    }
+}
+
+fn formula_integer_argument(value: f64) -> Result<i64, FormulaEvalError> {
+    if !value.is_finite() || value.fract() != 0.0 {
+        return Err(FormulaEvalError::Value);
+    }
+    if value < i64::MIN as f64 || value > i64::MAX as f64 {
+        return Err(FormulaEvalError::Num);
+    }
+    Ok(value as i64)
+}
+
+fn lookup_match_index_in_values(
+    lookup_value: &FormulaValueProbe,
+    values: &[FormulaValueProbe],
+    mode: FormulaLookupMode,
+) -> Result<usize, FormulaEvalError> {
+    if let FormulaValueProbe::Error(error) = lookup_value {
+        return Err(*error);
+    }
+    if matches!(mode, FormulaLookupMode::Exact) {
+        for (index, candidate) in values.iter().enumerate() {
+            if let FormulaValueProbe::Error(error) = candidate {
+                return Err(*error);
+            }
+            let matches = match (lookup_value, candidate) {
+                (FormulaValueProbe::Blank, FormulaValueProbe::Blank) => true,
+                (FormulaValueProbe::Bool(left), FormulaValueProbe::Bool(right)) => left == right,
+                (FormulaValueProbe::Number(left), FormulaValueProbe::Number(right)) => {
+                    left == right
+                }
+                (FormulaValueProbe::Text(left), FormulaValueProbe::Text(right)) => {
+                    left.eq_ignore_ascii_case(right)
+                }
+                _ => false,
+            };
+            if matches {
+                return Ok(index);
+            }
+        }
+        return Err(FormulaEvalError::NA);
+    }
+
+    let mut best = None;
+    for (index, candidate) in values.iter().enumerate() {
+        if let FormulaValueProbe::Error(error) = candidate {
+            return Err(*error);
+        }
+        let ordering = match (lookup_value, candidate) {
+            (FormulaValueProbe::Bool(left), FormulaValueProbe::Bool(right)) => {
+                Some(right.cmp(left))
+            }
+            (FormulaValueProbe::Number(left), FormulaValueProbe::Number(right)) => {
+                if !left.is_finite() || !right.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                right.partial_cmp(left)
+            }
+            (FormulaValueProbe::Text(left), FormulaValueProbe::Text(right)) => {
+                Some(right.to_ascii_lowercase().cmp(&left.to_ascii_lowercase()))
+            }
+            _ => None,
+        };
+        let Some(ordering) = ordering else {
+            continue;
+        };
+        match mode {
+            FormulaLookupMode::ApproxAscending if ordering != Ordering::Greater => {
+                best = Some(index);
+            }
+            FormulaLookupMode::ApproxDescending if ordering != Ordering::Less => {
+                best = Some(index);
+            }
+            FormulaLookupMode::Exact
+            | FormulaLookupMode::ApproxAscending
+            | FormulaLookupMode::ApproxDescending => {}
+        }
+    }
+    best.ok_or(FormulaEvalError::NA)
+}
+
 fn parse_formula_criteria_numeric_literal(input: &str) -> Option<(FormulaComparisonOperator, f64)> {
     for (prefix, operator) in [
         ("<>", FormulaComparisonOperator::NotEqual),
@@ -9228,6 +9333,48 @@ impl<'a> FormulaEvaluator<'a> {
                 .map(|cell| cell.value.clone())
                 .unwrap_or(CellValue::Blank)),
             Err(error) => Err(error),
+        }
+    }
+
+    fn lookup_values_in_rect(
+        &mut self,
+        sheet_id: SheetId,
+        rect: Rect,
+        orientation: FormulaLookupOrientation,
+    ) -> Result<Vec<FormulaValueProbe>, FormulaEvalError> {
+        if !self.state.worksheet_data.contains_key(&sheet_id) {
+            return Err(FormulaEvalError::Ref);
+        }
+        let mut values = Vec::new();
+        match orientation {
+            FormulaLookupOrientation::FirstColumn => {
+                for row in rect.row_first..=rect.row_last {
+                    let value = self.cell_value_or_blank(sheet_id, row, rect.col_first)?;
+                    values.push(formula_value_probe_from_cell_value(value));
+                }
+            }
+            FormulaLookupOrientation::FirstRow => {
+                for col in rect.col_first..=rect.col_last {
+                    let value = self.cell_value_or_blank(sheet_id, rect.row_first, col)?;
+                    values.push(formula_value_probe_from_cell_value(value));
+                }
+            }
+        }
+        Ok(values)
+    }
+
+    fn numeric_lookup_result_at(
+        &mut self,
+        sheet_id: SheetId,
+        row: u32,
+        col: u32,
+    ) -> Result<f64, FormulaEvalError> {
+        match self.cell_value_or_blank(sheet_id, row, col)? {
+            CellValue::Blank => Ok(0.0),
+            CellValue::Bool(value) => Ok(if value { 1.0 } else { 0.0 }),
+            CellValue::Number(value) => Ok(value),
+            CellValue::Text(_) => Err(FormulaEvalError::Value),
+            CellValue::Error(error) => Err(formula_eval_error_from_cell_error(error)),
         }
     }
 
@@ -9705,6 +9852,18 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("NA") {
             return self.parse_na_function();
         }
+        if name.eq_ignore_ascii_case("INDEX") {
+            return self.parse_index_function();
+        }
+        if name.eq_ignore_ascii_case("MATCH") {
+            return self.parse_match_function();
+        }
+        if name.eq_ignore_ascii_case("VLOOKUP") {
+            return self.parse_vlookup_function();
+        }
+        if name.eq_ignore_ascii_case("HLOOKUP") {
+            return self.parse_hlookup_function();
+        }
         if name.eq_ignore_ascii_case("SUMIF") {
             return self.parse_sumif_function();
         }
@@ -9828,6 +9987,117 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return Err(FormulaEvalError::Unsupported);
         }
         Err(FormulaEvalError::NA)
+    }
+
+    fn parse_index_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let (sheet_id, rect) = self.parse_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let row_index = formula_integer_argument(self.parse_comparison()?)?;
+        if row_index < 1 {
+            return Err(FormulaEvalError::Value);
+        }
+        let mut col_index = 1_i64;
+        self.skip_whitespace();
+        if self.consume_char(',') {
+            col_index = formula_integer_argument(self.parse_comparison()?)?;
+            if col_index < 1 {
+                return Err(FormulaEvalError::Value);
+            }
+            self.skip_whitespace();
+        }
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        if row_index > i64::from(rect.height()) || col_index > i64::from(rect.width()) {
+            return Err(FormulaEvalError::Ref);
+        }
+        let row = rect.row_first + row_index as u32 - 1;
+        let col = rect.col_first + col_index as u32 - 1;
+        self.evaluator.numeric_lookup_result_at(sheet_id, row, col)
+    }
+
+    fn parse_match_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let lookup_value = self.parse_lookup_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let (sheet_id, rect) = self.parse_reference_argument()?;
+        let mode = self
+            .parse_optional_lookup_mode_argument(true)?
+            .unwrap_or(FormulaLookupMode::ApproxAscending);
+        if rect.width() > 1 && rect.height() > 1 {
+            return Err(FormulaEvalError::Value);
+        }
+        let orientation = if rect.height() == 1 {
+            FormulaLookupOrientation::FirstRow
+        } else {
+            FormulaLookupOrientation::FirstColumn
+        };
+        let values = self
+            .evaluator
+            .lookup_values_in_rect(sheet_id, rect, orientation)?;
+        let index = lookup_match_index_in_values(&lookup_value, values.as_slice(), mode)?;
+        Ok(index as f64 + 1.0)
+    }
+
+    fn parse_vlookup_function(&mut self) -> Result<f64, FormulaEvalError> {
+        self.parse_table_lookup_function(false)
+    }
+
+    fn parse_hlookup_function(&mut self) -> Result<f64, FormulaEvalError> {
+        self.parse_table_lookup_function(true)
+    }
+
+    fn parse_table_lookup_function(&mut self, horizontal: bool) -> Result<f64, FormulaEvalError> {
+        let lookup_value = self.parse_lookup_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let (sheet_id, rect) = self.parse_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let result_index = formula_integer_argument(self.parse_comparison()?)?;
+        if result_index < 1 {
+            return Err(FormulaEvalError::Value);
+        }
+        let max_result_index = if horizontal {
+            rect.height()
+        } else {
+            rect.width()
+        };
+        if result_index > i64::from(max_result_index) {
+            return Err(FormulaEvalError::Ref);
+        }
+        let mode = self
+            .parse_optional_lookup_mode_argument(false)?
+            .unwrap_or(FormulaLookupMode::ApproxAscending);
+        let orientation = if horizontal {
+            FormulaLookupOrientation::FirstRow
+        } else {
+            FormulaLookupOrientation::FirstColumn
+        };
+        let values = self
+            .evaluator
+            .lookup_values_in_rect(sheet_id, rect, orientation)?;
+        let match_index = lookup_match_index_in_values(&lookup_value, values.as_slice(), mode)?;
+        let row = if horizontal {
+            rect.row_first + result_index as u32 - 1
+        } else {
+            rect.row_first + match_index as u32
+        };
+        let col = if horizontal {
+            rect.col_first + match_index as u32
+        } else {
+            rect.col_first + result_index as u32 - 1
+        };
+        self.evaluator.numeric_lookup_result_at(sheet_id, row, col)
     }
 
     fn parse_sumif_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -10064,6 +10334,39 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         Ok((target_sheet_id, rect))
     }
 
+    fn parse_lookup_value_argument(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let value = self.parse_value_probe_argument()?;
+        if let FormulaValueProbe::Error(error) = value {
+            return Err(error);
+        }
+        Ok(value)
+    }
+
+    fn parse_optional_lookup_mode_argument(
+        &mut self,
+        allow_descending: bool,
+    ) -> Result<Option<FormulaLookupMode>, FormulaEvalError> {
+        self.skip_whitespace();
+        if self.consume_char(')') {
+            return Ok(None);
+        }
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let mode_value = formula_integer_argument(self.parse_comparison()?)?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Ok(Some(if mode_value == 0 {
+            FormulaLookupMode::Exact
+        } else if allow_descending && mode_value < 0 {
+            FormulaLookupMode::ApproxDescending
+        } else {
+            FormulaLookupMode::ApproxAscending
+        }))
+    }
+
     fn parse_criteria_argument(&mut self) -> Result<FormulaCriteria, FormulaEvalError> {
         self.skip_whitespace();
         if let Some(literal) = self.parse_string_literal()? {
@@ -10126,15 +10429,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 rect.row_first,
                 rect.col_first,
             )?;
-            return Ok(match value {
-                CellValue::Blank => FormulaValueProbe::Blank,
-                CellValue::Bool(value) => FormulaValueProbe::Bool(value),
-                CellValue::Number(value) => FormulaValueProbe::Number(value),
-                CellValue::Text(value) => FormulaValueProbe::Text(value),
-                CellValue::Error(error) => {
-                    FormulaValueProbe::Error(formula_eval_error_from_cell_error(error))
-                }
-            });
+            return Ok(formula_value_probe_from_cell_value(value));
         }
         self.index = checkpoint;
         if let Some(identifier) = self.parse_identifier() {
@@ -14367,6 +14662,181 @@ mod tests {
                     .expect("sheet-qualified formula Value2")
             ),
             44.0
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_lookup_and_reference_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let vertical_table = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:C4".to_string())])
+                .expect("Range(A1:C4)"),
+        );
+        let horizontal_table = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E1:H4".to_string())])
+                .expect("Range(E1:H4)"),
+        );
+        let descending_values = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("L1:L4".to_string())])
+                .expect("Range(L1:L4)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("J1:J10".to_string())],
+                )
+                .expect("Range(J1:J10)"),
+        );
+
+        runtime
+            .dispatch_set(
+                vertical_table,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        3,
+                        vec![
+                            OmValue::Text("alpha".to_string()),
+                            OmValue::Number(10.0),
+                            OmValue::Number(100.0),
+                            OmValue::Text("beta".to_string()),
+                            OmValue::Number(20.0),
+                            OmValue::Number(200.0),
+                            OmValue::Text("delta".to_string()),
+                            OmValue::Number(40.0),
+                            OmValue::Number(400.0),
+                            OmValue::Text("gamma".to_string()),
+                            OmValue::Number(80.0),
+                            OmValue::Number(800.0),
+                        ],
+                    )
+                    .expect("vertical lookup values"),
+                ),
+                &[],
+            )
+            .expect("set vertical lookup table");
+        runtime
+            .dispatch_set(
+                horizontal_table,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        4,
+                        vec![
+                            OmValue::Text("Q1".to_string()),
+                            OmValue::Text("Q2".to_string()),
+                            OmValue::Text("Q3".to_string()),
+                            OmValue::Text("Q4".to_string()),
+                            OmValue::Number(10.0),
+                            OmValue::Number(20.0),
+                            OmValue::Number(30.0),
+                            OmValue::Number(40.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(100.0),
+                            OmValue::Number(200.0),
+                            OmValue::Number(300.0),
+                            OmValue::Number(400.0),
+                        ],
+                    )
+                    .expect("horizontal lookup values"),
+                ),
+                &[],
+            )
+            .expect("set horizontal lookup table");
+        runtime
+            .dispatch_set(
+                descending_values,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        1,
+                        vec![
+                            OmValue::Number(80.0),
+                            OmValue::Number(40.0),
+                            OmValue::Number(20.0),
+                            OmValue::Number(10.0),
+                        ],
+                    )
+                    .expect("descending lookup values"),
+                ),
+                &[],
+            )
+            .expect("set descending lookup values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        10,
+                        1,
+                        vec![
+                            OmValue::Text("=VLOOKUP(\"beta\", A1:C4, 2, FALSE)".to_string()),
+                            OmValue::Text("=VLOOKUP(35, B1:C4, 2)".to_string()),
+                            OmValue::Text("=MATCH(\"DELTA\", A1:A4, 0)".to_string()),
+                            OmValue::Text("=MATCH(35, B1:B4)".to_string()),
+                            OmValue::Text("=INDEX(A1:C4, 3, 3)".to_string()),
+                            OmValue::Text("=HLOOKUP(\"Q3\", E1:H4, 2, FALSE)".to_string()),
+                            OmValue::Text("=HLOOKUP(2.4, E3:H4, 2)".to_string()),
+                            OmValue::Text("=MATCH(35, L1:L4, -1)".to_string()),
+                            OmValue::Text("=VLOOKUP(\"missing\", A1:C4, 2, FALSE)".to_string()),
+                            OmValue::Text("=INDEX(A1:C4, 5, 1)".to_string()),
+                        ],
+                    )
+                    .expect("lookup formulas"),
+                ),
+                &[],
+            )
+            .expect("set lookup formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("lookup values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected lookup value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(20.0),
+                OmValue::Number(200.0),
+                OmValue::Number(3.0),
+                OmValue::Number(2.0),
+                OmValue::Number(400.0),
+                OmValue::Number(30.0),
+                OmValue::Number(200.0),
+                OmValue::Number(2.0),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::Ref),
+            ]
         );
     }
 
