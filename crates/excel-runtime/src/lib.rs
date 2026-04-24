@@ -8613,6 +8613,7 @@ enum FormulaEvalError {
     Value,
     Ref,
     Name,
+    NA,
     Num,
     Calc,
 }
@@ -8625,6 +8626,7 @@ impl FormulaEvalError {
             FormulaEvalError::Value => Some(CellValue::Error(CellError::Value)),
             FormulaEvalError::Ref => Some(CellValue::Error(CellError::Ref)),
             FormulaEvalError::Name => Some(CellValue::Error(CellError::Name)),
+            FormulaEvalError::NA => Some(CellValue::Error(CellError::NA)),
             FormulaEvalError::Num => Some(CellValue::Error(CellError::Num)),
             FormulaEvalError::Calc => Some(CellValue::Error(CellError::Calc)),
         }
@@ -8636,6 +8638,7 @@ fn formula_eval_error_from_cell_error(error: CellError) -> FormulaEvalError {
         CellError::Div0 => FormulaEvalError::Div0,
         CellError::Ref => FormulaEvalError::Ref,
         CellError::Name => FormulaEvalError::Name,
+        CellError::NA => FormulaEvalError::NA,
         CellError::Num => FormulaEvalError::Num,
         CellError::Calc => FormulaEvalError::Calc,
         _ => FormulaEvalError::Value,
@@ -9634,6 +9637,24 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("COUNTIF") {
             return self.parse_countif_function();
         }
+        if name.eq_ignore_ascii_case("IFERROR") {
+            return self.parse_iferror_function();
+        }
+        if name.eq_ignore_ascii_case("IFNA") {
+            return self.parse_ifna_function();
+        }
+        if name.eq_ignore_ascii_case("ISERROR") {
+            return self.parse_error_test_function(true, false);
+        }
+        if name.eq_ignore_ascii_case("ISERR") {
+            return self.parse_error_test_function(false, false);
+        }
+        if name.eq_ignore_ascii_case("ISNA") {
+            return self.parse_error_test_function(false, true);
+        }
+        if name.eq_ignore_ascii_case("NA") {
+            return self.parse_na_function();
+        }
         if name.eq_ignore_ascii_case("SUMIF") {
             return self.parse_sumif_function();
         }
@@ -9689,6 +9710,62 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         Ok(self
             .evaluator
             .countif_values_in_rect(sheet_id, rect, &criteria)? as f64)
+    }
+
+    fn parse_iferror_function(&mut self) -> Result<f64, FormulaEvalError> {
+        self.parse_error_fallback_function(false)
+    }
+
+    fn parse_ifna_function(&mut self) -> Result<f64, FormulaEvalError> {
+        self.parse_error_fallback_function(true)
+    }
+
+    fn parse_error_fallback_function(
+        &mut self,
+        catch_only_na: bool,
+    ) -> Result<f64, FormulaEvalError> {
+        let primary = self.parse_catchable_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let fallback = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        match primary {
+            Ok(value) => Ok(value),
+            Err(FormulaEvalError::NA) => Ok(fallback),
+            Err(_error) if !catch_only_na => Ok(fallback),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn parse_error_test_function(
+        &mut self,
+        match_any_error: bool,
+        match_only_na: bool,
+    ) -> Result<f64, FormulaEvalError> {
+        let value = self.parse_catchable_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let is_match = match value {
+            Ok(_) => false,
+            Err(FormulaEvalError::NA) => match_any_error || match_only_na,
+            Err(_) => match_any_error || !match_only_na,
+        };
+        Ok(if is_match { 1.0 } else { 0.0 })
+    }
+
+    fn parse_na_function(&mut self) -> Result<f64, FormulaEvalError> {
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Err(FormulaEvalError::NA)
     }
 
     fn parse_sumif_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -9958,6 +10035,16 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             if !self.consume_char(',') {
                 return Err(FormulaEvalError::Unsupported);
             }
+        }
+    }
+
+    fn parse_catchable_argument(
+        &mut self,
+    ) -> Result<Result<f64, FormulaEvalError>, FormulaEvalError> {
+        match self.parse_comparison() {
+            Ok(value) => Ok(Ok(value)),
+            Err(FormulaEvalError::Unsupported) => Err(FormulaEvalError::Unsupported),
+            Err(error) => Ok(Err(error)),
         }
     }
 
@@ -13281,6 +13368,88 @@ mod tests {
                 OmValue::Number(30.0),
                 OmValue::Number(0.0),
                 OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_error_helper_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A11".to_string())],
+                )
+                .expect("Range(A1:A11)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        11,
+                        1,
+                        vec![
+                            OmValue::Text("=NA()".to_string()),
+                            OmValue::Text("=IFERROR(1/0, 42)".to_string()),
+                            OmValue::Text("=IFERROR(SQRT(-1), 7)".to_string()),
+                            OmValue::Text("=IFERROR(9, 3)".to_string()),
+                            OmValue::Text("=IFNA(NA(), 11)".to_string()),
+                            OmValue::Text("=IFNA(1/0, 13)".to_string()),
+                            OmValue::Text("=ISERROR(1/0)".to_string()),
+                            OmValue::Text("=ISERR(1/0)".to_string()),
+                            OmValue::Text("=ISNA(NA())".to_string()),
+                            OmValue::Text("=ISERR(NA())".to_string()),
+                            OmValue::Text("=ISERROR(5)".to_string()),
+                        ],
+                    )
+                    .expect("error helper formulas"),
+                ),
+                &[],
+            )
+            .expect("set error helper formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("error helper values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected error helper value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Error(CellError::NA),
+                OmValue::Number(42.0),
+                OmValue::Number(7.0),
+                OmValue::Number(9.0),
+                OmValue::Number(11.0),
+                OmValue::Error(CellError::Div0),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(0.0),
+                OmValue::Number(0.0),
             ]
         );
     }
