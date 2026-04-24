@@ -11,6 +11,10 @@ Some detailed implementation notes currently remain in Korean because they were 
 - [Current implementation plan](../PLAN.md)
 - [Contributing guide](../CONTRIBUTING.md)
 
+## Current Runtime Surfaces
+
+- [Excel runtime calculation surface](interfaces/excel_runtime_calculation.md): current formula evaluator scope, supported functions, and known gaps.
+
 ## Spec Intake And Contracts
 
 - [Spec roots](spec_roots.md): source-of-truth references for XLSX, OPC, and Excel object model intake.

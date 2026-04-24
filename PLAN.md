@@ -24,7 +24,7 @@
 4. unknown part, relationship, extension은 typed model과 별개로 보존 가능한 구조를 둔다.
 5. 테스트는 synthetic fixture와 byte/package round-trip 검증을 기준으로 쌓는다.
 
-## Implemented This Turn
+## Implemented So Far
 
 - `docs`
   - 심화 구현 전에 따라야 할 공식 spec root와 intake 순서를 `docs/spec_roots.md`에 정리했다.
@@ -67,7 +67,9 @@
   - dirty row와 dirty cell도 original child sequence를 따라 opaque payload를 다시 써서 row-local/cell-local unknown XML을 가능한 범위에서 보존한다.
   - dirty row에 새 cell을 삽입할 때도 original segment order를 기준으로 다음 existing cell 및 trailing opaque payload 앞에 배치해 row-level XML 순서를 최대한 유지한다.
 - `excel-runtime`
-  - load/save orchestration, workbook/session lookup, range get/set을 제공한다.
+  - load/save orchestration, workbook/session lookup, object-handle dispatch, range get/set을 제공한다.
+  - `Application.Calculate`, `Application.Evaluate`, `Worksheet.Evaluate`와 numeric-first formula evaluator를 제공한다.
+  - arithmetic/comparison/logical/math helper, aggregate/count helper, criteria aggregate, error/info helper formula subset을 회귀 테스트와 함께 제공한다.
 
 ## Implementation Order
 
@@ -107,7 +109,9 @@
 
 - `excel-runtime`
   - `create_workbook`, `open_workbook`, `save_workbook`, `get/set range values`의 최소 host를 만든다.
-  - 아직 calc/render 전체 구현은 하지 않고, model + codec orchestration만 연결한다.
+  - `Application`/`Workbook`/`Worksheet`/`Range` 중심의 object-handle dispatch vertical slice를 연결한다.
+  - numeric-first formula evaluator와 `Application.Calculate`/`Evaluate`, `Worksheet.Evaluate`를 같은 runtime slice에 묶는다.
+  - dynamic array, string/date-heavy semantics, broader parity는 후속 단계로 남긴다.
 
 ## Next Execution Plan
 
@@ -298,7 +302,7 @@
 - 상태
   - `excel-runtime`의 object-handle dispatch slice를 workbook/worksheet/range facade 기준으로 구현했다.
   - Step 4 registry를 dispatch metadata source로 연결했고, stale-handle rejection과 member gating까지 포함하는 최소 vertical slice를 닫았다.
-  - 현재 범위는 `Application`/`Workbooks`/`Workbook`/`Worksheets`/`Worksheet`/`Range`의 최소 get/set/invoke와 `Variant`/`OmValue` coercion, stale object rejection, collection item lookup까지다.
+  - 현재 범위는 `Application`/`Workbooks`/`Workbook`/`Worksheets`/`Worksheet`/`Range`의 최소 get/set/invoke와 `Variant`/`OmValue` coercion, stale object rejection, collection item lookup, workbook/worksheet mutation의 일부까지다.
 
 - 목표
   - `excel-runtime`에 object handle 기반 최소 dispatch를 붙인다.
@@ -318,6 +322,29 @@
   - worksheet/range property dispatch
   - coercion/error mapping 회귀 테스트
   - metadata gating regression tests
+
+### Step 5.1. Runtime Calculation And Evaluate Slice
+
+- 상태
+  - `Application.Calculate`, `Application.Evaluate`, `Worksheet.Evaluate`를 runtime dispatch에 연결했다.
+  - 수식 엔진은 arithmetic, comparison, logical, math helper, aggregate/count helper, criteria aggregate, error/info helper subset을 현재 regression으로 고정했다.
+  - A1 reference, sheet-qualified A1 reference, in-cell `FormulaR1C1` conversion 경로를 현재 계산 slice에 연결했다.
+- 목표
+  - runtime mutation path에서 실제로 쓸 수 있는 numeric-first 계산 경로를 확보한다.
+  - `Evaluate` entry point와 in-cell formula recalculation이 같은 parser/evaluator를 공유하게 한다.
+  - 지원하지 않는 수식은 workbook state를 오염시키지 않고 예측 가능한 오류로 남긴다.
+- 산출물
+  - formula parser/evaluator
+  - `Application.Calculate`
+  - `Application.Evaluate` / `Worksheet.Evaluate`
+  - calculation regression tests
+- 선행 의존성
+  - Step 5
+- 병렬화 가능
+  - scalar/logical helper expansion
+  - aggregate/criteria function expansion
+  - error/info helper expansion
+  - runtime calculation 문서화
 
 ### Step 6. XLSX Fidelity Follow-up
 
@@ -4240,19 +4267,20 @@
 3. `Step 7`은 capture/harness 자체는 `Step 3` 이후 시작할 수 있지만, facade behavior diff의 가치는 `Step 5` 이후에 커진다.
 4. 서브에이전트는 `Step 6`의 fidelity slice들과 `Step 4`의 metadata table 분할 작업에 가장 효율적이다.
 
-## This Turn Scope
+## Current Scope Reached
 
-이번 작업에서는 아래의 초기 foundation을 구현했다.
+현재 트리는 아래 범위를 실제로 구현했다.
 
 1. `office-idl`과 `office-codegen`의 build-time contract 최소 경로
 2. `office-common`의 shared primitive/model 정의
 3. `office-opc`의 ZIP package preserve/load/save 경로
 4. `excel-model`의 workbook/sheet/cell state와 range read/write
 5. `excel-xlsx`의 minimal sniff/load/save 경로, metadata extraction, worksheet cell IO
-6. `excel-runtime`의 open/save/session lookup/range get-set 경로
-7. no-op 및 dirty `.xlsx` save 경로와 package preservation 테스트
+6. `excel-runtime`의 open/save/session lookup/range get-set, object-handle dispatch 경로
+7. numeric-first formula evaluation과 `Application.Calculate`/`Evaluate`, `Worksheet.Evaluate`
+8. no-op 및 dirty `.xlsx` save 경로와 package preservation 테스트
 
-`excel-calc`, `excel-render`, `office-wasm`, 실제 Excel oracle runner는 이번 범위에서 제외한다.
+별도 `excel-calc` crate, `excel-render`, `office-wasm`, 실제 Excel oracle runner는 아직 이번 트리에 없다.
 
 ## Acceptance Criteria
 
@@ -4262,10 +4290,11 @@
 - worksheet cell 값과 shared string을 model로 읽을 수 있다.
 - save 시 unknown/opaque part를 그대로 다시 내보내고 dirty worksheet value 변경을 반영할 수 있다.
 - `excel-runtime`에서 open/save/session lookup/range get-set 경로가 동작한다.
+- 현재 지원하는 수식 subset에 대해 `Application.Calculate`, `Application.Evaluate`, `Worksheet.Evaluate`가 동작한다.
 
 ## Deferred Work
 
-- formula parser / calc engine
+- broader formula parity: string/date/lookup/reference 함수, name resolution, richer coercion semantics
 - dynamic array / `Formula2` dialect
 - style/theme/drawing typed model
 - macro-preserving `.xlsm` specifics

@@ -13,7 +13,7 @@ The current repository focuses on the Excel slice first. The near-term goal is n
 
 This project is still in an early implementation phase.
 
-Implemented today:
+Implemented so far:
 
 - pinned documentation and capture contracts for Excel object model source acquisition,
 - `office-idl` loading for canonical schema-backed metadata,
@@ -22,7 +22,7 @@ Implemented today:
 - `excel-model` workbook, worksheet, and cell state,
 - `excel-xlsx` load/save support for a focused vertical slice,
 - `excel-runtime` orchestration for workbook/session and range access,
-- `excel-runtime` formula evaluation for arithmetic, aggregates, comparisons, logical functions, and `Application`/`Worksheet.Evaluate`,
+- `excel-runtime` formula evaluation for arithmetic, comparisons, logical/control helpers, aggregates, criteria aggregates, error/info helpers, and `Application`/`Worksheet.Evaluate`,
 - `office-capture` support for Windows capture bundle planning and materialization.
 
 Not implemented yet:
@@ -78,6 +78,7 @@ cargo test --workspace --locked --quiet
 
 - [Documentation index](docs/README.md)
 - [Phase 1 plan](PLAN.md)
+- [Excel runtime calculation surface](docs/interfaces/excel_runtime_calculation.md)
 - [Spec roots](docs/spec_roots.md)
 - [OM source acquisition](docs/specs/om_source_acquisition.md)
 - [Windows capture runner contract](docs/specs/windows_capture_runner.md)
