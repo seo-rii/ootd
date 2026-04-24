@@ -9077,6 +9077,13 @@ enum FormulaLookupMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormulaXLookupMatchMode {
+    Exact,
+    ExactOrNextSmaller,
+    ExactOrNextLarger,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FormulaLookupOrientation {
     FirstColumn,
     FirstRow,
@@ -9143,6 +9150,7 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("INDEX")
         || name.eq_ignore_ascii_case("VLOOKUP")
         || name.eq_ignore_ascii_case("HLOOKUP")
+        || name.eq_ignore_ascii_case("XLOOKUP")
 }
 
 fn formula_text_from_number(value: f64) -> Result<String, FormulaEvalError> {
@@ -9182,6 +9190,25 @@ fn formula_positive_position_argument(value: f64) -> Result<usize, FormulaEvalEr
         return Err(FormulaEvalError::Value);
     }
     usize::try_from(position).map_err(|_| FormulaEvalError::Num)
+}
+
+fn formula_xlookup_match_mode_argument(
+    value: f64,
+) -> Result<FormulaXLookupMatchMode, FormulaEvalError> {
+    match formula_integer_argument(value)? {
+        0 => Ok(FormulaXLookupMatchMode::Exact),
+        -1 => Ok(FormulaXLookupMatchMode::ExactOrNextSmaller),
+        1 => Ok(FormulaXLookupMatchMode::ExactOrNextLarger),
+        _ => Err(FormulaEvalError::Value),
+    }
+}
+
+fn formula_xlookup_reverse_search_argument(value: f64) -> Result<bool, FormulaEvalError> {
+    match formula_integer_argument(value)? {
+        1 => Ok(false),
+        -1 => Ok(true),
+        _ => Err(FormulaEvalError::Value),
+    }
 }
 
 fn formula_date_serial_from_args(year: f64, month: f64, day: f64) -> Result<f64, FormulaEvalError> {
@@ -9385,21 +9412,7 @@ fn lookup_match_index_in_values(
     }
     if matches!(mode, FormulaLookupMode::Exact) {
         for (index, candidate) in values.iter().enumerate() {
-            if let FormulaValueProbe::Error(error) = candidate {
-                return Err(*error);
-            }
-            let matches = match (lookup_value, candidate) {
-                (FormulaValueProbe::Blank, FormulaValueProbe::Blank) => true,
-                (FormulaValueProbe::Bool(left), FormulaValueProbe::Bool(right)) => left == right,
-                (FormulaValueProbe::Number(left), FormulaValueProbe::Number(right)) => {
-                    left == right
-                }
-                (FormulaValueProbe::Text(left), FormulaValueProbe::Text(right)) => {
-                    left.eq_ignore_ascii_case(right)
-                }
-                _ => false,
-            };
-            if matches {
+            if formula_value_probe_exact_match(lookup_value, candidate)? {
                 return Ok(index);
             }
         }
@@ -9408,24 +9421,7 @@ fn lookup_match_index_in_values(
 
     let mut best = None;
     for (index, candidate) in values.iter().enumerate() {
-        if let FormulaValueProbe::Error(error) = candidate {
-            return Err(*error);
-        }
-        let ordering = match (lookup_value, candidate) {
-            (FormulaValueProbe::Bool(left), FormulaValueProbe::Bool(right)) => {
-                Some(right.cmp(left))
-            }
-            (FormulaValueProbe::Number(left), FormulaValueProbe::Number(right)) => {
-                if !left.is_finite() || !right.is_finite() {
-                    return Err(FormulaEvalError::Value);
-                }
-                right.partial_cmp(left)
-            }
-            (FormulaValueProbe::Text(left), FormulaValueProbe::Text(right)) => {
-                Some(right.to_ascii_lowercase().cmp(&left.to_ascii_lowercase()))
-            }
-            _ => None,
-        };
+        let ordering = formula_value_probe_ordering(candidate, lookup_value)?;
         let Some(ordering) = ordering else {
             continue;
         };
@@ -9442,6 +9438,111 @@ fn lookup_match_index_in_values(
         }
     }
     best.ok_or(FormulaEvalError::NA)
+}
+
+fn xlookup_match_index_in_values(
+    lookup_value: &FormulaValueProbe,
+    values: &[FormulaValueProbe],
+    mode: FormulaXLookupMatchMode,
+    reverse_search: bool,
+) -> Result<usize, FormulaEvalError> {
+    if let FormulaValueProbe::Error(error) = lookup_value {
+        return Err(*error);
+    }
+    let indexes = if reverse_search {
+        (0..values.len()).rev().collect::<Vec<_>>()
+    } else {
+        (0..values.len()).collect::<Vec<_>>()
+    };
+    for index in indexes.iter().copied() {
+        if formula_value_probe_exact_match(lookup_value, &values[index])? {
+            return Ok(index);
+        }
+    }
+    if matches!(mode, FormulaXLookupMatchMode::Exact) {
+        return Err(FormulaEvalError::NA);
+    }
+
+    let mut best = None::<(usize, FormulaValueProbe)>;
+    for index in indexes {
+        let candidate = &values[index];
+        let Some(ordering) = formula_value_probe_ordering(candidate, lookup_value)? else {
+            continue;
+        };
+        let is_viable = match mode {
+            FormulaXLookupMatchMode::Exact => false,
+            FormulaXLookupMatchMode::ExactOrNextSmaller => ordering == Ordering::Less,
+            FormulaXLookupMatchMode::ExactOrNextLarger => ordering == Ordering::Greater,
+        };
+        if !is_viable {
+            continue;
+        }
+        let replace = match &best {
+            None => true,
+            Some((_, current)) => match formula_value_probe_ordering(candidate, current)? {
+                Some(candidate_to_current) => match mode {
+                    FormulaXLookupMatchMode::Exact => false,
+                    FormulaXLookupMatchMode::ExactOrNextSmaller => {
+                        candidate_to_current == Ordering::Greater
+                    }
+                    FormulaXLookupMatchMode::ExactOrNextLarger => {
+                        candidate_to_current == Ordering::Less
+                    }
+                },
+                None => false,
+            },
+        };
+        if replace {
+            best = Some((index, candidate.clone()));
+        }
+    }
+    best.map(|(index, _)| index).ok_or(FormulaEvalError::NA)
+}
+
+fn formula_value_probe_exact_match(
+    lookup_value: &FormulaValueProbe,
+    candidate: &FormulaValueProbe,
+) -> Result<bool, FormulaEvalError> {
+    if let FormulaValueProbe::Error(error) = lookup_value {
+        return Err(*error);
+    }
+    if let FormulaValueProbe::Error(error) = candidate {
+        return Err(*error);
+    }
+    Ok(match (lookup_value, candidate) {
+        (FormulaValueProbe::Blank, FormulaValueProbe::Blank) => true,
+        (FormulaValueProbe::Bool(left), FormulaValueProbe::Bool(right)) => left == right,
+        (FormulaValueProbe::Number(left), FormulaValueProbe::Number(right)) => left == right,
+        (FormulaValueProbe::Text(left), FormulaValueProbe::Text(right)) => {
+            left.eq_ignore_ascii_case(right)
+        }
+        _ => false,
+    })
+}
+
+fn formula_value_probe_ordering(
+    left: &FormulaValueProbe,
+    right: &FormulaValueProbe,
+) -> Result<Option<Ordering>, FormulaEvalError> {
+    if let FormulaValueProbe::Error(error) = left {
+        return Err(*error);
+    }
+    if let FormulaValueProbe::Error(error) = right {
+        return Err(*error);
+    }
+    Ok(match (left, right) {
+        (FormulaValueProbe::Bool(left), FormulaValueProbe::Bool(right)) => Some(left.cmp(right)),
+        (FormulaValueProbe::Number(left), FormulaValueProbe::Number(right)) => {
+            if !left.is_finite() || !right.is_finite() {
+                return Err(FormulaEvalError::Value);
+            }
+            left.partial_cmp(right)
+        }
+        (FormulaValueProbe::Text(left), FormulaValueProbe::Text(right)) => {
+            Some(left.to_ascii_lowercase().cmp(&right.to_ascii_lowercase()))
+        }
+        _ => None,
+    })
 }
 
 fn parse_formula_criteria_numeric_literal(input: &str) -> Option<(FormulaComparisonOperator, f64)> {
@@ -10306,11 +10407,17 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("MATCH") {
             return self.parse_match_function();
         }
+        if name.eq_ignore_ascii_case("XMATCH") {
+            return self.parse_xmatch_function();
+        }
         if name.eq_ignore_ascii_case("VLOOKUP") {
             return self.parse_vlookup_function();
         }
         if name.eq_ignore_ascii_case("HLOOKUP") {
             return self.parse_hlookup_function();
+        }
+        if name.eq_ignore_ascii_case("XLOOKUP") {
+            return formula_number_from_value_probe(self.parse_xlookup_value_function()?);
         }
         if name.eq_ignore_ascii_case("SUMIF") {
             return self.parse_sumif_function();
@@ -10404,6 +10511,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return formula_selected_text_from_value_probe(
                 self.parse_table_lookup_value_function(true)?,
             );
+        }
+        if name.eq_ignore_ascii_case("XLOOKUP") {
+            return formula_selected_text_from_value_probe(self.parse_xlookup_value_function()?);
         }
         Err(FormulaEvalError::Unsupported)
     }
@@ -10940,6 +11050,41 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         Ok(index as f64 + 1.0)
     }
 
+    fn parse_xmatch_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let lookup_value = self.parse_lookup_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let (sheet_id, rect, orientation) = self.parse_lookup_vector_reference_argument()?;
+        let mut mode = FormulaXLookupMatchMode::Exact;
+        let mut reverse_search = false;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            mode = formula_xlookup_match_mode_argument(self.parse_comparison()?)?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                reverse_search = formula_xlookup_reverse_search_argument(self.parse_comparison()?)?;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+            }
+        }
+        let values = self
+            .evaluator
+            .lookup_values_in_rect(sheet_id, rect, orientation)?;
+        let index =
+            xlookup_match_index_in_values(&lookup_value, values.as_slice(), mode, reverse_search)?;
+        Ok(index as f64 + 1.0)
+    }
+
     fn parse_vlookup_function(&mut self) -> Result<f64, FormulaEvalError> {
         self.parse_table_lookup_function(false)
     }
@@ -11001,6 +11146,92 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             rect.col_first + result_index as u32 - 1
         };
         self.evaluator.lookup_result_at(sheet_id, row, col)
+    }
+
+    fn parse_xlookup_value_function(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let lookup_value = self.parse_lookup_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let (lookup_sheet_id, lookup_rect, lookup_orientation) =
+            self.parse_lookup_vector_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let (return_sheet_id, return_rect, return_orientation) =
+            self.parse_lookup_vector_reference_argument()?;
+        let lookup_len = match lookup_orientation {
+            FormulaLookupOrientation::FirstColumn => lookup_rect.height(),
+            FormulaLookupOrientation::FirstRow => lookup_rect.width(),
+        };
+        let return_len = match return_orientation {
+            FormulaLookupOrientation::FirstColumn => return_rect.height(),
+            FormulaLookupOrientation::FirstRow => return_rect.width(),
+        };
+        if lookup_len != return_len {
+            return Err(FormulaEvalError::Value);
+        }
+
+        let mut if_not_found = None;
+        let mut mode = FormulaXLookupMatchMode::Exact;
+        let mut reverse_search = false;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            if_not_found = Some(self.parse_value_probe_argument()?);
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                mode = formula_xlookup_match_mode_argument(self.parse_comparison()?)?;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    reverse_search =
+                        formula_xlookup_reverse_search_argument(self.parse_comparison()?)?;
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                }
+            }
+        }
+
+        let lookup_values = self.evaluator.lookup_values_in_rect(
+            lookup_sheet_id,
+            lookup_rect,
+            lookup_orientation,
+        )?;
+        let match_index = match xlookup_match_index_in_values(
+            &lookup_value,
+            lookup_values.as_slice(),
+            mode,
+            reverse_search,
+        ) {
+            Ok(index) => index,
+            Err(FormulaEvalError::NA) => {
+                return if_not_found.ok_or(FormulaEvalError::NA);
+            }
+            Err(error) => return Err(error),
+        };
+        let (row, col) = match return_orientation {
+            FormulaLookupOrientation::FirstColumn => (
+                return_rect.row_first + match_index as u32,
+                return_rect.col_first,
+            ),
+            FormulaLookupOrientation::FirstRow => (
+                return_rect.row_first,
+                return_rect.col_first + match_index as u32,
+            ),
+        };
+        self.evaluator.lookup_result_at(return_sheet_id, row, col)
     }
 
     fn parse_sumif_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -11235,6 +11466,20 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         };
         self.index = next_index;
         Ok((target_sheet_id, rect))
+    }
+
+    fn parse_lookup_vector_reference_argument(
+        &mut self,
+    ) -> Result<(SheetId, Rect, FormulaLookupOrientation), FormulaEvalError> {
+        let (sheet_id, rect) = self.parse_reference_argument()?;
+        let orientation = if rect.width() == 1 {
+            FormulaLookupOrientation::FirstColumn
+        } else if rect.height() == 1 {
+            FormulaLookupOrientation::FirstRow
+        } else {
+            return Err(FormulaEvalError::Value);
+        };
+        Ok((sheet_id, rect, orientation))
     }
 
     fn parse_lookup_value_argument(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
@@ -16178,6 +16423,148 @@ mod tests {
                 )
                 .expect("Application.Evaluate text IF"),
             OmValue::Text("eval".to_string())
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_xlookup_and_xmatch_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:D5".to_string())])
+                .expect("Range(A1:D5)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("F1:F10".to_string())],
+                )
+                .expect("Range(F1:F10)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        5,
+                        4,
+                        vec![
+                            OmValue::Text("alpha".to_string()),
+                            OmValue::Text("Aye".to_string()),
+                            OmValue::Number(10.0),
+                            OmValue::Text("ten".to_string()),
+                            OmValue::Text("beta".to_string()),
+                            OmValue::Text("Bee".to_string()),
+                            OmValue::Number(20.0),
+                            OmValue::Text("twenty".to_string()),
+                            OmValue::Text("delta".to_string()),
+                            OmValue::Text("Dee".to_string()),
+                            OmValue::Number(40.0),
+                            OmValue::Text("forty".to_string()),
+                            OmValue::Text("gamma".to_string()),
+                            OmValue::Text("Gee".to_string()),
+                            OmValue::Number(80.0),
+                            OmValue::Text("eighty".to_string()),
+                            OmValue::Text("beta".to_string()),
+                            OmValue::Text("Bee two".to_string()),
+                            OmValue::Number(100.0),
+                            OmValue::Text("hundred".to_string()),
+                        ],
+                    )
+                    .expect("xlookup source values"),
+                ),
+                &[],
+            )
+            .expect("set xlookup source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        10,
+                        1,
+                        vec![
+                            OmValue::Text("=XLOOKUP(\"beta\", A1:A5, B1:B5)".to_string()),
+                            OmValue::Text(
+                                "=XLOOKUP(\"beta\", A1:A5, B1:B5, \"missing\", 0, -1)".to_string(),
+                            ),
+                            OmValue::Text("=XLOOKUP(\"delta\", A1:A5, C1:C5)".to_string()),
+                            OmValue::Text(
+                                "=XLOOKUP(\"missing\", A1:A5, B1:B5, \"fallback\")".to_string(),
+                            ),
+                            OmValue::Text("=XLOOKUP(\"missing\", A1:A5, C1:C5, 99)".to_string()),
+                            OmValue::Text("=XMATCH(\"beta\", A1:A5, 0, -1)".to_string()),
+                            OmValue::Text("=XMATCH(35, C1:C5, -1)".to_string()),
+                            OmValue::Text("=XMATCH(35, C1:C5, 1)".to_string()),
+                            OmValue::Text(
+                                "=XLOOKUP(35, C1:C5, D1:D5, \"missing\", -1)".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=CONCAT(XLOOKUP(35, C1:C5, D1:D5, \"missing\", 1), \"!\")"
+                                    .to_string(),
+                            ),
+                        ],
+                    )
+                    .expect("xlookup formulas"),
+                ),
+                &[],
+            )
+            .expect("set xlookup formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("xlookup values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected xlookup value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Text("Bee".to_string()),
+                OmValue::Text("Bee two".to_string()),
+                OmValue::Number(40.0),
+                OmValue::Text("fallback".to_string()),
+                OmValue::Number(99.0),
+                OmValue::Number(5.0),
+                OmValue::Number(2.0),
+                OmValue::Number(3.0),
+                OmValue::Text("twenty".to_string()),
+                OmValue::Text("forty!".to_string()),
+            ]
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    runtime.root_application(),
+                    "Evaluate",
+                    &[OmValue::Text(
+                        "=XLOOKUP(\"gamma\", A1:A5, B1:B5)".to_string()
+                    )],
+                )
+                .expect("Application.Evaluate XLOOKUP"),
+            OmValue::Text("Gee".to_string())
         );
     }
 

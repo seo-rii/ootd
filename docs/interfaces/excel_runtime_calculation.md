@@ -69,8 +69,10 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 
 - `INDEX`
 - `MATCH`
+- `XMATCH`
 - `VLOOKUP`
 - `HLOOKUP`
+- `XLOOKUP`
 - `ROW`
 - `COLUMN`
 - `ROWS`
@@ -80,10 +82,12 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 Lookup notes:
 
 - `MATCH` supports exact match, ascending approximate match, and descending approximate match over one-dimensional ranges.
+- `XMATCH` supports exact match, exact-or-next-smaller, exact-or-next-larger, and forward or reverse linear search over one-dimensional ranges.
 - `VLOOKUP` and `HLOOKUP` support exact and ascending approximate table lookup.
+- `XLOOKUP` supports scalar one-dimensional lookup and return arrays, `if_not_found`, exact match, exact-or-next-smaller, exact-or-next-larger, and forward or reverse linear search.
 - `ROW()` and `COLUMN()` without arguments resolve against the formula cell position during recalculation.
 - Lookup comparisons support numbers, booleans, and case-insensitive text.
-- `INDEX`, `VLOOKUP`, and `HLOOKUP` return scalar text results as `CellValue::Text`; numeric results still flow through the numeric evaluator.
+- `INDEX`, `VLOOKUP`, `HLOOKUP`, and `XLOOKUP` return scalar text results as `CellValue::Text`; numeric results still flow through the numeric evaluator.
 - `IF` and `CHOOSE` can return scalar text when the selected branch or argument is text.
 
 ### Date and time serial helpers
@@ -155,7 +159,7 @@ Text notes:
 
 - The evaluator is still numeric-first. It includes a focused scalar text helper subset, but broader string semantics, date/time text parsing, and richer coercion rules are not implemented.
 - Dynamic array behavior and broader `Formula2` parity are not implemented.
-- Lookup/reference support is still a focused scalar subset. It does not model named ranges, array-returning `INDEX(..., 0, ...)`, external references, or broader lookup families such as `XLOOKUP` yet.
+- Lookup/reference support is still a focused scalar subset. It does not model named ranges, array-returning `INDEX(..., 0, ...)` or `XLOOKUP`, wildcard lookup modes, binary search modes, external references, or broader lookup/reference families yet.
 - Named ranges, multi-area references, and 3D references are not implemented.
 - Unsupported formulas should fail predictably, but the runtime does not yet aim for 1:1 compatibility with Excel's full calculation engine.
 
