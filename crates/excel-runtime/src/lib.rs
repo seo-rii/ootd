@@ -8650,6 +8650,8 @@ enum FormulaScalarFunction {
     Abs,
     And,
     If,
+    IsEven,
+    IsOdd,
     Int,
     Mod,
     Not,
@@ -8670,6 +8672,10 @@ impl FormulaScalarFunction {
             Some(Self::And)
         } else if name.eq_ignore_ascii_case("IF") {
             Some(Self::If)
+        } else if name.eq_ignore_ascii_case("ISEVEN") {
+            Some(Self::IsEven)
+        } else if name.eq_ignore_ascii_case("ISODD") {
+            Some(Self::IsOdd)
         } else if name.eq_ignore_ascii_case("INT") {
             Some(Self::Int)
         } else if name.eq_ignore_ascii_case("MOD") {
@@ -8721,6 +8727,26 @@ impl FormulaScalarFunction {
                     *true_value
                 } else {
                     *false_value
+                })
+            }
+            FormulaScalarFunction::IsEven => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                Ok(if value.trunc().rem_euclid(2.0) == 0.0 {
+                    1.0
+                } else {
+                    0.0
+                })
+            }
+            FormulaScalarFunction::IsOdd => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                Ok(if value.trunc().rem_euclid(2.0) != 0.0 {
+                    1.0
+                } else {
+                    0.0
                 })
             }
             FormulaScalarFunction::Int => {
@@ -13638,6 +13664,84 @@ mod tests {
                 OmValue::Number(1.0),
                 OmValue::Number(0.0),
                 OmValue::Number(0.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_parity_check_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Range(B1)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A7".to_string())])
+                .expect("Range(A1:A7)"),
+        );
+
+        runtime
+            .dispatch_set(source, "Value2", OmValue::Text("hello".to_string()), &[])
+            .expect("set parity source value");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        7,
+                        1,
+                        vec![
+                            OmValue::Text("=ISEVEN(2.5)".to_string()),
+                            OmValue::Text("=ISODD(2.5)".to_string()),
+                            OmValue::Text("=ISODD(-1.5)".to_string()),
+                            OmValue::Text("=ISEVEN(5)".to_string()),
+                            OmValue::Text("=ISEVEN(0)".to_string()),
+                            OmValue::Text("=ISEVEN(B1)".to_string()),
+                            OmValue::Text("=ISODD(1/0)".to_string()),
+                        ],
+                    )
+                    .expect("parity formulas"),
+                ),
+                &[],
+            )
+            .expect("set parity formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("parity values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected parity value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(1.0),
+                OmValue::Number(0.0),
+                OmValue::Number(1.0),
+                OmValue::Number(0.0),
+                OmValue::Number(1.0),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Div0),
             ]
         );
     }
