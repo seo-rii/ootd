@@ -49,7 +49,13 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `PRODUCT`
 - `MIN`
 - `MAX`
+- `MEDIAN`
 - `AVERAGE`
+- `LARGE`
+- `SMALL`
+- `RANK`
+- `RANK.EQ`
+- `RANK.AVG`
 - `COUNT`
 - `COUNTA`
 - `COUNTBLANK`

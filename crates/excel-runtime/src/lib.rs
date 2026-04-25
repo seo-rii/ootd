@@ -9828,6 +9828,7 @@ enum FormulaAggregateFunction {
     Product,
     Min,
     Max,
+    Median,
     Average,
     Count,
 }
@@ -9842,6 +9843,8 @@ impl FormulaAggregateFunction {
             Some(Self::Min)
         } else if name.eq_ignore_ascii_case("MAX") {
             Some(Self::Max)
+        } else if name.eq_ignore_ascii_case("MEDIAN") {
+            Some(Self::Median)
         } else if name.eq_ignore_ascii_case("AVERAGE") {
             Some(Self::Average)
         } else if name.eq_ignore_ascii_case("COUNT") {
@@ -9860,6 +9863,19 @@ impl FormulaAggregateFunction {
             }
             FormulaAggregateFunction::Max => {
                 Ok(values.iter().copied().reduce(f64::max).unwrap_or(0.0))
+            }
+            FormulaAggregateFunction::Median => {
+                if values.is_empty() {
+                    return Err(FormulaEvalError::Num);
+                }
+                let mut values = values.to_vec();
+                values.sort_by(|left, right| left.total_cmp(right));
+                let midpoint = values.len() / 2;
+                if values.len() % 2 == 0 {
+                    Ok((values[midpoint - 1] + values[midpoint]) / 2.0)
+                } else {
+                    Ok(values[midpoint])
+                }
             }
             FormulaAggregateFunction::Average => {
                 if values.is_empty() {
@@ -10699,6 +10715,75 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         if name.eq_ignore_ascii_case("MAXIFS") {
             return self.parse_maxifs_function();
+        }
+        if name.eq_ignore_ascii_case("LARGE") || name.eq_ignore_ascii_case("SMALL") {
+            let mut values = self.parse_aggregate_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let k = formula_integer_argument(self.parse_comparison()?)?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            if values.is_empty() || k < 1 || k > values.len() as i64 {
+                return Err(FormulaEvalError::Num);
+            }
+            values.sort_by(|left, right| left.total_cmp(right));
+            let index = if name.eq_ignore_ascii_case("LARGE") {
+                values.len() - k as usize
+            } else {
+                k as usize - 1
+            };
+            return Ok(values[index]);
+        }
+        if name.eq_ignore_ascii_case("RANK")
+            || name.eq_ignore_ascii_case("RANK.EQ")
+            || name.eq_ignore_ascii_case("RANK.AVG")
+        {
+            let number = self.parse_comparison()?;
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let (target_sheet_id, rect) = self.parse_reference_argument()?;
+            let values = self
+                .evaluator
+                .numeric_values_in_rect(target_sheet_id, rect)?;
+            self.skip_whitespace();
+            let ascending = if self.consume_char(')') {
+                false
+            } else {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                let order = self.parse_comparison()?;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                order != 0.0
+            };
+            let tie_count = values.iter().filter(|value| **value == number).count();
+            if tie_count == 0 {
+                return Err(FormulaEvalError::NA);
+            }
+            let ahead_count = values
+                .iter()
+                .filter(|value| {
+                    if ascending {
+                        **value < number
+                    } else {
+                        **value > number
+                    }
+                })
+                .count();
+            let rank = ahead_count as f64 + 1.0;
+            if name.eq_ignore_ascii_case("RANK.AVG") {
+                return Ok(rank + (tie_count as f64 - 1.0) / 2.0);
+            }
+            return Ok(rank);
         }
         let function =
             FormulaAggregateFunction::from_name(name).ok_or(FormulaEvalError::Unsupported)?;
@@ -14634,6 +14719,125 @@ mod tests {
                 OmValue::Number(24.0),
                 OmValue::Number(2.0),
                 OmValue::Number(2.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_statistical_rank_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A6".to_string())])
+                .expect("Range(A1:A6)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("B1:B16".to_string())],
+                )
+                .expect("Range(B1:B16)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        6,
+                        1,
+                        vec![
+                            OmValue::Number(10.0),
+                            OmValue::Number(30.0),
+                            OmValue::Number(20.0),
+                            OmValue::Number(30.0),
+                            OmValue::Number(5.0),
+                            OmValue::Text("ignored".to_string()),
+                        ],
+                    )
+                    .expect("source values"),
+                ),
+                &[],
+            )
+            .expect("set statistical source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        16,
+                        1,
+                        vec![
+                            OmValue::Text("=MEDIAN(A1:A6)".to_string()),
+                            OmValue::Text("=MEDIAN(A1:A4)".to_string()),
+                            OmValue::Text("=LARGE(A1:A6, 1)".to_string()),
+                            OmValue::Text("=LARGE(A1:A6, 3)".to_string()),
+                            OmValue::Text("=SMALL(A1:A6, 2)".to_string()),
+                            OmValue::Text("=SMALL(A1:A6, 5)".to_string()),
+                            OmValue::Text("=RANK.EQ(30, A1:A6)".to_string()),
+                            OmValue::Text("=RANK.EQ(20, A1:A6)".to_string()),
+                            OmValue::Text("=RANK.AVG(30, A1:A6)".to_string()),
+                            OmValue::Text("=RANK.EQ(10, A1:A6, 1)".to_string()),
+                            OmValue::Text("=RANK.AVG(30, A1:A6, 1)".to_string()),
+                            OmValue::Text("=RANK(20, A1:A6)".to_string()),
+                            OmValue::Text("=LARGE(A1:A6, 0)".to_string()),
+                            OmValue::Text("=SMALL(A1:A6, 6)".to_string()),
+                            OmValue::Text("=RANK.EQ(99, A1:A6)".to_string()),
+                            OmValue::Text("=MEDIAN(A6)".to_string()),
+                        ],
+                    )
+                    .expect("statistical formulas"),
+                ),
+                &[],
+            )
+            .expect("set statistical formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("statistical values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected statistical value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(20.0),
+                OmValue::Number(25.0),
+                OmValue::Number(30.0),
+                OmValue::Number(20.0),
+                OmValue::Number(10.0),
+                OmValue::Number(30.0),
+                OmValue::Number(1.0),
+                OmValue::Number(3.0),
+                OmValue::Number(1.5),
+                OmValue::Number(2.0),
+                OmValue::Number(4.5),
+                OmValue::Number(3.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::Num),
             ]
         );
     }
