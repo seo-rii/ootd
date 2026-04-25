@@ -100,6 +100,9 @@ Lookup notes:
 - `EDATE`
 - `EOMONTH`
 - `DATEVALUE`
+- `WEEKDAY`
+- `WEEKNUM`
+- `ISOWEEKNUM`
 - `TIME`
 - `TIMEVALUE`
 - `HOUR`
@@ -110,6 +113,7 @@ Date/time notes:
 
 - Date helpers use Excel's 1900 date system, including the compatibility serial `60` for `1900-02-29`.
 - `DATE` supports month and day rollover, such as month `13` and day `0`.
+- `WEEKDAY` supports return types `1`, `2`, `3`, and `11` through `17`; `WEEKNUM` supports return types `1`, `2`, `11` through `17`, and ISO return type `21`.
 - `TIME` produces fractional-day serial values, with hour/minute/second rollover for non-negative arguments.
 - `DATEVALUE` supports ISO-like `yyyy-mm-dd`, `yyyy/m/d`, and numeric `m/d/yyyy` text.
 - `TIMEVALUE` supports `h:mm`, `h:mm:ss`, and `AM`/`PM` suffixes.

@@ -8657,6 +8657,7 @@ enum FormulaScalarFunction {
     EOMonth,
     Hour,
     If,
+    IsoWeekNum,
     IsEven,
     IsOdd,
     Int,
@@ -8673,6 +8674,8 @@ enum FormulaScalarFunction {
     Sqrt,
     Second,
     Time,
+    Weekday,
+    WeekNum,
     Year,
 }
 
@@ -8696,6 +8699,8 @@ impl FormulaScalarFunction {
             Some(Self::Hour)
         } else if name.eq_ignore_ascii_case("IF") {
             Some(Self::If)
+        } else if name.eq_ignore_ascii_case("ISOWEEKNUM") {
+            Some(Self::IsoWeekNum)
         } else if name.eq_ignore_ascii_case("ISEVEN") {
             Some(Self::IsEven)
         } else if name.eq_ignore_ascii_case("ISODD") {
@@ -8728,6 +8733,10 @@ impl FormulaScalarFunction {
             Some(Self::Second)
         } else if name.eq_ignore_ascii_case("TIME") {
             Some(Self::Time)
+        } else if name.eq_ignore_ascii_case("WEEKDAY") {
+            Some(Self::Weekday)
+        } else if name.eq_ignore_ascii_case("WEEKNUM") {
+            Some(Self::WeekNum)
         } else if name.eq_ignore_ascii_case("YEAR") {
             Some(Self::Year)
         } else {
@@ -8736,6 +8745,38 @@ impl FormulaScalarFunction {
     }
 
     fn evaluate(self, args: &[f64]) -> Result<f64, FormulaEvalError> {
+        let serial_weekday_monday0 = |serial: i64| {
+            let adjusted_serial = if serial > 60 { serial - 1 } else { serial };
+            (adjusted_serial - 1).rem_euclid(7)
+        };
+        let week_start_from_return_type =
+            |return_type: i64, allow_zero_based: bool| -> Result<i64, FormulaEvalError> {
+                match return_type {
+                    1 => Ok(6),
+                    2 => Ok(0),
+                    3 if allow_zero_based => Ok(0),
+                    11..=17 => Ok(return_type - 11),
+                    _ => Err(FormulaEvalError::Num),
+                }
+            };
+        let iso_weeknum_from_serial = |serial: i64| -> Result<i64, FormulaEvalError> {
+            let (year, month, day) = formula_ymd_from_serial(serial as f64)?;
+            let days = if (year, month, day) == (1900, 2, 29) {
+                days_from_civil(1900, 2, 28) + 1
+            } else {
+                days_from_civil(year, month, day)
+            };
+            let iso_weekday_from_days = |days: i64| (days + 3).rem_euclid(7) + 1;
+            let weekday = iso_weekday_from_days(days);
+            let current_monday = days - (weekday - 1);
+            let thursday = current_monday + 3;
+            let (iso_year, _, _) = civil_from_days(thursday);
+            let jan4 = days_from_civil(iso_year, 1, 4);
+            let jan4_weekday = iso_weekday_from_days(jan4);
+            let week1_monday = jan4 - (jan4_weekday - 1);
+            Ok((current_monday - week1_monday).div_euclid(7) + 1)
+        };
+
         match self {
             FormulaScalarFunction::Abs => {
                 let [value] = args else {
@@ -8799,6 +8840,13 @@ impl FormulaScalarFunction {
                 } else {
                     *false_value
                 })
+            }
+            FormulaScalarFunction::IsoWeekNum => {
+                let [serial] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                let serial = formula_serial_integer(*serial)?;
+                iso_weeknum_from_serial(serial).map(|week| week as f64)
             }
             FormulaScalarFunction::IsEven => {
                 let [value] = args else {
@@ -8928,6 +8976,40 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Value);
                 };
                 formula_time_serial_from_args(*hour, *minute, *second)
+            }
+            FormulaScalarFunction::Weekday => {
+                let (serial, return_type) = match args {
+                    [serial] => (*serial, 1.0),
+                    [serial, return_type] => (*serial, *return_type),
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                let serial = formula_serial_integer(serial)?;
+                let return_type = formula_integer_argument(return_type)?;
+                let weekday_monday0 = serial_weekday_monday0(serial);
+                if return_type == 3 {
+                    return Ok(weekday_monday0 as f64);
+                }
+                let first_day_monday0 = week_start_from_return_type(return_type, true)?;
+                Ok((weekday_monday0 - first_day_monday0).rem_euclid(7) as f64 + 1.0)
+            }
+            FormulaScalarFunction::WeekNum => {
+                let (serial, return_type) = match args {
+                    [serial] => (*serial, 1.0),
+                    [serial, return_type] => (*serial, *return_type),
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                let serial = formula_serial_integer(serial)?;
+                let return_type = formula_integer_argument(return_type)?;
+                if return_type == 21 {
+                    return iso_weeknum_from_serial(serial).map(|week| week as f64);
+                }
+                let first_day_monday0 = week_start_from_return_type(return_type, false)?;
+                let (year, _, _) = formula_ymd_from_serial(serial as f64)?;
+                let jan1_serial = formula_date_serial_from_args(year as f64, 1.0, 1.0)? as i64;
+                let jan1_weekday_monday0 = serial_weekday_monday0(jan1_serial);
+                let days_since_week_start =
+                    (jan1_weekday_monday0 - first_day_monday0).rem_euclid(7);
+                Ok((serial - jan1_serial + days_since_week_start).div_euclid(7) as f64 + 1.0)
             }
             FormulaScalarFunction::Year => {
                 let [serial] = args else {
@@ -17282,6 +17364,88 @@ mod tests {
                 OmValue::Number(0.0),
                 OmValue::Number(12.0),
                 OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_date_week_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A11".to_string())],
+                )
+                .expect("Range(A1:A11)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        11,
+                        1,
+                        vec![
+                            OmValue::Text("=WEEKDAY(DATE(2024, 2, 29))".to_string()),
+                            OmValue::Text("=WEEKDAY(DATE(2024, 2, 29), 2)".to_string()),
+                            OmValue::Text("=WEEKDAY(DATE(2024, 2, 29), 3)".to_string()),
+                            OmValue::Text("=WEEKDAY(DATE(2024, 2, 29), 14)".to_string()),
+                            OmValue::Text("=WEEKNUM(DATE(2024, 1, 1))".to_string()),
+                            OmValue::Text("=WEEKNUM(DATE(2024, 12, 31), 2)".to_string()),
+                            OmValue::Text("=WEEKNUM(DATE(2024, 12, 31), 21)".to_string()),
+                            OmValue::Text("=ISOWEEKNUM(DATE(2024, 2, 29))".to_string()),
+                            OmValue::Text("=ISOWEEKNUM(DATE(2024, 12, 31))".to_string()),
+                            OmValue::Text("=WEEKDAY(DATE(2024, 1, 1), 99)".to_string()),
+                            OmValue::Text("=WEEKNUM(DATE(2024, 1, 1), 99)".to_string()),
+                        ],
+                    )
+                    .expect("date week formulas"),
+                ),
+                &[],
+            )
+            .expect("set date week formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("date week values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected date week value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(5.0),
+                OmValue::Number(4.0),
+                OmValue::Number(3.0),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(53.0),
+                OmValue::Number(1.0),
+                OmValue::Number(9.0),
+                OmValue::Number(1.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
             ]
         );
     }
