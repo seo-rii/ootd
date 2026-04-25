@@ -8655,17 +8655,22 @@ enum FormulaScalarFunction {
     Days,
     EDate,
     EOMonth,
+    Exp,
     Hour,
     If,
     IsoWeekNum,
     IsEven,
     IsOdd,
     Int,
+    Ln,
+    Log,
+    Log10,
     Minute,
     Mod,
     Month,
     Not,
     Or,
+    Pi,
     RoundDown,
     Round,
     RoundUp,
@@ -8674,6 +8679,7 @@ enum FormulaScalarFunction {
     Sqrt,
     Second,
     Time,
+    Trunc,
     Weekday,
     WeekNum,
     Year,
@@ -8695,6 +8701,8 @@ impl FormulaScalarFunction {
             Some(Self::EDate)
         } else if name.eq_ignore_ascii_case("EOMONTH") {
             Some(Self::EOMonth)
+        } else if name.eq_ignore_ascii_case("EXP") {
+            Some(Self::Exp)
         } else if name.eq_ignore_ascii_case("HOUR") {
             Some(Self::Hour)
         } else if name.eq_ignore_ascii_case("IF") {
@@ -8707,6 +8715,12 @@ impl FormulaScalarFunction {
             Some(Self::IsOdd)
         } else if name.eq_ignore_ascii_case("INT") {
             Some(Self::Int)
+        } else if name.eq_ignore_ascii_case("LN") {
+            Some(Self::Ln)
+        } else if name.eq_ignore_ascii_case("LOG") {
+            Some(Self::Log)
+        } else if name.eq_ignore_ascii_case("LOG10") {
+            Some(Self::Log10)
         } else if name.eq_ignore_ascii_case("MINUTE") {
             Some(Self::Minute)
         } else if name.eq_ignore_ascii_case("MOD") {
@@ -8717,6 +8731,8 @@ impl FormulaScalarFunction {
             Some(Self::Not)
         } else if name.eq_ignore_ascii_case("OR") {
             Some(Self::Or)
+        } else if name.eq_ignore_ascii_case("PI") {
+            Some(Self::Pi)
         } else if name.eq_ignore_ascii_case("ROUNDDOWN") {
             Some(Self::RoundDown)
         } else if name.eq_ignore_ascii_case("ROUND") {
@@ -8733,6 +8749,8 @@ impl FormulaScalarFunction {
             Some(Self::Second)
         } else if name.eq_ignore_ascii_case("TIME") {
             Some(Self::Time)
+        } else if name.eq_ignore_ascii_case("TRUNC") {
+            Some(Self::Trunc)
         } else if name.eq_ignore_ascii_case("WEEKDAY") {
             Some(Self::Weekday)
         } else if name.eq_ignore_ascii_case("WEEKNUM") {
@@ -8825,6 +8843,17 @@ impl FormulaScalarFunction {
                 };
                 formula_eomonth(*serial, *months)
             }
+            FormulaScalarFunction::Exp => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                let value = value.exp();
+                if value.is_finite() {
+                    Ok(value)
+                } else {
+                    Err(FormulaEvalError::Num)
+                }
+            }
             FormulaScalarFunction::Hour => {
                 let [serial] = args else {
                     return Err(FormulaEvalError::Value);
@@ -8873,6 +8902,40 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Value);
                 };
                 Ok(value.floor())
+            }
+            FormulaScalarFunction::Ln => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if *value <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                Ok(value.ln())
+            }
+            FormulaScalarFunction::Log => {
+                let (number, base) = match args {
+                    [number] => (*number, 10.0),
+                    [number, base] => (*number, *base),
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if number <= 0.0 || base <= 0.0 || base == 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let value = number.log(base);
+                if value.is_finite() {
+                    Ok(value)
+                } else {
+                    Err(FormulaEvalError::Num)
+                }
+            }
+            FormulaScalarFunction::Log10 => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if *value <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                Ok(value.log10())
             }
             FormulaScalarFunction::Minute => {
                 let [serial] = args else {
@@ -8945,6 +9008,12 @@ impl FormulaScalarFunction {
                     0.0
                 })
             }
+            FormulaScalarFunction::Pi => {
+                if !args.is_empty() {
+                    return Err(FormulaEvalError::Value);
+                }
+                Ok(std::f64::consts::PI)
+            }
             FormulaScalarFunction::Power => {
                 let [base, exponent] = args else {
                     return Err(FormulaEvalError::Value);
@@ -8976,6 +9045,15 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Value);
                 };
                 formula_time_serial_from_args(*hour, *minute, *second)
+            }
+            FormulaScalarFunction::Trunc => {
+                let (value, digits) = match args {
+                    [value] => (*value, 0.0),
+                    [value, digits] => (*value, *digits),
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                let factor = formula_round_factor(digits)?;
+                Ok(round_toward_zero(value * factor) / factor)
             }
             FormulaScalarFunction::Weekday => {
                 let (serial, return_type) = match args {
@@ -10565,6 +10643,14 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if let Some(number) = self.parse_number()? {
             return Ok(number);
         }
+        let checkpoint = self.index;
+        if let Some(identifier) = self.parse_identifier() {
+            self.skip_whitespace();
+            if self.consume_char('(') {
+                return self.parse_function(identifier.as_str());
+            }
+        }
+        self.index = checkpoint;
         if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
             self.index = next_index;
             if rect.row_first == rect.row_last && rect.col_first == rect.col_last {
@@ -12143,7 +12229,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
     fn parse_identifier(&mut self) -> Option<String> {
         let start = self.index;
         while let Some(ch) = self.peek_char() {
-            if ch.is_ascii_alphabetic() || ch == '_' || ch == '.' {
+            if ch.is_ascii_alphabetic()
+                || ch == '_'
+                || ch == '.'
+                || (self.index > start && ch.is_ascii_digit())
+            {
                 self.index += ch.len_utf8();
             } else {
                 break;
@@ -16030,6 +16120,96 @@ mod tests {
                 OmValue::Number(-1.3),
                 OmValue::Number(-1.2),
                 OmValue::Number(130.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_logarithmic_math_helper_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A15".to_string())],
+                )
+                .expect("Range(A1:A15)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        15,
+                        1,
+                        vec![
+                            OmValue::Text("=PI()".to_string()),
+                            OmValue::Text("=EXP(0)".to_string()),
+                            OmValue::Text("=LN(1)".to_string()),
+                            OmValue::Text("=LOG(8, 2)".to_string()),
+                            OmValue::Text("=LOG(100)".to_string()),
+                            OmValue::Text("=LOG10(1000)".to_string()),
+                            OmValue::Text("=TRUNC(1.29, 1)".to_string()),
+                            OmValue::Text("=TRUNC(-1.29, 1)".to_string()),
+                            OmValue::Text("=TRUNC(1234, -2)".to_string()),
+                            OmValue::Text("=TRUNC(-1.9)".to_string()),
+                            OmValue::Text("=LN(0)".to_string()),
+                            OmValue::Text("=LOG(-1)".to_string()),
+                            OmValue::Text("=LOG(10, 1)".to_string()),
+                            OmValue::Text("=LOG10(0)".to_string()),
+                            OmValue::Text("=PI(1)".to_string()),
+                        ],
+                    )
+                    .expect("logarithmic math formulas"),
+                ),
+                &[],
+            )
+            .expect("set logarithmic math formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("logarithmic math values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected logarithmic math value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(std::f64::consts::PI),
+                OmValue::Number(1.0),
+                OmValue::Number(0.0),
+                OmValue::Number(8_f64.log(2.0)),
+                OmValue::Number(2.0),
+                OmValue::Number(3.0),
+                OmValue::Number(1.2),
+                OmValue::Number(-1.2),
+                OmValue::Number(1200.0),
+                OmValue::Number(-1.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
             ]
         );
     }

@@ -29,10 +29,16 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `ROUND`
 - `ROUNDUP`
 - `ROUNDDOWN`
+- `TRUNC`
 - `MOD`
 - `SIGN`
 - `POWER`
 - `SQRT`
+- `EXP`
+- `LN`
+- `LOG`
+- `LOG10`
+- `PI`
 - `ISEVEN`
 - `ISODD`
 
