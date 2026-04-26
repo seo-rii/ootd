@@ -8649,10 +8649,16 @@ fn formula_eval_error_from_cell_error(error: CellError) -> FormulaEvalError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FormulaScalarFunction {
     Abs,
+    Acos,
     And,
+    Asin,
+    Atan,
+    Atan2,
+    Cos,
     Date,
     Day,
     Days,
+    Degrees,
     EDate,
     EOMonth,
     Exp,
@@ -8671,13 +8677,16 @@ enum FormulaScalarFunction {
     Not,
     Or,
     Pi,
+    Radians,
     RoundDown,
     Round,
     RoundUp,
     Sign,
     Power,
+    Sin,
     Sqrt,
     Second,
+    Tan,
     Time,
     Trunc,
     Weekday,
@@ -8689,14 +8698,26 @@ impl FormulaScalarFunction {
     fn from_name(name: &str) -> Option<Self> {
         if name.eq_ignore_ascii_case("ABS") {
             Some(Self::Abs)
+        } else if name.eq_ignore_ascii_case("ACOS") {
+            Some(Self::Acos)
         } else if name.eq_ignore_ascii_case("AND") {
             Some(Self::And)
+        } else if name.eq_ignore_ascii_case("ASIN") {
+            Some(Self::Asin)
+        } else if name.eq_ignore_ascii_case("ATAN") {
+            Some(Self::Atan)
+        } else if name.eq_ignore_ascii_case("ATAN2") {
+            Some(Self::Atan2)
+        } else if name.eq_ignore_ascii_case("COS") {
+            Some(Self::Cos)
         } else if name.eq_ignore_ascii_case("DATE") {
             Some(Self::Date)
         } else if name.eq_ignore_ascii_case("DAY") {
             Some(Self::Day)
         } else if name.eq_ignore_ascii_case("DAYS") {
             Some(Self::Days)
+        } else if name.eq_ignore_ascii_case("DEGREES") {
+            Some(Self::Degrees)
         } else if name.eq_ignore_ascii_case("EDATE") {
             Some(Self::EDate)
         } else if name.eq_ignore_ascii_case("EOMONTH") {
@@ -8733,6 +8754,8 @@ impl FormulaScalarFunction {
             Some(Self::Or)
         } else if name.eq_ignore_ascii_case("PI") {
             Some(Self::Pi)
+        } else if name.eq_ignore_ascii_case("RADIANS") {
+            Some(Self::Radians)
         } else if name.eq_ignore_ascii_case("ROUNDDOWN") {
             Some(Self::RoundDown)
         } else if name.eq_ignore_ascii_case("ROUND") {
@@ -8743,10 +8766,14 @@ impl FormulaScalarFunction {
             Some(Self::Sign)
         } else if name.eq_ignore_ascii_case("POWER") {
             Some(Self::Power)
+        } else if name.eq_ignore_ascii_case("SIN") {
+            Some(Self::Sin)
         } else if name.eq_ignore_ascii_case("SQRT") {
             Some(Self::Sqrt)
         } else if name.eq_ignore_ascii_case("SECOND") {
             Some(Self::Second)
+        } else if name.eq_ignore_ascii_case("TAN") {
+            Some(Self::Tan)
         } else if name.eq_ignore_ascii_case("TIME") {
             Some(Self::Time)
         } else if name.eq_ignore_ascii_case("TRUNC") {
@@ -8802,6 +8829,15 @@ impl FormulaScalarFunction {
                 };
                 Ok(value.abs())
             }
+            FormulaScalarFunction::Acos => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if *value < -1.0 || *value > 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                Ok(value.acos())
+            }
             FormulaScalarFunction::And => {
                 if args.is_empty() {
                     return Err(FormulaEvalError::Value);
@@ -8811,6 +8847,41 @@ impl FormulaScalarFunction {
                 } else {
                     0.0
                 })
+            }
+            FormulaScalarFunction::Asin => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if *value < -1.0 || *value > 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                Ok(value.asin())
+            }
+            FormulaScalarFunction::Atan => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                Ok(value.atan())
+            }
+            FormulaScalarFunction::Atan2 => {
+                let [x_num, y_num] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if *x_num == 0.0 && *y_num == 0.0 {
+                    return Err(FormulaEvalError::Div0);
+                }
+                Ok((*y_num).atan2(*x_num))
+            }
+            FormulaScalarFunction::Cos => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                let value = value.cos();
+                if value.is_finite() {
+                    Ok(value)
+                } else {
+                    Err(FormulaEvalError::Num)
+                }
             }
             FormulaScalarFunction::Date => {
                 let [year, month, day] = args else {
@@ -8830,6 +8901,17 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Value);
                 };
                 Ok(end_date - start_date)
+            }
+            FormulaScalarFunction::Degrees => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                let value = value * 180.0 / std::f64::consts::PI;
+                if value.is_finite() {
+                    Ok(value)
+                } else {
+                    Err(FormulaEvalError::Num)
+                }
             }
             FormulaScalarFunction::EDate => {
                 let [serial, months] = args else {
@@ -9014,11 +9096,33 @@ impl FormulaScalarFunction {
                 }
                 Ok(std::f64::consts::PI)
             }
+            FormulaScalarFunction::Radians => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                let value = value * std::f64::consts::PI / 180.0;
+                if value.is_finite() {
+                    Ok(value)
+                } else {
+                    Err(FormulaEvalError::Num)
+                }
+            }
             FormulaScalarFunction::Power => {
                 let [base, exponent] = args else {
                     return Err(FormulaEvalError::Value);
                 };
                 let value = base.powf(*exponent);
+                if value.is_finite() {
+                    Ok(value)
+                } else {
+                    Err(FormulaEvalError::Num)
+                }
+            }
+            FormulaScalarFunction::Sin => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                let value = value.sin();
                 if value.is_finite() {
                     Ok(value)
                 } else {
@@ -9039,6 +9143,17 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Value);
                 };
                 Ok(formula_time_parts_from_serial(*serial)?.2 as f64)
+            }
+            FormulaScalarFunction::Tan => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                let value = value.tan();
+                if value.is_finite() {
+                    Ok(value)
+                } else {
+                    Err(FormulaEvalError::Num)
+                }
             }
             FormulaScalarFunction::Time => {
                 let [hour, minute, second] = args else {
@@ -16209,6 +16324,98 @@ mod tests {
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_trigonometric_math_helper_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A16".to_string())],
+                )
+                .expect("Range(A1:A16)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        16,
+                        1,
+                        vec![
+                            OmValue::Text("=SIN(0)".to_string()),
+                            OmValue::Text("=COS(0)".to_string()),
+                            OmValue::Text("=TAN(0)".to_string()),
+                            OmValue::Text("=ASIN(0)".to_string()),
+                            OmValue::Text("=ACOS(1)".to_string()),
+                            OmValue::Text("=ATAN(0)".to_string()),
+                            OmValue::Text("=ATAN2(1, 0)".to_string()),
+                            OmValue::Text("=ATAN2(0, 1)".to_string()),
+                            OmValue::Text("=ATAN2(1, 1)".to_string()),
+                            OmValue::Text("=DEGREES(PI())".to_string()),
+                            OmValue::Text("=RADIANS(180)".to_string()),
+                            OmValue::Text("=ASIN(2)".to_string()),
+                            OmValue::Text("=ACOS(-2)".to_string()),
+                            OmValue::Text("=ATAN2(0, 0)".to_string()),
+                            OmValue::Text("=SIN(0, 1)".to_string()),
+                            OmValue::Text("=RADIANS()".to_string()),
+                        ],
+                    )
+                    .expect("trigonometric math formulas"),
+                ),
+                &[],
+            )
+            .expect("set trigonometric math formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("trigonometric math values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected trigonometric math value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(0.0),
+                OmValue::Number(1.0),
+                OmValue::Number(0.0),
+                OmValue::Number(0.0),
+                OmValue::Number(0.0),
+                OmValue::Number(0.0),
+                OmValue::Number(0.0),
+                OmValue::Number(1.0_f64.atan2(0.0)),
+                OmValue::Number(1.0_f64.atan2(1.0)),
+                OmValue::Number(std::f64::consts::PI * 180.0 / std::f64::consts::PI),
+                OmValue::Number(180.0 * std::f64::consts::PI / 180.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
             ]
         );

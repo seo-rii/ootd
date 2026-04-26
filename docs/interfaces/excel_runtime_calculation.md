@@ -39,6 +39,15 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `LOG`
 - `LOG10`
 - `PI`
+- `SIN`
+- `COS`
+- `TAN`
+- `ASIN`
+- `ACOS`
+- `ATAN`
+- `ATAN2`
+- `DEGREES`
+- `RADIANS`
 - `ISEVEN`
 - `ISODD`
 
