@@ -8654,6 +8654,7 @@ enum FormulaScalarFunction {
     Asin,
     Atan,
     Atan2,
+    CeilingMath,
     Cos,
     Date,
     Day,
@@ -8662,6 +8663,7 @@ enum FormulaScalarFunction {
     EDate,
     EOMonth,
     Exp,
+    FloorMath,
     Hour,
     If,
     IsoWeekNum,
@@ -8674,10 +8676,12 @@ enum FormulaScalarFunction {
     Minute,
     Mod,
     Month,
+    MRound,
     Not,
     Or,
     Pi,
     Radians,
+    Quotient,
     RoundDown,
     Round,
     RoundUp,
@@ -8708,6 +8712,8 @@ impl FormulaScalarFunction {
             Some(Self::Atan)
         } else if name.eq_ignore_ascii_case("ATAN2") {
             Some(Self::Atan2)
+        } else if name.eq_ignore_ascii_case("CEILING.MATH") {
+            Some(Self::CeilingMath)
         } else if name.eq_ignore_ascii_case("COS") {
             Some(Self::Cos)
         } else if name.eq_ignore_ascii_case("DATE") {
@@ -8724,6 +8730,8 @@ impl FormulaScalarFunction {
             Some(Self::EOMonth)
         } else if name.eq_ignore_ascii_case("EXP") {
             Some(Self::Exp)
+        } else if name.eq_ignore_ascii_case("FLOOR.MATH") {
+            Some(Self::FloorMath)
         } else if name.eq_ignore_ascii_case("HOUR") {
             Some(Self::Hour)
         } else if name.eq_ignore_ascii_case("IF") {
@@ -8748,6 +8756,8 @@ impl FormulaScalarFunction {
             Some(Self::Mod)
         } else if name.eq_ignore_ascii_case("MONTH") {
             Some(Self::Month)
+        } else if name.eq_ignore_ascii_case("MROUND") {
+            Some(Self::MRound)
         } else if name.eq_ignore_ascii_case("NOT") {
             Some(Self::Not)
         } else if name.eq_ignore_ascii_case("OR") {
@@ -8756,6 +8766,8 @@ impl FormulaScalarFunction {
             Some(Self::Pi)
         } else if name.eq_ignore_ascii_case("RADIANS") {
             Some(Self::Radians)
+        } else if name.eq_ignore_ascii_case("QUOTIENT") {
+            Some(Self::Quotient)
         } else if name.eq_ignore_ascii_case("ROUNDDOWN") {
             Some(Self::RoundDown)
         } else if name.eq_ignore_ascii_case("ROUND") {
@@ -8821,6 +8833,47 @@ impl FormulaScalarFunction {
             let week1_monday = jan4 - (jan4_weekday - 1);
             Ok((current_monday - week1_monday).div_euclid(7) + 1)
         };
+        let normalize_zero = |value: f64| if value == 0.0 { 0.0 } else { value };
+        let ceiling_floor_math = |number: f64,
+                                  significance: f64,
+                                  mode: f64,
+                                  ceiling: bool|
+         -> Result<f64, FormulaEvalError> {
+            if !number.is_finite() || !significance.is_finite() || !mode.is_finite() {
+                return Err(FormulaEvalError::Value);
+            }
+            let significance = significance.abs();
+            if significance == 0.0 {
+                return Ok(0.0);
+            }
+            let value = if number >= 0.0 {
+                let quotient = number / significance;
+                if ceiling {
+                    quotient.ceil() * significance
+                } else {
+                    quotient.floor() * significance
+                }
+            } else {
+                let quotient = -number / significance;
+                let magnitude = if ceiling {
+                    if mode == 0.0 {
+                        quotient.floor() * significance
+                    } else {
+                        quotient.ceil() * significance
+                    }
+                } else if mode == 0.0 {
+                    quotient.ceil() * significance
+                } else {
+                    quotient.floor() * significance
+                };
+                -magnitude
+            };
+            if value.is_finite() {
+                Ok(normalize_zero(value))
+            } else {
+                Err(FormulaEvalError::Num)
+            }
+        };
 
         match self {
             FormulaScalarFunction::Abs => {
@@ -8871,6 +8924,15 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Div0);
                 }
                 Ok((*y_num).atan2(*x_num))
+            }
+            FormulaScalarFunction::CeilingMath => {
+                let (number, significance, mode) = match args {
+                    [number] => (*number, 1.0, 0.0),
+                    [number, significance] => (*number, *significance, 0.0),
+                    [number, significance, mode] => (*number, *significance, *mode),
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                ceiling_floor_math(number, significance, mode, true)
             }
             FormulaScalarFunction::Cos => {
                 let [value] = args else {
@@ -8935,6 +8997,15 @@ impl FormulaScalarFunction {
                 } else {
                     Err(FormulaEvalError::Num)
                 }
+            }
+            FormulaScalarFunction::FloorMath => {
+                let (number, significance, mode) = match args {
+                    [number] => (*number, 1.0, 0.0),
+                    [number, significance] => (*number, *significance, 0.0),
+                    [number, significance, mode] => (*number, *significance, *mode),
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                ceiling_floor_math(number, significance, mode, false)
             }
             FormulaScalarFunction::Hour => {
                 let [serial] = args else {
@@ -9041,6 +9112,23 @@ impl FormulaScalarFunction {
                 let (_, month, _) = formula_ymd_from_serial(*serial)?;
                 Ok(month as f64)
             }
+            FormulaScalarFunction::MRound => {
+                let [number, multiple] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if *multiple == 0.0 {
+                    return Ok(0.0);
+                }
+                if (*number > 0.0 && *multiple < 0.0) || (*number < 0.0 && *multiple > 0.0) {
+                    return Err(FormulaEvalError::Num);
+                }
+                let value = round_half_away_from_zero(number / multiple) * multiple;
+                if value.is_finite() {
+                    Ok(normalize_zero(value))
+                } else {
+                    Err(FormulaEvalError::Num)
+                }
+            }
             FormulaScalarFunction::Not => {
                 let [value] = args else {
                     return Err(FormulaEvalError::Value);
@@ -9114,6 +9202,20 @@ impl FormulaScalarFunction {
                 let value = base.powf(*exponent);
                 if value.is_finite() {
                     Ok(value)
+                } else {
+                    Err(FormulaEvalError::Num)
+                }
+            }
+            FormulaScalarFunction::Quotient => {
+                let [numerator, denominator] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if *denominator == 0.0 {
+                    return Err(FormulaEvalError::Div0);
+                }
+                let value = round_toward_zero(numerator / denominator);
+                if value.is_finite() {
+                    Ok(normalize_zero(value))
                 } else {
                     Err(FormulaEvalError::Num)
                 }
@@ -16235,6 +16337,100 @@ mod tests {
                 OmValue::Number(-1.3),
                 OmValue::Number(-1.2),
                 OmValue::Number(130.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_multiple_rounding_math_helper_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A17".to_string())],
+                )
+                .expect("Range(A1:A17)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        17,
+                        1,
+                        vec![
+                            OmValue::Text("=MROUND(10, 3)".to_string()),
+                            OmValue::Text("=MROUND(5, 2)".to_string()),
+                            OmValue::Text("=MROUND(-10, -3)".to_string()),
+                            OmValue::Text("=MROUND(10, -3)".to_string()),
+                            OmValue::Text("=MROUND(10, 0)".to_string()),
+                            OmValue::Text("=QUOTIENT(7, 3)".to_string()),
+                            OmValue::Text("=QUOTIENT(-7, 3)".to_string()),
+                            OmValue::Text("=QUOTIENT(7, 0)".to_string()),
+                            OmValue::Text("=CEILING.MATH(4.3)".to_string()),
+                            OmValue::Text("=CEILING.MATH(4.3, 2)".to_string()),
+                            OmValue::Text("=CEILING.MATH(-4.3)".to_string()),
+                            OmValue::Text("=CEILING.MATH(-4.3, 2, 1)".to_string()),
+                            OmValue::Text("=FLOOR.MATH(4.3)".to_string()),
+                            OmValue::Text("=FLOOR.MATH(4.3, 2)".to_string()),
+                            OmValue::Text("=FLOOR.MATH(-4.3)".to_string()),
+                            OmValue::Text("=FLOOR.MATH(-4.3, 2, 1)".to_string()),
+                            OmValue::Text("=QUOTIENT(1)".to_string()),
+                        ],
+                    )
+                    .expect("multiple rounding formulas"),
+                ),
+                &[],
+            )
+            .expect("set multiple rounding formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("multiple rounding values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected multiple rounding value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(9.0),
+                OmValue::Number(6.0),
+                OmValue::Number(-9.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Number(0.0),
+                OmValue::Number(2.0),
+                OmValue::Number(-2.0),
+                OmValue::Error(CellError::Div0),
+                OmValue::Number(5.0),
+                OmValue::Number(6.0),
+                OmValue::Number(-4.0),
+                OmValue::Number(-6.0),
+                OmValue::Number(4.0),
+                OmValue::Number(4.0),
+                OmValue::Number(-5.0),
+                OmValue::Number(-4.0),
+                OmValue::Error(CellError::Value),
             ]
         );
     }
