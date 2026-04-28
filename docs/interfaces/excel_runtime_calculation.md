@@ -228,13 +228,17 @@ Criteria notes:
 ### Error and information helpers
 
 - `NA`
+- `N`
 - `IFERROR`
 - `IFNA`
 - `ISERROR`
 - `ISERR`
 - `ISNA`
 - `ISBLANK`
+- `ISLOGICAL`
+- `ISNONTEXT`
 - `ISNUMBER`
+- `ISREF`
 - `ISTEXT`
 
 ### Text helpers

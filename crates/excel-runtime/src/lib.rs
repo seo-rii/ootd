@@ -11838,10 +11838,51 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 matches!(value, FormulaValueProbe::Number(_))
             });
         }
+        if name.eq_ignore_ascii_case("ISLOGICAL") {
+            return self.parse_value_probe_test_function(|value| {
+                matches!(value, FormulaValueProbe::Bool(_))
+            });
+        }
+        if name.eq_ignore_ascii_case("ISNONTEXT") {
+            return self.parse_value_probe_test_function(|value| {
+                !matches!(value, FormulaValueProbe::Text(_))
+            });
+        }
         if name.eq_ignore_ascii_case("ISTEXT") {
             return self.parse_value_probe_test_function(|value| {
                 matches!(value, FormulaValueProbe::Text(_))
             });
+        }
+        if name.eq_ignore_ascii_case("ISREF") {
+            self.skip_whitespace();
+            let checkpoint = self.index;
+            if let Some((_, _, next_index)) = self.try_parse_reference()? {
+                self.index = next_index;
+                self.skip_whitespace();
+                if self.consume_char(')') {
+                    return Ok(1.0);
+                }
+            }
+            self.index = checkpoint;
+            let _ = self.parse_value_probe_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return Ok(0.0);
+        }
+        if name.eq_ignore_ascii_case("N") {
+            let value = self.parse_value_probe_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return match value {
+                FormulaValueProbe::Blank | FormulaValueProbe::Text(_) => Ok(0.0),
+                FormulaValueProbe::Bool(value) => Ok(if value { 1.0 } else { 0.0 }),
+                FormulaValueProbe::Number(value) => Ok(value),
+                FormulaValueProbe::Error(error) => Err(error),
+            };
         }
         if name.eq_ignore_ascii_case("LEN") {
             return self.parse_len_function();
@@ -18531,9 +18572,9 @@ mod tests {
                 .dispatch_invoke(
                     active_sheet,
                     "Range",
-                    &[OmValue::Text("A1:A12".to_string())],
+                    &[OmValue::Text("A1:A31".to_string())],
                 )
-                .expect("Range(A1:A12)"),
+                .expect("Range(A1:A31)"),
         );
 
         runtime
@@ -18562,7 +18603,7 @@ mod tests {
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        12,
+                        31,
                         1,
                         vec![
                             OmValue::Text("=ISBLANK(B1)".to_string()),
@@ -18577,6 +18618,25 @@ mod tests {
                             OmValue::Text("=ISBLANK(B5)".to_string()),
                             OmValue::Text("=ISNUMBER(TRUE)".to_string()),
                             OmValue::Text("=ISBLANK(\"\")".to_string()),
+                            OmValue::Text("=ISLOGICAL(B4)".to_string()),
+                            OmValue::Text("=ISLOGICAL(TRUE)".to_string()),
+                            OmValue::Text("=ISLOGICAL(FALSE)".to_string()),
+                            OmValue::Text("=ISLOGICAL(\"TRUE\")".to_string()),
+                            OmValue::Text("=ISLOGICAL(1/0)".to_string()),
+                            OmValue::Text("=ISNONTEXT(B3)".to_string()),
+                            OmValue::Text("=ISNONTEXT(B2)".to_string()),
+                            OmValue::Text("=ISNONTEXT(B1)".to_string()),
+                            OmValue::Text("=ISNONTEXT(1/0)".to_string()),
+                            OmValue::Text("=ISREF(B2)".to_string()),
+                            OmValue::Text("=ISREF(B1:B4)".to_string()),
+                            OmValue::Text("=ISREF(XFE1)".to_string()),
+                            OmValue::Text("=ISREF(1+2)".to_string()),
+                            OmValue::Text("=N(B1)".to_string()),
+                            OmValue::Text("=N(B2)".to_string()),
+                            OmValue::Text("=N(B4)".to_string()),
+                            OmValue::Text("=N(FALSE)".to_string()),
+                            OmValue::Text("=N(\"7\")".to_string()),
+                            OmValue::Text("=N(NA())".to_string()),
                         ],
                     )
                     .expect("type check formulas"),
@@ -18610,6 +18670,25 @@ mod tests {
                 OmValue::Number(1.0),
                 OmValue::Number(0.0),
                 OmValue::Number(0.0),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(0.0),
+                OmValue::Number(0.0),
+                OmValue::Number(0.0),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(0.0),
+                OmValue::Number(0.0),
+                OmValue::Number(0.0),
+                OmValue::Number(5.0),
+                OmValue::Number(1.0),
+                OmValue::Number(0.0),
+                OmValue::Number(0.0),
+                OmValue::Error(CellError::NA),
             ]
         );
     }
