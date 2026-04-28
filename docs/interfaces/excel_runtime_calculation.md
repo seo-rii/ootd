@@ -147,7 +147,7 @@ Date/time notes:
 Criteria notes:
 
 - `*IFS` family currently requires criteria ranges and value ranges to have the same shape.
-- criteria strings support numeric comparison prefixes such as `">3"` and the blank-string criterion `""`.
+- criteria strings support numeric comparison prefixes such as `">3"`, text equality/inequality prefixes such as `"=north*"` and `"<>north*"`, the blank-string criterion `""`, and the nonblank criterion `"<>"`.
 - Text criteria support Excel-style `*` and `?` wildcards with `~` escaping.
 
 ### Error and information helpers

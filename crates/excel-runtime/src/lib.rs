@@ -9381,17 +9381,22 @@ impl FormulaComparisonOperator {
 #[derive(Debug, Clone, PartialEq)]
 enum FormulaCriteria {
     Blank,
+    NonBlank,
     Number {
         operator: FormulaComparisonOperator,
         value: f64,
     },
-    Text(String),
+    Text {
+        operator: FormulaComparisonOperator,
+        pattern: String,
+    },
 }
 
 impl FormulaCriteria {
     fn matches(&self, cell_value: &CellValue) -> bool {
         match self {
             FormulaCriteria::Blank => matches!(cell_value, CellValue::Blank),
+            FormulaCriteria::NonBlank => !matches!(cell_value, CellValue::Blank),
             FormulaCriteria::Number {
                 operator,
                 value: expected,
@@ -9402,8 +9407,16 @@ impl FormulaCriteria {
                 }
                 CellValue::Blank | CellValue::Text(_) | CellValue::Error(_) => false,
             },
-            FormulaCriteria::Text(expected) => match cell_value {
-                CellValue::Text(actual) => formula_wildcard_matches(expected, actual, true),
+            FormulaCriteria::Text { operator, pattern } => match cell_value {
+                CellValue::Text(actual) => match operator {
+                    FormulaComparisonOperator::Equal => {
+                        formula_wildcard_matches(pattern, actual, true)
+                    }
+                    FormulaComparisonOperator::NotEqual => {
+                        !formula_wildcard_matches(pattern, actual, true)
+                    }
+                    _ => false,
+                },
                 CellValue::Blank
                 | CellValue::Bool(_)
                 | CellValue::Number(_)
@@ -9426,7 +9439,28 @@ impl FormulaCriteria {
         if let Some((operator, value)) = parse_formula_criteria_numeric_literal(literal.as_str()) {
             return Self::Number { operator, value };
         }
-        Self::Text(literal)
+        if literal == "<>" {
+            return Self::NonBlank;
+        }
+        if let Some(pattern) = literal.strip_prefix("<>") {
+            return Self::Text {
+                operator: FormulaComparisonOperator::NotEqual,
+                pattern: pattern.to_string(),
+            };
+        }
+        if let Some(pattern) = literal.strip_prefix('=') {
+            if pattern.is_empty() {
+                return Self::Blank;
+            }
+            return Self::Text {
+                operator: FormulaComparisonOperator::Equal,
+                pattern: pattern.to_string(),
+            };
+        }
+        Self::Text {
+            operator: FormulaComparisonOperator::Equal,
+            pattern: literal,
+        }
     }
 }
 
@@ -15397,6 +15431,148 @@ mod tests {
                 OmValue::Number(30.0),
                 OmValue::Number(50.0),
                 OmValue::Number(60.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_text_operator_criteria_aggregate_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let criteria_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A7".to_string())])
+                .expect("Range(A1:A7)"),
+        );
+        let value_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B7".to_string())])
+                .expect("Range(B1:B7)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("C1:C12".to_string())],
+                )
+                .expect("Range(C1:C12)"),
+        );
+
+        runtime
+            .dispatch_set(
+                criteria_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        7,
+                        1,
+                        vec![
+                            OmValue::Text("north".to_string()),
+                            OmValue::Text("Northwest".to_string()),
+                            OmValue::Text("east".to_string()),
+                            OmValue::Text("west".to_string()),
+                            OmValue::Text("n*literal".to_string()),
+                            OmValue::Text("north-east".to_string()),
+                            OmValue::Empty,
+                        ],
+                    )
+                    .expect("text operator criteria values"),
+                ),
+                &[],
+            )
+            .expect("set text operator criteria values");
+        runtime
+            .dispatch_set(
+                value_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        7,
+                        1,
+                        vec![
+                            OmValue::Number(10.0),
+                            OmValue::Number(20.0),
+                            OmValue::Number(30.0),
+                            OmValue::Number(40.0),
+                            OmValue::Number(50.0),
+                            OmValue::Number(60.0),
+                            OmValue::Number(70.0),
+                        ],
+                    )
+                    .expect("text operator aggregate values"),
+                ),
+                &[],
+            )
+            .expect("set text operator aggregate values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        12,
+                        1,
+                        vec![
+                            OmValue::Text(r#"=COUNTIF(A1:A7, "=north*")"#.to_string()),
+                            OmValue::Text(r#"=COUNTIF(A1:A6, "<>north*")"#.to_string()),
+                            OmValue::Text(r#"=SUMIF(A1:A6, "<>north*", B1:B6)"#.to_string()),
+                            OmValue::Text(r#"=AVERAGEIF(A1:A6, "<>north*", B1:B6)"#.to_string()),
+                            OmValue::Text(r#"=COUNTIF(A1:A7, "<>")"#.to_string()),
+                            OmValue::Text(r#"=COUNTIF(A1:A7, "=")"#.to_string()),
+                            OmValue::Text(r#"=COUNTIF(A1:A6, "=n~*literal")"#.to_string()),
+                            OmValue::Text(
+                                r#"=COUNTIFS(A1:A6, "<>north*", B1:B6, ">35")"#.to_string(),
+                            ),
+                            OmValue::Text(r#"=SUMIFS(B1:B6, A1:A6, "=north*")"#.to_string()),
+                            OmValue::Text(r#"=AVERAGEIFS(B1:B6, A1:A6, "<>north*")"#.to_string()),
+                            OmValue::Text(r#"=MINIFS(B1:B6, A1:A6, "<>north*")"#.to_string()),
+                            OmValue::Text(r#"=MAXIFS(B1:B6, A1:A6, "<>north*")"#.to_string()),
+                        ],
+                    )
+                    .expect("text operator criteria formulas"),
+                ),
+                &[],
+            )
+            .expect("set text operator criteria formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("text operator criteria values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected text operator criteria value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(3.0),
+                OmValue::Number(3.0),
+                OmValue::Number(120.0),
+                OmValue::Number(40.0),
+                OmValue::Number(6.0),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(2.0),
+                OmValue::Number(90.0),
+                OmValue::Number(40.0),
+                OmValue::Number(30.0),
+                OmValue::Number(50.0),
             ]
         );
     }
