@@ -11081,6 +11081,63 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 let fraction = rank - lower_index as f64;
                 Ok(values[lower_index] + (values[upper_index] - values[lower_index]) * fraction)
             };
+        let percent_rank_value = |mut values: Vec<f64>,
+                                  x: f64,
+                                  significance: i64,
+                                  exclusive: bool|
+         -> Result<f64, FormulaEvalError> {
+            if values.is_empty() || !x.is_finite() {
+                return Err(FormulaEvalError::Num);
+            }
+            if significance < 1 {
+                return Err(FormulaEvalError::Num);
+            }
+            let significance = i32::try_from(significance).map_err(|_| FormulaEvalError::Num)?;
+            let factor = 10_f64.powi(significance);
+            if !factor.is_finite() {
+                return Err(FormulaEvalError::Num);
+            }
+            values.sort_by(|left, right| left.total_cmp(right));
+            let Some(minimum) = values.first().copied() else {
+                return Err(FormulaEvalError::Num);
+            };
+            let Some(maximum) = values.last().copied() else {
+                return Err(FormulaEvalError::Num);
+            };
+            if x < minimum || x > maximum {
+                return Err(FormulaEvalError::NA);
+            }
+            if !exclusive && values.len() == 1 {
+                return Ok(0.0);
+            }
+            if exclusive && values.len() == 1 {
+                return Ok(0.5);
+            }
+            let rank_for_index = |index: usize| -> f64 {
+                if exclusive {
+                    (index as f64 + 1.0) / (values.len() as f64 + 1.0)
+                } else {
+                    index as f64 / (values.len() as f64 - 1.0)
+                }
+            };
+            let rank = if let Some(index) = values.iter().position(|value| *value == x) {
+                rank_for_index(index)
+            } else {
+                let Some(upper_index) = values.iter().position(|value| *value > x) else {
+                    return Err(FormulaEvalError::NA);
+                };
+                if upper_index == 0 {
+                    return Err(FormulaEvalError::NA);
+                }
+                let lower_index = upper_index - 1;
+                let lower_rank = rank_for_index(lower_index);
+                let upper_rank = rank_for_index(upper_index);
+                lower_rank
+                    + (upper_rank - lower_rank) * (x - values[lower_index])
+                        / (values[upper_index] - values[lower_index])
+            };
+            Ok((rank * factor).trunc() / factor)
+        };
         if name.eq_ignore_ascii_case("IF") {
             return self.parse_if_function();
         }
@@ -11374,6 +11431,37 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 return Err(FormulaEvalError::Unsupported);
             }
             return percentile_value(values, k, name.eq_ignore_ascii_case("PERCENTILE.EXC"));
+        }
+        if name.eq_ignore_ascii_case("PERCENTRANK")
+            || name.eq_ignore_ascii_case("PERCENTRANK.INC")
+            || name.eq_ignore_ascii_case("PERCENTRANK.EXC")
+        {
+            let values = self.parse_aggregate_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let x = self.parse_comparison()?;
+            self.skip_whitespace();
+            let significance = if self.consume_char(')') {
+                3
+            } else {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                let significance = formula_integer_argument(self.parse_comparison()?)?;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                significance
+            };
+            return percent_rank_value(
+                values,
+                x,
+                significance,
+                name.eq_ignore_ascii_case("PERCENTRANK.EXC"),
+            );
         }
         if name.eq_ignore_ascii_case("QUARTILE")
             || name.eq_ignore_ascii_case("QUARTILE.INC")
@@ -15825,6 +15913,174 @@ mod tests {
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_percentrank_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let inclusive_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A11".to_string())],
+                )
+                .expect("Range(A1:A11)"),
+        );
+        let exclusive_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("C1:C10".to_string())],
+                )
+                .expect("Range(C1:C10)"),
+        );
+        let empty_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1".to_string())])
+                .expect("Range(D1)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("E1:E12".to_string())],
+                )
+                .expect("Range(E1:E12)"),
+        );
+
+        runtime
+            .dispatch_set(
+                inclusive_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        11,
+                        1,
+                        vec![
+                            OmValue::Number(13.0),
+                            OmValue::Number(12.0),
+                            OmValue::Number(11.0),
+                            OmValue::Number(8.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(1.0),
+                            OmValue::Text("ignored".to_string()),
+                        ],
+                    )
+                    .expect("inclusive percentrank values"),
+                ),
+                &[],
+            )
+            .expect("set inclusive percentrank source values");
+        runtime
+            .dispatch_set(
+                exclusive_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        10,
+                        1,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(6.0),
+                            OmValue::Number(6.0),
+                            OmValue::Number(6.0),
+                            OmValue::Number(7.0),
+                            OmValue::Number(8.0),
+                            OmValue::Number(9.0),
+                            OmValue::Text("ignored".to_string()),
+                        ],
+                    )
+                    .expect("exclusive percentrank values"),
+                ),
+                &[],
+            )
+            .expect("set exclusive percentrank source values");
+        runtime
+            .dispatch_set(
+                empty_source,
+                "Value2",
+                OmValue::Text("ignored".to_string()),
+                &[],
+            )
+            .expect("set empty percentrank source value");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        12,
+                        1,
+                        vec![
+                            OmValue::Text("=PERCENTRANK.INC(A1:A11, 2)".to_string()),
+                            OmValue::Text("=PERCENTRANK(A1:A11, 5)".to_string()),
+                            OmValue::Text("=PERCENTRANK.INC(A1:A11, 5, 2)".to_string()),
+                            OmValue::Text("=PERCENTRANK.INC(A1:A11, 13)".to_string()),
+                            OmValue::Text("=PERCENTRANK.INC(A1:A11, 0)".to_string()),
+                            OmValue::Text("=PERCENTRANK.EXC(C1:C10, 7)".to_string()),
+                            OmValue::Text("=PERCENTRANK.EXC(C1:C10, 5.43)".to_string()),
+                            OmValue::Text("=PERCENTRANK.EXC(C1:C10, 5.43, 1)".to_string()),
+                            OmValue::Text("=PERCENTRANK.EXC(C1:C10, 1)".to_string()),
+                            OmValue::Text("=PERCENTRANK.INC(D1, 1)".to_string()),
+                            OmValue::Text("=PERCENTRANK.INC(A1:A11, 5, 0)".to_string()),
+                            OmValue::Text("=PERCENTRANK.EXC(C1:C10, 10)".to_string()),
+                        ],
+                    )
+                    .expect("percentrank formulas"),
+                ),
+                &[],
+            )
+            .expect("set percentrank formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("percentrank values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected percentrank value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(0.333),
+                OmValue::Number(0.583),
+                OmValue::Number(0.58),
+                OmValue::Number(1.0),
+                OmValue::Error(CellError::NA),
+                OmValue::Number(0.7),
+                OmValue::Number(0.381),
+                OmValue::Number(0.3),
+                OmValue::Number(0.1),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::NA),
             ]
         );
     }

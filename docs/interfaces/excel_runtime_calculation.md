@@ -100,6 +100,9 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `PERCENTILE`
 - `PERCENTILE.INC`
 - `PERCENTILE.EXC`
+- `PERCENTRANK`
+- `PERCENTRANK.INC`
+- `PERCENTRANK.EXC`
 - `QUARTILE`
 - `QUARTILE.INC`
 - `QUARTILE.EXC`
