@@ -8655,6 +8655,8 @@ enum FormulaScalarFunction {
     Atan,
     Atan2,
     CeilingMath,
+    Combin,
+    Combina,
     Cos,
     Date,
     Day,
@@ -8663,6 +8665,8 @@ enum FormulaScalarFunction {
     EDate,
     EOMonth,
     Exp,
+    Fact,
+    FactDouble,
     FloorMath,
     Hour,
     If,
@@ -8677,8 +8681,11 @@ enum FormulaScalarFunction {
     Mod,
     Month,
     MRound,
+    Multinomial,
     Not,
     Or,
+    Permut,
+    PermutationA,
     Pi,
     Radians,
     Quotient,
@@ -8714,6 +8721,10 @@ impl FormulaScalarFunction {
             Some(Self::Atan2)
         } else if name.eq_ignore_ascii_case("CEILING.MATH") {
             Some(Self::CeilingMath)
+        } else if name.eq_ignore_ascii_case("COMBIN") {
+            Some(Self::Combin)
+        } else if name.eq_ignore_ascii_case("COMBINA") {
+            Some(Self::Combina)
         } else if name.eq_ignore_ascii_case("COS") {
             Some(Self::Cos)
         } else if name.eq_ignore_ascii_case("DATE") {
@@ -8730,6 +8741,10 @@ impl FormulaScalarFunction {
             Some(Self::EOMonth)
         } else if name.eq_ignore_ascii_case("EXP") {
             Some(Self::Exp)
+        } else if name.eq_ignore_ascii_case("FACT") {
+            Some(Self::Fact)
+        } else if name.eq_ignore_ascii_case("FACTDOUBLE") {
+            Some(Self::FactDouble)
         } else if name.eq_ignore_ascii_case("FLOOR.MATH") {
             Some(Self::FloorMath)
         } else if name.eq_ignore_ascii_case("HOUR") {
@@ -8758,10 +8773,16 @@ impl FormulaScalarFunction {
             Some(Self::Month)
         } else if name.eq_ignore_ascii_case("MROUND") {
             Some(Self::MRound)
+        } else if name.eq_ignore_ascii_case("MULTINOMIAL") {
+            Some(Self::Multinomial)
         } else if name.eq_ignore_ascii_case("NOT") {
             Some(Self::Not)
         } else if name.eq_ignore_ascii_case("OR") {
             Some(Self::Or)
+        } else if name.eq_ignore_ascii_case("PERMUT") {
+            Some(Self::Permut)
+        } else if name.eq_ignore_ascii_case("PERMUTATIONA") {
+            Some(Self::PermutationA)
         } else if name.eq_ignore_ascii_case("PI") {
             Some(Self::Pi)
         } else if name.eq_ignore_ascii_case("RADIANS") {
@@ -8874,6 +8895,43 @@ impl FormulaScalarFunction {
                 Err(FormulaEvalError::Num)
             }
         };
+        let trunc_nonnegative_integer = |value: f64| -> Result<u64, FormulaEvalError> {
+            if !value.is_finite() {
+                return Err(FormulaEvalError::Value);
+            }
+            let value = value.trunc();
+            if value < 0.0 {
+                return Err(FormulaEvalError::Num);
+            }
+            if value > u64::MAX as f64 {
+                return Err(FormulaEvalError::Num);
+            }
+            Ok(value as u64)
+        };
+        let factorial = |value: u64| -> Result<f64, FormulaEvalError> {
+            let mut total = 1.0_f64;
+            for factor in 2..=value {
+                total *= factor as f64;
+                if !total.is_finite() {
+                    return Err(FormulaEvalError::Num);
+                }
+            }
+            Ok(total)
+        };
+        let combination = |number: u64, chosen: u64| -> Result<f64, FormulaEvalError> {
+            if chosen > number {
+                return Err(FormulaEvalError::Num);
+            }
+            let chosen = chosen.min(number - chosen);
+            let mut total = 1.0_f64;
+            for step in 1..=chosen {
+                total = total * (number - chosen + step) as f64 / step as f64;
+                if !total.is_finite() {
+                    return Err(FormulaEvalError::Num);
+                }
+            }
+            Ok(total.round())
+        };
 
         match self {
             FormulaScalarFunction::Abs => {
@@ -8933,6 +8991,31 @@ impl FormulaScalarFunction {
                     _ => return Err(FormulaEvalError::Value),
                 };
                 ceiling_floor_math(number, significance, mode, true)
+            }
+            FormulaScalarFunction::Combin => {
+                let [number, chosen] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                let number = trunc_nonnegative_integer(*number)?;
+                let chosen = trunc_nonnegative_integer(*chosen)?;
+                combination(number, chosen)
+            }
+            FormulaScalarFunction::Combina => {
+                let [number, chosen] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                let number = trunc_nonnegative_integer(*number)?;
+                let chosen = trunc_nonnegative_integer(*chosen)?;
+                if number < chosen {
+                    return Err(FormulaEvalError::Num);
+                }
+                if chosen == 0 {
+                    return Ok(1.0);
+                }
+                let expanded = number
+                    .checked_add(chosen - 1)
+                    .ok_or(FormulaEvalError::Num)?;
+                combination(expanded, chosen)
             }
             FormulaScalarFunction::Cos => {
                 let [value] = args else {
@@ -8997,6 +9080,28 @@ impl FormulaScalarFunction {
                 } else {
                     Err(FormulaEvalError::Num)
                 }
+            }
+            FormulaScalarFunction::Fact => {
+                let [number] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                factorial(trunc_nonnegative_integer(*number)?)
+            }
+            FormulaScalarFunction::FactDouble => {
+                let [number] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                let number = trunc_nonnegative_integer(*number)?;
+                let mut total = 1.0_f64;
+                let mut factor = number;
+                while factor > 1 {
+                    total *= factor as f64;
+                    if !total.is_finite() {
+                        return Err(FormulaEvalError::Num);
+                    }
+                    factor -= 2;
+                }
+                Ok(total)
             }
             FormulaScalarFunction::FloorMath => {
                 let (number, significance, mode) = match args {
@@ -9129,6 +9234,22 @@ impl FormulaScalarFunction {
                     Err(FormulaEvalError::Num)
                 }
             }
+            FormulaScalarFunction::Multinomial => {
+                if args.is_empty() || args.len() > 255 {
+                    return Err(FormulaEvalError::Value);
+                }
+                let mut sum = 0_u64;
+                let mut denominator = 1.0_f64;
+                for value in args {
+                    let value = trunc_nonnegative_integer(*value)?;
+                    sum = sum.checked_add(value).ok_or(FormulaEvalError::Num)?;
+                    denominator *= factorial(value)?;
+                    if !denominator.is_finite() {
+                        return Err(FormulaEvalError::Num);
+                    }
+                }
+                Ok(factorial(sum)? / denominator)
+            }
             FormulaScalarFunction::Not => {
                 let [value] = args else {
                     return Err(FormulaEvalError::Value);
@@ -9177,6 +9298,41 @@ impl FormulaScalarFunction {
                 } else {
                     0.0
                 })
+            }
+            FormulaScalarFunction::Permut => {
+                let [number, chosen] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                let number = trunc_nonnegative_integer(*number)?;
+                let chosen = trunc_nonnegative_integer(*chosen)?;
+                if number == 0 || chosen > number {
+                    return Err(FormulaEvalError::Num);
+                }
+                let mut total = 1.0_f64;
+                for value in (number - chosen + 1)..=number {
+                    total *= value as f64;
+                    if !total.is_finite() {
+                        return Err(FormulaEvalError::Num);
+                    }
+                }
+                Ok(total)
+            }
+            FormulaScalarFunction::PermutationA => {
+                let [number, chosen] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                let number = trunc_nonnegative_integer(*number)?;
+                let chosen = trunc_nonnegative_integer(*chosen)?;
+                if number == 0 && chosen > 0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let chosen = i32::try_from(chosen).map_err(|_| FormulaEvalError::Num)?;
+                let value = (number as f64).powi(chosen);
+                if value.is_finite() {
+                    Ok(value)
+                } else {
+                    Err(FormulaEvalError::Num)
+                }
             }
             FormulaScalarFunction::Pi => {
                 if !args.is_empty() {
@@ -18355,6 +18511,110 @@ mod tests {
                 OmValue::Number(4.0),
                 OmValue::Number(-5.0),
                 OmValue::Number(-4.0),
+                OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_combinatoric_math_helper_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A22".to_string())],
+                )
+                .expect("Range(A1:A22)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        22,
+                        1,
+                        vec![
+                            OmValue::Text("=FACT(5)".to_string()),
+                            OmValue::Text("=FACT(5.9)".to_string()),
+                            OmValue::Text("=FACTDOUBLE(6)".to_string()),
+                            OmValue::Text("=FACTDOUBLE(7)".to_string()),
+                            OmValue::Text("=COMBIN(8, 2)".to_string()),
+                            OmValue::Text("=COMBIN(8.9, 2.9)".to_string()),
+                            OmValue::Text("=COMBINA(4, 3)".to_string()),
+                            OmValue::Text("=COMBINA(10, 3)".to_string()),
+                            OmValue::Text("=PERMUT(3, 2)".to_string()),
+                            OmValue::Text("=PERMUT(100, 3)".to_string()),
+                            OmValue::Text("=PERMUTATIONA(3, 2)".to_string()),
+                            OmValue::Text("=PERMUTATIONA(2, 2)".to_string()),
+                            OmValue::Text("=MULTINOMIAL(2, 3, 4)".to_string()),
+                            OmValue::Text("=MULTINOMIAL(2.9, 3.9, 4.9)".to_string()),
+                            OmValue::Text("=FACT(-1)".to_string()),
+                            OmValue::Text("=FACTDOUBLE(-1)".to_string()),
+                            OmValue::Text("=COMBIN(2, 3)".to_string()),
+                            OmValue::Text("=COMBINA(2, 3)".to_string()),
+                            OmValue::Text("=PERMUT(0, 1)".to_string()),
+                            OmValue::Text("=PERMUTATIONA(0, 1)".to_string()),
+                            OmValue::Text("=MULTINOMIAL(2, -1)".to_string()),
+                            OmValue::Text("=MULTINOMIAL()".to_string()),
+                        ],
+                    )
+                    .expect("combinatoric math formulas"),
+                ),
+                &[],
+            )
+            .expect("set combinatoric math formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("combinatoric math values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected combinatoric math value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(120.0),
+                OmValue::Number(120.0),
+                OmValue::Number(48.0),
+                OmValue::Number(105.0),
+                OmValue::Number(28.0),
+                OmValue::Number(28.0),
+                OmValue::Number(20.0),
+                OmValue::Number(220.0),
+                OmValue::Number(6.0),
+                OmValue::Number(970200.0),
+                OmValue::Number(9.0),
+                OmValue::Number(4.0),
+                OmValue::Number(1260.0),
+                OmValue::Number(1260.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Value),
             ]
         );

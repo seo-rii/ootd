@@ -36,6 +36,13 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `QUOTIENT`
 - `MOD`
 - `SIGN`
+- `FACT`
+- `FACTDOUBLE`
+- `COMBIN`
+- `COMBINA`
+- `PERMUT`
+- `PERMUTATIONA`
+- `MULTINOMIAL`
 - `POWER`
 - `SQRT`
 - `EXP`
