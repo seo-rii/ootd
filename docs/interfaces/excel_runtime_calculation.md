@@ -87,10 +87,18 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 
 ### Logical and control helpers
 
+- `TRUE`
+- `FALSE`
 - `AND`
 - `OR`
 - `NOT`
+- `XOR`
 - `IF`
+
+Logical notes:
+
+- `AND`, `OR`, and `XOR` support scalar arguments and rectangular range arguments.
+- Text and blank cells inside logical range arguments are ignored; a logical range with no numeric or boolean values returns `#VALUE!`.
 
 ### Aggregate and count helpers
 

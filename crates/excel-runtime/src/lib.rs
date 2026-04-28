@@ -10077,6 +10077,13 @@ enum FormulaValueProbe {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormulaLogicalFunction {
+    And,
+    Or,
+    Xor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FormulaLookupMode {
     Exact,
     ApproxAscending,
@@ -11792,6 +11799,26 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("IF") {
             return self.parse_if_function();
         }
+        if name.eq_ignore_ascii_case("AND") {
+            return self.parse_logical_function(FormulaLogicalFunction::And);
+        }
+        if name.eq_ignore_ascii_case("OR") {
+            return self.parse_logical_function(FormulaLogicalFunction::Or);
+        }
+        if name.eq_ignore_ascii_case("XOR") {
+            return self.parse_logical_function(FormulaLogicalFunction::Xor);
+        }
+        if name.eq_ignore_ascii_case("TRUE") || name.eq_ignore_ascii_case("FALSE") {
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return Ok(if name.eq_ignore_ascii_case("TRUE") {
+                1.0
+            } else {
+                0.0
+            });
+        }
         if let Some(function) = FormulaScalarFunction::from_name(name) {
             return self.parse_scalar_function(function);
         }
@@ -13389,6 +13416,124 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
             if self.consume_char(')') {
                 return function.evaluate(args.as_slice());
+            }
+            return Err(FormulaEvalError::Unsupported);
+        }
+    }
+
+    fn parse_logical_function(
+        &mut self,
+        function: FormulaLogicalFunction,
+    ) -> Result<f64, FormulaEvalError> {
+        let mut saw_value = false;
+        let mut true_count = 0_u64;
+        let mut false_count = 0_u64;
+        macro_rules! record_value {
+            ($value:expr, $from_reference:expr) => {
+                match $value {
+                    FormulaValueProbe::Bool(value) => {
+                        saw_value = true;
+                        if value {
+                            true_count += 1;
+                        } else {
+                            false_count += 1;
+                        }
+                    }
+                    FormulaValueProbe::Number(value) => {
+                        saw_value = true;
+                        if value != 0.0 {
+                            true_count += 1;
+                        } else {
+                            false_count += 1;
+                        }
+                    }
+                    FormulaValueProbe::Blank | FormulaValueProbe::Text(_) if $from_reference => {}
+                    FormulaValueProbe::Blank => {
+                        saw_value = true;
+                        false_count += 1;
+                    }
+                    FormulaValueProbe::Text(_) => return Err(FormulaEvalError::Value),
+                    FormulaValueProbe::Error(error) => return Err(error),
+                }
+            };
+        }
+        macro_rules! finish_logical {
+            () => {{
+                if !saw_value {
+                    return Err(FormulaEvalError::Value);
+                }
+                Ok(match function {
+                    FormulaLogicalFunction::And => {
+                        if false_count == 0 {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
+                    FormulaLogicalFunction::Or => {
+                        if true_count > 0 {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
+                    FormulaLogicalFunction::Xor => {
+                        if true_count % 2 == 1 {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
+                })
+            }};
+        }
+        loop {
+            self.skip_whitespace();
+            if self.consume_char(')') {
+                return finish_logical!();
+            }
+
+            let checkpoint = self.index;
+            if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
+                self.index = next_index;
+                self.skip_whitespace();
+                if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
+                    for row in rect.row_first..=rect.row_last {
+                        for col in rect.col_first..=rect.col_last {
+                            let value =
+                                self.evaluator
+                                    .cell_value_or_blank(target_sheet_id, row, col)?;
+                            record_value!(formula_value_probe_from_cell_value(value), true);
+                        }
+                    }
+                } else {
+                    self.index = checkpoint;
+                    self.skip_whitespace();
+                    if self.parse_string_literal()?.is_some() {
+                        return Err(FormulaEvalError::Value);
+                    }
+                    match self.parse_catchable_argument()? {
+                        Ok(value) => record_value!(FormulaValueProbe::Number(value), false),
+                        Err(error) => record_value!(FormulaValueProbe::Error(error), false),
+                    }
+                }
+            } else {
+                self.skip_whitespace();
+                if self.parse_string_literal()?.is_some() {
+                    return Err(FormulaEvalError::Value);
+                }
+                match self.parse_catchable_argument()? {
+                    Ok(value) => record_value!(FormulaValueProbe::Number(value), false),
+                    Err(error) => record_value!(FormulaValueProbe::Error(error), false),
+                }
+            }
+
+            self.skip_whitespace();
+            if self.consume_char(',') {
+                continue;
+            }
+            if self.consume_char(')') {
+                return finish_logical!();
             }
             return Err(FormulaEvalError::Unsupported);
         }
@@ -19920,25 +20065,47 @@ mod tests {
         );
         let source = expect_object_handle(
             runtime
-                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
-                .expect("Range(A1)"),
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A5".to_string())])
+                .expect("Range(A1:A5)"),
         );
         let formulas = expect_object_handle(
             runtime
-                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B6".to_string())])
-                .expect("Range(B1:B6)"),
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("B1:B18".to_string())],
+                )
+                .expect("Range(B1:B18)"),
         );
 
         runtime
-            .dispatch_set(source, "Value2", OmValue::Number(5.0), &[])
-            .expect("set boolean source value");
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        5,
+                        1,
+                        vec![
+                            OmValue::Number(5.0),
+                            OmValue::Bool(true),
+                            OmValue::Bool(false),
+                            OmValue::Text("skip".to_string()),
+                            OmValue::Empty,
+                        ],
+                    )
+                    .expect("boolean logic source values"),
+                ),
+                &[],
+            )
+            .expect("set boolean source values");
         runtime
             .dispatch_set(
                 formulas,
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        6,
+                        18,
                         1,
                         vec![
                             OmValue::Text("=TRUE".to_string()),
@@ -19947,6 +20114,18 @@ mod tests {
                             OmValue::Text("=AND(TRUE, A1=5, 1)".to_string()),
                             OmValue::Text("=OR(FALSE, 0, A1<>5)".to_string()),
                             OmValue::Text("=IF(AND(TRUE, A1>4), 99, 0)".to_string()),
+                            OmValue::Text("=TRUE()".to_string()),
+                            OmValue::Text("=FALSE()".to_string()),
+                            OmValue::Text("=IF(FALSE(), 1, 2)".to_string()),
+                            OmValue::Text("=AND(A1:A2)".to_string()),
+                            OmValue::Text("=AND(A1:A3)".to_string()),
+                            OmValue::Text("=OR(A3:A5)".to_string()),
+                            OmValue::Text("=OR(A4:A5)".to_string()),
+                            OmValue::Text("=XOR(TRUE, FALSE, A1<>5)".to_string()),
+                            OmValue::Text("=XOR(TRUE, TRUE, FALSE)".to_string()),
+                            OmValue::Text("=XOR(A2:A4)".to_string()),
+                            OmValue::Text("=XOR(A4:A5)".to_string()),
+                            OmValue::Text("=AND(\"TRUE\")".to_string()),
                         ],
                     )
                     .expect("boolean logic formulas"),
@@ -19974,6 +20153,18 @@ mod tests {
                 OmValue::Number(1.0),
                 OmValue::Number(0.0),
                 OmValue::Number(99.0),
+                OmValue::Number(1.0),
+                OmValue::Number(0.0),
+                OmValue::Number(2.0),
+                OmValue::Number(1.0),
+                OmValue::Number(0.0),
+                OmValue::Number(0.0),
+                OmValue::Error(CellError::Value),
+                OmValue::Number(1.0),
+                OmValue::Number(0.0),
+                OmValue::Number(1.0),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
             ]
         );
     }
