@@ -10994,6 +10994,43 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
     }
 
     fn parse_function(&mut self, name: &str) -> Result<f64, FormulaEvalError> {
+        let percentile_value =
+            |mut values: Vec<f64>, k: f64, exclusive: bool| -> Result<f64, FormulaEvalError> {
+                if values.is_empty() || !k.is_finite() {
+                    return Err(FormulaEvalError::Num);
+                }
+                values.sort_by(|left, right| left.total_cmp(right));
+                if exclusive {
+                    if k <= 0.0 || k >= 1.0 {
+                        return Err(FormulaEvalError::Num);
+                    }
+                    let rank = k * (values.len() as f64 + 1.0);
+                    if rank < 1.0 || rank > values.len() as f64 {
+                        return Err(FormulaEvalError::Num);
+                    }
+                    let lower_rank = rank.floor();
+                    let upper_rank = rank.ceil();
+                    if lower_rank == upper_rank {
+                        return Ok(values[lower_rank as usize - 1]);
+                    }
+                    let lower_index = lower_rank as usize - 1;
+                    let upper_index = upper_rank as usize - 1;
+                    let fraction = rank - lower_rank;
+                    return Ok(values[lower_index]
+                        + (values[upper_index] - values[lower_index]) * fraction);
+                }
+                if !(0.0..=1.0).contains(&k) {
+                    return Err(FormulaEvalError::Num);
+                }
+                let rank = k * (values.len() as f64 - 1.0);
+                let lower_index = rank.floor() as usize;
+                let upper_index = rank.ceil() as usize;
+                if lower_index == upper_index {
+                    return Ok(values[lower_index]);
+                }
+                let fraction = rank - lower_index as f64;
+                Ok(values[lower_index] + (values[upper_index] - values[lower_index]) * fraction)
+            };
         if name.eq_ignore_ascii_case("IF") {
             return self.parse_if_function();
         }
@@ -11191,6 +11228,53 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 }
                 return Err(FormulaEvalError::Unsupported);
             }
+        }
+        if name.eq_ignore_ascii_case("PERCENTILE")
+            || name.eq_ignore_ascii_case("PERCENTILE.INC")
+            || name.eq_ignore_ascii_case("PERCENTILE.EXC")
+        {
+            let values = self.parse_aggregate_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let k = self.parse_comparison()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return percentile_value(values, k, name.eq_ignore_ascii_case("PERCENTILE.EXC"));
+        }
+        if name.eq_ignore_ascii_case("QUARTILE")
+            || name.eq_ignore_ascii_case("QUARTILE.INC")
+            || name.eq_ignore_ascii_case("QUARTILE.EXC")
+        {
+            let values = self.parse_aggregate_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let quart = self.parse_comparison()?;
+            if !quart.is_finite() {
+                return Err(FormulaEvalError::Value);
+            }
+            if quart < i64::MIN as f64 || quart > i64::MAX as f64 {
+                return Err(FormulaEvalError::Num);
+            }
+            let quart = quart.trunc() as i64;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let exclusive = name.eq_ignore_ascii_case("QUARTILE.EXC");
+            if exclusive {
+                if !(1..=3).contains(&quart) {
+                    return Err(FormulaEvalError::Num);
+                }
+            } else if !(0..=4).contains(&quart) {
+                return Err(FormulaEvalError::Num);
+            }
+            return percentile_value(values, quart as f64 / 4.0, exclusive);
         }
         if name.eq_ignore_ascii_case("LARGE") || name.eq_ignore_ascii_case("SMALL") {
             let mut values = self.parse_aggregate_argument()?;
@@ -15456,6 +15540,132 @@ mod tests {
                 OmValue::Error(CellError::Div0),
                 OmValue::Error(CellError::Div0),
                 OmValue::Error(CellError::Div0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_percentile_and_quartile_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A9".to_string())])
+                .expect("Range(A1:A9)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("B1:B18".to_string())],
+                )
+                .expect("Range(B1:B18)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        9,
+                        1,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(7.0),
+                            OmValue::Number(8.0),
+                            OmValue::Number(9.0),
+                            OmValue::Number(10.0),
+                            OmValue::Number(12.0),
+                            OmValue::Text("ignored".to_string()),
+                        ],
+                    )
+                    .expect("source values"),
+                ),
+                &[],
+            )
+            .expect("set percentile/quartile source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        18,
+                        1,
+                        vec![
+                            OmValue::Text("=PERCENTILE.INC(A1:A9, 0)".to_string()),
+                            OmValue::Text("=PERCENTILE.INC(A1:A9, 0.25)".to_string()),
+                            OmValue::Text("=PERCENTILE(A1:A9, 0.75)".to_string()),
+                            OmValue::Text("=PERCENTILE.INC(A1:A9, 1)".to_string()),
+                            OmValue::Text("=PERCENTILE.EXC(A1:A9, 0.25)".to_string()),
+                            OmValue::Text("=PERCENTILE.EXC(A1:A9, 0.5)".to_string()),
+                            OmValue::Text("=PERCENTILE.EXC(A1:A9, 0.75)".to_string()),
+                            OmValue::Text("=QUARTILE.INC(A1:A9, 0)".to_string()),
+                            OmValue::Text("=QUARTILE.INC(A1:A9, 1)".to_string()),
+                            OmValue::Text("=QUARTILE(A1:A9, 3)".to_string()),
+                            OmValue::Text("=QUARTILE.EXC(A1:A9, 1)".to_string()),
+                            OmValue::Text("=QUARTILE.EXC(A1:A9, 2)".to_string()),
+                            OmValue::Text("=QUARTILE.EXC(A1:A9, 3)".to_string()),
+                            OmValue::Text("=QUARTILE.INC(A1:A9, 1.8)".to_string()),
+                            OmValue::Text("=PERCENTILE.EXC(A1:A9, 0.1)".to_string()),
+                            OmValue::Text("=PERCENTILE.INC(A9, 0.5)".to_string()),
+                            OmValue::Text("=QUARTILE.INC(A1:A9, 5)".to_string()),
+                            OmValue::Text("=QUARTILE.EXC(A1:A9, 4)".to_string()),
+                        ],
+                    )
+                    .expect("percentile/quartile formulas"),
+                ),
+                &[],
+            )
+            .expect("set percentile/quartile formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("percentile/quartile values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected percentile/quartile value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(1.0),
+                OmValue::Number(3.5),
+                OmValue::Number(9.25),
+                OmValue::Number(12.0),
+                OmValue::Number(2.5),
+                OmValue::Number(7.5),
+                OmValue::Number(9.75),
+                OmValue::Number(1.0),
+                OmValue::Number(3.5),
+                OmValue::Number(9.25),
+                OmValue::Number(2.5),
+                OmValue::Number(7.5),
+                OmValue::Number(9.75),
+                OmValue::Number(3.5),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
             ]
         );
     }

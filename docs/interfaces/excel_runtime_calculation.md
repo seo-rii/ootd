@@ -84,6 +84,12 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `STDEVP`
 - `LARGE`
 - `SMALL`
+- `PERCENTILE`
+- `PERCENTILE.INC`
+- `PERCENTILE.EXC`
+- `QUARTILE`
+- `QUARTILE.INC`
+- `QUARTILE.EXC`
 - `RANK`
 - `RANK.EQ`
 - `RANK.AVG`
