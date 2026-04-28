@@ -8651,6 +8651,8 @@ enum FormulaScalarFunction {
     Abs,
     Acos,
     Acosh,
+    Acot,
+    Acoth,
     And,
     Asin,
     Asinh,
@@ -8727,6 +8729,10 @@ impl FormulaScalarFunction {
             Some(Self::Acos)
         } else if name.eq_ignore_ascii_case("ACOSH") {
             Some(Self::Acosh)
+        } else if name.eq_ignore_ascii_case("ACOT") {
+            Some(Self::Acot)
+        } else if name.eq_ignore_ascii_case("ACOTH") {
+            Some(Self::Acoth)
         } else if name.eq_ignore_ascii_case("AND") {
             Some(Self::And)
         } else if name.eq_ignore_ascii_case("ASIN") {
@@ -9043,6 +9049,21 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Num);
                 }
                 checked_numeric_result(value.acosh())
+            }
+            FormulaScalarFunction::Acot => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                checked_numeric_result(1.0_f64.atan2(*value))
+            }
+            FormulaScalarFunction::Acoth => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if value.abs() <= 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                checked_numeric_result(0.5 * ((*value + 1.0) / (*value - 1.0)).ln())
             }
             FormulaScalarFunction::And => {
                 if args.is_empty() {
@@ -19281,6 +19302,86 @@ mod tests {
                 OmValue::Error(CellError::Div0),
                 OmValue::Error(CellError::Div0),
                 OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_inverse_cotangent_math_helper_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A10".to_string())],
+                )
+                .expect("Range(A1:A10)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        10,
+                        1,
+                        vec![
+                            OmValue::Text("=ACOT(2)".to_string()),
+                            OmValue::Text("=ACOT(0)".to_string()),
+                            OmValue::Text("=ACOT(-2)".to_string()),
+                            OmValue::Text("=ACOTH(6)".to_string()),
+                            OmValue::Text("=ACOTH(-6)".to_string()),
+                            OmValue::Text("=ACOTH(1)".to_string()),
+                            OmValue::Text("=ACOTH(-1)".to_string()),
+                            OmValue::Text("=ACOTH(0)".to_string()),
+                            OmValue::Text("=ACOT()".to_string()),
+                            OmValue::Text("=ACOTH(2, 3)".to_string()),
+                        ],
+                    )
+                    .expect("inverse cotangent math formulas"),
+                ),
+                &[],
+            )
+            .expect("set inverse cotangent math formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("inverse cotangent math values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected inverse cotangent math value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(1.0_f64.atan2(2.0)),
+                OmValue::Number(std::f64::consts::FRAC_PI_2),
+                OmValue::Number(1.0_f64.atan2(-2.0)),
+                OmValue::Number(0.5 * (7.0_f64 / 5.0).ln()),
+                OmValue::Number(0.5 * (5.0_f64 / 7.0).ln()),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
             ]

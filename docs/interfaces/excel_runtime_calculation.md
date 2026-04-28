@@ -62,6 +62,7 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `ACOS`
 - `ATAN`
 - `ATAN2`
+- `ACOT`
 - `SINH`
 - `COSH`
 - `TANH`
@@ -71,6 +72,7 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `ASINH`
 - `ACOSH`
 - `ATANH`
+- `ACOTH`
 - `DEGREES`
 - `RADIANS`
 - `ISEVEN`
