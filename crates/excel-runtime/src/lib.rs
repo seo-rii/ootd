@@ -10155,10 +10155,17 @@ fn parse_formula_criteria_numeric_literal(input: &str) -> Option<(FormulaCompari
 enum FormulaAggregateFunction {
     Sum,
     Product,
+    SumSq,
     Min,
     Max,
     Median,
     Average,
+    AveDev,
+    DevSq,
+    VarP,
+    VarS,
+    StDevP,
+    StDevS,
     Count,
 }
 
@@ -10168,6 +10175,8 @@ impl FormulaAggregateFunction {
             Some(Self::Sum)
         } else if name.eq_ignore_ascii_case("PRODUCT") {
             Some(Self::Product)
+        } else if name.eq_ignore_ascii_case("SUMSQ") {
+            Some(Self::SumSq)
         } else if name.eq_ignore_ascii_case("MIN") {
             Some(Self::Min)
         } else if name.eq_ignore_ascii_case("MAX") {
@@ -10176,6 +10185,18 @@ impl FormulaAggregateFunction {
             Some(Self::Median)
         } else if name.eq_ignore_ascii_case("AVERAGE") {
             Some(Self::Average)
+        } else if name.eq_ignore_ascii_case("AVEDEV") {
+            Some(Self::AveDev)
+        } else if name.eq_ignore_ascii_case("DEVSQ") {
+            Some(Self::DevSq)
+        } else if name.eq_ignore_ascii_case("VAR.P") || name.eq_ignore_ascii_case("VARP") {
+            Some(Self::VarP)
+        } else if name.eq_ignore_ascii_case("VAR.S") || name.eq_ignore_ascii_case("VAR") {
+            Some(Self::VarS)
+        } else if name.eq_ignore_ascii_case("STDEV.P") || name.eq_ignore_ascii_case("STDEVP") {
+            Some(Self::StDevP)
+        } else if name.eq_ignore_ascii_case("STDEV.S") || name.eq_ignore_ascii_case("STDEV") {
+            Some(Self::StDevS)
         } else if name.eq_ignore_ascii_case("COUNT") {
             Some(Self::Count)
         } else {
@@ -10184,9 +10205,28 @@ impl FormulaAggregateFunction {
     }
 
     fn evaluate(self, values: &[f64]) -> Result<f64, FormulaEvalError> {
+        let mean = |values: &[f64]| -> Result<f64, FormulaEvalError> {
+            if values.is_empty() {
+                Err(FormulaEvalError::Div0)
+            } else {
+                Ok(values.iter().sum::<f64>() / values.len() as f64)
+            }
+        };
+        let deviation_sum = |values: &[f64]| -> Result<f64, FormulaEvalError> {
+            let mean = mean(values)?;
+            Ok(values
+                .iter()
+                .map(|value| {
+                    let deviation = value - mean;
+                    deviation * deviation
+                })
+                .sum())
+        };
+
         match self {
             FormulaAggregateFunction::Sum => Ok(values.iter().sum()),
             FormulaAggregateFunction::Product => Ok(values.iter().product()),
+            FormulaAggregateFunction::SumSq => Ok(values.iter().map(|value| value * value).sum()),
             FormulaAggregateFunction::Min => {
                 Ok(values.iter().copied().reduce(f64::min).unwrap_or(0.0))
             }
@@ -10211,6 +10251,30 @@ impl FormulaAggregateFunction {
                     Err(FormulaEvalError::Div0)
                 } else {
                     Ok(values.iter().sum::<f64>() / values.len() as f64)
+                }
+            }
+            FormulaAggregateFunction::AveDev => {
+                let mean = mean(values)?;
+                Ok(values.iter().map(|value| (value - mean).abs()).sum::<f64>()
+                    / values.len() as f64)
+            }
+            FormulaAggregateFunction::DevSq => deviation_sum(values),
+            FormulaAggregateFunction::VarP => Ok(deviation_sum(values)? / values.len() as f64),
+            FormulaAggregateFunction::VarS => {
+                if values.len() < 2 {
+                    Err(FormulaEvalError::Div0)
+                } else {
+                    Ok(deviation_sum(values)? / (values.len() - 1) as f64)
+                }
+            }
+            FormulaAggregateFunction::StDevP => {
+                Ok((deviation_sum(values)? / values.len() as f64).sqrt())
+            }
+            FormulaAggregateFunction::StDevS => {
+                if values.len() < 2 {
+                    Err(FormulaEvalError::Div0)
+                } else {
+                    Ok((deviation_sum(values)? / (values.len() - 1) as f64).sqrt())
                 }
             }
             FormulaAggregateFunction::Count => Ok(values.len() as f64),
@@ -15270,6 +15334,128 @@ mod tests {
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::NA),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_statistical_deviation_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A9".to_string())])
+                .expect("Range(A1:A9)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("B1:B16".to_string())],
+                )
+                .expect("Range(B1:B16)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        9,
+                        1,
+                        vec![
+                            OmValue::Number(2.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(5.0),
+                            OmValue::Number(5.0),
+                            OmValue::Number(7.0),
+                            OmValue::Number(9.0),
+                            OmValue::Text("ignored".to_string()),
+                        ],
+                    )
+                    .expect("source values"),
+                ),
+                &[],
+            )
+            .expect("set statistical deviation source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        16,
+                        1,
+                        vec![
+                            OmValue::Text("=SUMSQ(A1:A9)".to_string()),
+                            OmValue::Text("=DEVSQ(A1:A9)".to_string()),
+                            OmValue::Text("=VAR.P(A1:A9)".to_string()),
+                            OmValue::Text("=VAR.S(A1:A9)".to_string()),
+                            OmValue::Text("=STDEV.P(A1:A9)".to_string()),
+                            OmValue::Text("=STDEV.S(A1:A9)".to_string()),
+                            OmValue::Text("=VAR(A1:A9)".to_string()),
+                            OmValue::Text("=VARP(A1:A9)".to_string()),
+                            OmValue::Text("=STDEV(A1:A9)".to_string()),
+                            OmValue::Text("=STDEVP(A1:A9)".to_string()),
+                            OmValue::Text("=AVEDEV(A1:A9)".to_string()),
+                            OmValue::Text("=SUMSQ(A9)".to_string()),
+                            OmValue::Text("=DEVSQ(A9)".to_string()),
+                            OmValue::Text("=VAR.S(A1)".to_string()),
+                            OmValue::Text("=STDEV.S(A1)".to_string()),
+                            OmValue::Text("=VAR.P(A9)".to_string()),
+                        ],
+                    )
+                    .expect("statistical deviation formulas"),
+                ),
+                &[],
+            )
+            .expect("set statistical deviation formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("statistical deviation values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected statistical deviation value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(232.0),
+                OmValue::Number(32.0),
+                OmValue::Number(4.0),
+                OmValue::Number(32.0 / 7.0),
+                OmValue::Number(2.0),
+                OmValue::Number((32.0_f64 / 7.0).sqrt()),
+                OmValue::Number(32.0 / 7.0),
+                OmValue::Number(4.0),
+                OmValue::Number((32.0_f64 / 7.0).sqrt()),
+                OmValue::Number(2.0),
+                OmValue::Number(1.5),
+                OmValue::Number(0.0),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Div0),
             ]
         );
     }

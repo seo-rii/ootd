@@ -66,11 +66,22 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 
 - `SUM`
 - `PRODUCT`
+- `SUMSQ`
 - `SUMPRODUCT`
 - `MIN`
 - `MAX`
 - `MEDIAN`
 - `AVERAGE`
+- `AVEDEV`
+- `DEVSQ`
+- `VAR`
+- `VAR.P`
+- `VAR.S`
+- `VARP`
+- `STDEV`
+- `STDEV.P`
+- `STDEV.S`
+- `STDEVP`
 - `LARGE`
 - `SMALL`
 - `RANK`
