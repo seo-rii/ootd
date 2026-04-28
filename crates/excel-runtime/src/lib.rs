@@ -8650,14 +8650,22 @@ fn formula_eval_error_from_cell_error(error: CellError) -> FormulaEvalError {
 enum FormulaScalarFunction {
     Abs,
     Acos,
+    Acosh,
     And,
     Asin,
+    Asinh,
     Atan,
     Atan2,
+    Atanh,
     CeilingMath,
     Combin,
     Combina,
     Cos,
+    Cosh,
+    Cot,
+    Coth,
+    Csc,
+    Csch,
     Date,
     Day,
     Days,
@@ -8694,12 +8702,16 @@ enum FormulaScalarFunction {
     RoundDown,
     Round,
     RoundUp,
+    Sec,
+    Sech,
     Sign,
     Power,
     Sin,
+    Sinh,
     Sqrt,
     Second,
     Tan,
+    Tanh,
     Time,
     Trunc,
     Weekday,
@@ -8713,14 +8725,20 @@ impl FormulaScalarFunction {
             Some(Self::Abs)
         } else if name.eq_ignore_ascii_case("ACOS") {
             Some(Self::Acos)
+        } else if name.eq_ignore_ascii_case("ACOSH") {
+            Some(Self::Acosh)
         } else if name.eq_ignore_ascii_case("AND") {
             Some(Self::And)
         } else if name.eq_ignore_ascii_case("ASIN") {
             Some(Self::Asin)
+        } else if name.eq_ignore_ascii_case("ASINH") {
+            Some(Self::Asinh)
         } else if name.eq_ignore_ascii_case("ATAN") {
             Some(Self::Atan)
         } else if name.eq_ignore_ascii_case("ATAN2") {
             Some(Self::Atan2)
+        } else if name.eq_ignore_ascii_case("ATANH") {
+            Some(Self::Atanh)
         } else if name.eq_ignore_ascii_case("CEILING.MATH") {
             Some(Self::CeilingMath)
         } else if name.eq_ignore_ascii_case("COMBIN") {
@@ -8729,6 +8747,16 @@ impl FormulaScalarFunction {
             Some(Self::Combina)
         } else if name.eq_ignore_ascii_case("COS") {
             Some(Self::Cos)
+        } else if name.eq_ignore_ascii_case("COSH") {
+            Some(Self::Cosh)
+        } else if name.eq_ignore_ascii_case("COT") {
+            Some(Self::Cot)
+        } else if name.eq_ignore_ascii_case("COTH") {
+            Some(Self::Coth)
+        } else if name.eq_ignore_ascii_case("CSC") {
+            Some(Self::Csc)
+        } else if name.eq_ignore_ascii_case("CSCH") {
+            Some(Self::Csch)
         } else if name.eq_ignore_ascii_case("DATE") {
             Some(Self::Date)
         } else if name.eq_ignore_ascii_case("DAY") {
@@ -8801,18 +8829,26 @@ impl FormulaScalarFunction {
             Some(Self::Round)
         } else if name.eq_ignore_ascii_case("ROUNDUP") {
             Some(Self::RoundUp)
+        } else if name.eq_ignore_ascii_case("SEC") {
+            Some(Self::Sec)
+        } else if name.eq_ignore_ascii_case("SECH") {
+            Some(Self::Sech)
         } else if name.eq_ignore_ascii_case("SIGN") {
             Some(Self::Sign)
         } else if name.eq_ignore_ascii_case("POWER") {
             Some(Self::Power)
         } else if name.eq_ignore_ascii_case("SIN") {
             Some(Self::Sin)
+        } else if name.eq_ignore_ascii_case("SINH") {
+            Some(Self::Sinh)
         } else if name.eq_ignore_ascii_case("SQRT") {
             Some(Self::Sqrt)
         } else if name.eq_ignore_ascii_case("SECOND") {
             Some(Self::Second)
         } else if name.eq_ignore_ascii_case("TAN") {
             Some(Self::Tan)
+        } else if name.eq_ignore_ascii_case("TANH") {
+            Some(Self::Tanh)
         } else if name.eq_ignore_ascii_case("TIME") {
             Some(Self::Time)
         } else if name.eq_ignore_ascii_case("TRUNC") {
@@ -8961,6 +8997,27 @@ impl FormulaScalarFunction {
                     Err(FormulaEvalError::Num)
                 }
             };
+        const RECIPROCAL_TRIG_INPUT_LIMIT: f64 = 134_217_728.0;
+        let validate_reciprocal_trig_input = |value: f64| -> Result<(), FormulaEvalError> {
+            if !value.is_finite() || value.abs() >= RECIPROCAL_TRIG_INPUT_LIMIT {
+                Err(FormulaEvalError::Num)
+            } else {
+                Ok(())
+            }
+        };
+        let checked_numeric_result = |value: f64| -> Result<f64, FormulaEvalError> {
+            if value.is_finite() {
+                Ok(value)
+            } else {
+                Err(FormulaEvalError::Num)
+            }
+        };
+        let reciprocal_numeric_result = |denominator: f64| -> Result<f64, FormulaEvalError> {
+            if denominator == 0.0 {
+                return Err(FormulaEvalError::Div0);
+            }
+            checked_numeric_result(1.0 / denominator)
+        };
 
         match self {
             FormulaScalarFunction::Abs => {
@@ -8977,6 +9034,15 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Num);
                 }
                 Ok(value.acos())
+            }
+            FormulaScalarFunction::Acosh => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if *value < 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                checked_numeric_result(value.acosh())
             }
             FormulaScalarFunction::And => {
                 if args.is_empty() {
@@ -8997,6 +9063,12 @@ impl FormulaScalarFunction {
                 }
                 Ok(value.asin())
             }
+            FormulaScalarFunction::Asinh => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                checked_numeric_result(value.asinh())
+            }
             FormulaScalarFunction::Atan => {
                 let [value] = args else {
                     return Err(FormulaEvalError::Value);
@@ -9011,6 +9083,15 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Div0);
                 }
                 Ok((*y_num).atan2(*x_num))
+            }
+            FormulaScalarFunction::Atanh => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if *value <= -1.0 || *value >= 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                checked_numeric_result(value.atanh())
             }
             FormulaScalarFunction::CeilingMath => {
                 let (number, significance, mode) = match args {
@@ -9056,6 +9137,40 @@ impl FormulaScalarFunction {
                 } else {
                     Err(FormulaEvalError::Num)
                 }
+            }
+            FormulaScalarFunction::Cosh => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                checked_numeric_result(value.cosh())
+            }
+            FormulaScalarFunction::Cot => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                validate_reciprocal_trig_input(*value)?;
+                reciprocal_numeric_result(value.tan())
+            }
+            FormulaScalarFunction::Coth => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                validate_reciprocal_trig_input(*value)?;
+                reciprocal_numeric_result(value.tanh())
+            }
+            FormulaScalarFunction::Csc => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                validate_reciprocal_trig_input(*value)?;
+                reciprocal_numeric_result(value.sin())
+            }
+            FormulaScalarFunction::Csch => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                validate_reciprocal_trig_input(*value)?;
+                reciprocal_numeric_result(value.sinh())
             }
             FormulaScalarFunction::Date => {
                 let [year, month, day] = args else {
@@ -9328,6 +9443,20 @@ impl FormulaScalarFunction {
                 let factor = formula_round_factor(*digits)?;
                 Ok(round_away_from_zero(value * factor) / factor)
             }
+            FormulaScalarFunction::Sec => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                validate_reciprocal_trig_input(*value)?;
+                reciprocal_numeric_result(value.cos())
+            }
+            FormulaScalarFunction::Sech => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                validate_reciprocal_trig_input(*value)?;
+                reciprocal_numeric_result(value.cosh())
+            }
             FormulaScalarFunction::Sign => {
                 let [value] = args else {
                     return Err(FormulaEvalError::Value);
@@ -9428,6 +9557,12 @@ impl FormulaScalarFunction {
                     Err(FormulaEvalError::Num)
                 }
             }
+            FormulaScalarFunction::Sinh => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                checked_numeric_result(value.sinh())
+            }
             FormulaScalarFunction::Sqrt => {
                 let [value] = args else {
                     return Err(FormulaEvalError::Value);
@@ -9453,6 +9588,12 @@ impl FormulaScalarFunction {
                 } else {
                     Err(FormulaEvalError::Num)
                 }
+            }
+            FormulaScalarFunction::Tanh => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                checked_numeric_result(value.tanh())
             }
             FormulaScalarFunction::Time => {
                 let [hour, minute, second] = args else {
@@ -19025,6 +19166,120 @@ mod tests {
                 OmValue::Number(180.0 * std::f64::consts::PI / 180.0),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_hyperbolic_trigonometric_math_helper_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A27".to_string())],
+                )
+                .expect("Range(A1:A27)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        27,
+                        1,
+                        vec![
+                            OmValue::Text("=SINH(0)".to_string()),
+                            OmValue::Text("=SINH(1)".to_string()),
+                            OmValue::Text("=COSH(0)".to_string()),
+                            OmValue::Text("=COSH(1)".to_string()),
+                            OmValue::Text("=TANH(-2)".to_string()),
+                            OmValue::Text("=ASINH(-2.5)".to_string()),
+                            OmValue::Text("=ACOSH(1)".to_string()),
+                            OmValue::Text("=ACOSH(10)".to_string()),
+                            OmValue::Text("=ATANH(-0.1)".to_string()),
+                            OmValue::Text("=SEC(0)".to_string()),
+                            OmValue::Text("=SEC(45)".to_string()),
+                            OmValue::Text("=CSC(15)".to_string()),
+                            OmValue::Text("=COT(30)".to_string()),
+                            OmValue::Text("=SECH(0)".to_string()),
+                            OmValue::Text("=SECH(45)".to_string()),
+                            OmValue::Text("=CSCH(1.5)".to_string()),
+                            OmValue::Text("=COTH(2)".to_string()),
+                            OmValue::Text("=ACOSH(0)".to_string()),
+                            OmValue::Text("=ATANH(1)".to_string()),
+                            OmValue::Text("=SEC(134217728)".to_string()),
+                            OmValue::Text("=CSC(-134217728)".to_string()),
+                            OmValue::Text("=COT(0)".to_string()),
+                            OmValue::Text("=CSC(0)".to_string()),
+                            OmValue::Text("=CSCH(0)".to_string()),
+                            OmValue::Text("=COTH(0)".to_string()),
+                            OmValue::Text("=SINH(1, 2)".to_string()),
+                            OmValue::Text("=SEC()".to_string()),
+                        ],
+                    )
+                    .expect("hyperbolic trigonometric math formulas"),
+                ),
+                &[],
+            )
+            .expect("set hyperbolic trigonometric math formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("hyperbolic trigonometric math values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected hyperbolic trigonometric math value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(0.0),
+                OmValue::Number(1.0_f64.sinh()),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0_f64.cosh()),
+                OmValue::Number((-2.0_f64).tanh()),
+                OmValue::Number((-2.5_f64).asinh()),
+                OmValue::Number(0.0),
+                OmValue::Number(10.0_f64.acosh()),
+                OmValue::Number((-0.1_f64).atanh()),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0 / 45.0_f64.cos()),
+                OmValue::Number(1.0 / 15.0_f64.sin()),
+                OmValue::Number(1.0 / 30.0_f64.tan()),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0 / 45.0_f64.cosh()),
+                OmValue::Number(1.0 / 1.5_f64.sinh()),
+                OmValue::Number(1.0 / 2.0_f64.tanh()),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Div0),
                 OmValue::Error(CellError::Div0),
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
