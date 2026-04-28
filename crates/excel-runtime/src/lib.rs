@@ -9403,7 +9403,7 @@ impl FormulaCriteria {
                 CellValue::Blank | CellValue::Text(_) | CellValue::Error(_) => false,
             },
             FormulaCriteria::Text(expected) => match cell_value {
-                CellValue::Text(actual) => actual.eq_ignore_ascii_case(expected),
+                CellValue::Text(actual) => formula_wildcard_matches(expected, actual, true),
                 CellValue::Blank
                 | CellValue::Bool(_)
                 | CellValue::Number(_)
@@ -15267,6 +15267,136 @@ mod tests {
                 OmValue::Number(60.0),
                 OmValue::Number(20.0),
                 OmValue::Number(40.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_wildcard_criteria_aggregate_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let criteria_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A6".to_string())])
+                .expect("Range(A1:A6)"),
+        );
+        let value_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B6".to_string())])
+                .expect("Range(B1:B6)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1:C9".to_string())])
+                .expect("Range(C1:C9)"),
+        );
+
+        runtime
+            .dispatch_set(
+                criteria_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        6,
+                        1,
+                        vec![
+                            OmValue::Text("north".to_string()),
+                            OmValue::Text("Northwest".to_string()),
+                            OmValue::Text("east".to_string()),
+                            OmValue::Text("west".to_string()),
+                            OmValue::Text("n*literal".to_string()),
+                            OmValue::Text("north-east".to_string()),
+                        ],
+                    )
+                    .expect("wildcard criteria values"),
+                ),
+                &[],
+            )
+            .expect("set wildcard criteria values");
+        runtime
+            .dispatch_set(
+                value_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        6,
+                        1,
+                        vec![
+                            OmValue::Number(10.0),
+                            OmValue::Number(20.0),
+                            OmValue::Number(30.0),
+                            OmValue::Number(40.0),
+                            OmValue::Number(50.0),
+                            OmValue::Number(60.0),
+                        ],
+                    )
+                    .expect("wildcard aggregate values"),
+                ),
+                &[],
+            )
+            .expect("set wildcard aggregate values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        9,
+                        1,
+                        vec![
+                            OmValue::Text(r#"=COUNTIF(A1:A6, "north*")"#.to_string()),
+                            OmValue::Text(r#"=COUNTIF(A1:A6, "?ast")"#.to_string()),
+                            OmValue::Text(r#"=COUNTIF(A1:A6, "n~*literal")"#.to_string()),
+                            OmValue::Text(r#"=SUMIF(A1:A6, "north*", B1:B6)"#.to_string()),
+                            OmValue::Text(r#"=AVERAGEIF(A1:A6, "north*", B1:B6)"#.to_string()),
+                            OmValue::Text(
+                                r#"=COUNTIFS(A1:A6, "north*", B1:B6, ">15")"#.to_string(),
+                            ),
+                            OmValue::Text(r#"=SUMIFS(B1:B6, A1:A6, "?ast")"#.to_string()),
+                            OmValue::Text(r#"=AVERAGEIFS(B1:B6, A1:A6, "n~*literal")"#.to_string()),
+                            OmValue::Text(r#"=MAXIFS(B1:B6, A1:A6, "north*")"#.to_string()),
+                        ],
+                    )
+                    .expect("wildcard criteria formulas"),
+                ),
+                &[],
+            )
+            .expect("set wildcard criteria formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("wildcard criteria values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected wildcard criteria value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(3.0),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(90.0),
+                OmValue::Number(30.0),
+                OmValue::Number(2.0),
+                OmValue::Number(30.0),
+                OmValue::Number(50.0),
+                OmValue::Number(60.0),
             ]
         );
     }

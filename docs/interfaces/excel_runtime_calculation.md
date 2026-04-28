@@ -148,6 +148,7 @@ Criteria notes:
 
 - `*IFS` family currently requires criteria ranges and value ranges to have the same shape.
 - criteria strings support numeric comparison prefixes such as `">3"` and the blank-string criterion `""`.
+- Text criteria support Excel-style `*` and `?` wildcards with `~` escaping.
 
 ### Error and information helpers
 
