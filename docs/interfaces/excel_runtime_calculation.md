@@ -245,6 +245,8 @@ Criteria notes:
 
 - `NA`
 - `N`
+- `TYPE`
+- `ERROR.TYPE`
 - `IFERROR`
 - `IFNA`
 - `ISERROR`
@@ -255,7 +257,9 @@ Criteria notes:
 - `ISNONTEXT`
 - `ISNUMBER`
 - `ISREF`
+- `ISFORMULA`
 - `ISTEXT`
+- `FORMULATEXT`
 
 ### Text helpers
 

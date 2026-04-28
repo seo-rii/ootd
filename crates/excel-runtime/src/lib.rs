@@ -10263,6 +10263,7 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("REPT")
         || name.eq_ignore_ascii_case("REPLACE")
         || name.eq_ignore_ascii_case("SUBSTITUTE")
+        || name.eq_ignore_ascii_case("FORMULATEXT")
         || name.eq_ignore_ascii_case("IF")
         || name.eq_ignore_ascii_case("CHOOSE")
         || name.eq_ignore_ascii_case("INDEX")
@@ -11350,6 +11351,23 @@ impl<'a> FormulaEvaluator<'a> {
         ))
     }
 
+    fn formula_source_at(
+        &self,
+        sheet_id: SheetId,
+        row: u32,
+        col: u32,
+    ) -> Result<Option<FormulaSource>, FormulaEvalError> {
+        if !self.state.worksheet_data.contains_key(&sheet_id) {
+            return Err(FormulaEvalError::Ref);
+        }
+        Ok(self
+            .state
+            .worksheet_data
+            .get(&sheet_id)
+            .and_then(|worksheet| worksheet.cells.get(&(row, col)))
+            .and_then(|cell| cell.formula.clone()))
+    }
+
     fn countif_values_in_rect(
         &mut self,
         sheet_id: SheetId,
@@ -12019,6 +12037,15 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
             return Ok(0.0);
         }
+        if name.eq_ignore_ascii_case("ISFORMULA") {
+            return self.parse_isformula_function();
+        }
+        if name.eq_ignore_ascii_case("TYPE") {
+            return self.parse_type_function();
+        }
+        if name.eq_ignore_ascii_case("ERROR.TYPE") {
+            return self.parse_error_type_function();
+        }
         if name.eq_ignore_ascii_case("N") {
             let value = self.parse_value_probe_argument()?;
             self.skip_whitespace();
@@ -12556,6 +12583,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("SUBSTITUTE") {
             return self.parse_substitute_text_function();
         }
+        if name.eq_ignore_ascii_case("FORMULATEXT") {
+            return self.parse_formulatext_function();
+        }
         if name.eq_ignore_ascii_case("IF") {
             return formula_selected_text_from_value_probe(self.parse_if_value_function()?);
         }
@@ -12831,6 +12861,33 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
         }
         Ok(text)
+    }
+
+    fn parse_formulatext_function(&mut self) -> Result<String, FormulaEvalError> {
+        let (target_sheet_id, rect) = self.parse_reference_argument()?;
+        if rect.row_first != rect.row_last || rect.col_first != rect.col_last {
+            return Err(FormulaEvalError::Value);
+        }
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let Some(formula) =
+            self.evaluator
+                .formula_source_at(target_sheet_id, rect.row_first, rect.col_first)?
+        else {
+            return Err(FormulaEvalError::NA);
+        };
+        let text = if formula.is_r1c1 {
+            convert_formula_r1c1_to_a1(&formula.text, rect.row_first, rect.col_first)
+        } else {
+            formula.text
+        };
+        Ok(if text.starts_with('=') {
+            text
+        } else {
+            format!("={text}")
+        })
     }
 
     fn parse_len_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -13222,6 +13279,63 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return Err(FormulaEvalError::Unsupported);
         }
         Ok(if predicate(&value) { 1.0 } else { 0.0 })
+    }
+
+    fn parse_type_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let value = self.parse_value_probe_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Ok(match value {
+            FormulaValueProbe::Blank | FormulaValueProbe::Number(_) => 1.0,
+            FormulaValueProbe::Text(_) => 2.0,
+            FormulaValueProbe::Bool(_) => 4.0,
+            FormulaValueProbe::Error(_) => 16.0,
+        })
+    }
+
+    fn parse_error_type_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let value = self.parse_value_probe_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let FormulaValueProbe::Error(error) = value else {
+            return Err(FormulaEvalError::NA);
+        };
+        match error {
+            FormulaEvalError::Div0 => Ok(2.0),
+            FormulaEvalError::Value => Ok(3.0),
+            FormulaEvalError::Ref => Ok(4.0),
+            FormulaEvalError::Name => Ok(5.0),
+            FormulaEvalError::Num => Ok(6.0),
+            FormulaEvalError::NA => Ok(7.0),
+            FormulaEvalError::Calc => Ok(14.0),
+            FormulaEvalError::Unsupported => Err(FormulaEvalError::NA),
+        }
+    }
+
+    fn parse_isformula_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let (target_sheet_id, rect) = self.parse_reference_argument()?;
+        if rect.row_first != rect.row_last || rect.col_first != rect.col_last {
+            return Err(FormulaEvalError::Value);
+        }
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Ok(
+            if self
+                .evaluator
+                .formula_source_at(target_sheet_id, rect.row_first, rect.col_first)?
+                .is_some()
+            {
+                1.0
+            } else {
+                0.0
+            },
+        )
     }
 
     fn parse_na_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -19096,6 +19210,140 @@ mod tests {
                 OmValue::Number(0.0),
                 OmValue::Error(CellError::NA),
             ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_formula_metadata_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B4".to_string())])
+                .expect("Range(B1:B4)"),
+        );
+        let formula_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1".to_string())])
+                .expect("Range(C1)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A13".to_string())],
+                )
+                .expect("Range(A1:A13)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        1,
+                        vec![
+                            OmValue::Empty,
+                            OmValue::Number(5.0),
+                            OmValue::Text("hello".to_string()),
+                            OmValue::Bool(true),
+                        ],
+                    )
+                    .expect("formula metadata source values"),
+                ),
+                &[],
+            )
+            .expect("set formula metadata source values");
+        runtime
+            .dispatch_set(
+                formula_source,
+                "Formula",
+                OmValue::Text("=B2+1".to_string()),
+                &[],
+            )
+            .expect("set metadata formula source");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        13,
+                        1,
+                        vec![
+                            OmValue::Text("=TYPE(B1)".to_string()),
+                            OmValue::Text("=TYPE(B2)".to_string()),
+                            OmValue::Text("=TYPE(B3)".to_string()),
+                            OmValue::Text("=TYPE(B4)".to_string()),
+                            OmValue::Text("=TYPE(NA())".to_string()),
+                            OmValue::Text("=ERROR.TYPE(1/0)".to_string()),
+                            OmValue::Text(r#"=ERROR.TYPE(VALUE("bad"))"#.to_string()),
+                            OmValue::Text("=ERROR.TYPE(SQRT(-1))".to_string()),
+                            OmValue::Text("=ERROR.TYPE(NA())".to_string()),
+                            OmValue::Text("=ERROR.TYPE(42)".to_string()),
+                            OmValue::Text("=ISFORMULA(C1)".to_string()),
+                            OmValue::Text("=ISFORMULA(B2)".to_string()),
+                            OmValue::Text("=FORMULATEXT(C1)".to_string()),
+                        ],
+                    )
+                    .expect("formula metadata formulas"),
+                ),
+                &[],
+            )
+            .expect("set formula metadata formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("formula metadata values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected formula metadata value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(2.0),
+                OmValue::Number(4.0),
+                OmValue::Number(16.0),
+                OmValue::Number(2.0),
+                OmValue::Number(3.0),
+                OmValue::Number(6.0),
+                OmValue::Number(7.0),
+                OmValue::Error(CellError::NA),
+                OmValue::Number(1.0),
+                OmValue::Number(0.0),
+                OmValue::Text("=B2+1".to_string()),
+            ]
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    runtime.root_application(),
+                    "Evaluate",
+                    &[OmValue::Text("=FORMULATEXT(B2)".to_string())],
+                )
+                .expect("Application.Evaluate FORMULATEXT non-formula"),
+            OmValue::Error(CellError::NA)
         );
     }
 
