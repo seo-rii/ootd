@@ -72,6 +72,11 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `MAX`
 - `MEDIAN`
 - `AVERAGE`
+- `GEOMEAN`
+- `HARMEAN`
+- `MODE`
+- `MODE.SNGL`
+- `TRIMMEAN`
 - `AVEDEV`
 - `DEVSQ`
 - `VAR`

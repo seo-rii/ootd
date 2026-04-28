@@ -10160,6 +10160,9 @@ enum FormulaAggregateFunction {
     Max,
     Median,
     Average,
+    GeoMean,
+    HarMean,
+    ModeSngl,
     AveDev,
     DevSq,
     VarP,
@@ -10185,6 +10188,12 @@ impl FormulaAggregateFunction {
             Some(Self::Median)
         } else if name.eq_ignore_ascii_case("AVERAGE") {
             Some(Self::Average)
+        } else if name.eq_ignore_ascii_case("GEOMEAN") {
+            Some(Self::GeoMean)
+        } else if name.eq_ignore_ascii_case("HARMEAN") {
+            Some(Self::HarMean)
+        } else if name.eq_ignore_ascii_case("MODE") || name.eq_ignore_ascii_case("MODE.SNGL") {
+            Some(Self::ModeSngl)
         } else if name.eq_ignore_ascii_case("AVEDEV") {
             Some(Self::AveDev)
         } else if name.eq_ignore_ascii_case("DEVSQ") {
@@ -10252,6 +10261,47 @@ impl FormulaAggregateFunction {
                 } else {
                     Ok(values.iter().sum::<f64>() / values.len() as f64)
                 }
+            }
+            FormulaAggregateFunction::GeoMean => {
+                if values.is_empty() {
+                    return Err(FormulaEvalError::Div0);
+                }
+                let mut log_sum = 0.0;
+                for value in values {
+                    if *value <= 0.0 {
+                        return Err(FormulaEvalError::Num);
+                    }
+                    log_sum += value.ln();
+                }
+                Ok((log_sum / values.len() as f64).exp())
+            }
+            FormulaAggregateFunction::HarMean => {
+                if values.is_empty() {
+                    return Err(FormulaEvalError::Div0);
+                }
+                let mut reciprocal_sum = 0.0;
+                for value in values {
+                    if *value <= 0.0 {
+                        return Err(FormulaEvalError::Num);
+                    }
+                    reciprocal_sum += 1.0 / value;
+                }
+                Ok(values.len() as f64 / reciprocal_sum)
+            }
+            FormulaAggregateFunction::ModeSngl => {
+                let mut mode = None;
+                let mut mode_count = 1_usize;
+                for value in values {
+                    let count = values
+                        .iter()
+                        .filter(|candidate| **candidate == *value)
+                        .count();
+                    if count > mode_count {
+                        mode = Some(*value);
+                        mode_count = count;
+                    }
+                }
+                mode.ok_or(FormulaEvalError::NA)
             }
             FormulaAggregateFunction::AveDev => {
                 let mean = mean(values)?;
@@ -11355,6 +11405,35 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 return Err(FormulaEvalError::Num);
             }
             return percentile_value(values, quart as f64 / 4.0, exclusive);
+        }
+        if name.eq_ignore_ascii_case("TRIMMEAN") {
+            let mut values = self.parse_aggregate_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let percent = self.parse_comparison()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            if values.is_empty() {
+                return Err(FormulaEvalError::Div0);
+            }
+            if !percent.is_finite() || !(0.0..=1.0).contains(&percent) {
+                return Err(FormulaEvalError::Num);
+            }
+            values.sort_by(|left, right| left.total_cmp(right));
+            let trim_count = (values.len() as f64 * percent).floor() as usize;
+            let trim_each_side = (trim_count - trim_count % 2) / 2;
+            let remaining = values.len().saturating_sub(trim_each_side * 2);
+            if remaining == 0 {
+                return Err(FormulaEvalError::Num);
+            }
+            return Ok(values[trim_each_side..trim_each_side + remaining]
+                .iter()
+                .sum::<f64>()
+                / remaining as f64);
         }
         if name.eq_ignore_ascii_case("LARGE") || name.eq_ignore_ascii_case("SMALL") {
             let mut values = self.parse_aggregate_argument()?;
@@ -15916,6 +15995,224 @@ mod tests {
                 OmValue::Error(CellError::Div0),
                 OmValue::Error(CellError::NA),
                 OmValue::Error(CellError::NA),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_statistical_mean_and_mode_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let trim_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A12".to_string())],
+                )
+                .expect("Range(A1:A12)"),
+        );
+        let mean_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B8".to_string())])
+                .expect("Range(B1:B8)"),
+        );
+        let mode_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1:C7".to_string())])
+                .expect("Range(C1:C7)"),
+        );
+        let unique_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1:D3".to_string())])
+                .expect("Range(D1:D3)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("E1:E11".to_string())],
+                )
+                .expect("Range(E1:E11)"),
+        );
+
+        runtime
+            .dispatch_set(
+                trim_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        12,
+                        1,
+                        vec![
+                            OmValue::Number(4.0),
+                            OmValue::Number(5.0),
+                            OmValue::Number(6.0),
+                            OmValue::Number(7.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(5.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                            OmValue::Text("ignored".to_string()),
+                        ],
+                    )
+                    .expect("trimmean values"),
+                ),
+                &[],
+            )
+            .expect("set trimmean source values");
+        runtime
+            .dispatch_set(
+                mean_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        8,
+                        1,
+                        vec![
+                            OmValue::Number(4.0),
+                            OmValue::Number(5.0),
+                            OmValue::Number(8.0),
+                            OmValue::Number(7.0),
+                            OmValue::Number(11.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(3.0),
+                            OmValue::Text("ignored".to_string()),
+                        ],
+                    )
+                    .expect("mean values"),
+                ),
+                &[],
+            )
+            .expect("set statistical mean source values");
+        runtime
+            .dispatch_set(
+                mode_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        7,
+                        1,
+                        vec![
+                            OmValue::Number(6.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(6.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(6.0),
+                            OmValue::Text("ignored".to_string()),
+                        ],
+                    )
+                    .expect("mode values"),
+                ),
+                &[],
+            )
+            .expect("set mode source values");
+        runtime
+            .dispatch_set(
+                unique_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        1,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                        ],
+                    )
+                    .expect("unique values"),
+                ),
+                &[],
+            )
+            .expect("set unique source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        11,
+                        1,
+                        vec![
+                            OmValue::Text("=GEOMEAN(B1:B8)".to_string()),
+                            OmValue::Text("=HARMEAN(B1:B8)".to_string()),
+                            OmValue::Text("=MODE(C1:C7)".to_string()),
+                            OmValue::Text("=MODE.SNGL(C1:C7)".to_string()),
+                            OmValue::Text("=TRIMMEAN(A1:A12, 0.2)".to_string()),
+                            OmValue::Text("=TRIMMEAN(A1:A12, 0.1)".to_string()),
+                            OmValue::Text("=GEOMEAN(0, 4)".to_string()),
+                            OmValue::Text("=HARMEAN(-1, 4)".to_string()),
+                            OmValue::Text("=MODE.SNGL(D1:D3)".to_string()),
+                            OmValue::Text("=TRIMMEAN(A1:A12, -0.1)".to_string()),
+                            OmValue::Text("=TRIMMEAN(A1:A12, 1.1)".to_string()),
+                        ],
+                    )
+                    .expect("statistical mean/mode formulas"),
+                ),
+                &[],
+            )
+            .expect("set statistical mean/mode formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("statistical mean/mode values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected statistical mean/mode value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(
+                    ((4.0_f64.ln()
+                        + 5.0_f64.ln()
+                        + 8.0_f64.ln()
+                        + 7.0_f64.ln()
+                        + 11.0_f64.ln()
+                        + 4.0_f64.ln()
+                        + 3.0_f64.ln())
+                        / 7.0)
+                        .exp(),
+                ),
+                OmValue::Number(
+                    7.0 / (1.0 / 4.0
+                        + 1.0 / 5.0
+                        + 1.0 / 8.0
+                        + 1.0 / 7.0
+                        + 1.0 / 11.0
+                        + 1.0 / 4.0
+                        + 1.0 / 3.0),
+                ),
+                OmValue::Number(6.0),
+                OmValue::Number(6.0),
+                OmValue::Number(34.0 / 9.0),
+                OmValue::Number(42.0 / 11.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
             ]
         );
     }
