@@ -8664,6 +8664,7 @@ enum FormulaScalarFunction {
     Degrees,
     EDate,
     EOMonth,
+    Even,
     Exp,
     Fact,
     FactDouble,
@@ -8683,6 +8684,7 @@ enum FormulaScalarFunction {
     MRound,
     Multinomial,
     Not,
+    Odd,
     Or,
     Permut,
     PermutationA,
@@ -8739,6 +8741,8 @@ impl FormulaScalarFunction {
             Some(Self::EDate)
         } else if name.eq_ignore_ascii_case("EOMONTH") {
             Some(Self::EOMonth)
+        } else if name.eq_ignore_ascii_case("EVEN") {
+            Some(Self::Even)
         } else if name.eq_ignore_ascii_case("EXP") {
             Some(Self::Exp)
         } else if name.eq_ignore_ascii_case("FACT") {
@@ -8777,6 +8781,8 @@ impl FormulaScalarFunction {
             Some(Self::Multinomial)
         } else if name.eq_ignore_ascii_case("NOT") {
             Some(Self::Not)
+        } else if name.eq_ignore_ascii_case("ODD") {
+            Some(Self::Odd)
         } else if name.eq_ignore_ascii_case("OR") {
             Some(Self::Or)
         } else if name.eq_ignore_ascii_case("PERMUT") {
@@ -8932,6 +8938,29 @@ impl FormulaScalarFunction {
             }
             Ok(total.round())
         };
+        let round_away_to_integer_with_parity =
+            |value: f64, odd: bool| -> Result<f64, FormulaEvalError> {
+                if !value.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                if value == 0.0 {
+                    return Ok(if odd { 1.0 } else { 0.0 });
+                }
+                let mut magnitude = value.abs().ceil();
+                if (magnitude.rem_euclid(2.0) != 0.0) != odd {
+                    magnitude += 1.0;
+                }
+                let rounded = if value.is_sign_negative() {
+                    -magnitude
+                } else {
+                    magnitude
+                };
+                if rounded.is_finite() {
+                    Ok(normalize_zero(rounded))
+                } else {
+                    Err(FormulaEvalError::Num)
+                }
+            };
 
         match self {
             FormulaScalarFunction::Abs => {
@@ -9069,6 +9098,12 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Value);
                 };
                 formula_eomonth(*serial, *months)
+            }
+            FormulaScalarFunction::Even => {
+                let [number] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                round_away_to_integer_with_parity(*number, false)
             }
             FormulaScalarFunction::Exp => {
                 let [value] = args else {
@@ -9255,6 +9290,12 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Value);
                 };
                 Ok(if *value == 0.0 { 1.0 } else { 0.0 })
+            }
+            FormulaScalarFunction::Odd => {
+                let [number] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                round_away_to_integer_with_parity(*number, true)
             }
             FormulaScalarFunction::Or => {
                 if args.is_empty() {
@@ -10316,8 +10357,10 @@ enum FormulaAggregateFunction {
     Max,
     Median,
     Average,
+    Gcd,
     GeoMean,
     HarMean,
+    Lcm,
     ModeSngl,
     AveDev,
     DevSq,
@@ -10344,10 +10387,14 @@ impl FormulaAggregateFunction {
             Some(Self::Median)
         } else if name.eq_ignore_ascii_case("AVERAGE") {
             Some(Self::Average)
+        } else if name.eq_ignore_ascii_case("GCD") {
+            Some(Self::Gcd)
         } else if name.eq_ignore_ascii_case("GEOMEAN") {
             Some(Self::GeoMean)
         } else if name.eq_ignore_ascii_case("HARMEAN") {
             Some(Self::HarMean)
+        } else if name.eq_ignore_ascii_case("LCM") {
+            Some(Self::Lcm)
         } else if name.eq_ignore_ascii_case("MODE") || name.eq_ignore_ascii_case("MODE.SNGL") {
             Some(Self::ModeSngl)
         } else if name.eq_ignore_ascii_case("AVEDEV") {
@@ -10387,6 +10434,25 @@ impl FormulaAggregateFunction {
                 })
                 .sum())
         };
+        const EXCEL_INTEGER_LIMIT: u64 = 1_u64 << 53;
+        let trunc_excel_nonnegative_integer = |value: f64| -> Result<u64, FormulaEvalError> {
+            if !value.is_finite() {
+                return Err(FormulaEvalError::Value);
+            }
+            let value = value.trunc();
+            if value < 0.0 || value >= EXCEL_INTEGER_LIMIT as f64 {
+                return Err(FormulaEvalError::Num);
+            }
+            Ok(value as u64)
+        };
+        let gcd_u64 = |mut left: u64, mut right: u64| -> u64 {
+            while right != 0 {
+                let next = left % right;
+                left = right;
+                right = next;
+            }
+            left
+        };
 
         match self {
             FormulaAggregateFunction::Sum => Ok(values.iter().sum()),
@@ -10418,6 +10484,16 @@ impl FormulaAggregateFunction {
                     Ok(values.iter().sum::<f64>() / values.len() as f64)
                 }
             }
+            FormulaAggregateFunction::Gcd => {
+                if values.is_empty() {
+                    return Err(FormulaEvalError::Value);
+                }
+                let mut result = 0_u64;
+                for value in values {
+                    result = gcd_u64(result, trunc_excel_nonnegative_integer(*value)?);
+                }
+                Ok(result as f64)
+            }
             FormulaAggregateFunction::GeoMean => {
                 if values.is_empty() {
                     return Err(FormulaEvalError::Div0);
@@ -10443,6 +10519,26 @@ impl FormulaAggregateFunction {
                     reciprocal_sum += 1.0 / value;
                 }
                 Ok(values.len() as f64 / reciprocal_sum)
+            }
+            FormulaAggregateFunction::Lcm => {
+                if values.is_empty() {
+                    return Err(FormulaEvalError::Value);
+                }
+                let mut result = 1_u64;
+                for value in values {
+                    let value = trunc_excel_nonnegative_integer(*value)?;
+                    if value == 0 {
+                        return Ok(0.0);
+                    }
+                    let next = (result / gcd_u64(result, value))
+                        .checked_mul(value)
+                        .ok_or(FormulaEvalError::Num)?;
+                    if next >= EXCEL_INTEGER_LIMIT {
+                        return Err(FormulaEvalError::Num);
+                    }
+                    result = next;
+                }
+                Ok(result as f64)
             }
             FormulaAggregateFunction::ModeSngl => {
                 let mut mode = None;
@@ -18616,6 +18712,140 @@ mod tests {
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_integer_math_helper_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B3".to_string())])
+                .expect("Range(B1:B3)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A25".to_string())],
+                )
+                .expect("Range(A1:A25)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        1,
+                        vec![
+                            OmValue::Number(24.0),
+                            OmValue::Number(36.0),
+                            OmValue::Number(60.0),
+                        ],
+                    )
+                    .expect("integer math source values"),
+                ),
+                &[],
+            )
+            .expect("set integer math source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        25,
+                        1,
+                        vec![
+                            OmValue::Text("=EVEN(1.5)".to_string()),
+                            OmValue::Text("=EVEN(3)".to_string()),
+                            OmValue::Text("=EVEN(2)".to_string()),
+                            OmValue::Text("=EVEN(-1)".to_string()),
+                            OmValue::Text("=EVEN(0)".to_string()),
+                            OmValue::Text("=ODD(1.5)".to_string()),
+                            OmValue::Text("=ODD(3)".to_string()),
+                            OmValue::Text("=ODD(2)".to_string()),
+                            OmValue::Text("=ODD(-2)".to_string()),
+                            OmValue::Text("=ODD(0)".to_string()),
+                            OmValue::Text("=GCD(24, 36)".to_string()),
+                            OmValue::Text("=GCD(B1:B3)".to_string()),
+                            OmValue::Text("=GCD(5, 2)".to_string()),
+                            OmValue::Text("=GCD(5.9, 2.9)".to_string()),
+                            OmValue::Text("=GCD(5, 0)".to_string()),
+                            OmValue::Text("=LCM(5, 2)".to_string()),
+                            OmValue::Text("=LCM(B1:B3)".to_string()),
+                            OmValue::Text("=LCM(5.9, 2.9)".to_string()),
+                            OmValue::Text("=LCM(5, 0)".to_string()),
+                            OmValue::Text("=GCD(-1, 2)".to_string()),
+                            OmValue::Text("=LCM(-1, 2)".to_string()),
+                            OmValue::Text("=GCD()".to_string()),
+                            OmValue::Text("=LCM()".to_string()),
+                            OmValue::Text("=GCD(9007199254740992)".to_string()),
+                            OmValue::Text("=LCM(9007199254740991, 2)".to_string()),
+                        ],
+                    )
+                    .expect("integer math formulas"),
+                ),
+                &[],
+            )
+            .expect("set integer math formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("integer math values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected integer math value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(2.0),
+                OmValue::Number(4.0),
+                OmValue::Number(2.0),
+                OmValue::Number(-2.0),
+                OmValue::Number(0.0),
+                OmValue::Number(3.0),
+                OmValue::Number(3.0),
+                OmValue::Number(3.0),
+                OmValue::Number(-3.0),
+                OmValue::Number(1.0),
+                OmValue::Number(12.0),
+                OmValue::Number(12.0),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(5.0),
+                OmValue::Number(10.0),
+                OmValue::Number(360.0),
+                OmValue::Number(10.0),
+                OmValue::Number(0.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
             ]
         );
     }

@@ -36,6 +36,8 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `QUOTIENT`
 - `MOD`
 - `SIGN`
+- `EVEN`
+- `ODD`
 - `FACT`
 - `FACTDOUBLE`
 - `COMBIN`
@@ -61,6 +63,8 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `RADIANS`
 - `ISEVEN`
 - `ISODD`
+- `GCD`
+- `LCM`
 
 ### Logical and control helpers
 
