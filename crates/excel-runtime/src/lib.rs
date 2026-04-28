@@ -11336,6 +11336,41 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 return Err(FormulaEvalError::Unsupported);
             }
         }
+        if name.eq_ignore_ascii_case("SUMXMY2")
+            || name.eq_ignore_ascii_case("SUMX2MY2")
+            || name.eq_ignore_ascii_case("SUMX2PY2")
+        {
+            self.skip_whitespace();
+            if self.consume_char(')') {
+                return Err(FormulaEvalError::Value);
+            }
+            let first_values = self.parse_aggregate_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            self.skip_whitespace();
+            let second_values = self.parse_aggregate_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            if first_values.len() != second_values.len() {
+                return Err(FormulaEvalError::NA);
+            }
+            let mut total = 0.0_f64;
+            for (first_value, second_value) in first_values.iter().zip(second_values.iter()) {
+                if name.eq_ignore_ascii_case("SUMXMY2") {
+                    let difference = first_value - second_value;
+                    total += difference * difference;
+                } else if name.eq_ignore_ascii_case("SUMX2MY2") {
+                    total += first_value * first_value - second_value * second_value;
+                } else {
+                    total += first_value * first_value + second_value * second_value;
+                }
+            }
+            return Ok(total);
+        }
         if name.eq_ignore_ascii_case("CORREL")
             || name.eq_ignore_ascii_case("PEARSON")
             || name.eq_ignore_ascii_case("COVAR")
@@ -15665,6 +15700,181 @@ mod tests {
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::NA),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_sumx_array_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let first_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A8".to_string())])
+                .expect("Range(A1:A8)"),
+        );
+        let second_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B8".to_string())])
+                .expect("Range(B1:B8)"),
+        );
+        let short_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1:C3".to_string())])
+                .expect("Range(C1:C3)"),
+        );
+        let error_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1".to_string())])
+                .expect("Range(D1)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("E1:E10".to_string())],
+                )
+                .expect("Range(E1:E10)"),
+        );
+
+        runtime
+            .dispatch_set(
+                first_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        8,
+                        1,
+                        vec![
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(9.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(8.0),
+                            OmValue::Number(7.0),
+                            OmValue::Number(5.0),
+                            OmValue::Text("ignored".to_string()),
+                        ],
+                    )
+                    .expect("first sumx values"),
+                ),
+                &[],
+            )
+            .expect("set first sumx values");
+        runtime
+            .dispatch_set(
+                second_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        8,
+                        1,
+                        vec![
+                            OmValue::Number(6.0),
+                            OmValue::Number(5.0),
+                            OmValue::Number(11.0),
+                            OmValue::Number(7.0),
+                            OmValue::Number(5.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(4.0),
+                            OmValue::Text("ignored".to_string()),
+                        ],
+                    )
+                    .expect("second sumx values"),
+                ),
+                &[],
+            )
+            .expect("set second sumx values");
+        runtime
+            .dispatch_set(
+                short_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        1,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Text("ignored".to_string()),
+                        ],
+                    )
+                    .expect("short sumx values"),
+                ),
+                &[],
+            )
+            .expect("set short sumx values");
+        runtime
+            .dispatch_set(
+                error_source,
+                "Formula",
+                OmValue::Text("=NA()".to_string()),
+                &[],
+            )
+            .expect("set error source formula");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        10,
+                        1,
+                        vec![
+                            OmValue::Text("=SUMXMY2(A1:A8, B1:B8)".to_string()),
+                            OmValue::Text("=SUMX2MY2(A1:A8, B1:B8)".to_string()),
+                            OmValue::Text("=SUMX2PY2(A1:A8, B1:B8)".to_string()),
+                            OmValue::Text("=SUMXMY2(2, 6)".to_string()),
+                            OmValue::Text("=SUMX2MY2(2, 6)".to_string()),
+                            OmValue::Text("=SUMX2PY2(2, 6)".to_string()),
+                            OmValue::Text("=SUMXMY2(A1:A8, C1:C3)".to_string()),
+                            OmValue::Text("=SUMX2PY2(C1:C3, B1:B8)".to_string()),
+                            OmValue::Text("=SUMXMY2(D1:D1, B1:B1)".to_string()),
+                            OmValue::Text("=SUMXMY2()".to_string()),
+                        ],
+                    )
+                    .expect("sumx formulas"),
+                ),
+                &[],
+            )
+            .expect("set sumx formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("sumx values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected sumx value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(79.0),
+                OmValue::Number(-55.0),
+                OmValue::Number(521.0),
+                OmValue::Number(16.0),
+                OmValue::Number(-32.0),
+                OmValue::Number(40.0),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::Value),
             ]
         );
     }

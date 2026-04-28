@@ -68,6 +68,9 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `PRODUCT`
 - `SUMSQ`
 - `SUMPRODUCT`
+- `SUMXMY2`
+- `SUMX2MY2`
+- `SUMX2PY2`
 - `MIN`
 - `MAX`
 - `MEDIAN`
