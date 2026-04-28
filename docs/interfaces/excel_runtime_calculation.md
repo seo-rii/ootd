@@ -193,6 +193,8 @@ Lookup notes:
 - `MONTH`
 - `DAY`
 - `DAYS`
+- `DAYS360`
+- `YEARFRAC`
 - `EDATE`
 - `EOMONTH`
 - `DATEVALUE`
@@ -209,6 +211,8 @@ Date/time notes:
 
 - Date helpers use Excel's 1900 date system, including the compatibility serial `60` for `1900-02-29`.
 - `DATE` supports month and day rollover, such as month `13` and day `0`.
+- `DAYS360` supports the U.S. (NASD) and European methods.
+- `YEARFRAC` supports bases `0` through `4`, with basis `0`/`4` using the matching 30/360 day-count variants.
 - `WEEKDAY` supports return types `1`, `2`, `3`, and `11` through `17`; `WEEKNUM` supports return types `1`, `2`, `11` through `17`, and ISO return type `21`.
 - `TIME` produces fractional-day serial values, with hour/minute/second rollover for non-negative arguments.
 - `DATEVALUE` supports ISO-like `yyyy-mm-dd`, `yyyy/m/d`, and numeric `m/d/yyyy` text.

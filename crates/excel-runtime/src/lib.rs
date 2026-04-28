@@ -8673,6 +8673,7 @@ enum FormulaScalarFunction {
     Date,
     Day,
     Days,
+    Days360,
     Degrees,
     EDate,
     EOMonth,
@@ -8724,6 +8725,7 @@ enum FormulaScalarFunction {
     Weekday,
     WeekNum,
     Year,
+    YearFrac,
 }
 
 impl FormulaScalarFunction {
@@ -8778,6 +8780,8 @@ impl FormulaScalarFunction {
             Some(Self::Day)
         } else if name.eq_ignore_ascii_case("DAYS") {
             Some(Self::Days)
+        } else if name.eq_ignore_ascii_case("DAYS360") {
+            Some(Self::Days360)
         } else if name.eq_ignore_ascii_case("DEGREES") {
             Some(Self::Degrees)
         } else if name.eq_ignore_ascii_case("EDATE") {
@@ -8880,6 +8884,8 @@ impl FormulaScalarFunction {
             Some(Self::WeekNum)
         } else if name.eq_ignore_ascii_case("YEAR") {
             Some(Self::Year)
+        } else if name.eq_ignore_ascii_case("YEARFRAC") {
+            Some(Self::YearFrac)
         } else {
             None
         }
@@ -8916,6 +8922,96 @@ impl FormulaScalarFunction {
             let jan4_weekday = iso_weekday_from_days(jan4);
             let week1_monday = jan4 - (jan4_weekday - 1);
             Ok((current_monday - week1_monday).div_euclid(7) + 1)
+        };
+        let days_in_excel_year = |year: i64| -> f64 {
+            (1..=12)
+                .map(|month| days_in_excel_month(year, month))
+                .sum::<u32>() as f64
+        };
+        let serial_to_next_year = |year: i64| -> Result<i64, FormulaEvalError> {
+            formula_date_serial_from_args((year + 1) as f64, 1.0, 1.0).map(|value| value as i64)
+        };
+        let serial_to_year_start = |year: i64| -> Result<i64, FormulaEvalError> {
+            formula_date_serial_from_args(year as f64, 1.0, 1.0).map(|value| value as i64)
+        };
+        let days360 =
+            |start_serial: i64, end_serial: i64, european: bool| -> Result<i64, FormulaEvalError> {
+                let (start_serial, end_serial, sign) = if start_serial > end_serial {
+                    (end_serial, start_serial, -1)
+                } else {
+                    (start_serial, end_serial, 1)
+                };
+                let (start_year, start_month, start_day) =
+                    formula_ymd_from_serial(start_serial as f64)?;
+                let (mut end_year, mut end_month, mut end_day) =
+                    formula_ymd_from_serial(end_serial as f64)?;
+                let mut start_day = start_day;
+                if european {
+                    if start_day == 31 {
+                        start_day = 30;
+                    }
+                    if end_day == 31 {
+                        end_day = 30;
+                    }
+                } else {
+                    if start_day == 31 {
+                        start_day = 30;
+                    }
+                    if end_day == 31 {
+                        if start_day < 30 {
+                            end_day = 1;
+                            if end_month == 12 {
+                                end_year += 1;
+                                end_month = 1;
+                            } else {
+                                end_month += 1;
+                            }
+                        } else {
+                            end_day = 30;
+                        }
+                    }
+                }
+                Ok(sign
+                    * ((end_year - start_year) * 360
+                        + (i64::from(end_month) - i64::from(start_month)) * 30
+                        + i64::from(end_day)
+                        - i64::from(start_day)))
+            };
+        let yearfrac_actual_actual =
+            |start_serial: i64, end_serial: i64| -> Result<f64, FormulaEvalError> {
+                if start_serial == end_serial {
+                    return Ok(0.0);
+                }
+                let (start_serial, end_serial, sign) = if start_serial > end_serial {
+                    (end_serial, start_serial, -1.0)
+                } else {
+                    (start_serial, end_serial, 1.0)
+                };
+                let (start_year, _, _) = formula_ymd_from_serial(start_serial as f64)?;
+                let (end_year, _, _) = formula_ymd_from_serial(end_serial as f64)?;
+                if start_year == end_year {
+                    return Ok(
+                        sign * (end_serial - start_serial) as f64 / days_in_excel_year(start_year)
+                    );
+                }
+                let mut total = (serial_to_next_year(start_year)? - start_serial) as f64
+                    / days_in_excel_year(start_year);
+                for _ in (start_year + 1)..end_year {
+                    total += 1.0;
+                }
+                total += (end_serial - serial_to_year_start(end_year)?) as f64
+                    / days_in_excel_year(end_year);
+                Ok(sign * total)
+            };
+        let yearfrac_basis = |value: f64| -> Result<i64, FormulaEvalError> {
+            if !value.is_finite() {
+                return Err(FormulaEvalError::Value);
+            }
+            let basis = value.trunc();
+            if !(0.0..=4.0).contains(&basis) {
+                return Err(FormulaEvalError::Num);
+            }
+            Ok(basis as i64)
         };
         let normalize_zero = |value: f64| if value == 0.0 { 0.0 } else { value };
         let ceiling_floor_math = |number: f64,
@@ -9299,6 +9395,18 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Value);
                 };
                 Ok(end_date - start_date)
+            }
+            FormulaScalarFunction::Days360 => {
+                let (start_date, end_date, european) = match args {
+                    [start_date, end_date] => (*start_date, *end_date, false),
+                    [start_date, end_date, method] => (*start_date, *end_date, *method != 0.0),
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                Ok(days360(
+                    formula_serial_integer(start_date)?,
+                    formula_serial_integer(end_date)?,
+                    european,
+                )? as f64)
             }
             FormulaScalarFunction::Degrees => {
                 let [value] = args else {
@@ -9781,6 +9889,25 @@ impl FormulaScalarFunction {
                 };
                 let (year, _, _) = formula_ymd_from_serial(*serial)?;
                 Ok(year as f64)
+            }
+            FormulaScalarFunction::YearFrac => {
+                let (start_date, end_date, basis) = match args {
+                    [start_date, end_date] => (*start_date, *end_date, 0),
+                    [start_date, end_date, basis] => {
+                        (*start_date, *end_date, yearfrac_basis(*basis)?)
+                    }
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                let start_serial = formula_serial_integer(start_date)?;
+                let end_serial = formula_serial_integer(end_date)?;
+                match basis {
+                    0 => Ok(days360(start_serial, end_serial, false)? as f64 / 360.0),
+                    1 => yearfrac_actual_actual(start_serial, end_serial),
+                    2 => Ok((end_serial - start_serial) as f64 / 360.0),
+                    3 => Ok((end_serial - start_serial) as f64 / 365.0),
+                    4 => Ok(days360(start_serial, end_serial, true)? as f64 / 360.0),
+                    _ => Err(FormulaEvalError::Num),
+                }
             }
         }
     }
@@ -20981,6 +21108,122 @@ mod tests {
                 OmValue::Number(45382.0),
                 OmValue::Number(60.0),
                 OmValue::Number(29.0),
+                OmValue::Error(CellError::Num),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_date_day_count_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A18".to_string())],
+                )
+                .expect("Range(A1:A18)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        18,
+                        1,
+                        vec![
+                            OmValue::Text("=DAYS360(DATE(2024,1,1), DATE(2024,2,1))".to_string()),
+                            OmValue::Text("=DAYS360(DATE(2024,1,15), DATE(2024,1,31))".to_string()),
+                            OmValue::Text(
+                                "=DAYS360(DATE(2024,1,15), DATE(2024,1,31), TRUE)".to_string(),
+                            ),
+                            OmValue::Text("=DAYS360(DATE(2024,1,31), DATE(2024,2,29))".to_string()),
+                            OmValue::Text("=DAYS360(DATE(2024,3,1), DATE(2024,1,1))".to_string()),
+                            OmValue::Text("=YEARFRAC(DATE(2024,1,1), DATE(2024,7,1))".to_string()),
+                            OmValue::Text(
+                                "=YEARFRAC(DATE(2024,1,1), DATE(2024,7,1), 1)".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=YEARFRAC(DATE(2024,1,1), DATE(2024,7,1), 2)".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=YEARFRAC(DATE(2024,1,1), DATE(2024,7,1), 3)".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=YEARFRAC(DATE(2024,1,1), DATE(2024,7,1), 4)".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=YEARFRAC(DATE(2024,1,1), DATE(2025,1,1), 1)".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=YEARFRAC(DATE(2025,1,1), DATE(2024,1,1), 1)".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=YEARFRAC(DATE(2024,1,1), DATE(2024,7,1), 3.9)".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=YEARFRAC(DATE(2024,1,1), DATE(2024,7,1), -1)".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=YEARFRAC(DATE(2024,1,1), DATE(2024,7,1), 5)".to_string(),
+                            ),
+                            OmValue::Text("=DAYS360(DATE(2024,1,1))".to_string()),
+                            OmValue::Text("=YEARFRAC(DATE(2024,1,1))".to_string()),
+                            OmValue::Text("=DAYS360(DATE(10000,1,1), DATE(2024,1,1))".to_string()),
+                        ],
+                    )
+                    .expect("date day count formulas"),
+                ),
+                &[],
+            )
+            .expect("set date day count formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("date day count values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected date day count value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(30.0),
+                OmValue::Number(16.0),
+                OmValue::Number(15.0),
+                OmValue::Number(29.0),
+                OmValue::Number(-60.0),
+                OmValue::Number(0.5),
+                OmValue::Number(182.0 / 366.0),
+                OmValue::Number(182.0 / 360.0),
+                OmValue::Number(182.0 / 365.0),
+                OmValue::Number(0.5),
+                OmValue::Number(1.0),
+                OmValue::Number(-1.0),
+                OmValue::Number(182.0 / 365.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Num),
             ]
         );
