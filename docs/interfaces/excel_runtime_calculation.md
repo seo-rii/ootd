@@ -119,8 +119,11 @@ Logical notes:
 - `SUMX2PY2`
 - `MIN`
 - `MAX`
+- `MINA`
+- `MAXA`
 - `MEDIAN`
 - `AVERAGE`
+- `AVERAGEA`
 - `GEOMEAN`
 - `HARMEAN`
 - `MODE`
@@ -132,10 +135,14 @@ Logical notes:
 - `VAR.P`
 - `VAR.S`
 - `VARP`
+- `VARA`
+- `VARPA`
 - `STDEV`
 - `STDEV.P`
 - `STDEV.S`
 - `STDEVP`
+- `STDEVA`
+- `STDEVPA`
 - `CORREL`
 - `PEARSON`
 - `COVAR`

@@ -12192,6 +12192,16 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("MAXIFS") {
             return self.parse_maxifs_function();
         }
+        if name.eq_ignore_ascii_case("AVERAGEA")
+            || name.eq_ignore_ascii_case("MINA")
+            || name.eq_ignore_ascii_case("MAXA")
+            || name.eq_ignore_ascii_case("VARA")
+            || name.eq_ignore_ascii_case("VARPA")
+            || name.eq_ignore_ascii_case("STDEVA")
+            || name.eq_ignore_ascii_case("STDEVPA")
+        {
+            return self.parse_aggregate_a_function(name);
+        }
         if name.eq_ignore_ascii_case("SUMPRODUCT") {
             let mut arguments: Vec<(u32, u32, Vec<f64>)> = Vec::new();
             let finish = |arguments: &[(u32, u32, Vec<f64>)]| -> Result<f64, FormulaEvalError> {
@@ -13928,6 +13938,58 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
     }
 
+    fn parse_aggregate_a_function(&mut self, name: &str) -> Result<f64, FormulaEvalError> {
+        let mut values = Vec::new();
+        loop {
+            self.skip_whitespace();
+            if self.consume_char(')') {
+                break;
+            }
+            values.extend(self.parse_aggregate_a_argument()?);
+            self.skip_whitespace();
+            if self.consume_char(',') {
+                continue;
+            }
+            if self.consume_char(')') {
+                break;
+            }
+            return Err(FormulaEvalError::Unsupported);
+        }
+        if name.eq_ignore_ascii_case("MINA") {
+            return Ok(values.iter().copied().reduce(f64::min).unwrap_or(0.0));
+        }
+        if name.eq_ignore_ascii_case("MAXA") {
+            return Ok(values.iter().copied().reduce(f64::max).unwrap_or(0.0));
+        }
+        if values.is_empty() {
+            return Err(FormulaEvalError::Div0);
+        }
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        if name.eq_ignore_ascii_case("AVERAGEA") {
+            return Ok(mean);
+        }
+        let deviation_sum = values
+            .iter()
+            .map(|value| {
+                let deviation = value - mean;
+                deviation * deviation
+            })
+            .sum::<f64>();
+        if name.eq_ignore_ascii_case("VARPA") {
+            return Ok(deviation_sum / values.len() as f64);
+        }
+        if name.eq_ignore_ascii_case("STDEVPA") {
+            return Ok((deviation_sum / values.len() as f64).sqrt());
+        }
+        if values.len() < 2 {
+            return Err(FormulaEvalError::Div0);
+        }
+        if name.eq_ignore_ascii_case("VARA") {
+            return Ok(deviation_sum / (values.len() - 1) as f64);
+        }
+        Ok((deviation_sum / (values.len() - 1) as f64).sqrt())
+    }
+
     fn parse_scalar_function(
         &mut self,
         function: FormulaScalarFunction,
@@ -14079,6 +14141,42 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         self.index = checkpoint;
         Ok(vec![self.parse_comparison()?])
+    }
+
+    fn parse_aggregate_a_argument(&mut self) -> Result<Vec<f64>, FormulaEvalError> {
+        let checkpoint = self.index;
+        if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
+            self.index = next_index;
+            self.skip_whitespace();
+            if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
+                let mut values = Vec::new();
+                for row in rect.row_first..=rect.row_last {
+                    for col in rect.col_first..=rect.col_last {
+                        match self
+                            .evaluator
+                            .cell_value_or_blank(target_sheet_id, row, col)?
+                        {
+                            CellValue::Blank => {}
+                            CellValue::Bool(value) => values.push(if value { 1.0 } else { 0.0 }),
+                            CellValue::Number(value) => values.push(value),
+                            CellValue::Text(_) => values.push(0.0),
+                            CellValue::Error(error) => {
+                                return Err(formula_eval_error_from_cell_error(error));
+                            }
+                        }
+                    }
+                }
+                return Ok(values);
+            }
+        }
+        self.index = checkpoint;
+        let value = self.parse_value_probe_argument()?;
+        match value {
+            FormulaValueProbe::Blank | FormulaValueProbe::Text(_) => Ok(vec![0.0]),
+            FormulaValueProbe::Bool(value) => Ok(vec![if value { 1.0 } else { 0.0 }]),
+            FormulaValueProbe::Number(value) => Ok(vec![value]),
+            FormulaValueProbe::Error(error) => Err(error),
+        }
     }
 
     fn parse_optional_holidays_tail(&mut self) -> Result<Vec<i64>, FormulaEvalError> {
@@ -19696,6 +19794,112 @@ mod tests {
                 OmValue::Number(3.0),
                 OmValue::Number(5.0),
                 OmValue::Number(1.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_aggregate_a_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A5".to_string())])
+                .expect("Range(A1:A5)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("B1:B10".to_string())],
+                )
+                .expect("Range(B1:B10)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        5,
+                        1,
+                        vec![
+                            OmValue::Number(2.0),
+                            OmValue::Text("text".to_string()),
+                            OmValue::Bool(false),
+                            OmValue::Bool(true),
+                            OmValue::Empty,
+                        ],
+                    )
+                    .expect("aggregate A source values"),
+                ),
+                &[],
+            )
+            .expect("set aggregate A source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        10,
+                        1,
+                        vec![
+                            OmValue::Text("=AVERAGEA(A1:A5)".to_string()),
+                            OmValue::Text("=MINA(A1:A5)".to_string()),
+                            OmValue::Text("=MAXA(A1:A5)".to_string()),
+                            OmValue::Text("=VARA(A1:A5)".to_string()),
+                            OmValue::Text("=VARPA(A1:A5)".to_string()),
+                            OmValue::Text("=STDEVA(A1:A5)".to_string()),
+                            OmValue::Text("=STDEVPA(A1:A5)".to_string()),
+                            OmValue::Text(r#"=AVERAGEA(TRUE, FALSE, "x", 2)"#.to_string()),
+                            OmValue::Text(r#"=MINA("x", TRUE)"#.to_string()),
+                            OmValue::Text("=STDEVA(5)".to_string()),
+                        ],
+                    )
+                    .expect("aggregate A formulas"),
+                ),
+                &[],
+            )
+            .expect("set aggregate A formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("aggregate A values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected aggregate A value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(0.75),
+                OmValue::Number(0.0),
+                OmValue::Number(2.0),
+                OmValue::Number(2.75 / 3.0),
+                OmValue::Number(2.75 / 4.0),
+                OmValue::Number((2.75_f64 / 3.0).sqrt()),
+                OmValue::Number((2.75_f64 / 4.0).sqrt()),
+                OmValue::Number(0.75),
+                OmValue::Number(0.0),
+                OmValue::Error(CellError::Div0),
             ]
         );
     }
