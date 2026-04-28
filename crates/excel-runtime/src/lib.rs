@@ -11958,6 +11958,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 0.0
             });
         }
+        if name.eq_ignore_ascii_case("DATEDIF") {
+            return self.parse_datedif_function();
+        }
         if let Some(function) = FormulaScalarFunction::from_name(name) {
             return self.parse_scalar_function(function);
         }
@@ -13129,6 +13132,80 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         Ok(self
             .evaluator
             .countif_values_in_rect(sheet_id, rect, &criteria)? as f64)
+    }
+
+    fn parse_datedif_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let start_serial = formula_serial_integer(self.parse_comparison()?)?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let end_serial = formula_serial_integer(self.parse_comparison()?)?;
+        if start_serial > end_serial {
+            return Err(FormulaEvalError::Num);
+        }
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let unit = self.parse_text_value_argument()?.to_ascii_uppercase();
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let (start_year, start_month, start_day) = formula_ymd_from_serial(start_serial as f64)?;
+        let (end_year, end_month, end_day) = formula_ymd_from_serial(end_serial as f64)?;
+        match unit.as_str() {
+            "D" => Ok((end_serial - start_serial) as f64),
+            "Y" => {
+                let mut years = end_year - start_year;
+                if (end_month, end_day) < (start_month, start_day) {
+                    years -= 1;
+                }
+                Ok(years as f64)
+            }
+            "M" | "YM" => {
+                let mut months =
+                    (end_year - start_year) * 12 + i64::from(end_month) - i64::from(start_month);
+                if end_day < start_day {
+                    months -= 1;
+                }
+                if unit == "YM" {
+                    months = months.rem_euclid(12);
+                }
+                Ok(months as f64)
+            }
+            "MD" => {
+                if end_day >= start_day {
+                    return Ok(f64::from(end_day - start_day));
+                }
+                let (previous_month_year, previous_month) = normalize_year_month(
+                    end_year,
+                    i64::from(end_month)
+                        .checked_sub(1)
+                        .ok_or(FormulaEvalError::Num)?,
+                )?;
+                Ok(f64::from(
+                    days_in_excel_month(previous_month_year, previous_month) + end_day - start_day,
+                ))
+            }
+            "YD" => {
+                let mut anchor = formula_date_serial_from_args(
+                    end_year as f64,
+                    f64::from(start_month),
+                    f64::from(start_day),
+                )? as i64;
+                if anchor > end_serial {
+                    anchor = formula_date_serial_from_args(
+                        (end_year - 1) as f64,
+                        f64::from(start_month),
+                        f64::from(start_day),
+                    )? as i64;
+                }
+                Ok((end_serial - anchor) as f64)
+            }
+            _ => Err(FormulaEvalError::Num),
+        }
     }
 
     fn parse_if_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -22043,9 +22120,9 @@ mod tests {
                 .dispatch_invoke(
                     active_sheet,
                     "Range",
-                    &[OmValue::Text("A1:A18".to_string())],
+                    &[OmValue::Text("A1:A26".to_string())],
                 )
-                .expect("Range(A1:A18)"),
+                .expect("Range(A1:A26)"),
         );
 
         runtime
@@ -22054,7 +22131,7 @@ mod tests {
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        18,
+                        26,
                         1,
                         vec![
                             OmValue::Text("=DAYS360(DATE(2024,1,1), DATE(2024,2,1))".to_string()),
@@ -22095,6 +22172,30 @@ mod tests {
                             OmValue::Text("=DAYS360(DATE(2024,1,1))".to_string()),
                             OmValue::Text("=YEARFRAC(DATE(2024,1,1))".to_string()),
                             OmValue::Text("=DAYS360(DATE(10000,1,1), DATE(2024,1,1))".to_string()),
+                            OmValue::Text(
+                                r#"=DATEDIF(DATE(2020,1,15), DATE(2021,3,20), "Y")"#.to_string(),
+                            ),
+                            OmValue::Text(
+                                r#"=DATEDIF(DATE(2020,1,15), DATE(2021,3,20), "M")"#.to_string(),
+                            ),
+                            OmValue::Text(
+                                r#"=DATEDIF(DATE(2020,1,15), DATE(2021,3,20), "D")"#.to_string(),
+                            ),
+                            OmValue::Text(
+                                r#"=DATEDIF(DATE(2020,1,15), DATE(2021,3,20), "MD")"#.to_string(),
+                            ),
+                            OmValue::Text(
+                                r#"=DATEDIF(DATE(2020,1,15), DATE(2021,3,20), "YM")"#.to_string(),
+                            ),
+                            OmValue::Text(
+                                r#"=DATEDIF(DATE(2020,1,15), DATE(2021,3,20), "YD")"#.to_string(),
+                            ),
+                            OmValue::Text(
+                                r#"=DATEDIF(DATE(2021,1,1), DATE(2020,1,1), "D")"#.to_string(),
+                            ),
+                            OmValue::Text(
+                                r#"=DATEDIF(DATE(2020,1,1), DATE(2021,1,1), "BAD")"#.to_string(),
+                            ),
                         ],
                     )
                     .expect("date day count formulas"),
@@ -22133,6 +22234,14 @@ mod tests {
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Num),
+                OmValue::Number(1.0),
+                OmValue::Number(14.0),
+                OmValue::Number(430.0),
+                OmValue::Number(5.0),
+                OmValue::Number(2.0),
+                OmValue::Number(64.0),
+                OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
             ]
         );

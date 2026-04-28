@@ -209,6 +209,7 @@ Lookup notes:
 - `MONTH`
 - `DAY`
 - `DAYS`
+- `DATEDIF`
 - `DAYS360`
 - `YEARFRAC`
 - `EDATE`
