@@ -11053,6 +11053,81 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("MAXIFS") {
             return self.parse_maxifs_function();
         }
+        if name.eq_ignore_ascii_case("SUMPRODUCT") {
+            let mut arguments: Vec<(u32, u32, Vec<f64>)> = Vec::new();
+            let finish = |arguments: &[(u32, u32, Vec<f64>)]| -> Result<f64, FormulaEvalError> {
+                let Some((base_height, base_width, first_values)) = arguments.first() else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if arguments
+                    .iter()
+                    .any(|(height, width, _)| height != base_height || width != base_width)
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                let mut total = 0.0_f64;
+                for index in 0..first_values.len() {
+                    let mut product = 1.0;
+                    for (_, _, values) in arguments {
+                        product *= values[index];
+                    }
+                    total += product;
+                }
+                if total.is_finite() {
+                    Ok(total)
+                } else {
+                    Err(FormulaEvalError::Num)
+                }
+            };
+            loop {
+                self.skip_whitespace();
+                if self.consume_char(')') {
+                    return finish(arguments.as_slice());
+                }
+
+                let checkpoint = self.index;
+                if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
+                    self.index = next_index;
+                    self.skip_whitespace();
+                    if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
+                        let mut values =
+                            Vec::with_capacity((rect.width() * rect.height()) as usize);
+                        for row in rect.row_first..=rect.row_last {
+                            for col in rect.col_first..=rect.col_last {
+                                match self.evaluator.cell_value_or_blank(
+                                    target_sheet_id,
+                                    row,
+                                    col,
+                                )? {
+                                    CellValue::Number(number) => values.push(number),
+                                    CellValue::Error(error) => {
+                                        return Err(formula_eval_error_from_cell_error(error));
+                                    }
+                                    CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {
+                                        values.push(0.0);
+                                    }
+                                }
+                            }
+                        }
+                        arguments.push((rect.height(), rect.width(), values));
+                    } else {
+                        self.index = checkpoint;
+                        arguments.push((1, 1, vec![self.parse_comparison()?]));
+                    }
+                } else {
+                    arguments.push((1, 1, vec![self.parse_comparison()?]));
+                }
+
+                self.skip_whitespace();
+                if self.consume_char(',') {
+                    continue;
+                }
+                if self.consume_char(')') {
+                    return finish(arguments.as_slice());
+                }
+                return Err(FormulaEvalError::Unsupported);
+            }
+        }
         if name.eq_ignore_ascii_case("LARGE") || name.eq_ignore_ascii_case("SMALL") {
             let mut values = self.parse_aggregate_argument()?;
             self.skip_whitespace();
@@ -15060,6 +15135,141 @@ mod tests {
                 OmValue::Number(24.0),
                 OmValue::Number(2.0),
                 OmValue::Number(2.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_sumproduct_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let first_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B2".to_string())])
+                .expect("Range(A1:B2)"),
+        );
+        let second_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1:D2".to_string())])
+                .expect("Range(C1:D2)"),
+        );
+        let error_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E1".to_string())])
+                .expect("Range(E1)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("F1:F8".to_string())])
+                .expect("Range(F1:F8)"),
+        );
+
+        runtime
+            .dispatch_set(
+                first_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        2,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(4.0),
+                        ],
+                    )
+                    .expect("first sumproduct values"),
+                ),
+                &[],
+            )
+            .expect("set first sumproduct values");
+        runtime
+            .dispatch_set(
+                second_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        2,
+                        vec![
+                            OmValue::Number(5.0),
+                            OmValue::Number(6.0),
+                            OmValue::Number(7.0),
+                            OmValue::Text("ignored".to_string()),
+                        ],
+                    )
+                    .expect("second sumproduct values"),
+                ),
+                &[],
+            )
+            .expect("set second sumproduct values");
+        runtime
+            .dispatch_set(
+                error_source,
+                "Formula",
+                OmValue::Text("=NA()".to_string()),
+                &[],
+            )
+            .expect("set error source formula");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        8,
+                        1,
+                        vec![
+                            OmValue::Text("=SUMPRODUCT(A1:B2, C1:D2)".to_string()),
+                            OmValue::Text("=SUMPRODUCT(A1:B2)".to_string()),
+                            OmValue::Text("=SUMPRODUCT(A1:A2, C1:C2)".to_string()),
+                            OmValue::Text("=SUMPRODUCT(2, 3)".to_string()),
+                            OmValue::Text("=SUMPRODUCT(A1:B2, C1:C1)".to_string()),
+                            OmValue::Text("=SUMPRODUCT()".to_string()),
+                            OmValue::Text("=SUMPRODUCT(A1:B2, 2)".to_string()),
+                            OmValue::Text("=SUMPRODUCT(E1:E1, A1:A1)".to_string()),
+                        ],
+                    )
+                    .expect("sumproduct formulas"),
+                ),
+                &[],
+            )
+            .expect("set sumproduct formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("sumproduct values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected sumproduct value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(38.0),
+                OmValue::Number(10.0),
+                OmValue::Number(26.0),
+                OmValue::Number(6.0),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::NA),
             ]
         );
     }

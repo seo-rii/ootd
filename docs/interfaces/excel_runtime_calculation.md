@@ -66,6 +66,7 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 
 - `SUM`
 - `PRODUCT`
+- `SUMPRODUCT`
 - `MIN`
 - `MAX`
 - `MEDIAN`
@@ -78,6 +79,10 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `COUNT`
 - `COUNTA`
 - `COUNTBLANK`
+
+Aggregate notes:
+
+- `SUMPRODUCT` supports scalar and rectangular range arguments with matching shapes; non-numeric range entries are treated as zero and error cells are propagated.
 
 ### Criteria aggregate helpers
 
