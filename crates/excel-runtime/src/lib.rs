@@ -8659,7 +8659,9 @@ enum FormulaScalarFunction {
     Atan,
     Atan2,
     Atanh,
+    Ceiling,
     CeilingMath,
+    CeilingPrecise,
     Combin,
     Combina,
     Cos,
@@ -8678,9 +8680,12 @@ enum FormulaScalarFunction {
     Exp,
     Fact,
     FactDouble,
+    Floor,
     FloorMath,
+    FloorPrecise,
     Hour,
     If,
+    IsoCeiling,
     IsoWeekNum,
     IsEven,
     IsOdd,
@@ -8745,8 +8750,12 @@ impl FormulaScalarFunction {
             Some(Self::Atan2)
         } else if name.eq_ignore_ascii_case("ATANH") {
             Some(Self::Atanh)
+        } else if name.eq_ignore_ascii_case("CEILING") {
+            Some(Self::Ceiling)
         } else if name.eq_ignore_ascii_case("CEILING.MATH") {
             Some(Self::CeilingMath)
+        } else if name.eq_ignore_ascii_case("CEILING.PRECISE") {
+            Some(Self::CeilingPrecise)
         } else if name.eq_ignore_ascii_case("COMBIN") {
             Some(Self::Combin)
         } else if name.eq_ignore_ascii_case("COMBINA") {
@@ -8783,12 +8792,18 @@ impl FormulaScalarFunction {
             Some(Self::Fact)
         } else if name.eq_ignore_ascii_case("FACTDOUBLE") {
             Some(Self::FactDouble)
+        } else if name.eq_ignore_ascii_case("FLOOR") {
+            Some(Self::Floor)
         } else if name.eq_ignore_ascii_case("FLOOR.MATH") {
             Some(Self::FloorMath)
+        } else if name.eq_ignore_ascii_case("FLOOR.PRECISE") {
+            Some(Self::FloorPrecise)
         } else if name.eq_ignore_ascii_case("HOUR") {
             Some(Self::Hour)
         } else if name.eq_ignore_ascii_case("IF") {
             Some(Self::If)
+        } else if name.eq_ignore_ascii_case("ISO.CEILING") {
+            Some(Self::IsoCeiling)
         } else if name.eq_ignore_ascii_case("ISOWEEKNUM") {
             Some(Self::IsoWeekNum)
         } else if name.eq_ignore_ascii_case("ISEVEN") {
@@ -8943,6 +8958,65 @@ impl FormulaScalarFunction {
                 Err(FormulaEvalError::Num)
             }
         };
+        let ceiling_floor_legacy =
+            |number: f64, significance: f64, ceiling: bool| -> Result<f64, FormulaEvalError> {
+                if !number.is_finite() || !significance.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                if number == 0.0 {
+                    return Ok(0.0);
+                }
+                if significance == 0.0 {
+                    return Err(FormulaEvalError::Div0);
+                }
+                if number > 0.0 && significance < 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let multiple = significance.abs();
+                let quotient = number.abs() / multiple;
+                let magnitude = if number >= 0.0 {
+                    if ceiling {
+                        quotient.ceil() * multiple
+                    } else {
+                        quotient.floor() * multiple
+                    }
+                } else if ceiling == (significance < 0.0) {
+                    quotient.ceil() * multiple
+                } else {
+                    quotient.floor() * multiple
+                };
+                let value = if number.is_sign_negative() {
+                    -magnitude
+                } else {
+                    magnitude
+                };
+                if value.is_finite() {
+                    Ok(normalize_zero(value))
+                } else {
+                    Err(FormulaEvalError::Num)
+                }
+            };
+        let ceiling_floor_precise =
+            |number: f64, significance: f64, ceiling: bool| -> Result<f64, FormulaEvalError> {
+                if !number.is_finite() || !significance.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                let significance = significance.abs();
+                if number == 0.0 || significance == 0.0 {
+                    return Ok(0.0);
+                }
+                let quotient = number / significance;
+                let value = if ceiling {
+                    quotient.ceil() * significance
+                } else {
+                    quotient.floor() * significance
+                };
+                if value.is_finite() {
+                    Ok(normalize_zero(value))
+                } else {
+                    Err(FormulaEvalError::Num)
+                }
+            };
         let trunc_nonnegative_integer = |value: f64| -> Result<u64, FormulaEvalError> {
             if !value.is_finite() {
                 return Err(FormulaEvalError::Value);
@@ -9114,6 +9188,12 @@ impl FormulaScalarFunction {
                 }
                 checked_numeric_result(value.atanh())
             }
+            FormulaScalarFunction::Ceiling => {
+                let [number, significance] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                ceiling_floor_legacy(*number, *significance, true)
+            }
             FormulaScalarFunction::CeilingMath => {
                 let (number, significance, mode) = match args {
                     [number] => (*number, 1.0, 0.0),
@@ -9122,6 +9202,14 @@ impl FormulaScalarFunction {
                     _ => return Err(FormulaEvalError::Value),
                 };
                 ceiling_floor_math(number, significance, mode, true)
+            }
+            FormulaScalarFunction::CeilingPrecise => {
+                let (number, significance) = match args {
+                    [number] => (*number, 1.0),
+                    [number, significance] => (*number, *significance),
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                ceiling_floor_precise(number, significance, true)
             }
             FormulaScalarFunction::Combin => {
                 let [number, chosen] = args else {
@@ -9274,6 +9362,12 @@ impl FormulaScalarFunction {
                 }
                 Ok(total)
             }
+            FormulaScalarFunction::Floor => {
+                let [number, significance] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                ceiling_floor_legacy(*number, *significance, false)
+            }
             FormulaScalarFunction::FloorMath => {
                 let (number, significance, mode) = match args {
                     [number] => (*number, 1.0, 0.0),
@@ -9282,6 +9376,14 @@ impl FormulaScalarFunction {
                     _ => return Err(FormulaEvalError::Value),
                 };
                 ceiling_floor_math(number, significance, mode, false)
+            }
+            FormulaScalarFunction::FloorPrecise => {
+                let (number, significance) = match args {
+                    [number] => (*number, 1.0),
+                    [number, significance] => (*number, *significance),
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                ceiling_floor_precise(number, significance, false)
             }
             FormulaScalarFunction::Hour => {
                 let [serial] = args else {
@@ -9298,6 +9400,14 @@ impl FormulaScalarFunction {
                 } else {
                     *false_value
                 })
+            }
+            FormulaScalarFunction::IsoCeiling => {
+                let (number, significance) = match args {
+                    [number] => (*number, 1.0),
+                    [number, significance] => (*number, *significance),
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                ceiling_floor_precise(number, significance, true)
             }
             FormulaScalarFunction::IsoWeekNum => {
                 let [serial] = args else {
@@ -18769,6 +18879,122 @@ mod tests {
                 OmValue::Number(4.0),
                 OmValue::Number(-5.0),
                 OmValue::Number(-4.0),
+                OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_rounding_compatibility_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A28".to_string())],
+                )
+                .expect("Range(A1:A28)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        28,
+                        1,
+                        vec![
+                            OmValue::Text("=CEILING(2.5, 1)".to_string()),
+                            OmValue::Text("=CEILING(-2.5, -2)".to_string()),
+                            OmValue::Text("=CEILING(-2.5, 2)".to_string()),
+                            OmValue::Text("=CEILING(0.234, 0.01)".to_string()),
+                            OmValue::Text("=CEILING(2.5, -2)".to_string()),
+                            OmValue::Text("=CEILING(2.5, 0)".to_string()),
+                            OmValue::Text("=CEILING(0, 0)".to_string()),
+                            OmValue::Text("=FLOOR(3.7, 2)".to_string()),
+                            OmValue::Text("=FLOOR(-2.5, -2)".to_string()),
+                            OmValue::Text("=FLOOR(-2.5, 2)".to_string()),
+                            OmValue::Text("=FLOOR(0.234, 0.01)".to_string()),
+                            OmValue::Text("=FLOOR(2.5, -2)".to_string()),
+                            OmValue::Text("=FLOOR(2.5, 0)".to_string()),
+                            OmValue::Text("=FLOOR(0, 0)".to_string()),
+                            OmValue::Text("=CEILING.PRECISE(4.3)".to_string()),
+                            OmValue::Text("=CEILING.PRECISE(-4.3)".to_string()),
+                            OmValue::Text("=CEILING.PRECISE(4.3, -2)".to_string()),
+                            OmValue::Text("=CEILING.PRECISE(-4.3, -2)".to_string()),
+                            OmValue::Text("=FLOOR.PRECISE(3.2)".to_string()),
+                            OmValue::Text("=FLOOR.PRECISE(-3.2)".to_string()),
+                            OmValue::Text("=FLOOR.PRECISE(3.2, -1)".to_string()),
+                            OmValue::Text("=FLOOR.PRECISE(-3.2, -1)".to_string()),
+                            OmValue::Text("=ISO.CEILING(4.3, 2)".to_string()),
+                            OmValue::Text("=ISO.CEILING(-4.3, 2)".to_string()),
+                            OmValue::Text("=CEILING.PRECISE(4.3, 0)".to_string()),
+                            OmValue::Text("=FLOOR.PRECISE(4.3, 0)".to_string()),
+                            OmValue::Text("=CEILING(1)".to_string()),
+                            OmValue::Text("=FLOOR.PRECISE()".to_string()),
+                        ],
+                    )
+                    .expect("rounding compatibility formulas"),
+                ),
+                &[],
+            )
+            .expect("set rounding compatibility formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("rounding compatibility values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected rounding compatibility value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(3.0),
+                OmValue::Number(-4.0),
+                OmValue::Number(-2.0),
+                OmValue::Number(0.24),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Div0),
+                OmValue::Number(0.0),
+                OmValue::Number(2.0),
+                OmValue::Number(-2.0),
+                OmValue::Number(-4.0),
+                OmValue::Number(0.23),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Div0),
+                OmValue::Number(0.0),
+                OmValue::Number(5.0),
+                OmValue::Number(-4.0),
+                OmValue::Number(6.0),
+                OmValue::Number(-4.0),
+                OmValue::Number(3.0),
+                OmValue::Number(-4.0),
+                OmValue::Number(3.0),
+                OmValue::Number(-4.0),
+                OmValue::Number(6.0),
+                OmValue::Number(-4.0),
+                OmValue::Number(0.0),
+                OmValue::Number(0.0),
+                OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
             ]
         );

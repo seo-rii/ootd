@@ -30,8 +30,13 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `ROUNDUP`
 - `ROUNDDOWN`
 - `TRUNC`
+- `CEILING`
 - `CEILING.MATH`
+- `CEILING.PRECISE`
+- `ISO.CEILING`
+- `FLOOR`
 - `FLOOR.MATH`
+- `FLOOR.PRECISE`
 - `MROUND`
 - `QUOTIENT`
 - `MOD`
