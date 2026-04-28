@@ -11229,6 +11229,86 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 return Err(FormulaEvalError::Unsupported);
             }
         }
+        if name.eq_ignore_ascii_case("CORREL")
+            || name.eq_ignore_ascii_case("PEARSON")
+            || name.eq_ignore_ascii_case("COVAR")
+            || name.eq_ignore_ascii_case("COVARIANCE.P")
+            || name.eq_ignore_ascii_case("COVARIANCE.S")
+            || name.eq_ignore_ascii_case("SLOPE")
+            || name.eq_ignore_ascii_case("INTERCEPT")
+            || name.eq_ignore_ascii_case("RSQ")
+        {
+            self.skip_whitespace();
+            let first_values = self.parse_aggregate_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            self.skip_whitespace();
+            let second_values = self.parse_aggregate_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            if first_values.len() != second_values.len() {
+                return Err(FormulaEvalError::NA);
+            }
+            let count = first_values.len();
+            if count == 0 {
+                return if name.eq_ignore_ascii_case("CORREL")
+                    || name.eq_ignore_ascii_case("COVAR")
+                    || name.eq_ignore_ascii_case("COVARIANCE.P")
+                    || name.eq_ignore_ascii_case("COVARIANCE.S")
+                {
+                    Err(FormulaEvalError::Div0)
+                } else {
+                    Err(FormulaEvalError::NA)
+                };
+            }
+            if name.eq_ignore_ascii_case("COVARIANCE.S") && count < 2 {
+                return Err(FormulaEvalError::Div0);
+            }
+
+            let first_mean = first_values.iter().sum::<f64>() / count as f64;
+            let second_mean = second_values.iter().sum::<f64>() / count as f64;
+            let mut sum_first_second_deviation = 0.0_f64;
+            let mut sum_first_deviation_square = 0.0_f64;
+            let mut sum_second_deviation_square = 0.0_f64;
+            for (first_value, second_value) in first_values.iter().zip(second_values.iter()) {
+                let first_deviation = first_value - first_mean;
+                let second_deviation = second_value - second_mean;
+                sum_first_second_deviation += first_deviation * second_deviation;
+                sum_first_deviation_square += first_deviation * first_deviation;
+                sum_second_deviation_square += second_deviation * second_deviation;
+            }
+
+            if name.eq_ignore_ascii_case("COVAR") || name.eq_ignore_ascii_case("COVARIANCE.P") {
+                return Ok(sum_first_second_deviation / count as f64);
+            }
+            if name.eq_ignore_ascii_case("COVARIANCE.S") {
+                return Ok(sum_first_second_deviation / (count - 1) as f64);
+            }
+            if name.eq_ignore_ascii_case("SLOPE") || name.eq_ignore_ascii_case("INTERCEPT") {
+                if sum_second_deviation_square == 0.0 {
+                    return Err(FormulaEvalError::Div0);
+                }
+                let slope = sum_first_second_deviation / sum_second_deviation_square;
+                if name.eq_ignore_ascii_case("SLOPE") {
+                    return Ok(slope);
+                }
+                return Ok(first_mean - slope * second_mean);
+            }
+
+            let denominator = sum_first_deviation_square * sum_second_deviation_square;
+            if denominator == 0.0 {
+                return Err(FormulaEvalError::Div0);
+            }
+            let correlation = sum_first_second_deviation / denominator.sqrt();
+            if name.eq_ignore_ascii_case("RSQ") {
+                return Ok(correlation * correlation);
+            }
+            return Ok(correlation);
+        }
         if name.eq_ignore_ascii_case("PERCENTILE")
             || name.eq_ignore_ascii_case("PERCENTILE.INC")
             || name.eq_ignore_ascii_case("PERCENTILE.EXC")
@@ -15666,6 +15746,176 @@ mod tests {
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_paired_statistical_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let x_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A6".to_string())])
+                .expect("Range(A1:A6)"),
+        );
+        let y_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B6".to_string())])
+                .expect("Range(B1:B6)"),
+        );
+        let constant_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1:D5".to_string())])
+                .expect("Range(D1:D5)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("E1:E15".to_string())],
+                )
+                .expect("Range(E1:E15)"),
+        );
+
+        runtime
+            .dispatch_set(
+                x_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        6,
+                        1,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(5.0),
+                            OmValue::Text("ignored".to_string()),
+                        ],
+                    )
+                    .expect("x values"),
+                ),
+                &[],
+            )
+            .expect("set paired statistical x values");
+        runtime
+            .dispatch_set(
+                y_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        6,
+                        1,
+                        vec![
+                            OmValue::Number(2.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(5.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(5.0),
+                            OmValue::Text("ignored".to_string()),
+                        ],
+                    )
+                    .expect("y values"),
+                ),
+                &[],
+            )
+            .expect("set paired statistical y values");
+        runtime
+            .dispatch_set(
+                constant_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        5,
+                        1,
+                        vec![
+                            OmValue::Number(4.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(4.0),
+                        ],
+                    )
+                    .expect("constant values"),
+                ),
+                &[],
+            )
+            .expect("set paired statistical constant values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        15,
+                        1,
+                        vec![
+                            OmValue::Text("=CORREL(A1:A6, B1:B6)".to_string()),
+                            OmValue::Text("=PEARSON(A1:A6, B1:B6)".to_string()),
+                            OmValue::Text("=COVARIANCE.P(A1:A6, B1:B6)".to_string()),
+                            OmValue::Text("=COVAR(A1:A6, B1:B6)".to_string()),
+                            OmValue::Text("=COVARIANCE.S(A1:A6, B1:B6)".to_string()),
+                            OmValue::Text("=SLOPE(B1:B6, A1:A6)".to_string()),
+                            OmValue::Text("=INTERCEPT(B1:B6, A1:A6)".to_string()),
+                            OmValue::Text("=RSQ(B1:B6, A1:A6)".to_string()),
+                            OmValue::Text("=CORREL(A1:A5, A1:A5)".to_string()),
+                            OmValue::Text("=CORREL(A1:A6, D1:D5)".to_string()),
+                            OmValue::Text("=SLOPE(B1:B6, D1:D5)".to_string()),
+                            OmValue::Text("=COVARIANCE.P(A6, B6)".to_string()),
+                            OmValue::Text("=COVARIANCE.S(A1, B1)".to_string()),
+                            OmValue::Text("=CORREL(A1:A5, B1:B4)".to_string()),
+                            OmValue::Text("=RSQ(B1:B4, A1:A5)".to_string()),
+                        ],
+                    )
+                    .expect("paired statistical formulas"),
+                ),
+                &[],
+            )
+            .expect("set paired statistical formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("paired statistical values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected paired statistical value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(6.0 / 60.0_f64.sqrt()),
+                OmValue::Number(6.0 / 60.0_f64.sqrt()),
+                OmValue::Number(6.0 / 5.0),
+                OmValue::Number(6.0 / 5.0),
+                OmValue::Number(6.0 / 4.0),
+                OmValue::Number(6.0 / 10.0),
+                OmValue::Number(4.0 - (6.0 / 10.0) * 3.0),
+                OmValue::Number((6.0 / 60.0_f64.sqrt()) * (6.0 / 60.0_f64.sqrt())),
+                OmValue::Number(1.0),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::NA),
             ]
         );
     }

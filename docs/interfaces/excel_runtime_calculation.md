@@ -82,6 +82,14 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `STDEV.P`
 - `STDEV.S`
 - `STDEVP`
+- `CORREL`
+- `PEARSON`
+- `COVAR`
+- `COVARIANCE.P`
+- `COVARIANCE.S`
+- `SLOPE`
+- `INTERCEPT`
+- `RSQ`
 - `LARGE`
 - `SMALL`
 - `PERCENTILE`
