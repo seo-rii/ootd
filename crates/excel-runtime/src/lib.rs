@@ -8659,6 +8659,11 @@ enum FormulaScalarFunction {
     Atan,
     Atan2,
     Atanh,
+    BitAnd,
+    BitLShift,
+    BitOr,
+    BitRShift,
+    BitXor,
     Ceiling,
     CeilingMath,
     CeilingPrecise,
@@ -8675,6 +8680,7 @@ enum FormulaScalarFunction {
     Days,
     Days360,
     Degrees,
+    Delta,
     EDate,
     EOMonth,
     Even,
@@ -8684,6 +8690,7 @@ enum FormulaScalarFunction {
     Floor,
     FloorMath,
     FloorPrecise,
+    GeStep,
     Hour,
     If,
     IsoCeiling,
@@ -8752,6 +8759,16 @@ impl FormulaScalarFunction {
             Some(Self::Atan2)
         } else if name.eq_ignore_ascii_case("ATANH") {
             Some(Self::Atanh)
+        } else if name.eq_ignore_ascii_case("BITAND") {
+            Some(Self::BitAnd)
+        } else if name.eq_ignore_ascii_case("BITLSHIFT") {
+            Some(Self::BitLShift)
+        } else if name.eq_ignore_ascii_case("BITOR") {
+            Some(Self::BitOr)
+        } else if name.eq_ignore_ascii_case("BITRSHIFT") {
+            Some(Self::BitRShift)
+        } else if name.eq_ignore_ascii_case("BITXOR") {
+            Some(Self::BitXor)
         } else if name.eq_ignore_ascii_case("CEILING") {
             Some(Self::Ceiling)
         } else if name.eq_ignore_ascii_case("CEILING.MATH") {
@@ -8784,6 +8801,8 @@ impl FormulaScalarFunction {
             Some(Self::Days360)
         } else if name.eq_ignore_ascii_case("DEGREES") {
             Some(Self::Degrees)
+        } else if name.eq_ignore_ascii_case("DELTA") {
+            Some(Self::Delta)
         } else if name.eq_ignore_ascii_case("EDATE") {
             Some(Self::EDate)
         } else if name.eq_ignore_ascii_case("EOMONTH") {
@@ -8802,6 +8821,8 @@ impl FormulaScalarFunction {
             Some(Self::FloorMath)
         } else if name.eq_ignore_ascii_case("FLOOR.PRECISE") {
             Some(Self::FloorPrecise)
+        } else if name.eq_ignore_ascii_case("GESTEP") {
+            Some(Self::GeStep)
         } else if name.eq_ignore_ascii_case("HOUR") {
             Some(Self::Hour)
         } else if name.eq_ignore_ascii_case("IF") {
@@ -9284,6 +9305,60 @@ impl FormulaScalarFunction {
                 }
                 checked_numeric_result(value.atanh())
             }
+            FormulaScalarFunction::BitAnd => {
+                let [left, right] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                Ok((formula_bitwise_argument(*left)? & formula_bitwise_argument(*right)?) as f64)
+            }
+            FormulaScalarFunction::BitLShift => {
+                let [number, shift] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                let number = formula_bitwise_argument(*number)?;
+                let shift = formula_bit_shift_argument(*shift)?;
+                let value = if shift < 0 {
+                    number >> shift.unsigned_abs() as u32
+                } else {
+                    number
+                        .checked_shl(shift as u32)
+                        .ok_or(FormulaEvalError::Num)?
+                };
+                if value > ((1_u64 << 48) - 1) {
+                    return Err(FormulaEvalError::Num);
+                }
+                Ok(value as f64)
+            }
+            FormulaScalarFunction::BitOr => {
+                let [left, right] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                Ok((formula_bitwise_argument(*left)? | formula_bitwise_argument(*right)?) as f64)
+            }
+            FormulaScalarFunction::BitRShift => {
+                let [number, shift] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                let number = formula_bitwise_argument(*number)?;
+                let shift = formula_bit_shift_argument(*shift)?;
+                let value = if shift < 0 {
+                    number
+                        .checked_shl(shift.unsigned_abs() as u32)
+                        .ok_or(FormulaEvalError::Num)?
+                } else {
+                    number >> shift as u32
+                };
+                if value > ((1_u64 << 48) - 1) {
+                    return Err(FormulaEvalError::Num);
+                }
+                Ok(value as f64)
+            }
+            FormulaScalarFunction::BitXor => {
+                let [left, right] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                Ok((formula_bitwise_argument(*left)? ^ formula_bitwise_argument(*right)?) as f64)
+            }
             FormulaScalarFunction::Ceiling => {
                 let [number, significance] = args else {
                     return Err(FormulaEvalError::Value);
@@ -9419,6 +9494,14 @@ impl FormulaScalarFunction {
                     Err(FormulaEvalError::Num)
                 }
             }
+            FormulaScalarFunction::Delta => {
+                let (left, right) = match args {
+                    [left] => (*left, 0.0),
+                    [left, right] => (*left, *right),
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                Ok(if left == right { 1.0 } else { 0.0 })
+            }
             FormulaScalarFunction::EDate => {
                 let [serial, months] = args else {
                     return Err(FormulaEvalError::Value);
@@ -9492,6 +9575,14 @@ impl FormulaScalarFunction {
                     _ => return Err(FormulaEvalError::Value),
                 };
                 ceiling_floor_precise(number, significance, false)
+            }
+            FormulaScalarFunction::GeStep => {
+                let (number, step) = match args {
+                    [number] => (*number, 0.0),
+                    [number, step] => (*number, *step),
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                Ok(if number >= step { 1.0 } else { 0.0 })
             }
             FormulaScalarFunction::Hour => {
                 let [serial] = args else {
@@ -10161,6 +10252,7 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("LEFT")
         || name.eq_ignore_ascii_case("RIGHT")
         || name.eq_ignore_ascii_case("MID")
+        || name.eq_ignore_ascii_case("BASE")
         || name.eq_ignore_ascii_case("CHAR")
         || name.eq_ignore_ascii_case("CLEAN")
         || name.eq_ignore_ascii_case("T")
@@ -10200,6 +10292,31 @@ fn formula_integer_argument(value: f64) -> Result<i64, FormulaEvalError> {
         return Err(FormulaEvalError::Num);
     }
     Ok(value as i64)
+}
+
+fn formula_bitwise_argument(value: f64) -> Result<u64, FormulaEvalError> {
+    let value = formula_integer_argument(value)?;
+    let value = u64::try_from(value).map_err(|_| FormulaEvalError::Num)?;
+    if value > ((1_u64 << 48) - 1) {
+        return Err(FormulaEvalError::Num);
+    }
+    Ok(value)
+}
+
+fn formula_bit_shift_argument(value: f64) -> Result<i64, FormulaEvalError> {
+    let value = formula_integer_argument(value)?;
+    if !(-53..=53).contains(&value) {
+        return Err(FormulaEvalError::Num);
+    }
+    Ok(value)
+}
+
+fn formula_radix_argument(value: f64) -> Result<u32, FormulaEvalError> {
+    let value = formula_integer_argument(value)?;
+    if !(2..=36).contains(&value) {
+        return Err(FormulaEvalError::Num);
+    }
+    u32::try_from(value).map_err(|_| FormulaEvalError::Num)
 }
 
 fn formula_non_negative_count_argument(value: f64) -> Result<usize, FormulaEvalError> {
@@ -11915,6 +12032,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 FormulaValueProbe::Error(error) => Err(error),
             };
         }
+        if name.eq_ignore_ascii_case("DECIMAL") {
+            return self.parse_decimal_function();
+        }
         if name.eq_ignore_ascii_case("CODE") || name.eq_ignore_ascii_case("UNICODE") {
             return self.parse_character_code_function();
         }
@@ -12386,6 +12506,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("MID") {
             return self.parse_mid_text_function();
         }
+        if name.eq_ignore_ascii_case("BASE") {
+            return self.parse_base_text_function();
+        }
         if name.eq_ignore_ascii_case("CHAR") {
             return self.parse_character_text_function(false);
         }
@@ -12531,6 +12654,55 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         char::from_u32(code)
             .map(|ch| ch.to_string())
             .ok_or(FormulaEvalError::Value)
+    }
+
+    fn parse_base_text_function(&mut self) -> Result<String, FormulaEvalError> {
+        let number = formula_integer_argument(self.parse_comparison()?)?;
+        let number = u64::try_from(number).map_err(|_| FormulaEvalError::Num)?;
+        if number >= (1_u64 << 53) {
+            return Err(FormulaEvalError::Num);
+        }
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let radix = formula_radix_argument(self.parse_comparison()?)?;
+        self.skip_whitespace();
+        let min_length = if self.consume_char(')') {
+            0
+        } else {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let min_length = formula_integer_argument(self.parse_comparison()?)?;
+            if !(0..=255).contains(&min_length) {
+                return Err(FormulaEvalError::Num);
+            }
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            min_length as usize
+        };
+        let mut value = number;
+        let mut output = String::new();
+        loop {
+            let digit = (value % u64::from(radix)) as u32;
+            output.push(
+                char::from_digit(digit, radix)
+                    .expect("digit")
+                    .to_ascii_uppercase(),
+            );
+            value /= u64::from(radix);
+            if value == 0 {
+                break;
+            }
+        }
+        let mut output = output.chars().rev().collect::<String>();
+        if output.len() < min_length {
+            output = "0".repeat(min_length - output.len()) + output.as_str();
+        }
+        Ok(output)
     }
 
     fn parse_unary_text_function(
@@ -12760,6 +12932,34 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         } else {
             Err(FormulaEvalError::Value)
         }
+    }
+
+    fn parse_decimal_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let text = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let radix = formula_radix_argument(self.parse_comparison()?)?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let text = text.trim();
+        if text.is_empty() || text.len() > 255 {
+            return Err(FormulaEvalError::Num);
+        }
+        let mut total = 0.0_f64;
+        for ch in text.chars() {
+            let Some(digit) = ch.to_digit(radix) else {
+                return Err(FormulaEvalError::Num);
+            };
+            total = total * radix as f64 + digit as f64;
+            if !total.is_finite() {
+                return Err(FormulaEvalError::Num);
+            }
+        }
+        Ok(total)
     }
 
     fn parse_datevalue_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -19645,6 +19845,110 @@ mod tests {
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_engineering_math_helper_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A22".to_string())],
+                )
+                .expect("Range(A1:A22)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        22,
+                        1,
+                        vec![
+                            OmValue::Text("=BITAND(13, 11)".to_string()),
+                            OmValue::Text("=BITOR(13, 11)".to_string()),
+                            OmValue::Text("=BITXOR(13, 11)".to_string()),
+                            OmValue::Text("=BITLSHIFT(5, 2)".to_string()),
+                            OmValue::Text("=BITRSHIFT(20, 2)".to_string()),
+                            OmValue::Text("=BITLSHIFT(20, -2)".to_string()),
+                            OmValue::Text("=BITRSHIFT(5, -2)".to_string()),
+                            OmValue::Text("=BITAND(-1, 1)".to_string()),
+                            OmValue::Text("=BITLSHIFT(1, 54)".to_string()),
+                            OmValue::Text("=DELTA(5, 5)".to_string()),
+                            OmValue::Text("=DELTA(5, 4)".to_string()),
+                            OmValue::Text("=DELTA(0)".to_string()),
+                            OmValue::Text("=GESTEP(5, 4)".to_string()),
+                            OmValue::Text("=GESTEP(3, 4)".to_string()),
+                            OmValue::Text("=GESTEP(0)".to_string()),
+                            OmValue::Text("=BASE(31, 16)".to_string()),
+                            OmValue::Text("=BASE(5, 2, 8)".to_string()),
+                            OmValue::Text("=BASE(0, 36, 3)".to_string()),
+                            OmValue::Text("=BASE(-1, 2)".to_string()),
+                            OmValue::Text(r#"=DECIMAL("FF", 16)"#.to_string()),
+                            OmValue::Text(r#"=DECIMAL("1010", 2)"#.to_string()),
+                            OmValue::Text(r#"=DECIMAL("2", 2)"#.to_string()),
+                        ],
+                    )
+                    .expect("engineering math formulas"),
+                ),
+                &[],
+            )
+            .expect("set engineering math formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("engineering math values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected engineering math value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(9.0),
+                OmValue::Number(15.0),
+                OmValue::Number(6.0),
+                OmValue::Number(20.0),
+                OmValue::Number(5.0),
+                OmValue::Number(5.0),
+                OmValue::Number(20.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Number(1.0),
+                OmValue::Number(0.0),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(0.0),
+                OmValue::Number(1.0),
+                OmValue::Text("1F".to_string()),
+                OmValue::Text("00000101".to_string()),
+                OmValue::Text("000".to_string()),
+                OmValue::Error(CellError::Num),
+                OmValue::Number(255.0),
+                OmValue::Number(10.0),
                 OmValue::Error(CellError::Num),
             ]
         );

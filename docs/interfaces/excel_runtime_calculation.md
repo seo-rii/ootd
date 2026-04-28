@@ -84,6 +84,14 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `ISODD`
 - `GCD`
 - `LCM`
+- `BITAND`
+- `BITOR`
+- `BITXOR`
+- `BITLSHIFT`
+- `BITRSHIFT`
+- `DELTA`
+- `GESTEP`
+- `DECIMAL`
 
 ### Logical and control helpers
 
@@ -253,6 +261,7 @@ Criteria notes:
 
 - `CONCAT`
 - `CONCATENATE`
+- `BASE`
 - `CHAR`
 - `CLEAN`
 - `CODE`
