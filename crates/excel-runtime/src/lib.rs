@@ -10161,6 +10161,10 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("LEFT")
         || name.eq_ignore_ascii_case("RIGHT")
         || name.eq_ignore_ascii_case("MID")
+        || name.eq_ignore_ascii_case("CHAR")
+        || name.eq_ignore_ascii_case("CLEAN")
+        || name.eq_ignore_ascii_case("T")
+        || name.eq_ignore_ascii_case("UNICHAR")
         || name.eq_ignore_ascii_case("UPPER")
         || name.eq_ignore_ascii_case("LOWER")
         || name.eq_ignore_ascii_case("TRIM")
@@ -11911,6 +11915,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 FormulaValueProbe::Error(error) => Err(error),
             };
         }
+        if name.eq_ignore_ascii_case("CODE") || name.eq_ignore_ascii_case("UNICODE") {
+            return self.parse_character_code_function();
+        }
         if name.eq_ignore_ascii_case("LEN") {
             return self.parse_len_function();
         }
@@ -12379,6 +12386,33 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("MID") {
             return self.parse_mid_text_function();
         }
+        if name.eq_ignore_ascii_case("CHAR") {
+            return self.parse_character_text_function(false);
+        }
+        if name.eq_ignore_ascii_case("UNICHAR") {
+            return self.parse_character_text_function(true);
+        }
+        if name.eq_ignore_ascii_case("CLEAN") {
+            return self.parse_unary_text_function(|text| {
+                text.chars()
+                    .filter(|ch| !matches!(*ch as u32, 0..=31))
+                    .collect()
+            });
+        }
+        if name.eq_ignore_ascii_case("T") {
+            let value = self.parse_value_probe_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return match value {
+                FormulaValueProbe::Text(value) => Ok(value),
+                FormulaValueProbe::Error(error) => Err(error),
+                FormulaValueProbe::Blank
+                | FormulaValueProbe::Bool(_)
+                | FormulaValueProbe::Number(_) => Ok(String::new()),
+            };
+        }
         if name.eq_ignore_ascii_case("UPPER") {
             return self.parse_unary_text_function(|text| text.to_uppercase());
         }
@@ -12482,6 +12516,21 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return Err(FormulaEvalError::Unsupported);
         }
         Ok(text.chars().skip(start - 1).take(count).collect())
+    }
+
+    fn parse_character_text_function(&mut self, unicode: bool) -> Result<String, FormulaEvalError> {
+        let code = formula_integer_argument(self.parse_comparison()?)?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let code = u32::try_from(code).map_err(|_| FormulaEvalError::Value)?;
+        if (!unicode && !(1..=255).contains(&code)) || code == 0 {
+            return Err(FormulaEvalError::Value);
+        }
+        char::from_u32(code)
+            .map(|ch| ch.to_string())
+            .ok_or(FormulaEvalError::Value)
     }
 
     fn parse_unary_text_function(
@@ -12619,6 +12668,18 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return Err(FormulaEvalError::Unsupported);
         }
         Ok(text.chars().count() as f64)
+    }
+
+    fn parse_character_code_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let text = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        text.chars()
+            .next()
+            .map(|ch| ch as u32 as f64)
+            .ok_or(FormulaEvalError::Value)
     }
 
     fn parse_find_function(&mut self, case_insensitive: bool) -> Result<f64, FormulaEvalError> {
@@ -20195,9 +20256,9 @@ mod tests {
                 .dispatch_invoke(
                     active_sheet,
                     "Range",
-                    &[OmValue::Text("B1:B14".to_string())],
+                    &[OmValue::Text("B1:B27".to_string())],
                 )
-                .expect("Range(B1:B14)"),
+                .expect("Range(B1:B27)"),
         );
 
         runtime
@@ -20225,12 +20286,21 @@ mod tests {
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        14,
+                        27,
                         1,
                         vec![
                             OmValue::Text(r#"=LEFT("abcdef", 3)"#.to_string()),
                             OmValue::Text(r#"=RIGHT("abcdef", 2)"#.to_string()),
                             OmValue::Text(r#"=MID("abcdef", 2, 3)"#.to_string()),
+                            OmValue::Text("=CHAR(65)".to_string()),
+                            OmValue::Text("=CHAR(10)".to_string()),
+                            OmValue::Text("=CHAR(0)".to_string()),
+                            OmValue::Text("=UNICHAR(9731)".to_string()),
+                            OmValue::Text("=UNICHAR(0)".to_string()),
+                            OmValue::Text(r#"=CLEAN(CONCAT("a", CHAR(10), "b"))"#.to_string()),
+                            OmValue::Text(r#"=T("keep")"#.to_string()),
+                            OmValue::Text("=T(A1)".to_string()),
+                            OmValue::Text("=T(A2)".to_string()),
                             OmValue::Text(r#"=CONCAT("Q", A2, "-", A3)"#.to_string()),
                             OmValue::Text(
                                 r#"=CONCATENATE(LEFT("abcdef", 2), RIGHT("wxyz", 2))"#.to_string(),
@@ -20244,6 +20314,10 @@ mod tests {
                             OmValue::Text(r#"=SEARCH("B", "abcabc")"#.to_string()),
                             OmValue::Text(r#"=EXACT("A", "a")"#.to_string()),
                             OmValue::Text(r#"=EXACT(UPPER("a"), "A")"#.to_string()),
+                            OmValue::Text(r#"=CODE("ABC")"#.to_string()),
+                            OmValue::Text(r#"=CODE("")"#.to_string()),
+                            OmValue::Text("=UNICODE(UNICHAR(9731))".to_string()),
+                            OmValue::Text(r#"=UNICODE("")"#.to_string()),
                         ],
                     )
                     .expect("text helper formulas"),
@@ -20268,6 +20342,15 @@ mod tests {
                 OmValue::Text("abc".to_string()),
                 OmValue::Text("ef".to_string()),
                 OmValue::Text("bcd".to_string()),
+                OmValue::Text("A".to_string()),
+                OmValue::Text("\n".to_string()),
+                OmValue::Error(CellError::Value),
+                OmValue::Text(char::from_u32(9731).expect("snowman").to_string()),
+                OmValue::Error(CellError::Value),
+                OmValue::Text("ab".to_string()),
+                OmValue::Text("keep".to_string()),
+                OmValue::Text("mix".to_string()),
+                OmValue::Text(String::new()),
                 OmValue::Text("Q42-TRUE".to_string()),
                 OmValue::Text("abyz".to_string()),
                 OmValue::Text("MIX".to_string()),
@@ -20279,6 +20362,10 @@ mod tests {
                 OmValue::Number(2.0),
                 OmValue::Number(0.0),
                 OmValue::Number(1.0),
+                OmValue::Number(65.0),
+                OmValue::Error(CellError::Value),
+                OmValue::Number(9731.0),
+                OmValue::Error(CellError::Value),
             ]
         );
         assert_eq!(

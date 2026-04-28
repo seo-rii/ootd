@@ -253,9 +253,15 @@ Criteria notes:
 
 - `CONCAT`
 - `CONCATENATE`
+- `CHAR`
+- `CLEAN`
+- `CODE`
 - `LEFT`
 - `RIGHT`
 - `MID`
+- `T`
+- `UNICHAR`
+- `UNICODE`
 - `UPPER`
 - `LOWER`
 - `TRIM`
