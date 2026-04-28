@@ -218,6 +218,8 @@ Lookup notes:
 - `WEEKDAY`
 - `WEEKNUM`
 - `ISOWEEKNUM`
+- `WORKDAY`
+- `NETWORKDAYS`
 - `TIME`
 - `TIMEVALUE`
 - `HOUR`
