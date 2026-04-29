@@ -10292,6 +10292,60 @@ fn formula_text_from_number(value: f64) -> Result<String, FormulaEvalError> {
     Ok(value.to_string())
 }
 
+fn formula_numbervalue(
+    text: &str,
+    decimal_separator: &str,
+    group_separator: &str,
+) -> Result<f64, FormulaEvalError> {
+    if decimal_separator.chars().count() != 1
+        || group_separator.chars().count() != 1
+        || decimal_separator == group_separator
+    {
+        return Err(FormulaEvalError::Value);
+    }
+    let decimal_separator = decimal_separator
+        .chars()
+        .next()
+        .ok_or(FormulaEvalError::Value)?;
+    let group_separator = group_separator
+        .chars()
+        .next()
+        .ok_or(FormulaEvalError::Value)?;
+
+    let mut body = text.trim();
+    if body.is_empty() {
+        return Err(FormulaEvalError::Value);
+    }
+    let mut multiplier = 1.0;
+    while let Some(stripped) = body.strip_suffix('%') {
+        multiplier /= 100.0;
+        body = stripped.trim_end();
+    }
+    if body.is_empty() {
+        return Err(FormulaEvalError::Value);
+    }
+    let mut normalized = String::with_capacity(body.len());
+    for ch in body.chars() {
+        if ch == group_separator {
+            continue;
+        }
+        if ch == decimal_separator {
+            normalized.push('.');
+        } else if !ch.is_whitespace() {
+            normalized.push(ch);
+        }
+    }
+    let value = normalized
+        .parse::<f64>()
+        .map_err(|_| FormulaEvalError::Value)?
+        * multiplier;
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(FormulaEvalError::Value)
+    }
+}
+
 fn formula_proper_text(text: &str) -> String {
     let mut output = String::new();
     let mut capitalize_next = true;
@@ -12281,6 +12335,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("VALUE") {
             return self.parse_value_function();
         }
+        if name.eq_ignore_ascii_case("NUMBERVALUE") {
+            return self.parse_numbervalue_function();
+        }
         if name.eq_ignore_ascii_case("DATEVALUE") {
             return self.parse_datevalue_function();
         }
@@ -13418,6 +13475,35 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         } else {
             Err(FormulaEvalError::Value)
         }
+    }
+
+    fn parse_numbervalue_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let text = self.parse_text_value_argument()?;
+        let mut decimal_separator = ".".to_string();
+        let mut group_separator = ",".to_string();
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            decimal_separator = self.parse_text_value_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                group_separator = self.parse_text_value_argument()?;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+            }
+        }
+        formula_numbervalue(
+            text.as_str(),
+            decimal_separator.as_str(),
+            group_separator.as_str(),
+        )
     }
 
     fn parse_decimal_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -22037,9 +22123,9 @@ mod tests {
                 .dispatch_invoke(
                     active_sheet,
                     "Range",
-                    &[OmValue::Text("A1:A11".to_string())],
+                    &[OmValue::Text("A1:A15".to_string())],
                 )
-                .expect("Range(A1:A11)"),
+                .expect("Range(A1:A15)"),
         );
 
         runtime
@@ -22048,7 +22134,7 @@ mod tests {
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        11,
+                        15,
                         1,
                         vec![
                             OmValue::Text(r#"=REPT("ha", 3)"#.to_string()),
@@ -22066,6 +22152,10 @@ mod tests {
                             OmValue::Text(r#"=VALUE("45%")"#.to_string()),
                             OmValue::Text(r#"=VALUE(CONCAT("1", "2"))"#.to_string()),
                             OmValue::Text(r#"=VALUE("bad")"#.to_string()),
+                            OmValue::Text(r#"=NUMBERVALUE("2,500.25")"#.to_string()),
+                            OmValue::Text(r#"=NUMBERVALUE("2.500,25", ",", ".")"#.to_string()),
+                            OmValue::Text(r#"=NUMBERVALUE("12,5% ", ",", ".")"#.to_string()),
+                            OmValue::Text(r#"=NUMBERVALUE("1.2.3", ".", ",")"#.to_string()),
                         ],
                     )
                     .expect("text edit formulas"),
@@ -22097,6 +22187,10 @@ mod tests {
                 OmValue::Number(12.5),
                 OmValue::Number(0.45),
                 OmValue::Number(12.0),
+                OmValue::Error(CellError::Value),
+                OmValue::Number(2500.25),
+                OmValue::Number(2500.25),
+                OmValue::Number(0.125),
                 OmValue::Error(CellError::Value),
             ]
         );
