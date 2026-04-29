@@ -290,7 +290,11 @@ Criteria notes:
 - `UNICODE`
 - `UPPER`
 - `LOWER`
+- `PROPER`
 - `TRIM`
+- `TEXTJOIN`
+- `TEXTBEFORE`
+- `TEXTAFTER`
 - `REPT`
 - `REPLACE`
 - `SUBSTITUTE`
@@ -305,6 +309,7 @@ Text notes:
 - text-returning helpers produce `CellValue::Text` and support scalar literals, booleans, numbers, single-cell references, and nested text helpers.
 - `FIND` is case-sensitive, `SEARCH` is case-insensitive, and both return 1-based character positions.
 - `SEARCH`, `XLOOKUP`, and `XMATCH` support Excel-style `*` and `?` wildcards with `~` escaping in their focused scalar paths.
+- `TEXTJOIN` supports scalar values and rectangular ranges, and `TEXTBEFORE` / `TEXTAFTER` support scalar delimiters, instance numbers, case-sensitivity mode, match-end mode, and scalar `if_not_found` fallbacks.
 - `VALUE` supports plain decimal numeric text and a trailing percent sign, but not currency symbols, date/time text, or locale-specific separators.
 - `REPT` returns `#VALUE!` for outputs beyond Excel's 32,767-character cell text limit.
 - Range flattening, locale-aware formatting, and full Excel text coercion are not implemented yet.

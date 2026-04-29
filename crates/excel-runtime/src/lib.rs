@@ -10259,7 +10259,11 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("UNICHAR")
         || name.eq_ignore_ascii_case("UPPER")
         || name.eq_ignore_ascii_case("LOWER")
+        || name.eq_ignore_ascii_case("PROPER")
         || name.eq_ignore_ascii_case("TRIM")
+        || name.eq_ignore_ascii_case("TEXTJOIN")
+        || name.eq_ignore_ascii_case("TEXTBEFORE")
+        || name.eq_ignore_ascii_case("TEXTAFTER")
         || name.eq_ignore_ascii_case("REPT")
         || name.eq_ignore_ascii_case("REPLACE")
         || name.eq_ignore_ascii_case("SUBSTITUTE")
@@ -10285,6 +10289,48 @@ fn formula_text_from_number(value: f64) -> Result<String, FormulaEvalError> {
         return Ok((value as i64).to_string());
     }
     Ok(value.to_string())
+}
+
+fn formula_proper_text(text: &str) -> String {
+    let mut output = String::new();
+    let mut capitalize_next = true;
+    for ch in text.chars() {
+        if ch.is_alphabetic() {
+            if capitalize_next {
+                output.extend(ch.to_uppercase());
+            } else {
+                output.extend(ch.to_lowercase());
+            }
+            capitalize_next = false;
+        } else {
+            output.push(ch);
+            capitalize_next = true;
+        }
+    }
+    output
+}
+
+fn formula_text_delimiter_matches(
+    text: &str,
+    delimiter: &str,
+    case_insensitive: bool,
+) -> Vec<(usize, usize)> {
+    if delimiter.is_empty() {
+        return Vec::new();
+    }
+    let mut matches = Vec::new();
+    for (start, _) in text.char_indices() {
+        let end = start + delimiter.len();
+        if end <= text.len() && text.is_char_boundary(end) {
+            let candidate = &text[start..end];
+            if candidate == delimiter
+                || (case_insensitive && candidate.eq_ignore_ascii_case(delimiter))
+            {
+                matches.push((start, end));
+            }
+        }
+    }
+    matches
 }
 
 fn formula_integer_argument(value: f64) -> Result<i64, FormulaEvalError> {
@@ -12645,10 +12691,22 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("LOWER") {
             return self.parse_unary_text_function(|text| text.to_lowercase());
         }
+        if name.eq_ignore_ascii_case("PROPER") {
+            return self.parse_unary_text_function(|text| formula_proper_text(text.as_str()));
+        }
         if name.eq_ignore_ascii_case("TRIM") {
             return self.parse_unary_text_function(|text| {
                 text.split_whitespace().collect::<Vec<_>>().join(" ")
             });
+        }
+        if name.eq_ignore_ascii_case("TEXTJOIN") {
+            return self.parse_textjoin_function();
+        }
+        if name.eq_ignore_ascii_case("TEXTBEFORE") {
+            return self.parse_text_boundary_function(false);
+        }
+        if name.eq_ignore_ascii_case("TEXTAFTER") {
+            return self.parse_text_boundary_function(true);
         }
         if name.eq_ignore_ascii_case("REPT") {
             return self.parse_rept_text_function();
@@ -12846,6 +12904,120 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return Err(FormulaEvalError::Unsupported);
         }
         Ok(count)
+    }
+
+    fn parse_textjoin_function(&mut self) -> Result<String, FormulaEvalError> {
+        let delimiter = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let ignore_empty = self.parse_comparison()? != 0.0;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+
+        let mut parts = Vec::new();
+        loop {
+            for text in self.parse_text_values_argument()? {
+                if !ignore_empty || !text.is_empty() {
+                    parts.push(text);
+                }
+            }
+            self.skip_whitespace();
+            if self.consume_char(')') {
+                return Ok(parts.join(delimiter.as_str()));
+            }
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+        }
+    }
+
+    fn parse_text_boundary_function(&mut self, after: bool) -> Result<String, FormulaEvalError> {
+        let text = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let delimiter = self.parse_text_value_argument()?;
+        if delimiter.is_empty() {
+            return Err(FormulaEvalError::Value);
+        }
+
+        let mut instance = 1_i64;
+        let mut match_mode = 0_i64;
+        let mut match_end = false;
+        let mut if_not_found = None;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            instance = formula_integer_argument(self.parse_comparison()?)?;
+            if instance == 0 {
+                return Err(FormulaEvalError::Value);
+            }
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                match_mode = formula_integer_argument(self.parse_comparison()?)?;
+                if !matches!(match_mode, 0 | 1) {
+                    return Err(FormulaEvalError::Value);
+                }
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    match_end = self.parse_comparison()? != 0.0;
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        if !self.consume_char(',') {
+                            return Err(FormulaEvalError::Unsupported);
+                        }
+                        if_not_found = Some(self.parse_text_value_argument()?);
+                        self.skip_whitespace();
+                        if !self.consume_char(')') {
+                            return Err(FormulaEvalError::Unsupported);
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut matches =
+            formula_text_delimiter_matches(text.as_str(), delimiter.as_str(), match_mode == 1);
+        if match_end {
+            if instance > 0 {
+                matches.push((text.len(), text.len()));
+            } else {
+                matches.insert(0, (0, 0));
+            }
+        }
+        let selected = if instance > 0 {
+            usize::try_from(instance - 1)
+                .ok()
+                .and_then(|index| matches.get(index))
+        } else {
+            let count = instance
+                .checked_abs()
+                .and_then(|value| usize::try_from(value).ok());
+            count
+                .and_then(|count| matches.len().checked_sub(count))
+                .and_then(|index| matches.get(index))
+        };
+        let Some(&(start, end)) = selected else {
+            return if_not_found.ok_or(FormulaEvalError::NA);
+        };
+        if after {
+            Ok(text[end..].to_string())
+        } else {
+            Ok(text[..start].to_string())
+        }
     }
 
     fn parse_rept_text_function(&mut self) -> Result<String, FormulaEvalError> {
@@ -14464,6 +14636,31 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
         }
         formula_text_from_number(self.parse_comparison()?)
+    }
+
+    fn parse_text_values_argument(&mut self) -> Result<Vec<String>, FormulaEvalError> {
+        self.skip_whitespace();
+        let checkpoint = self.index;
+        if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
+            self.index = next_index;
+            self.skip_whitespace();
+            if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
+                let mut values = Vec::new();
+                for row in rect.row_first..=rect.row_last {
+                    for col in rect.col_first..=rect.col_last {
+                        let value =
+                            self.evaluator
+                                .cell_value_or_blank(target_sheet_id, row, col)?;
+                        values.push(formula_text_from_value_probe(
+                            formula_value_probe_from_cell_value(value),
+                        )?);
+                    }
+                }
+                return Ok(values);
+            }
+        }
+        self.index = checkpoint;
+        Ok(vec![self.parse_text_value_argument()?])
     }
 
     fn parse_value_probe_argument(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
@@ -21398,6 +21595,146 @@ mod tests {
                 )
                 .expect("Application.Evaluate text helper"),
             OmValue::Text("Eval7".to_string())
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_text_join_and_boundary_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A4".to_string())])
+                .expect("Range(A1:A4)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("B1:B18".to_string())],
+                )
+                .expect("Range(B1:B18)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        1,
+                        vec![
+                            OmValue::Text("north".to_string()),
+                            OmValue::Text(String::new()),
+                            OmValue::Number(7.0),
+                            OmValue::Bool(true),
+                        ],
+                    )
+                    .expect("text join source values"),
+                ),
+                &[],
+            )
+            .expect("set text join source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        18,
+                        1,
+                        vec![
+                            OmValue::Text(r#"=PROPER("hello WORLD")"#.to_string()),
+                            OmValue::Text(r#"=PROPER("2-way street")"#.to_string()),
+                            OmValue::Text(r#"=TEXTJOIN("-", TRUE, A1:A4)"#.to_string()),
+                            OmValue::Text(r#"=TEXTJOIN("/", FALSE, "x", A2, "y")"#.to_string()),
+                            OmValue::Text(r#"=TEXTJOIN(",", TRUE, A1:A2, "tail")"#.to_string()),
+                            OmValue::Text(r#"=TEXTBEFORE("alpha-beta-gamma", "-")"#.to_string()),
+                            OmValue::Text(r#"=TEXTAFTER("alpha-beta-gamma", "-")"#.to_string()),
+                            OmValue::Text(r#"=TEXTBEFORE("alpha-beta-gamma", "-", 2)"#.to_string()),
+                            OmValue::Text(r#"=TEXTAFTER("alpha-beta-gamma", "-", 2)"#.to_string()),
+                            OmValue::Text(
+                                r#"=TEXTBEFORE("alpha-beta-gamma", "-", -1)"#.to_string(),
+                            ),
+                            OmValue::Text(r#"=TEXTAFTER("alpha-beta-gamma", "-", -2)"#.to_string()),
+                            OmValue::Text(r#"=TEXTBEFORE("CaseSensitive", "S", 1, 0)"#.to_string()),
+                            OmValue::Text(r#"=TEXTBEFORE("CaseSensitive", "S", 1, 1)"#.to_string()),
+                            OmValue::Text(r#"=TEXTAFTER("abc", "x", 1, 0, 1)"#.to_string()),
+                            OmValue::Text(r#"=TEXTBEFORE("abc", "x", 1, 0, 1)"#.to_string()),
+                            OmValue::Text(
+                                r#"=TEXTAFTER("abc", "x", 1, 0, 0, "fallback")"#.to_string(),
+                            ),
+                            OmValue::Text(r#"=TEXTBEFORE("abc", "x")"#.to_string()),
+                            OmValue::Text(
+                                r#"=CONCAT(TEXTBEFORE("a:b", ":"), TEXTAFTER("a:b", ":"))"#
+                                    .to_string(),
+                            ),
+                        ],
+                    )
+                    .expect("text join and boundary formulas"),
+                ),
+                &[],
+            )
+            .expect("set text join and boundary formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("text join and boundary values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected text join and boundary value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Text("Hello World".to_string()),
+                OmValue::Text("2-Way Street".to_string()),
+                OmValue::Text("north-7-TRUE".to_string()),
+                OmValue::Text("x//y".to_string()),
+                OmValue::Text("north,tail".to_string()),
+                OmValue::Text("alpha".to_string()),
+                OmValue::Text("beta-gamma".to_string()),
+                OmValue::Text("alpha-beta".to_string()),
+                OmValue::Text("gamma".to_string()),
+                OmValue::Text("alpha-beta".to_string()),
+                OmValue::Text("beta-gamma".to_string()),
+                OmValue::Text("Case".to_string()),
+                OmValue::Text("Ca".to_string()),
+                OmValue::Text(String::new()),
+                OmValue::Text("abc".to_string()),
+                OmValue::Text("fallback".to_string()),
+                OmValue::Error(CellError::NA),
+                OmValue::Text("ab".to_string()),
+            ]
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    runtime.root_application(),
+                    "Evaluate",
+                    &[OmValue::Text(
+                        r#"=TEXTJOIN("", TRUE, PROPER("x y"), TEXTAFTER("a:b", ":"))"#.to_string(),
+                    )],
+                )
+                .expect("Application.Evaluate text join"),
+            OmValue::Text("X Yb".to_string())
         );
     }
 
