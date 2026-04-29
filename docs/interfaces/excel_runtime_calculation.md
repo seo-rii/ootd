@@ -199,6 +199,8 @@ Aggregate notes:
 - `COLUMN`
 - `ROWS`
 - `COLUMNS`
+- `SHEET`
+- `SHEETS`
 - `CHOOSE`
 
 Lookup notes:
@@ -208,6 +210,7 @@ Lookup notes:
 - `VLOOKUP` and `HLOOKUP` support exact and ascending approximate table lookup.
 - `XLOOKUP` supports scalar one-dimensional lookup and return arrays, `if_not_found`, exact match, wildcard match, exact-or-next-smaller, exact-or-next-larger, and forward or reverse linear search.
 - `ROW()` and `COLUMN()` without arguments resolve against the formula cell position during recalculation.
+- `SHEET()` returns the current worksheet's 1-based workbook position; `SHEETS()` returns the workbook worksheet count, and reference arguments are supported for single-sheet references.
 - Lookup comparisons support numbers, booleans, and case-insensitive text.
 - `INDEX`, `VLOOKUP`, `HLOOKUP`, and `XLOOKUP` return scalar text results as `CellValue::Text`; numeric results still flow through the numeric evaluator.
 - `CHOOSE` can return scalar text when the selected argument is text.

@@ -12287,6 +12287,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("ROWS") {
             return self.parse_rows_function();
         }
+        if name.eq_ignore_ascii_case("SHEET") {
+            return self.parse_sheet_function();
+        }
+        if name.eq_ignore_ascii_case("SHEETS") {
+            return self.parse_sheets_function();
+        }
         if name.eq_ignore_ascii_case("INDEX") {
             return self.parse_index_function();
         }
@@ -13884,6 +13890,42 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return Err(FormulaEvalError::Unsupported);
         }
         Ok(rect.height() as f64)
+    }
+
+    fn parse_sheet_function(&mut self) -> Result<f64, FormulaEvalError> {
+        self.skip_whitespace();
+        if self.consume_char(')') {
+            return self.sheet_index(self.sheet_id);
+        }
+        let (target_sheet_id, _) = self.parse_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        self.sheet_index(target_sheet_id)
+    }
+
+    fn parse_sheets_function(&mut self) -> Result<f64, FormulaEvalError> {
+        self.skip_whitespace();
+        if self.consume_char(')') {
+            return Ok(self.evaluator.state.worksheets.len() as f64);
+        }
+        let _ = self.parse_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Ok(1.0)
+    }
+
+    fn sheet_index(&self, sheet_id: SheetId) -> Result<f64, FormulaEvalError> {
+        self.evaluator
+            .state
+            .worksheets
+            .iter()
+            .position(|worksheet| worksheet.id == sheet_id)
+            .map(|index| index as f64 + 1.0)
+            .ok_or(FormulaEvalError::Ref)
     }
 
     fn parse_index_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -22991,6 +23033,96 @@ mod tests {
                 OmValue::Number(20.0),
                 OmValue::Number(30.0),
                 OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_sheet_info_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let first_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Worksheets", &[])
+                .expect("Application.Worksheets"),
+        );
+        let data_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Add", &[])
+                .expect("Worksheets.Add"),
+        );
+        runtime
+            .dispatch_set(
+                data_sheet,
+                "Name",
+                OmValue::Text("Data Sheet".to_string()),
+                &[],
+            )
+            .expect("rename data sheet");
+        runtime
+            .dispatch_invoke(first_sheet, "Activate", &[])
+            .expect("reactivate first sheet");
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("B1:B6".to_string())])
+                .expect("Sheet1.Range(B1:B6)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        6,
+                        1,
+                        vec![
+                            OmValue::Text("=SHEETS()".to_string()),
+                            OmValue::Text("=SHEET()".to_string()),
+                            OmValue::Text("=SHEET(A1)".to_string()),
+                            OmValue::Text("=SHEET('Data Sheet'!A1)".to_string()),
+                            OmValue::Text("=SHEETS(A1)".to_string()),
+                            OmValue::Text("=SHEETS('Data Sheet'!A1:B2)".to_string()),
+                        ],
+                    )
+                    .expect("sheet info formulas"),
+                ),
+                &[],
+            )
+            .expect("set sheet info formulas");
+
+        runtime
+            .dispatch_invoke(application, "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("sheet info values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected sheet info value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(2.0),
+                OmValue::Number(2.0),
+                OmValue::Number(2.0),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
             ]
         );
     }
