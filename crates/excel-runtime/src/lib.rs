@@ -10477,14 +10477,74 @@ fn formula_weekday_monday0_from_serial(serial: i64) -> i64 {
     (adjusted_serial - 1).rem_euclid(7)
 }
 
-fn formula_is_workday_serial(serial: i64, holidays: &[i64]) -> bool {
-    formula_weekday_monday0_from_serial(serial) < 5 && !holidays.contains(&serial)
+fn formula_standard_weekend_mask() -> [bool; 7] {
+    [false, false, false, false, false, true, true]
+}
+
+fn formula_weekend_mask_from_code(code: i64) -> Result<[bool; 7], FormulaEvalError> {
+    match code {
+        1 => Ok(formula_standard_weekend_mask()),
+        2 => Ok([true, false, false, false, false, false, true]),
+        3 => Ok([true, true, false, false, false, false, false]),
+        4 => Ok([false, true, true, false, false, false, false]),
+        5 => Ok([false, false, true, true, false, false, false]),
+        6 => Ok([false, false, false, true, true, false, false]),
+        7 => Ok([false, false, false, false, true, true, false]),
+        11 => Ok([false, false, false, false, false, false, true]),
+        12 => Ok([true, false, false, false, false, false, false]),
+        13 => Ok([false, true, false, false, false, false, false]),
+        14 => Ok([false, false, true, false, false, false, false]),
+        15 => Ok([false, false, false, true, false, false, false]),
+        16 => Ok([false, false, false, false, true, false, false]),
+        17 => Ok([false, false, false, false, false, true, false]),
+        _ => Err(FormulaEvalError::Value),
+    }
+}
+
+fn formula_weekend_mask_from_string(value: &str) -> Result<[bool; 7], FormulaEvalError> {
+    if value.chars().count() != 7 {
+        return Err(FormulaEvalError::Value);
+    }
+    let mut mask = [false; 7];
+    let mut workday_count = 0_u8;
+    for (index, ch) in value.chars().enumerate() {
+        mask[index] = match ch {
+            '0' => {
+                workday_count += 1;
+                false
+            }
+            '1' => true,
+            _ => return Err(FormulaEvalError::Value),
+        };
+    }
+    if workday_count == 0 {
+        return Err(FormulaEvalError::Value);
+    }
+    Ok(mask)
+}
+
+fn formula_is_workday_serial(serial: i64, holidays: &[i64], weekend: &[bool; 7]) -> bool {
+    !weekend[formula_weekday_monday0_from_serial(serial) as usize] && !holidays.contains(&serial)
 }
 
 fn formula_networkdays(
     start_serial: i64,
     end_serial: i64,
     holidays: &[i64],
+) -> Result<f64, FormulaEvalError> {
+    formula_networkdays_with_weekend(
+        start_serial,
+        end_serial,
+        holidays,
+        &formula_standard_weekend_mask(),
+    )
+}
+
+fn formula_networkdays_with_weekend(
+    start_serial: i64,
+    end_serial: i64,
+    holidays: &[i64],
+    weekend: &[bool; 7],
 ) -> Result<f64, FormulaEvalError> {
     let (first, last, sign) = if start_serial <= end_serial {
         (start_serial, end_serial, 1.0)
@@ -10495,7 +10555,7 @@ fn formula_networkdays(
     formula_ymd_from_serial(last as f64)?;
     let mut count = 0_u64;
     for serial in first..=last {
-        if formula_is_workday_serial(serial, holidays) {
+        if formula_is_workday_serial(serial, holidays, weekend) {
             count += 1;
         }
     }
@@ -10507,6 +10567,20 @@ fn formula_workday(
     days: i64,
     holidays: &[i64],
 ) -> Result<f64, FormulaEvalError> {
+    formula_workday_with_weekend(
+        start_serial,
+        days,
+        holidays,
+        &formula_standard_weekend_mask(),
+    )
+}
+
+fn formula_workday_with_weekend(
+    start_serial: i64,
+    days: i64,
+    holidays: &[i64],
+    weekend: &[bool; 7],
+) -> Result<f64, FormulaEvalError> {
     formula_ymd_from_serial(start_serial as f64)?;
     let direction = if days < 0 { -1 } else { 1 };
     let mut serial = start_serial;
@@ -10514,7 +10588,7 @@ fn formula_workday(
     while remaining > 0 {
         serial = serial.checked_add(direction).ok_or(FormulaEvalError::Num)?;
         formula_ymd_from_serial(serial as f64)?;
-        if formula_is_workday_serial(serial, holidays) {
+        if formula_is_workday_serial(serial, holidays, weekend) {
             remaining -= 1;
         }
     }
@@ -12067,8 +12141,14 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("WORKDAY") {
             return self.parse_workday_function();
         }
+        if name.eq_ignore_ascii_case("WORKDAY.INTL") {
+            return self.parse_workday_intl_function();
+        }
         if name.eq_ignore_ascii_case("NETWORKDAYS") {
             return self.parse_networkdays_function();
+        }
+        if name.eq_ignore_ascii_case("NETWORKDAYS.INTL") {
+            return self.parse_networkdays_intl_function();
         }
         if let Some(function) = FormulaScalarFunction::from_name(name) {
             return self.parse_scalar_function(function);
@@ -13470,6 +13550,17 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         formula_workday(start_serial, days, holidays.as_slice())
     }
 
+    fn parse_workday_intl_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let start_serial = formula_serial_integer(self.parse_comparison()?)?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let days = formula_integer_argument(self.parse_comparison()?)?;
+        let (weekend, holidays) = self.parse_optional_weekend_holidays_tail()?;
+        formula_workday_with_weekend(start_serial, days, holidays.as_slice(), &weekend)
+    }
+
     fn parse_networkdays_function(&mut self) -> Result<f64, FormulaEvalError> {
         let start_serial = formula_serial_integer(self.parse_comparison()?)?;
         self.skip_whitespace();
@@ -13479,6 +13570,17 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         let end_serial = formula_serial_integer(self.parse_comparison()?)?;
         let holidays = self.parse_optional_holidays_tail()?;
         formula_networkdays(start_serial, end_serial, holidays.as_slice())
+    }
+
+    fn parse_networkdays_intl_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let start_serial = formula_serial_integer(self.parse_comparison()?)?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let end_serial = formula_serial_integer(self.parse_comparison()?)?;
+        let (weekend, holidays) = self.parse_optional_weekend_holidays_tail()?;
+        formula_networkdays_with_weekend(start_serial, end_serial, holidays.as_slice(), &weekend)
     }
 
     fn parse_if_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -14436,30 +14538,66 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if !self.consume_char(',') {
             return Err(FormulaEvalError::Unsupported);
         }
-        self.skip_whitespace();
-        let checkpoint = self.index;
-        let holidays =
-            if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
-                self.index = next_index;
-                self.skip_whitespace();
-                if self.peek_char() == Some(')') {
-                    self.evaluator
-                        .numeric_values_in_rect(target_sheet_id, rect)?
-                        .into_iter()
-                        .map(formula_serial_integer)
-                        .collect::<Result<Vec<_>, _>>()?
-                } else {
-                    self.index = checkpoint;
-                    vec![formula_serial_integer(self.parse_comparison()?)?]
-                }
-            } else {
-                vec![formula_serial_integer(self.parse_comparison()?)?]
-            };
+        let holidays = self.parse_holidays_argument()?;
         self.skip_whitespace();
         if !self.consume_char(')') {
             return Err(FormulaEvalError::Unsupported);
         }
         Ok(holidays)
+    }
+
+    fn parse_optional_weekend_holidays_tail(
+        &mut self,
+    ) -> Result<([bool; 7], Vec<i64>), FormulaEvalError> {
+        self.skip_whitespace();
+        if self.consume_char(')') {
+            return Ok((formula_standard_weekend_mask(), Vec::new()));
+        }
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let weekend = self.parse_weekend_argument()?;
+        self.skip_whitespace();
+        if self.consume_char(')') {
+            return Ok((weekend, Vec::new()));
+        }
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let holidays = self.parse_holidays_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Ok((weekend, holidays))
+    }
+
+    fn parse_weekend_argument(&mut self) -> Result<[bool; 7], FormulaEvalError> {
+        self.skip_whitespace();
+        if let Some(value) = self.parse_string_literal()? {
+            return formula_weekend_mask_from_string(value.as_str());
+        }
+        formula_weekend_mask_from_code(formula_integer_argument(self.parse_comparison()?)?)
+    }
+
+    fn parse_holidays_argument(&mut self) -> Result<Vec<i64>, FormulaEvalError> {
+        self.skip_whitespace();
+        let checkpoint = self.index;
+        if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
+            self.index = next_index;
+            self.skip_whitespace();
+            if self.peek_char().is_none_or(|ch| matches!(ch, ')' | ',')) {
+                return self
+                    .evaluator
+                    .numeric_values_in_rect(target_sheet_id, rect)?
+                    .into_iter()
+                    .map(formula_serial_integer)
+                    .collect::<Result<Vec<_>, _>>();
+            } else {
+                self.index = checkpoint;
+            }
+        }
+        Ok(vec![formula_serial_integer(self.parse_comparison()?)?])
     }
 
     fn parse_counta_argument(&mut self) -> Result<u64, FormulaEvalError> {
@@ -23189,6 +23327,128 @@ mod tests {
                 OmValue::Number(45295.0),
                 OmValue::Number(45296.0),
                 OmValue::Number(45292.0),
+                OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_workday_intl_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let holidays = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1:C2".to_string())])
+                .expect("Range(C1:C2)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A12".to_string())],
+                )
+                .expect("Range(A1:A12)"),
+        );
+
+        runtime
+            .dispatch_set(
+                holidays,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        1,
+                        vec![
+                            OmValue::Text("=DATE(2024,1,1)".to_string()),
+                            OmValue::Text("=DATE(2024,1,3)".to_string()),
+                        ],
+                    )
+                    .expect("intl holiday formulas"),
+                ),
+                &[],
+            )
+            .expect("set intl holiday formulas");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        12,
+                        1,
+                        vec![
+                            OmValue::Text(
+                                "=NETWORKDAYS.INTL(DATE(2024,1,1), DATE(2024,1,7))".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=NETWORKDAYS.INTL(DATE(2024,1,1), DATE(2024,1,7), 11)".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=NETWORKDAYS.INTL(DATE(2024,1,1), DATE(2024,1,7), 12)".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=NETWORKDAYS.INTL(DATE(2024,1,1), DATE(2024,1,7), \"1000001\")"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=NETWORKDAYS.INTL(DATE(2024,1,1), DATE(2024,1,5), 1, C1:C2)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text("=WORKDAY.INTL(DATE(2024,1,5), 1)".to_string()),
+                            OmValue::Text("=WORKDAY.INTL(DATE(2024,1,5), 1, 7)".to_string()),
+                            OmValue::Text("=WORKDAY.INTL(DATE(2024,1,5), 1, 11)".to_string()),
+                            OmValue::Text("=WORKDAY.INTL(DATE(2024,1,1), 3, 1, C1:C2)".to_string()),
+                            OmValue::Text("=WORKDAY.INTL(DATE(2024,1,5), -1, 11)".to_string()),
+                            OmValue::Text("=WORKDAY.INTL(DATE(2024,1,5), 1, 99)".to_string()),
+                            OmValue::Text(
+                                "=NETWORKDAYS.INTL(DATE(2024,1,1), DATE(2024,1,7), \"1111111\")"
+                                    .to_string(),
+                            ),
+                        ],
+                    )
+                    .expect("workday intl formulas"),
+                ),
+                &[],
+            )
+            .expect("set workday intl formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("workday intl values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected workday intl value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(5.0),
+                OmValue::Number(6.0),
+                OmValue::Number(6.0),
+                OmValue::Number(5.0),
+                OmValue::Number(3.0),
+                OmValue::Number(45299.0),
+                OmValue::Number(45298.0),
+                OmValue::Number(45297.0),
+                OmValue::Number(45296.0),
+                OmValue::Number(45295.0),
+                OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
             ]
         );

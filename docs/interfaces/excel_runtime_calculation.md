@@ -229,7 +229,9 @@ Lookup notes:
 - `WEEKNUM`
 - `ISOWEEKNUM`
 - `WORKDAY`
+- `WORKDAY.INTL`
 - `NETWORKDAYS`
+- `NETWORKDAYS.INTL`
 - `TIME`
 - `TIMEVALUE`
 - `HOUR`
@@ -243,6 +245,7 @@ Date/time notes:
 - `DAYS360` supports the U.S. (NASD) and European methods.
 - `YEARFRAC` supports bases `0` through `4`, with basis `0`/`4` using the matching 30/360 day-count variants.
 - `WEEKDAY` supports return types `1`, `2`, `3`, and `11` through `17`; `WEEKNUM` supports return types `1`, `2`, `11` through `17`, and ISO return type `21`.
+- `WORKDAY.INTL` and `NETWORKDAYS.INTL` support Excel weekend codes `1` through `7` and `11` through `17`, plus seven-character weekend masks.
 - `TIME` produces fractional-day serial values, with hour/minute/second rollover for non-negative arguments.
 - `DATEVALUE` supports ISO-like `yyyy-mm-dd`, `yyyy/m/d`, and numeric `m/d/yyyy` text.
 - `TIMEVALUE` supports `h:mm`, `h:mm:ss`, and `AM`/`PM` suffixes.
