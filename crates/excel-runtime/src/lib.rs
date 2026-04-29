@@ -10247,7 +10247,8 @@ fn formula_selected_text_from_value_probe(
 }
 
 fn formula_text_function_name(name: &str) -> bool {
-    name.eq_ignore_ascii_case("CONCAT")
+    name.eq_ignore_ascii_case("ADDRESS")
+        || name.eq_ignore_ascii_case("CONCAT")
         || name.eq_ignore_ascii_case("CONCATENATE")
         || name.eq_ignore_ascii_case("LEFT")
         || name.eq_ignore_ascii_case("RIGHT")
@@ -10331,6 +10332,14 @@ fn formula_text_delimiter_matches(
         }
     }
     matches
+}
+
+fn formula_sheet_address_qualifier(sheet_name: &str) -> String {
+    if excel_reference_qualifier_needs_quotes(sheet_name) {
+        format!("'{}'!", sheet_name.replace('\'', "''"))
+    } else {
+        format!("{sheet_name}!")
+    }
 }
 
 fn formula_integer_argument(value: f64) -> Result<i64, FormulaEvalError> {
@@ -12287,6 +12296,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("ROWS") {
             return self.parse_rows_function();
         }
+        if name.eq_ignore_ascii_case("AREAS") {
+            return self.parse_areas_function();
+        }
         if name.eq_ignore_ascii_case("SHEET") {
             return self.parse_sheet_function();
         }
@@ -12729,6 +12741,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
     }
 
     fn parse_text_function(&mut self, name: &str) -> Result<String, FormulaEvalError> {
+        if name.eq_ignore_ascii_case("ADDRESS") {
+            return self.parse_address_text_function();
+        }
         if name.eq_ignore_ascii_case("CONCAT") || name.eq_ignore_ascii_case("CONCATENATE") {
             return self.parse_concat_text_function();
         }
@@ -12860,6 +12875,80 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
             return Err(FormulaEvalError::Unsupported);
         }
+    }
+
+    fn parse_address_text_function(&mut self) -> Result<String, FormulaEvalError> {
+        let row = formula_integer_argument(self.parse_comparison()?)?;
+        if row < 1 || row > i64::from(EXCEL_MAX_ROW_INDEX) {
+            return Err(FormulaEvalError::Value);
+        }
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let col = formula_integer_argument(self.parse_comparison()?)?;
+        if col < 1 || col > i64::from(EXCEL_MAX_COLUMN_INDEX) {
+            return Err(FormulaEvalError::Value);
+        }
+
+        let mut abs_num = 1_i64;
+        let mut a1 = true;
+        let mut sheet_text = None;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            abs_num = formula_integer_argument(self.parse_comparison()?)?;
+            if !(1..=4).contains(&abs_num) {
+                return Err(FormulaEvalError::Value);
+            }
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                a1 = self.parse_comparison()? != 0.0;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    sheet_text = Some(self.parse_text_value_argument()?);
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                }
+            }
+        }
+
+        let row = u32::try_from(row).map_err(|_| FormulaEvalError::Value)?;
+        let col = u32::try_from(col).map_err(|_| FormulaEvalError::Value)?;
+        let row_absolute = matches!(abs_num, 1 | 2);
+        let column_absolute = matches!(abs_num, 1 | 3);
+        let mut address = if a1 {
+            format_cell_address(row, col, row_absolute, column_absolute)
+        } else {
+            let row_part = if row_absolute {
+                row.to_string()
+            } else {
+                format!("[{row}]")
+            };
+            let col_part = if column_absolute {
+                col.to_string()
+            } else {
+                format!("[{col}]")
+            };
+            format!("R{row_part}C{col_part}")
+        };
+        if let Some(sheet_text) = sheet_text {
+            address = format!(
+                "{}{address}",
+                formula_sheet_address_qualifier(sheet_text.as_str())
+            );
+        }
+        Ok(address)
     }
 
     fn parse_left_text_function(&mut self) -> Result<String, FormulaEvalError> {
@@ -13890,6 +13979,15 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return Err(FormulaEvalError::Unsupported);
         }
         Ok(rect.height() as f64)
+    }
+
+    fn parse_areas_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let _ = self.parse_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Ok(1.0)
     }
 
     fn parse_sheet_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -23032,6 +23130,88 @@ mod tests {
                 OmValue::Number(3.0),
                 OmValue::Number(20.0),
                 OmValue::Number(30.0),
+                OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_address_and_areas_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A11".to_string())],
+                )
+                .expect("Range(A1:A11)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        11,
+                        1,
+                        vec![
+                            OmValue::Text("=AREAS(A1:B2)".to_string()),
+                            OmValue::Text("=ADDRESS(1,1)".to_string()),
+                            OmValue::Text("=ADDRESS(2,3,2)".to_string()),
+                            OmValue::Text("=ADDRESS(2,3,3)".to_string()),
+                            OmValue::Text("=ADDRESS(2,3,4)".to_string()),
+                            OmValue::Text("=ADDRESS(2,3,1,FALSE)".to_string()),
+                            OmValue::Text("=ADDRESS(2,3,4,FALSE)".to_string()),
+                            OmValue::Text(r#"=ADDRESS(1,1,1,TRUE,"Sheet 1")"#.to_string()),
+                            OmValue::Text("=ADDRESS(1,27,1)".to_string()),
+                            OmValue::Text("=ADDRESS(0,1)".to_string()),
+                            OmValue::Text("=ADDRESS(1,16385)".to_string()),
+                        ],
+                    )
+                    .expect("address and areas formulas"),
+                ),
+                &[],
+            )
+            .expect("set address and areas formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("address and areas values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected address and areas value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(1.0),
+                OmValue::Text("$A$1".to_string()),
+                OmValue::Text("C$2".to_string()),
+                OmValue::Text("$C2".to_string()),
+                OmValue::Text("C2".to_string()),
+                OmValue::Text("R2C3".to_string()),
+                OmValue::Text("R[2]C[3]".to_string()),
+                OmValue::Text("'Sheet 1'!$A$1".to_string()),
+                OmValue::Text("$AA$1".to_string()),
+                OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
             ]
         );
