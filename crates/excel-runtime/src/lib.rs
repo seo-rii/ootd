@@ -10265,6 +10265,8 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("SUBSTITUTE")
         || name.eq_ignore_ascii_case("FORMULATEXT")
         || name.eq_ignore_ascii_case("IF")
+        || name.eq_ignore_ascii_case("IFS")
+        || name.eq_ignore_ascii_case("SWITCH")
         || name.eq_ignore_ascii_case("CHOOSE")
         || name.eq_ignore_ascii_case("INDEX")
         || name.eq_ignore_ascii_case("VLOOKUP")
@@ -11987,6 +11989,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("IF") {
             return self.parse_if_function();
         }
+        if name.eq_ignore_ascii_case("IFS") {
+            return formula_number_from_value_probe(self.parse_ifs_value_function()?);
+        }
+        if name.eq_ignore_ascii_case("SWITCH") {
+            return formula_number_from_value_probe(self.parse_switch_value_function()?);
+        }
         if name.eq_ignore_ascii_case("AND") {
             return self.parse_logical_function(FormulaLogicalFunction::And);
         }
@@ -12656,6 +12664,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         if name.eq_ignore_ascii_case("IF") {
             return formula_selected_text_from_value_probe(self.parse_if_value_function()?);
+        }
+        if name.eq_ignore_ascii_case("IFS") {
+            return formula_selected_text_from_value_probe(self.parse_ifs_value_function()?);
+        }
+        if name.eq_ignore_ascii_case("SWITCH") {
+            return formula_selected_text_from_value_probe(self.parse_switch_value_function()?);
         }
         if name.eq_ignore_ascii_case("CHOOSE") {
             return formula_selected_text_from_value_probe(self.parse_choose_value_function()?);
@@ -13327,6 +13341,69 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         } else {
             false_value
         })
+    }
+
+    fn parse_ifs_value_function(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let mut selected_value = None;
+        loop {
+            let condition = match self.parse_catchable_argument()? {
+                Ok(condition) => condition,
+                Err(error) if selected_value.is_none() => return Err(error),
+                Err(_) => 0.0,
+            };
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let value = self.parse_value_probe_argument()?;
+            if selected_value.is_none() && condition != 0.0 {
+                selected_value = Some(value);
+            }
+            self.skip_whitespace();
+            if self.consume_char(')') {
+                return selected_value.ok_or(FormulaEvalError::NA);
+            }
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+        }
+    }
+
+    fn parse_switch_value_function(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let expression = self.parse_value_probe_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let mut selected_value = None;
+        let mut saw_pair = false;
+        loop {
+            let candidate_or_default = self.parse_value_probe_argument()?;
+            self.skip_whitespace();
+            if self.consume_char(')') {
+                if !saw_pair {
+                    return Err(FormulaEvalError::Value);
+                }
+                return Ok(selected_value.unwrap_or(candidate_or_default));
+            }
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let result = self.parse_value_probe_argument()?;
+            if selected_value.is_none()
+                && formula_value_probe_exact_match(&expression, &candidate_or_default)?
+            {
+                selected_value = Some(result);
+            }
+            saw_pair = true;
+            self.skip_whitespace();
+            if self.consume_char(')') {
+                return selected_value.ok_or(FormulaEvalError::NA);
+            }
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+        }
     }
 
     fn parse_choose_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -21993,6 +22070,119 @@ mod tests {
                     &[OmValue::Text("=IF(TRUE, \"eval\", \"miss\")".to_string())],
                 )
                 .expect("Application.Evaluate text IF"),
+            OmValue::Text("eval".to_string())
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_ifs_and_switch_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A12".to_string())],
+                )
+                .expect("Range(A1:A12)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        12,
+                        1,
+                        vec![
+                            OmValue::Text("=IFS(TRUE, 10)".to_string()),
+                            OmValue::Text("=IFS(FALSE, 1, 2>1, 22)".to_string()),
+                            OmValue::Text("=IFS(FALSE, 1)".to_string()),
+                            OmValue::Text("=IFS(FALSE, \"no\", TRUE, \"yes\")".to_string()),
+                            OmValue::Text("=IFS(TRUE, 1/0, TRUE, 9)".to_string()),
+                            OmValue::Text("=IFS(TRUE, 5, 1/0, 9)".to_string()),
+                            OmValue::Text("=SWITCH(2, 1, 10, 2, 20, 30)".to_string()),
+                            OmValue::Text("=SWITCH(3, 1, 10, 2, 20, 30)".to_string()),
+                            OmValue::Text("=SWITCH(\"b\", \"a\", 1, \"b\", 2)".to_string()),
+                            OmValue::Text("=SWITCH(\"z\", \"a\", 1)".to_string()),
+                            OmValue::Text(
+                                "=SWITCH(\"b\", \"a\", \"alpha\", \"b\", \"beta\", \"fallback\")"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=CONCAT(IFS(TRUE, \"I\"), SWITCH(1, 1, \"S\"))".to_string(),
+                            ),
+                        ],
+                    )
+                    .expect("IFS and SWITCH formulas"),
+                ),
+                &[],
+            )
+            .expect("set IFS and SWITCH formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("IFS and SWITCH values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected IFS and SWITCH value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(10.0),
+                OmValue::Number(22.0),
+                OmValue::Error(CellError::NA),
+                OmValue::Text("yes".to_string()),
+                OmValue::Error(CellError::Div0),
+                OmValue::Number(5.0),
+                OmValue::Number(20.0),
+                OmValue::Number(30.0),
+                OmValue::Number(2.0),
+                OmValue::Error(CellError::NA),
+                OmValue::Text("beta".to_string()),
+                OmValue::Text("IS".to_string()),
+            ]
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    runtime.root_application(),
+                    "Evaluate",
+                    &[OmValue::Text(
+                        "=IFS(1>2, \"miss\", 2>1, \"eval\")".to_string(),
+                    )],
+                )
+                .expect("Application.Evaluate text IFS"),
+            OmValue::Text("eval".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    runtime.root_application(),
+                    "Evaluate",
+                    &[OmValue::Text(
+                        "=SWITCH(\"x\", \"x\", \"eval\", \"miss\")".to_string(),
+                    )],
+                )
+                .expect("Application.Evaluate text SWITCH"),
             OmValue::Text("eval".to_string())
         );
     }

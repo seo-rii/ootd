@@ -102,11 +102,14 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `NOT`
 - `XOR`
 - `IF`
+- `IFS`
+- `SWITCH`
 
 Logical notes:
 
 - `AND`, `OR`, and `XOR` support scalar arguments and rectangular range arguments.
 - Text and blank cells inside logical range arguments are ignored; a logical range with no numeric or boolean values returns `#VALUE!`.
+- `IF`, `IFS`, and `SWITCH` can return scalar text when the selected branch or result is text.
 
 ### Aggregate and count helpers
 
@@ -207,7 +210,7 @@ Lookup notes:
 - `ROW()` and `COLUMN()` without arguments resolve against the formula cell position during recalculation.
 - Lookup comparisons support numbers, booleans, and case-insensitive text.
 - `INDEX`, `VLOOKUP`, `HLOOKUP`, and `XLOOKUP` return scalar text results as `CellValue::Text`; numeric results still flow through the numeric evaluator.
-- `IF` and `CHOOSE` can return scalar text when the selected branch or argument is text.
+- `CHOOSE` can return scalar text when the selected argument is text.
 
 ### Date and time serial helpers
 
