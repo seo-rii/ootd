@@ -8683,6 +8683,7 @@ enum FormulaScalarFunction {
     Ddb,
     Degrees,
     Delta,
+    Disc,
     EDate,
     EOMonth,
     Effect,
@@ -8696,6 +8697,7 @@ enum FormulaScalarFunction {
     GeStep,
     Hour,
     If,
+    Intrate,
     IsoCeiling,
     IsoWeekNum,
     IsEven,
@@ -8718,7 +8720,9 @@ enum FormulaScalarFunction {
     PermutationA,
     Pi,
     Radians,
+    PriceDisc,
     Quotient,
+    Received,
     RoundDown,
     Round,
     RoundUp,
@@ -8741,6 +8745,7 @@ enum FormulaScalarFunction {
     WeekNum,
     Year,
     YearFrac,
+    YieldDisc,
 }
 
 impl FormulaScalarFunction {
@@ -8815,6 +8820,8 @@ impl FormulaScalarFunction {
             Some(Self::Degrees)
         } else if name.eq_ignore_ascii_case("DELTA") {
             Some(Self::Delta)
+        } else if name.eq_ignore_ascii_case("DISC") {
+            Some(Self::Disc)
         } else if name.eq_ignore_ascii_case("EDATE") {
             Some(Self::EDate)
         } else if name.eq_ignore_ascii_case("EOMONTH") {
@@ -8841,6 +8848,8 @@ impl FormulaScalarFunction {
             Some(Self::Hour)
         } else if name.eq_ignore_ascii_case("IF") {
             Some(Self::If)
+        } else if name.eq_ignore_ascii_case("INTRATE") {
+            Some(Self::Intrate)
         } else if name.eq_ignore_ascii_case("ISO.CEILING") {
             Some(Self::IsoCeiling)
         } else if name.eq_ignore_ascii_case("ISOWEEKNUM") {
@@ -8885,8 +8894,12 @@ impl FormulaScalarFunction {
             Some(Self::Pi)
         } else if name.eq_ignore_ascii_case("RADIANS") {
             Some(Self::Radians)
+        } else if name.eq_ignore_ascii_case("PRICEDISC") {
+            Some(Self::PriceDisc)
         } else if name.eq_ignore_ascii_case("QUOTIENT") {
             Some(Self::Quotient)
+        } else if name.eq_ignore_ascii_case("RECEIVED") {
+            Some(Self::Received)
         } else if name.eq_ignore_ascii_case("ROUNDDOWN") {
             Some(Self::RoundDown)
         } else if name.eq_ignore_ascii_case("ROUND") {
@@ -8931,6 +8944,8 @@ impl FormulaScalarFunction {
             Some(Self::Year)
         } else if name.eq_ignore_ascii_case("YEARFRAC") {
             Some(Self::YearFrac)
+        } else if name.eq_ignore_ascii_case("YIELDDISC") {
+            Some(Self::YieldDisc)
         } else {
             None
         }
@@ -9058,6 +9073,33 @@ impl FormulaScalarFunction {
             }
             Ok(basis as i64)
         };
+        let financial_date_serial = |value: f64| -> Result<i64, FormulaEvalError> {
+            let serial = formula_serial_integer(value).map_err(|_| FormulaEvalError::Value)?;
+            formula_ymd_from_serial(serial as f64)
+                .map(|_| serial)
+                .map_err(|_| FormulaEvalError::Value)
+        };
+        let yearfrac_by_basis =
+            |start_serial: i64, end_serial: i64, basis: i64| -> Result<f64, FormulaEvalError> {
+                match basis {
+                    0 => Ok(days360(start_serial, end_serial, false)? as f64 / 360.0),
+                    1 => yearfrac_actual_actual(start_serial, end_serial),
+                    2 => Ok((end_serial - start_serial) as f64 / 360.0),
+                    3 => Ok((end_serial - start_serial) as f64 / 365.0),
+                    4 => Ok(days360(start_serial, end_serial, true)? as f64 / 360.0),
+                    _ => Err(FormulaEvalError::Num),
+                }
+            };
+        let discount_security_yearfrac =
+            |settlement: f64, maturity: f64, basis: f64| -> Result<f64, FormulaEvalError> {
+                let basis = yearfrac_basis(basis)?;
+                let settlement = financial_date_serial(settlement)?;
+                let maturity = financial_date_serial(maturity)?;
+                if settlement >= maturity {
+                    return Err(FormulaEvalError::Num);
+                }
+                yearfrac_by_basis(settlement, maturity, basis)
+            };
         let normalize_zero = |value: f64| if value == 0.0 { 0.0 } else { value };
         let ceiling_floor_math = |number: f64,
                                   significance: f64,
@@ -9618,6 +9660,28 @@ impl FormulaScalarFunction {
                 };
                 Ok(if left == right { 1.0 } else { 0.0 })
             }
+            FormulaScalarFunction::Disc => {
+                let (settlement, maturity, price, redemption, basis) = match args {
+                    [settlement, maturity, price, redemption] => {
+                        (*settlement, *maturity, *price, *redemption, 0.0)
+                    }
+                    [settlement, maturity, price, redemption, basis] => {
+                        (*settlement, *maturity, *price, *redemption, *basis)
+                    }
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if ![settlement, maturity, price, redemption, basis]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if price <= 0.0 || redemption <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let yearfrac = discount_security_yearfrac(settlement, maturity, basis)?;
+                checked_numeric_result((redemption - price) / redemption / yearfrac)
+            }
             FormulaScalarFunction::EDate => {
                 let [serial, months] = args else {
                     return Err(FormulaEvalError::Value);
@@ -9728,6 +9792,28 @@ impl FormulaScalarFunction {
                 } else {
                     *false_value
                 })
+            }
+            FormulaScalarFunction::Intrate => {
+                let (settlement, maturity, investment, redemption, basis) = match args {
+                    [settlement, maturity, investment, redemption] => {
+                        (*settlement, *maturity, *investment, *redemption, 0.0)
+                    }
+                    [settlement, maturity, investment, redemption, basis] => {
+                        (*settlement, *maturity, *investment, *redemption, *basis)
+                    }
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if ![settlement, maturity, investment, redemption, basis]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if investment <= 0.0 || redemption <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let yearfrac = discount_security_yearfrac(settlement, maturity, basis)?;
+                checked_numeric_result((redemption - investment) / investment / yearfrac)
             }
             FormulaScalarFunction::IsoCeiling => {
                 let (number, significance) = match args {
@@ -9906,6 +9992,28 @@ impl FormulaScalarFunction {
                 }
                 checked_numeric_result((fv / pv).ln() / (1.0 + rate).ln())
             }
+            FormulaScalarFunction::PriceDisc => {
+                let (settlement, maturity, discount, redemption, basis) = match args {
+                    [settlement, maturity, discount, redemption] => {
+                        (*settlement, *maturity, *discount, *redemption, 0.0)
+                    }
+                    [settlement, maturity, discount, redemption, basis] => {
+                        (*settlement, *maturity, *discount, *redemption, *basis)
+                    }
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if ![settlement, maturity, discount, redemption, basis]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if discount <= 0.0 || redemption <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let yearfrac = discount_security_yearfrac(settlement, maturity, basis)?;
+                checked_numeric_result(redemption * (1.0 - discount * yearfrac))
+            }
             FormulaScalarFunction::Round => {
                 let [value, digits] = args else {
                     return Err(FormulaEvalError::Value);
@@ -9926,6 +10034,32 @@ impl FormulaScalarFunction {
                 };
                 let factor = formula_round_factor(*digits)?;
                 Ok(round_away_from_zero(value * factor) / factor)
+            }
+            FormulaScalarFunction::Received => {
+                let (settlement, maturity, investment, discount, basis) = match args {
+                    [settlement, maturity, investment, discount] => {
+                        (*settlement, *maturity, *investment, *discount, 0.0)
+                    }
+                    [settlement, maturity, investment, discount, basis] => {
+                        (*settlement, *maturity, *investment, *discount, *basis)
+                    }
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if ![settlement, maturity, investment, discount, basis]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if investment <= 0.0 || discount <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let yearfrac = discount_security_yearfrac(settlement, maturity, basis)?;
+                let denominator = 1.0 - discount * yearfrac;
+                if denominator <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                checked_numeric_result(investment / denominator)
             }
             FormulaScalarFunction::Rri => {
                 let [nper, pv, fv] = args else {
@@ -10194,6 +10328,28 @@ impl FormulaScalarFunction {
                     4 => Ok(days360(start_serial, end_serial, true)? as f64 / 360.0),
                     _ => Err(FormulaEvalError::Num),
                 }
+            }
+            FormulaScalarFunction::YieldDisc => {
+                let (settlement, maturity, price, redemption, basis) = match args {
+                    [settlement, maturity, price, redemption] => {
+                        (*settlement, *maturity, *price, *redemption, 0.0)
+                    }
+                    [settlement, maturity, price, redemption, basis] => {
+                        (*settlement, *maturity, *price, *redemption, *basis)
+                    }
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if ![settlement, maturity, price, redemption, basis]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if price <= 0.0 || redemption <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let yearfrac = discount_security_yearfrac(settlement, maturity, basis)?;
+                checked_numeric_result((redemption - price) / price / yearfrac)
             }
         }
     }
@@ -24609,6 +24765,86 @@ mod tests {
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Num),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_discount_security_financial_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A10".to_string())],
+                )
+                .expect("Range(A1:A10)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        10,
+                        1,
+                        vec![
+                            OmValue::Text("=DISC(1, 366, 90, 100, 3)".to_string()),
+                            OmValue::Text("=PRICEDISC(1, 366, 0.1, 100, 3)".to_string()),
+                            OmValue::Text("=INTRATE(1, 366, 90, 100, 3)".to_string()),
+                            OmValue::Text("=RECEIVED(1, 366, 90, 0.1, 3)".to_string()),
+                            OmValue::Text("=YIELDDISC(1, 366, 90, 100, 3)".to_string()),
+                            OmValue::Text("=DISC(366, 1, 90, 100, 3)".to_string()),
+                            OmValue::Text("=PRICEDISC(1, 366, 0, 100, 3)".to_string()),
+                            OmValue::Text("=RECEIVED(1, 366, 90, 1, 3)".to_string()),
+                            OmValue::Text("=YIELDDISC(1, 366, 0, 100, 3)".to_string()),
+                            OmValue::Text("=INTRATE(0, 366, 90, 100, 3)".to_string()),
+                        ],
+                    )
+                    .expect("discount security financial formulas"),
+                ),
+                &[],
+            )
+            .expect("set discount security financial formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("discount security financial values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected discount security financial value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(0.1),
+                OmValue::Number(90.0),
+                OmValue::Number(1.0 / 9.0),
+                OmValue::Number(100.0),
+                OmValue::Number(1.0 / 9.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
             ]
         );
     }
