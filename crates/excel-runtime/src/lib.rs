@@ -8720,11 +8720,13 @@ enum FormulaScalarFunction {
     Sec,
     Sech,
     Sign,
+    Sln,
     Power,
     Sin,
     Sinh,
     Sqrt,
     Second,
+    Syd,
     Tan,
     Tanh,
     Time,
@@ -8881,6 +8883,8 @@ impl FormulaScalarFunction {
             Some(Self::Sech)
         } else if name.eq_ignore_ascii_case("SIGN") {
             Some(Self::Sign)
+        } else if name.eq_ignore_ascii_case("SLN") {
+            Some(Self::Sln)
         } else if name.eq_ignore_ascii_case("POWER") {
             Some(Self::Power)
         } else if name.eq_ignore_ascii_case("SIN") {
@@ -8891,6 +8895,8 @@ impl FormulaScalarFunction {
             Some(Self::Sqrt)
         } else if name.eq_ignore_ascii_case("SECOND") {
             Some(Self::Second)
+        } else if name.eq_ignore_ascii_case("SYD") {
+            Some(Self::Syd)
         } else if name.eq_ignore_ascii_case("TAN") {
             Some(Self::Tan)
         } else if name.eq_ignore_ascii_case("TANH") {
@@ -9799,6 +9805,18 @@ impl FormulaScalarFunction {
                     0.0
                 })
             }
+            FormulaScalarFunction::Sln => {
+                let [cost, salvage, life] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if ![cost, salvage, life].iter().all(|value| value.is_finite()) {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *life <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                checked_numeric_result((cost - salvage) / life)
+            }
             FormulaScalarFunction::Permut => {
                 let [number, chosen] = args else {
                     return Err(FormulaEvalError::Value);
@@ -9907,6 +9925,23 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Value);
                 };
                 Ok(formula_time_parts_from_serial(*serial)?.2 as f64)
+            }
+            FormulaScalarFunction::Syd => {
+                let [cost, salvage, life, period] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if ![cost, salvage, life, period]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *life <= 0.0 || *period <= 0.0 || *period > *life {
+                    return Err(FormulaEvalError::Num);
+                }
+                checked_numeric_result(
+                    (cost - salvage) * (life - period + 1.0) * 2.0 / (life * (life + 1.0)),
+                )
             }
             FormulaScalarFunction::Tan => {
                 let [value] = args else {
@@ -23545,6 +23580,76 @@ mod tests {
                 OmValue::Number(-100.0),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_basic_depreciation_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A7".to_string())])
+                .expect("Range(A1:A7)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        7,
+                        1,
+                        vec![
+                            OmValue::Text("=SLN(1000, 100, 9)".to_string()),
+                            OmValue::Text("=SYD(1000, 100, 9, 1)".to_string()),
+                            OmValue::Text("=SYD(1000, 100, 9, 9)".to_string()),
+                            OmValue::Text("=SLN(100, 20, 0)".to_string()),
+                            OmValue::Text("=SYD(100, 20, 5, 0)".to_string()),
+                            OmValue::Text("=SYD(100, 20, 5, 6)".to_string()),
+                            OmValue::Text("=SYD(100, 20, 0, 1)".to_string()),
+                        ],
+                    )
+                    .expect("basic depreciation formulas"),
+                ),
+                &[],
+            )
+            .expect("set basic depreciation formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("basic depreciation values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected basic depreciation value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(100.0),
+                OmValue::Number(180.0),
+                OmValue::Number(20.0),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
