@@ -8649,6 +8649,7 @@ fn formula_eval_error_from_cell_error(error: CellError) -> FormulaEvalError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FormulaScalarFunction {
     Abs,
+    AccrInt,
     AccrIntM,
     Acos,
     Acosh,
@@ -8768,6 +8769,8 @@ impl FormulaScalarFunction {
     fn from_name(name: &str) -> Option<Self> {
         if name.eq_ignore_ascii_case("ABS") {
             Some(Self::Abs)
+        } else if name.eq_ignore_ascii_case("ACCRINT") {
+            Some(Self::AccrInt)
         } else if name.eq_ignore_ascii_case("ACCRINTM") {
             Some(Self::AccrIntM)
         } else if name.eq_ignore_ascii_case("ACOS") {
@@ -9641,6 +9644,146 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Value);
                 };
                 Ok(value.abs())
+            }
+            FormulaScalarFunction::AccrInt => {
+                let (issue, first_interest, settlement, rate, par, frequency, basis, calc_method) =
+                    match args {
+                        [issue, first_interest, settlement, rate, par, frequency] => (
+                            *issue,
+                            *first_interest,
+                            *settlement,
+                            *rate,
+                            *par,
+                            *frequency,
+                            0.0,
+                            1.0,
+                        ),
+                        [
+                            issue,
+                            first_interest,
+                            settlement,
+                            rate,
+                            par,
+                            frequency,
+                            basis,
+                        ] => (
+                            *issue,
+                            *first_interest,
+                            *settlement,
+                            *rate,
+                            *par,
+                            *frequency,
+                            *basis,
+                            1.0,
+                        ),
+                        [
+                            issue,
+                            first_interest,
+                            settlement,
+                            rate,
+                            par,
+                            frequency,
+                            basis,
+                            calc_method,
+                        ] => (
+                            *issue,
+                            *first_interest,
+                            *settlement,
+                            *rate,
+                            *par,
+                            *frequency,
+                            *basis,
+                            *calc_method,
+                        ),
+                        _ => return Err(FormulaEvalError::Value),
+                    };
+                if ![
+                    issue,
+                    first_interest,
+                    settlement,
+                    rate,
+                    par,
+                    frequency,
+                    basis,
+                    calc_method,
+                ]
+                .iter()
+                .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if rate <= 0.0 || par <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let frequency = coupon_frequency(frequency)?;
+                let basis = yearfrac_basis(basis)?;
+                let issue = financial_date_serial(issue)?;
+                let first_interest = financial_date_serial(first_interest)?;
+                let settlement = financial_date_serial(settlement)?;
+                if issue >= settlement {
+                    return Err(FormulaEvalError::Num);
+                }
+
+                let months_per_coupon = 12 / frequency;
+                let accrual_start = if calc_method == 0.0 && settlement > first_interest {
+                    first_interest
+                } else {
+                    issue
+                };
+                let mut next_coupon = first_interest;
+                let mut guard = 0_usize;
+                while next_coupon <= accrual_start {
+                    next_coupon =
+                        formula_edate(next_coupon as f64, months_per_coupon as f64)? as i64;
+                    guard += 1;
+                    if guard > 10000 {
+                        return Err(FormulaEvalError::Num);
+                    }
+                }
+                loop {
+                    let previous_coupon =
+                        formula_edate(next_coupon as f64, -(months_per_coupon as f64))? as i64;
+                    if previous_coupon <= accrual_start {
+                        break;
+                    }
+                    next_coupon = previous_coupon;
+                    guard += 1;
+                    if guard > 10000 {
+                        return Err(FormulaEvalError::Num);
+                    }
+                }
+
+                let coupon_interest = par * rate / frequency as f64;
+                let mut accrued_periods = 0.0;
+                while accrual_start < settlement {
+                    let previous_coupon =
+                        formula_edate(next_coupon as f64, -(months_per_coupon as f64))? as i64;
+                    let period_start = accrual_start.max(previous_coupon);
+                    let period_end = settlement.min(next_coupon);
+                    if period_end > period_start {
+                        let accrued_days = coupon_days_between(period_start, period_end, basis)?;
+                        let period_days =
+                            coupon_period_days(previous_coupon, next_coupon, frequency, basis);
+                        if period_days <= 0.0 {
+                            return Err(FormulaEvalError::Num);
+                        }
+                        accrued_periods += accrued_days / period_days;
+                        if !accrued_periods.is_finite() {
+                            return Err(FormulaEvalError::Num);
+                        }
+                    }
+                    if next_coupon >= settlement {
+                        break;
+                    }
+                    next_coupon =
+                        formula_edate(next_coupon as f64, months_per_coupon as f64)? as i64;
+                    guard += 1;
+                    if guard > 10000 {
+                        return Err(FormulaEvalError::Num);
+                    }
+                }
+
+                checked_numeric_result(coupon_interest * accrued_periods)
             }
             FormulaScalarFunction::AccrIntM => {
                 let (issue, settlement, rate, par, basis) = match args {
@@ -26981,6 +27124,134 @@ mod tests {
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_accrint_financial_formula() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A12".to_string())],
+                )
+                .expect("Range(A1:A12)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        12,
+                        1,
+                        vec![
+                            OmValue::Text("=ACCRINT(39508,39691,39569,0.1,1000,2,0)"
+                                .to_string()),
+                            OmValue::Text(
+                                "=ACCRINT(DATE(2008,3,5),39691,39569,0.1,1000,2,0,FALSE)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=ACCRINT(DATE(2008,4,5),39691,39569,0.1,1000,2,0,TRUE)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=ACCRINT(DATE(2008,1,1),DATE(2008,7,1),DATE(2009,1,1),0.12,1000,2,0,TRUE)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=ACCRINT(DATE(2008,1,1),DATE(2008,7,1),DATE(2009,1,1),0.12,1000,2,0,FALSE)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=ACCRINT(DATE(2008,1,1),DATE(2008,7,1),DATE(2009,1,1),0,1000,2,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=ACCRINT(DATE(2008,1,1),DATE(2008,7,1),DATE(2009,1,1),0.12,0,2,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=ACCRINT(DATE(2008,1,1),DATE(2008,7,1),DATE(2009,1,1),0.12,1000,3,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=ACCRINT(DATE(2008,1,1),DATE(2008,7,1),DATE(2009,1,1),0.12,1000,2,5)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=ACCRINT(DATE(2009,1,1),DATE(2008,7,1),DATE(2009,1,1),0.12,1000,2,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=ACCRINT(0,DATE(2008,7,1),DATE(2009,1,1),0.12,1000,2,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=ACCRINT(DATE(2008,1,1),0,DATE(2009,1,1),0.12,1000,2,0)"
+                                    .to_string(),
+                            ),
+                        ],
+                    )
+                    .expect("ACCRINT formulas"),
+                ),
+                &[],
+            )
+            .expect("set ACCRINT formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("ACCRINT values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected ACCRINT value array");
+        };
+        let expected_numbers = [
+            16.666666666666668,
+            15.555555555555557,
+            7.222222222222222,
+            120.0,
+            60.0,
+        ];
+        for (index, expected) in expected_numbers.into_iter().enumerate() {
+            let number = expect_number(values.values[index].clone());
+            assert!(
+                (number - expected).abs() < 1e-8,
+                "ACCRINT result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            &values.values[5..],
+            &[
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
             ]
         );

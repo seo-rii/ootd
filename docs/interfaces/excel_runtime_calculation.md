@@ -131,6 +131,7 @@ Roman numeral notes:
 - `YIELDDISC`
 - `PRICEMAT`
 - `YIELDMAT`
+- `ACCRINT`
 - `ACCRINTM`
 - `TBILLEQ`
 - `TBILLPRICE`
@@ -175,6 +176,7 @@ Financial notes:
 - `MIRR` preserves value order, includes zero cash flows as periods, and ignores text, logical, and empty cells in range inputs.
 - `DISC`, `INTRATE`, `RECEIVED`, `PRICEDISC`, and `YIELDDISC` cover discounted securities using the same basis values as `YEARFRAC`.
 - `PRICEMAT` and `YIELDMAT` cover securities that pay interest at maturity, validating issue, settlement, and maturity dates against the same basis values.
+- `ACCRINT` calculates periodic accrued interest across normal and odd first coupon periods, honoring the optional `calc_method` argument.
 - `ACCRINTM` calculates interest accrued to maturity using `YEARFRAC` basis values and defaults omitted par to `1000`.
 - `TBILLEQ`, `TBILLPRICE`, and `TBILLYIELD` cover Treasury bill formulas, using actual days and rejecting maturities more than 365 days after settlement.
 - `COUPDAYBS`, `COUPDAYS`, `COUPDAYSNC`, `COUPNCD`, `COUPNUM`, and `COUPPCD` cover regular coupon schedules with annual, semiannual, and quarterly frequencies and basis values `0` through `4`.
