@@ -13029,6 +13029,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("NETWORKDAYS.INTL") {
             return self.parse_networkdays_intl_function();
         }
+        if name.eq_ignore_ascii_case("SERIESSUM") {
+            return self.parse_series_sum_function();
+        }
         if let Some(function) = FormulaScalarFunction::from_name(name) {
             return self.parse_scalar_function(function);
         }
@@ -16483,6 +16486,54 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
             return Err(FormulaEvalError::Unsupported);
         }
+    }
+
+    fn parse_series_sum_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let x = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let n = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let m = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        self.skip_whitespace();
+        let coefficients = self.parse_aggregate_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        if coefficients.is_empty() {
+            return Err(FormulaEvalError::Value);
+        }
+        if ![x, n, m].iter().all(|value| value.is_finite())
+            || coefficients.iter().any(|value| !value.is_finite())
+        {
+            return Err(FormulaEvalError::Value);
+        }
+        let mut total = 0.0;
+        for (index, coefficient) in coefficients.iter().enumerate() {
+            let exponent = n + index as f64 * m;
+            if !exponent.is_finite() {
+                return Err(FormulaEvalError::Num);
+            }
+            let term = coefficient * x.powf(exponent);
+            if !term.is_finite() {
+                return Err(FormulaEvalError::Num);
+            }
+            total += term;
+            if !total.is_finite() {
+                return Err(FormulaEvalError::Num);
+            }
+        }
+        Ok(total)
     }
 
     fn parse_counta_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -22665,6 +22716,101 @@ mod tests {
                 OmValue::Number(-1.3),
                 OmValue::Number(-1.2),
                 OmValue::Number(130.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_series_sum_math_formula() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let coefficients = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A4".to_string())])
+                .expect("Range(A1:A4)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B7".to_string())])
+                .expect("Range(B1:B7)"),
+        );
+
+        runtime
+            .dispatch_set(
+                coefficients,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        1,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                            OmValue::Text("ignored".to_string()),
+                        ],
+                    )
+                    .expect("SERIESSUM coefficient values"),
+                ),
+                &[],
+            )
+            .expect("set SERIESSUM coefficient values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        7,
+                        1,
+                        vec![
+                            OmValue::Text("=SERIESSUM(2, 0, 1, A1:A3)".to_string()),
+                            OmValue::Text("=SERIESSUM(2, 1, 2, A1:A2)".to_string()),
+                            OmValue::Text("=SERIESSUM(2, 0, 1, 5)".to_string()),
+                            OmValue::Text("=SERIESSUM(0, 0, 1, A1:A2)".to_string()),
+                            OmValue::Text("=SERIESSUM(0, -1, 1, A1:A1)".to_string()),
+                            OmValue::Text("=SERIESSUM(2, 0, 1, A4:A4)".to_string()),
+                            OmValue::Text("=SERIESSUM(-2, 0.5, 1, 1)".to_string()),
+                        ],
+                    )
+                    .expect("SERIESSUM formulas"),
+                ),
+                &[],
+            )
+            .expect("set SERIESSUM formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("SERIESSUM values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected SERIESSUM value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(17.0),
+                OmValue::Number(18.0),
+                OmValue::Number(5.0),
+                OmValue::Number(1.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Num),
             ]
         );
     }
