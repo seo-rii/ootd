@@ -8758,6 +8758,7 @@ enum FormulaScalarFunction {
     TBillYield,
     Time,
     Trunc,
+    Vdb,
     Weekday,
     WeekNum,
     Year,
@@ -8989,6 +8990,8 @@ impl FormulaScalarFunction {
             Some(Self::Time)
         } else if name.eq_ignore_ascii_case("TRUNC") {
             Some(Self::Trunc)
+        } else if name.eq_ignore_ascii_case("VDB") {
+            Some(Self::Vdb)
         } else if name.eq_ignore_ascii_case("WEEKDAY") {
             Some(Self::Weekday)
         } else if name.eq_ignore_ascii_case("WEEKNUM") {
@@ -11152,6 +11155,99 @@ impl FormulaScalarFunction {
                 };
                 let factor = formula_round_factor(digits)?;
                 Ok(round_toward_zero(value * factor) / factor)
+            }
+            FormulaScalarFunction::Vdb => {
+                let (cost, salvage, life, start_period, end_period, factor, no_switch) = match args
+                {
+                    [cost, salvage, life, start_period, end_period] => {
+                        (*cost, *salvage, *life, *start_period, *end_period, 2.0, 0.0)
+                    }
+                    [cost, salvage, life, start_period, end_period, factor] => (
+                        *cost,
+                        *salvage,
+                        *life,
+                        *start_period,
+                        *end_period,
+                        *factor,
+                        0.0,
+                    ),
+                    [
+                        cost,
+                        salvage,
+                        life,
+                        start_period,
+                        end_period,
+                        factor,
+                        no_switch,
+                    ] => (
+                        *cost,
+                        *salvage,
+                        *life,
+                        *start_period,
+                        *end_period,
+                        *factor,
+                        *no_switch,
+                    ),
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if ![
+                    cost,
+                    salvage,
+                    life,
+                    start_period,
+                    end_period,
+                    factor,
+                    no_switch,
+                ]
+                .iter()
+                .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if cost <= 0.0
+                    || salvage < 0.0
+                    || salvage > cost
+                    || life <= 0.0
+                    || start_period < 0.0
+                    || end_period <= start_period
+                    || end_period > life
+                    || factor <= 0.0
+                {
+                    return Err(FormulaEvalError::Num);
+                }
+                let no_switch = no_switch != 0.0;
+                let mut book_value = cost;
+                let mut depreciation_total = 0.0;
+                let mut period = 0.0;
+                let period_limit = end_period.ceil();
+                while period < period_limit {
+                    let declining_depreciation = book_value * factor / life;
+                    let remaining_periods = life - period;
+                    if remaining_periods <= 0.0 {
+                        return Err(FormulaEvalError::Num);
+                    }
+                    let straight_line_depreciation = (book_value - salvage) / remaining_periods;
+                    let mut depreciation = if no_switch {
+                        declining_depreciation
+                    } else {
+                        declining_depreciation.max(straight_line_depreciation)
+                    };
+                    depreciation = depreciation.min(book_value - salvage).max(0.0);
+                    let overlap_start = start_period.max(period);
+                    let overlap_end = end_period.min(period + 1.0);
+                    if overlap_end > overlap_start {
+                        depreciation_total += depreciation * (overlap_end - overlap_start);
+                        if !depreciation_total.is_finite() {
+                            return Err(FormulaEvalError::Num);
+                        }
+                    }
+                    book_value -= depreciation;
+                    if !book_value.is_finite() {
+                        return Err(FormulaEvalError::Num);
+                    }
+                    period += 1.0;
+                }
+                checked_numeric_result(depreciation_total)
             }
             FormulaScalarFunction::Weekday => {
                 let (serial, return_type) = match args {
@@ -28008,6 +28104,108 @@ mod tests {
                 OmValue::Number(400.0),
                 OmValue::Number(240.0),
                 OmValue::Number(160.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_vdb_depreciation_formula() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A16".to_string())],
+                )
+                .expect("Range(A1:A16)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        16,
+                        1,
+                        vec![
+                            OmValue::Text("=VDB(2400,300,10*365,0,1)".to_string()),
+                            OmValue::Text("=VDB(2400,300,10*12,0,1)".to_string()),
+                            OmValue::Text("=VDB(2400,300,10,0,1)".to_string()),
+                            OmValue::Text("=VDB(2400,300,10*12,6,18)".to_string()),
+                            OmValue::Text("=VDB(2400,300,10*12,6,18,1.5)".to_string()),
+                            OmValue::Text("=VDB(2400,300,10,0,0.875,1.5)".to_string()),
+                            OmValue::Text("=VDB(1000,100,10,5,6,1.5)".to_string()),
+                            OmValue::Text("=VDB(1000,100,10,5,6,1.5,TRUE)".to_string()),
+                            OmValue::Text("=VDB(0,100,10,0,1)".to_string()),
+                            OmValue::Text("=VDB(1000,-1,10,0,1)".to_string()),
+                            OmValue::Text("=VDB(1000,1100,10,0,1)".to_string()),
+                            OmValue::Text("=VDB(1000,100,0,0,1)".to_string()),
+                            OmValue::Text("=VDB(1000,100,10,-1,1)".to_string()),
+                            OmValue::Text("=VDB(1000,100,10,2,1)".to_string()),
+                            OmValue::Text("=VDB(1000,100,10,0,11)".to_string()),
+                            OmValue::Text("=VDB(1000,100,10,0,1,0)".to_string()),
+                        ],
+                    )
+                    .expect("VDB formulas"),
+                ),
+                &[],
+            )
+            .expect("set VDB formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("VDB values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected VDB value array");
+        };
+        let expected_numbers = [
+            2400.0 * 2.0 / 3650.0,
+            40.0,
+            480.0,
+            396.3060532647509,
+            311.8089366582341,
+            315.0,
+            68.7410625,
+            66.555796875,
+        ];
+        for (index, expected) in expected_numbers.into_iter().enumerate() {
+            let number = expect_number(values.values[index].clone());
+            assert!(
+                (number - expected).abs() < 1e-8,
+                "VDB result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            &values.values[8..],
+            &[
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),

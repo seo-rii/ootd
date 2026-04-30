@@ -159,6 +159,7 @@ Roman numeral notes:
 - `DDB`
 - `AMORDEGRC`
 - `AMORLINC`
+- `VDB`
 - `EFFECT`
 - `NOMINAL`
 - `RRI`
@@ -192,6 +193,7 @@ Financial notes:
 - `DDB` covers double-declining balance depreciation with an optional factor and caps each period so accumulated depreciation does not drop below salvage value.
 - `AMORDEGRC` covers French-accounting degressive depreciation, including coefficient selection, integer depreciation rounding, and final-period rate changes.
 - `AMORLINC` covers French-accounting linear depreciation, including prorated first periods and salvage-value caps.
+- `VDB` covers variable declining-balance depreciation over full or partial periods, including the optional straight-line switch.
 - `EFFECT` and `NOMINAL` truncate compounding periods to an integer. `RRI` and `PDURATION` cover direct logarithmic/compound-growth rate helpers.
 
 ### Logical and control helpers
