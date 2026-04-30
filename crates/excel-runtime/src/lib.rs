@@ -12713,6 +12713,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("PPMT") {
             return self.parse_ppmt_function();
         }
+        if name.eq_ignore_ascii_case("CUMIPMT") {
+            return self.parse_cumulative_payment_function(false);
+        }
+        if name.eq_ignore_ascii_case("CUMPRINC") {
+            return self.parse_cumulative_payment_function(true);
+        }
         if name.eq_ignore_ascii_case("NPER") {
             return self.parse_nper_function();
         }
@@ -14372,6 +14378,76 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
 
     fn parse_ppmt_function(&mut self) -> Result<f64, FormulaEvalError> {
         self.parse_ipmt_or_ppmt_function(true)
+    }
+
+    fn parse_cumulative_payment_function(
+        &mut self,
+        principal: bool,
+    ) -> Result<f64, FormulaEvalError> {
+        let rate = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let nper = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let pv = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let start_period = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let end_period = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let payment_type = formula_financial_type_argument(self.parse_comparison()?)?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        if ![rate, nper, pv, start_period, end_period]
+            .iter()
+            .all(|value| value.is_finite())
+        {
+            return Err(FormulaEvalError::Value);
+        }
+        let start_period = start_period.trunc();
+        let end_period = end_period.trunc();
+        if rate <= 0.0
+            || nper <= 0.0
+            || pv <= 0.0
+            || start_period < 1.0
+            || end_period < 1.0
+            || start_period > end_period
+        {
+            return Err(FormulaEvalError::Num);
+        }
+        let payment = formula_pmt_value(rate, nper, pv, 0.0, payment_type)?;
+        let mut total = 0.0;
+        let mut period = start_period;
+        while period <= end_period {
+            let interest = formula_ipmt_value(rate, period, nper, pv, 0.0, payment_type)?;
+            total += if principal {
+                payment - interest
+            } else {
+                interest
+            };
+            period += 1.0;
+        }
+        if total.is_finite() {
+            Ok(total)
+        } else {
+            Err(FormulaEvalError::Num)
+        }
     }
 
     fn parse_nper_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -23392,6 +23468,86 @@ mod tests {
                 OmValue::Number(0.0),
                 OmValue::Number(0.0),
                 OmValue::Number(-20.0),
+                OmValue::Error(CellError::Num),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_cumulative_financial_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A10".to_string())],
+                )
+                .expect("Range(A1:A10)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        10,
+                        1,
+                        vec![
+                            OmValue::Text("=CUMIPMT(1, 2, 75, 1, 2, 0)".to_string()),
+                            OmValue::Text("=CUMPRINC(1, 2, 75, 1, 2, 0)".to_string()),
+                            OmValue::Text("=CUMIPMT(1, 1, 100, 1, 1, 1)".to_string()),
+                            OmValue::Text("=CUMPRINC(1, 1, 100, 1, 1, 1)".to_string()),
+                            OmValue::Text("=CUMIPMT(0, 2, 75, 1, 2, 0)".to_string()),
+                            OmValue::Text("=CUMPRINC(1, 0, 75, 1, 1, 0)".to_string()),
+                            OmValue::Text("=CUMIPMT(1, 2, -75, 1, 2, 0)".to_string()),
+                            OmValue::Text("=CUMIPMT(1, 2, 75, 0, 1, 0)".to_string()),
+                            OmValue::Text("=CUMPRINC(1, 2, 75, 2, 1, 0)".to_string()),
+                            OmValue::Text("=CUMIPMT(1, 2, 75, 1, 2, 2)".to_string()),
+                        ],
+                    )
+                    .expect("cumulative financial formulas"),
+                ),
+                &[],
+            )
+            .expect("set cumulative financial formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("cumulative financial values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected cumulative financial value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(-125.0),
+                OmValue::Number(-75.0),
+                OmValue::Number(0.0),
+                OmValue::Number(-100.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
             ]
         );

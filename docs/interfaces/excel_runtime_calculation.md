@@ -121,6 +121,8 @@ Roman numeral notes:
 - `PMT`
 - `IPMT`
 - `PPMT`
+- `CUMIPMT`
+- `CUMPRINC`
 - `NPER`
 - `ISPMT`
 
@@ -129,6 +131,7 @@ Financial notes:
 - `DOLLARDE` and `DOLLARFR` truncate the denominator argument before conversion, return `#NUM!` for negative denominators, and return `#DIV/0!` when the truncated denominator is zero.
 - `FV`, `PV`, `PMT`, and `NPER` support omitted future/present value and payment timing arguments with the standard `0`/`1` timing modes. `ISPMT` uses Excel's zero-based period convention.
 - `IPMT` and `PPMT` split the standard `PMT` result into interest and principal portions for one-based periods in the range `1..nper`.
+- `CUMIPMT` and `CUMPRINC` sum the corresponding interest or principal portions across a one-based inclusive period range.
 
 ### Logical and control helpers
 
