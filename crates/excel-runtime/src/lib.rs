@@ -8731,6 +8731,7 @@ enum FormulaScalarFunction {
     Price,
     Radians,
     PriceDisc,
+    PriceMat,
     Quotient,
     Received,
     RoundDown,
@@ -8760,6 +8761,7 @@ enum FormulaScalarFunction {
     YearFrac,
     Yield,
     YieldDisc,
+    YieldMat,
 }
 
 impl FormulaScalarFunction {
@@ -8930,6 +8932,8 @@ impl FormulaScalarFunction {
             Some(Self::Radians)
         } else if name.eq_ignore_ascii_case("PRICEDISC") {
             Some(Self::PriceDisc)
+        } else if name.eq_ignore_ascii_case("PRICEMAT") {
+            Some(Self::PriceMat)
         } else if name.eq_ignore_ascii_case("QUOTIENT") {
             Some(Self::Quotient)
         } else if name.eq_ignore_ascii_case("RECEIVED") {
@@ -8988,6 +8992,8 @@ impl FormulaScalarFunction {
             Some(Self::Yield)
         } else if name.eq_ignore_ascii_case("YIELDDISC") {
             Some(Self::YieldDisc)
+        } else if name.eq_ignore_ascii_case("YIELDMAT") {
+            Some(Self::YieldMat)
         } else {
             None
         }
@@ -9142,6 +9148,30 @@ impl FormulaScalarFunction {
                 }
                 yearfrac_by_basis(settlement, maturity, basis)
             };
+        let maturity_security_yearfracs = |settlement: f64,
+                                           maturity: f64,
+                                           issue: f64,
+                                           basis: f64|
+         -> Result<(f64, f64, f64), FormulaEvalError> {
+            let basis = yearfrac_basis(basis)?;
+            let settlement = financial_date_serial(settlement)?;
+            let maturity = financial_date_serial(maturity)?;
+            let issue = financial_date_serial(issue)?;
+            if issue >= settlement || settlement >= maturity {
+                return Err(FormulaEvalError::Num);
+            }
+            let issue_to_maturity = yearfrac_by_basis(issue, maturity, basis)?;
+            let settlement_to_maturity = yearfrac_by_basis(settlement, maturity, basis)?;
+            let issue_to_settlement = yearfrac_by_basis(issue, settlement, basis)?;
+            if issue_to_maturity <= 0.0 || settlement_to_maturity <= 0.0 {
+                return Err(FormulaEvalError::Num);
+            }
+            Ok((
+                issue_to_maturity,
+                settlement_to_maturity,
+                issue_to_settlement,
+            ))
+        };
         let treasury_bill_days =
             |settlement: f64, maturity: f64| -> Result<f64, FormulaEvalError> {
                 let settlement = financial_date_serial(settlement)?;
@@ -10454,6 +10484,33 @@ impl FormulaScalarFunction {
                 let yearfrac = discount_security_yearfrac(settlement, maturity, basis)?;
                 checked_numeric_result(redemption * (1.0 - discount * yearfrac))
             }
+            FormulaScalarFunction::PriceMat => {
+                let (settlement, maturity, issue, rate, yld, basis) = match args {
+                    [settlement, maturity, issue, rate, yld] => {
+                        (*settlement, *maturity, *issue, *rate, *yld, 0.0)
+                    }
+                    [settlement, maturity, issue, rate, yld, basis] => {
+                        (*settlement, *maturity, *issue, *rate, *yld, *basis)
+                    }
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if ![settlement, maturity, issue, rate, yld, basis]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if rate < 0.0 || yld < 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let (issue_to_maturity, settlement_to_maturity, issue_to_settlement) =
+                    maturity_security_yearfracs(settlement, maturity, issue, basis)?;
+                let maturity_value = 100.0 + 100.0 * rate * issue_to_maturity;
+                let accrued_interest = 100.0 * rate * issue_to_settlement;
+                checked_numeric_result(
+                    maturity_value / (1.0 + yld * settlement_to_maturity) - accrued_interest,
+                )
+            }
             FormulaScalarFunction::Round => {
                 let [value, digits] = args else {
                     return Err(FormulaEvalError::Value);
@@ -10876,6 +10933,35 @@ impl FormulaScalarFunction {
                 }
                 let yearfrac = discount_security_yearfrac(settlement, maturity, basis)?;
                 checked_numeric_result((redemption - price) / price / yearfrac)
+            }
+            FormulaScalarFunction::YieldMat => {
+                let (settlement, maturity, issue, rate, price, basis) = match args {
+                    [settlement, maturity, issue, rate, price] => {
+                        (*settlement, *maturity, *issue, *rate, *price, 0.0)
+                    }
+                    [settlement, maturity, issue, rate, price, basis] => {
+                        (*settlement, *maturity, *issue, *rate, *price, *basis)
+                    }
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if ![settlement, maturity, issue, rate, price, basis]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if rate < 0.0 || price <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let (issue_to_maturity, settlement_to_maturity, issue_to_settlement) =
+                    maturity_security_yearfracs(settlement, maturity, issue, basis)?;
+                let maturity_value = 100.0 + 100.0 * rate * issue_to_maturity;
+                let accrued_interest = 100.0 * rate * issue_to_settlement;
+                let investment = price + accrued_interest;
+                if investment <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                checked_numeric_result((maturity_value / investment - 1.0) / settlement_to_maturity)
             }
         }
     }
@@ -26132,6 +26218,126 @@ mod tests {
         assert_eq!(
             &values.values[4..],
             &[
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_price_mat_and_yield_mat_financial_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A11".to_string())],
+                )
+                .expect("Range(A1:A11)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        11,
+                        1,
+                        vec![
+                            OmValue::Text("=PRICEMAT(181,366,1,0.1,0.1,3)".to_string()),
+                            OmValue::Text("=YIELDMAT(181,366,1,0.1,100,3)".to_string()),
+                            OmValue::Text(
+                                "=PRICEMAT(DATE(2008,2,15),DATE(2008,4,13),DATE(2007,11,11),0.061,0.061,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=YIELDMAT(DATE(2008,2,15),DATE(2008,4,13),DATE(2007,11,11),0.061,99,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text("=PRICEMAT(366,181,1,0.1,0.1,3)".to_string()),
+                            OmValue::Text("=PRICEMAT(181,366,181,0.1,0.1,3)".to_string()),
+                            OmValue::Text("=PRICEMAT(181,366,1,-0.1,0.1,3)".to_string()),
+                            OmValue::Text("=PRICEMAT(181,366,1,0.1,-0.1,3)".to_string()),
+                            OmValue::Text("=YIELDMAT(181,366,1,0.1,0,3)".to_string()),
+                            OmValue::Text("=PRICEMAT(181,366,1,0.1,0.1,5)".to_string()),
+                            OmValue::Text("=PRICEMAT(0,366,1,0.1,0.1,3)".to_string()),
+                        ],
+                    )
+                    .expect("price/yield at maturity financial formulas"),
+                ),
+                &[],
+            )
+            .expect("set price/yield at maturity financial formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("price/yield at maturity values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected price/yield at maturity value array");
+        };
+        let basis3_issue_to_maturity = 365.0 / 365.0;
+        let basis3_settlement_to_maturity = 185.0 / 365.0;
+        let basis3_issue_to_settlement = 180.0 / 365.0;
+        let basis3_maturity_value = 100.0 + 100.0 * 0.1 * basis3_issue_to_maturity;
+        let basis3_accrued_interest = 100.0 * 0.1 * basis3_issue_to_settlement;
+        let expected_basis3_price = basis3_maturity_value
+            / (1.0 + 0.1 * basis3_settlement_to_maturity)
+            - basis3_accrued_interest;
+        let expected_basis3_yield = (basis3_maturity_value / (100.0 + basis3_accrued_interest)
+            - 1.0)
+            / basis3_settlement_to_maturity;
+        let basis0_issue_to_maturity = 152.0 / 360.0;
+        let basis0_settlement_to_maturity = 58.0 / 360.0;
+        let basis0_issue_to_settlement = 94.0 / 360.0;
+        let basis0_maturity_value = 100.0 + 100.0 * 0.061 * basis0_issue_to_maturity;
+        let basis0_accrued_interest = 100.0 * 0.061 * basis0_issue_to_settlement;
+        let expected_basis0_price = basis0_maturity_value
+            / (1.0 + 0.061 * basis0_settlement_to_maturity)
+            - basis0_accrued_interest;
+        let expected_basis0_yield = (basis0_maturity_value / (99.0 + basis0_accrued_interest)
+            - 1.0)
+            / basis0_settlement_to_maturity;
+        let expected_numbers = [
+            expected_basis3_price,
+            expected_basis3_yield,
+            expected_basis0_price,
+            expected_basis0_yield,
+        ];
+        for (index, expected) in expected_numbers.into_iter().enumerate() {
+            let number = expect_number(values.values[index].clone());
+            assert!(
+                (number - expected).abs() < 1e-8,
+                "price/yield at maturity result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            &values.values[4..],
+            &[
+                OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
