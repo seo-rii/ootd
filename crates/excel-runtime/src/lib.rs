@@ -8684,6 +8684,7 @@ enum FormulaScalarFunction {
     Delta,
     EDate,
     EOMonth,
+    Effect,
     Even,
     Exp,
     Fact,
@@ -8707,9 +8708,11 @@ enum FormulaScalarFunction {
     Month,
     MRound,
     Multinomial,
+    Nominal,
     Not,
     Odd,
     Or,
+    PDuration,
     Permut,
     PermutationA,
     Pi,
@@ -8718,6 +8721,7 @@ enum FormulaScalarFunction {
     RoundDown,
     Round,
     RoundUp,
+    Rri,
     Sec,
     Sech,
     Sign,
@@ -8812,6 +8816,8 @@ impl FormulaScalarFunction {
             Some(Self::EDate)
         } else if name.eq_ignore_ascii_case("EOMONTH") {
             Some(Self::EOMonth)
+        } else if name.eq_ignore_ascii_case("EFFECT") {
+            Some(Self::Effect)
         } else if name.eq_ignore_ascii_case("EVEN") {
             Some(Self::Even)
         } else if name.eq_ignore_ascii_case("EXP") {
@@ -8858,12 +8864,16 @@ impl FormulaScalarFunction {
             Some(Self::MRound)
         } else if name.eq_ignore_ascii_case("MULTINOMIAL") {
             Some(Self::Multinomial)
+        } else if name.eq_ignore_ascii_case("NOMINAL") {
+            Some(Self::Nominal)
         } else if name.eq_ignore_ascii_case("NOT") {
             Some(Self::Not)
         } else if name.eq_ignore_ascii_case("ODD") {
             Some(Self::Odd)
         } else if name.eq_ignore_ascii_case("OR") {
             Some(Self::Or)
+        } else if name.eq_ignore_ascii_case("PDURATION") {
+            Some(Self::PDuration)
         } else if name.eq_ignore_ascii_case("PERMUT") {
             Some(Self::Permut)
         } else if name.eq_ignore_ascii_case("PERMUTATIONA") {
@@ -8880,6 +8890,8 @@ impl FormulaScalarFunction {
             Some(Self::Round)
         } else if name.eq_ignore_ascii_case("ROUNDUP") {
             Some(Self::RoundUp)
+        } else if name.eq_ignore_ascii_case("RRI") {
+            Some(Self::Rri)
         } else if name.eq_ignore_ascii_case("SEC") {
             Some(Self::Sec)
         } else if name.eq_ignore_ascii_case("SECH") {
@@ -9563,6 +9575,19 @@ impl FormulaScalarFunction {
                 };
                 formula_eomonth(*serial, *months)
             }
+            FormulaScalarFunction::Effect => {
+                let [nominal_rate, npery] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if !nominal_rate.is_finite() || !npery.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                let npery = npery.trunc();
+                if *nominal_rate <= 0.0 || npery < 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                checked_numeric_result((1.0 + nominal_rate / npery).powf(npery) - 1.0)
+            }
             FormulaScalarFunction::Even => {
                 let [number] = args else {
                     return Err(FormulaEvalError::Value);
@@ -9779,6 +9804,19 @@ impl FormulaScalarFunction {
                 }
                 Ok(factorial(sum)? / denominator)
             }
+            FormulaScalarFunction::Nominal => {
+                let [effect_rate, npery] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if !effect_rate.is_finite() || !npery.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                let npery = npery.trunc();
+                if *effect_rate <= 0.0 || npery < 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                checked_numeric_result(npery * ((1.0 + effect_rate).powf(1.0 / npery) - 1.0))
+            }
             FormulaScalarFunction::Not => {
                 let [value] = args else {
                     return Err(FormulaEvalError::Value);
@@ -9801,6 +9839,18 @@ impl FormulaScalarFunction {
                     0.0
                 })
             }
+            FormulaScalarFunction::PDuration => {
+                let [rate, pv, fv] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if ![rate, pv, fv].iter().all(|value| value.is_finite()) {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *rate <= 0.0 || *pv <= 0.0 || *fv <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                checked_numeric_result((fv / pv).ln() / (1.0 + rate).ln())
+            }
             FormulaScalarFunction::Round => {
                 let [value, digits] = args else {
                     return Err(FormulaEvalError::Value);
@@ -9821,6 +9871,18 @@ impl FormulaScalarFunction {
                 };
                 let factor = formula_round_factor(*digits)?;
                 Ok(round_away_from_zero(value * factor) / factor)
+            }
+            FormulaScalarFunction::Rri => {
+                let [nper, pv, fv] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if ![nper, pv, fv].iter().all(|value| value.is_finite()) {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *nper <= 0.0 || *pv <= 0.0 || *fv < 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                checked_numeric_result((fv / pv).powf(1.0 / nper) - 1.0)
             }
             FormulaScalarFunction::Sec => {
                 let [value] = args else {
@@ -23627,6 +23689,96 @@ mod tests {
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_interest_rate_financial_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A15".to_string())],
+                )
+                .expect("Range(A1:A15)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        15,
+                        1,
+                        vec![
+                            OmValue::Text("=EFFECT(3, 2)".to_string()),
+                            OmValue::Text("=EFFECT(1, 2.9)".to_string()),
+                            OmValue::Text("=EFFECT(0, 2)".to_string()),
+                            OmValue::Text("=EFFECT(1, 0.9)".to_string()),
+                            OmValue::Text("=NOMINAL(3, 2)".to_string()),
+                            OmValue::Text("=NOMINAL(1.25, 2.9)".to_string()),
+                            OmValue::Text("=NOMINAL(0, 2)".to_string()),
+                            OmValue::Text("=RRI(1, 100, 125)".to_string()),
+                            OmValue::Text("=RRI(1, 100, 0)".to_string()),
+                            OmValue::Text("=RRI(0, 100, 200)".to_string()),
+                            OmValue::Text("=RRI(1, -100, 200)".to_string()),
+                            OmValue::Text("=PDURATION(3, 100, 400)".to_string()),
+                            OmValue::Text("=PDURATION(0, 100, 200)".to_string()),
+                            OmValue::Text("=PDURATION(1, 0, 200)".to_string()),
+                            OmValue::Text("=NOMINAL(EFFECT(3, 2), 2)".to_string()),
+                        ],
+                    )
+                    .expect("interest rate financial formulas"),
+                ),
+                &[],
+            )
+            .expect("set interest rate financial formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("interest rate financial values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected interest rate financial value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(5.25),
+                OmValue::Number(1.25),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Number(2.0),
+                OmValue::Number(1.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Number(0.25),
+                OmValue::Number(-1.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Number(1.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Number(3.0),
             ]
         );
     }

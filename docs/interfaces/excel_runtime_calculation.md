@@ -126,6 +126,10 @@ Roman numeral notes:
 - `SLN`
 - `SYD`
 - `DDB`
+- `EFFECT`
+- `NOMINAL`
+- `RRI`
+- `PDURATION`
 - `NPER`
 - `ISPMT`
 
@@ -137,6 +141,7 @@ Financial notes:
 - `CUMIPMT` and `CUMPRINC` sum the corresponding interest or principal portions across a one-based inclusive period range.
 - `SLN` and `SYD` cover straight-line and sum-of-years' digits depreciation with `#NUM!` for non-positive life or out-of-range periods.
 - `DDB` covers double-declining balance depreciation with an optional factor and caps each period so accumulated depreciation does not drop below salvage value.
+- `EFFECT` and `NOMINAL` truncate compounding periods to an integer. `RRI` and `PDURATION` cover direct logarithmic/compound-growth rate helpers.
 
 ### Logical and control helpers
 
