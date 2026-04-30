@@ -8739,6 +8739,9 @@ enum FormulaScalarFunction {
     Syd,
     Tan,
     Tanh,
+    TBillEq,
+    TBillPrice,
+    TBillYield,
     Time,
     Trunc,
     Weekday,
@@ -8932,6 +8935,12 @@ impl FormulaScalarFunction {
             Some(Self::Tan)
         } else if name.eq_ignore_ascii_case("TANH") {
             Some(Self::Tanh)
+        } else if name.eq_ignore_ascii_case("TBILLEQ") {
+            Some(Self::TBillEq)
+        } else if name.eq_ignore_ascii_case("TBILLPRICE") {
+            Some(Self::TBillPrice)
+        } else if name.eq_ignore_ascii_case("TBILLYIELD") {
+            Some(Self::TBillYield)
         } else if name.eq_ignore_ascii_case("TIME") {
             Some(Self::Time)
         } else if name.eq_ignore_ascii_case("TRUNC") {
@@ -9099,6 +9108,15 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Num);
                 }
                 yearfrac_by_basis(settlement, maturity, basis)
+            };
+        let treasury_bill_days =
+            |settlement: f64, maturity: f64| -> Result<f64, FormulaEvalError> {
+                let settlement = financial_date_serial(settlement)?;
+                let maturity = financial_date_serial(maturity)?;
+                if settlement >= maturity || maturity - settlement > 365 {
+                    return Err(FormulaEvalError::Num);
+                }
+                Ok((maturity - settlement) as f64)
             };
         let normalize_zero = |value: f64| if value == 0.0 { 0.0 } else { value };
         let ceiling_floor_math = |number: f64,
@@ -10253,6 +10271,58 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Value);
                 };
                 checked_numeric_result(value.tanh())
+            }
+            FormulaScalarFunction::TBillEq => {
+                let [settlement, maturity, discount] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if ![settlement, maturity, discount]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *discount <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let days = treasury_bill_days(*settlement, *maturity)?;
+                let denominator = 360.0 - discount * days;
+                if denominator <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                checked_numeric_result(365.0 * discount / denominator)
+            }
+            FormulaScalarFunction::TBillPrice => {
+                let [settlement, maturity, discount] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if ![settlement, maturity, discount]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *discount <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let days = treasury_bill_days(*settlement, *maturity)?;
+                checked_numeric_result(100.0 * (1.0 - discount * days / 360.0))
+            }
+            FormulaScalarFunction::TBillYield => {
+                let [settlement, maturity, price] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if ![settlement, maturity, price]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *price <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let days = treasury_bill_days(*settlement, *maturity)?;
+                checked_numeric_result((100.0 - price) / price * 360.0 / days)
             }
             FormulaScalarFunction::Time => {
                 let [hour, minute, second] = args else {
@@ -24840,6 +24910,80 @@ mod tests {
                 OmValue::Number(1.0 / 9.0),
                 OmValue::Number(100.0),
                 OmValue::Number(1.0 / 9.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_treasury_bill_financial_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A9".to_string())])
+                .expect("Range(A1:A9)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        9,
+                        1,
+                        vec![
+                            OmValue::Text("=TBILLEQ(1, 361, 0.1)".to_string()),
+                            OmValue::Text("=TBILLPRICE(1, 361, 0.1)".to_string()),
+                            OmValue::Text("=TBILLYIELD(1, 361, 90)".to_string()),
+                            OmValue::Text("=TBILLEQ(361, 1, 0.1)".to_string()),
+                            OmValue::Text("=TBILLPRICE(1, 367, 0.1)".to_string()),
+                            OmValue::Text("=TBILLYIELD(1, 367, 90)".to_string()),
+                            OmValue::Text("=TBILLEQ(1, 361, 0)".to_string()),
+                            OmValue::Text("=TBILLYIELD(1, 361, 0)".to_string()),
+                            OmValue::Text("=TBILLPRICE(0, 361, 0.1)".to_string()),
+                        ],
+                    )
+                    .expect("treasury bill financial formulas"),
+                ),
+                &[],
+            )
+            .expect("set treasury bill financial formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("treasury bill financial values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected treasury bill financial value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(36.5 / 324.0),
+                OmValue::Number(90.0),
+                OmValue::Number(1.0 / 9.0),
+                OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
