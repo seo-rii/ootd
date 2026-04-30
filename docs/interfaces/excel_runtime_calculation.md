@@ -53,6 +53,10 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `POWER`
 - `SQRT`
 - `SQRTPI`
+- `ERF`
+- `ERF.PRECISE`
+- `ERFC`
+- `ERFC.PRECISE`
 - `EXP`
 - `LN`
 - `LOG`
@@ -110,6 +114,8 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `OCT2HEX`
 - `FISHER`
 - `FISHERINV`
+- `GAMMALN`
+- `GAMMALN.PRECISE`
 - `EXPON.DIST` / `EXPONDIST`
 - `GAUSS`
 - `LOGNORM.DIST` / `LOGNORMDIST`
@@ -126,6 +132,8 @@ Roman numeral notes:
 - `ARABIC` accepts classic and simplified Roman numerals, ignores case and surrounding spaces, returns `0` for empty text, and supports a leading negative sign.
 - `SERIESSUM` supports scalar or rectangular coefficient inputs and ignores non-numeric cells in coefficient ranges.
 - `FISHER` and `FISHERINV` cover the Fisher transformation and its inverse for scalar numeric values.
+- `ERF`, `ERF.PRECISE`, `ERFC`, and `ERFC.PRECISE` cover scalar error-function calculations. `ERF` also supports the legacy lower/upper integration form.
+- `GAMMALN` and `GAMMALN.PRECISE` return the natural logarithm of the gamma function for positive scalar inputs.
 - `EXPON.DIST`, `LOGNORM.DIST`, `NORM.DIST`, `NORM.S.DIST`, `POISSON.DIST`, and `WEIBULL.DIST` cover scalar probability and cumulative distribution calculations, with legacy function aliases mapped to the same implementations where their argument shapes match.
 - `GAUSS`, `PHI`, and `STANDARDIZE` cover scalar standard-normal helpers.
 

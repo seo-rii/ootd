@@ -8698,6 +8698,10 @@ enum FormulaScalarFunction {
     EDate,
     EOMonth,
     Effect,
+    Erf,
+    ErfPrecise,
+    Erfc,
+    ErfcPrecise,
     Even,
     Exp,
     ExponDist,
@@ -8709,6 +8713,8 @@ enum FormulaScalarFunction {
     FloorMath,
     FloorPrecise,
     Gauss,
+    GammaLn,
+    GammaLnPrecise,
     GeStep,
     Hour,
     If,
@@ -8884,6 +8890,14 @@ impl FormulaScalarFunction {
             Some(Self::EOMonth)
         } else if name.eq_ignore_ascii_case("EFFECT") {
             Some(Self::Effect)
+        } else if name.eq_ignore_ascii_case("ERF") {
+            Some(Self::Erf)
+        } else if name.eq_ignore_ascii_case("ERF.PRECISE") {
+            Some(Self::ErfPrecise)
+        } else if name.eq_ignore_ascii_case("ERFC") {
+            Some(Self::Erfc)
+        } else if name.eq_ignore_ascii_case("ERFC.PRECISE") {
+            Some(Self::ErfcPrecise)
         } else if name.eq_ignore_ascii_case("EVEN") {
             Some(Self::Even)
         } else if name.eq_ignore_ascii_case("EXPON.DIST") || name.eq_ignore_ascii_case("EXPONDIST")
@@ -8907,6 +8921,10 @@ impl FormulaScalarFunction {
             Some(Self::FloorPrecise)
         } else if name.eq_ignore_ascii_case("GAUSS") {
             Some(Self::Gauss)
+        } else if name.eq_ignore_ascii_case("GAMMALN") {
+            Some(Self::GammaLn)
+        } else if name.eq_ignore_ascii_case("GAMMALN.PRECISE") {
+            Some(Self::GammaLnPrecise)
         } else if name.eq_ignore_ascii_case("GESTEP") {
             Some(Self::GeStep)
         } else if name.eq_ignore_ascii_case("HOUR") {
@@ -9707,6 +9725,35 @@ impl FormulaScalarFunction {
             INV_SQRT_2_PI * (-0.5 * z * z).exp()
         };
         let standard_normal_cdf = |z: f64| 0.5 * (1.0 + erf_approx(z / std::f64::consts::SQRT_2));
+        let gamma_ln_value = |value: f64| {
+            const COEFFICIENTS: [f64; 9] = [
+                0.9999999999998099,
+                676.5203681218851,
+                -1259.1392167224028,
+                771.3234287776531,
+                -176.6150291621406,
+                12.507343278686905,
+                -0.13857109526572012,
+                0.000009984369578019572,
+                0.00000015056327351493116,
+            ];
+            let lanczos = |input: f64| {
+                let z = input - 1.0;
+                let mut x = COEFFICIENTS[0];
+                for (index, coefficient) in COEFFICIENTS.iter().enumerate().skip(1) {
+                    x += coefficient / (z + index as f64);
+                }
+                let t = z + 7.5;
+                0.5 * (2.0 * std::f64::consts::PI).ln() + (z + 0.5) * t.ln() - t + x.ln()
+            };
+            if value < 0.5 {
+                std::f64::consts::PI.ln()
+                    - (std::f64::consts::PI * value).sin().ln()
+                    - lanczos(1.0 - value)
+            } else {
+                lanczos(value)
+            }
+        };
         let reciprocal_numeric_result = |denominator: f64| -> Result<f64, FormulaEvalError> {
             if denominator == 0.0 {
                 return Err(FormulaEvalError::Div0);
@@ -10533,6 +10580,39 @@ impl FormulaScalarFunction {
                 }
                 checked_numeric_result((1.0 + nominal_rate / npery).powf(npery) - 1.0)
             }
+            FormulaScalarFunction::Erf => {
+                let (lower_limit, upper_limit) = match args {
+                    [lower_limit] => (*lower_limit, 0.0),
+                    [lower_limit, upper_limit] => (*lower_limit, *upper_limit),
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if !lower_limit.is_finite() || !upper_limit.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                checked_numeric_result(if args.len() == 1 {
+                    erf_approx(lower_limit)
+                } else {
+                    erf_approx(upper_limit) - erf_approx(lower_limit)
+                })
+            }
+            FormulaScalarFunction::ErfPrecise => {
+                let [x] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if !x.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                checked_numeric_result(erf_approx(*x))
+            }
+            FormulaScalarFunction::Erfc | FormulaScalarFunction::ErfcPrecise => {
+                let [x] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if !x.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                checked_numeric_result(1.0 - erf_approx(*x))
+            }
             FormulaScalarFunction::Even => {
                 let [number] = args else {
                     return Err(FormulaEvalError::Value);
@@ -10636,6 +10716,18 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Value);
                 };
                 checked_numeric_result(standard_normal_cdf(*z) - 0.5)
+            }
+            FormulaScalarFunction::GammaLn | FormulaScalarFunction::GammaLnPrecise => {
+                let [x] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if !x.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *x <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                checked_numeric_result(gamma_ln_value(*x))
             }
             FormulaScalarFunction::GeStep => {
                 let (number, step) = match args {
@@ -24738,6 +24830,100 @@ mod tests {
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_error_and_gamma_math_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A12".to_string())],
+                )
+                .expect("Range(A1:A12)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        12,
+                        1,
+                        vec![
+                            OmValue::Text("=ERF(1)".to_string()),
+                            OmValue::Text("=ERF(0,1)".to_string()),
+                            OmValue::Text("=ERF.PRECISE(-1)".to_string()),
+                            OmValue::Text("=ERFC(1)".to_string()),
+                            OmValue::Text("=ERFC.PRECISE(-1)".to_string()),
+                            OmValue::Text("=GAMMALN(4)".to_string()),
+                            OmValue::Text("=GAMMALN.PRECISE(0.5)".to_string()),
+                            OmValue::Text("=GAMMALN(10)".to_string()),
+                            OmValue::Text("=ERF(1,2,3)".to_string()),
+                            OmValue::Text("=ERFC(1,2)".to_string()),
+                            OmValue::Text("=GAMMALN(0)".to_string()),
+                            OmValue::Text("=GAMMALN.PRECISE(-1)".to_string()),
+                        ],
+                    )
+                    .expect("error and gamma math formulas"),
+                ),
+                &[],
+            )
+            .expect("set error and gamma math formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("error and gamma math values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected error and gamma math value array");
+        };
+        let expected_numbers = [
+            0.8427007929497149,
+            0.8427007929497149,
+            -0.8427007929497149,
+            0.15729920705028513,
+            1.842700792949715,
+            1.7917594692280554,
+            0.5723649429247004,
+            12.801827480081467,
+        ];
+        for (index, expected) in expected_numbers.into_iter().enumerate() {
+            let number = expect_number(values.values[index].clone());
+            assert!(
+                (number - expected).abs() < 1e-7,
+                "error/gamma math result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            &values.values[8..],
+            &[
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
             ]
         );
     }
