@@ -8679,6 +8679,7 @@ enum FormulaScalarFunction {
     Day,
     Days,
     Days360,
+    Db,
     Ddb,
     Degrees,
     Delta,
@@ -8806,6 +8807,8 @@ impl FormulaScalarFunction {
             Some(Self::Days)
         } else if name.eq_ignore_ascii_case("DAYS360") {
             Some(Self::Days360)
+        } else if name.eq_ignore_ascii_case("DB") {
+            Some(Self::Db)
         } else if name.eq_ignore_ascii_case("DDB") {
             Some(Self::Ddb)
         } else if name.eq_ignore_ascii_case("DEGREES") {
@@ -9503,6 +9506,58 @@ impl FormulaScalarFunction {
                     formula_serial_integer(end_date)?,
                     european,
                 )? as f64)
+            }
+            FormulaScalarFunction::Db => {
+                let (cost, salvage, life, period, month) = match args {
+                    [cost, salvage, life, period] => (*cost, *salvage, *life, *period, 12.0),
+                    [cost, salvage, life, period, month] => {
+                        (*cost, *salvage, *life, *period, *month)
+                    }
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if ![cost, salvage, life, period, month]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                let period = period.trunc();
+                let month = month.trunc();
+                if cost <= 0.0
+                    || salvage < 0.0
+                    || salvage > cost
+                    || life <= 0.0
+                    || period < 1.0
+                    || month < 1.0
+                    || month > 12.0
+                    || period > life + if month < 12.0 { 1.0 } else { 0.0 }
+                {
+                    return Err(FormulaEvalError::Num);
+                }
+                let rate =
+                    round_half_away_from_zero((1.0 - (salvage / cost).powf(1.0 / life)) * 1000.0)
+                        / 1000.0;
+                let mut accumulated_depreciation = 0.0;
+                let mut current_period = 1.0;
+                let mut depreciation = 0.0;
+                while current_period <= period {
+                    depreciation = if current_period == 1.0 {
+                        cost * rate * month / 12.0
+                    } else if current_period > life {
+                        (cost - accumulated_depreciation) * rate * (12.0 - month) / 12.0
+                    } else {
+                        (cost - accumulated_depreciation) * rate
+                    };
+                    depreciation = depreciation
+                        .min(cost - salvage - accumulated_depreciation)
+                        .max(0.0);
+                    if current_period == period {
+                        break;
+                    }
+                    accumulated_depreciation += depreciation;
+                    current_period += 1.0;
+                }
+                checked_numeric_result(depreciation)
             }
             FormulaScalarFunction::Ddb => {
                 let (cost, salvage, life, period, factor) = match args {
@@ -24722,6 +24777,80 @@ mod tests {
                 OmValue::Number(100.0),
                 OmValue::Number(180.0),
                 OmValue::Number(20.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_fixed_declining_depreciation_formula() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A9".to_string())])
+                .expect("Range(A1:A9)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        9,
+                        1,
+                        vec![
+                            OmValue::Text("=DB(100, 25, 2, 1)".to_string()),
+                            OmValue::Text("=DB(100, 25, 2, 2)".to_string()),
+                            OmValue::Text("=DB(100, 25, 2, 1, 6)".to_string()),
+                            OmValue::Text("=DB(100, 25, 2, 2, 6)".to_string()),
+                            OmValue::Text("=DB(100, 25, 2, 3, 6)".to_string()),
+                            OmValue::Text("=DB(100, 25, 2, 3)".to_string()),
+                            OmValue::Text("=DB(100, 25, 2, 4, 6)".to_string()),
+                            OmValue::Text("=DB(100, 25, 2, 1, 0)".to_string()),
+                            OmValue::Text("=DB(100, 125, 2, 1)".to_string()),
+                        ],
+                    )
+                    .expect("fixed declining depreciation formulas"),
+                ),
+                &[],
+            )
+            .expect("set fixed declining depreciation formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("fixed declining depreciation values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected fixed declining depreciation value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(50.0),
+                OmValue::Number(25.0),
+                OmValue::Number(25.0),
+                OmValue::Number(37.5),
+                OmValue::Number(9.375),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
