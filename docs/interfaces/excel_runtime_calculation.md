@@ -133,6 +133,12 @@ Roman numeral notes:
 - `TBILLEQ`
 - `TBILLPRICE`
 - `TBILLYIELD`
+- `COUPDAYBS`
+- `COUPDAYS`
+- `COUPDAYSNC`
+- `COUPNCD`
+- `COUPNUM`
+- `COUPPCD`
 - `DURATION`
 - `MDURATION`
 - `FV`
@@ -166,7 +172,8 @@ Financial notes:
 - `DISC`, `INTRATE`, `RECEIVED`, `PRICEDISC`, and `YIELDDISC` cover discounted securities using the same basis values as `YEARFRAC`.
 - `ACCRINTM` calculates interest accrued to maturity using `YEARFRAC` basis values and defaults omitted par to `1000`.
 - `TBILLEQ`, `TBILLPRICE`, and `TBILLYIELD` cover Treasury bill formulas, using actual days and rejecting maturities more than 365 days after settlement.
-- `DURATION` and `MDURATION` calculate Macauley and modified duration for regular coupon schedules, with annual, semiannual, and quarterly frequencies and basis values `0` through `4`.
+- `COUPDAYBS`, `COUPDAYS`, `COUPDAYSNC`, `COUPNCD`, `COUPNUM`, and `COUPPCD` cover regular coupon schedules with annual, semiannual, and quarterly frequencies and basis values `0` through `4`.
+- `DURATION` and `MDURATION` calculate Macauley and modified duration over the same regular coupon schedules.
 - `FV`, `PV`, `PMT`, `NPER`, and `RATE` support omitted future/present value and payment timing arguments with the standard `0`/`1` timing modes. `RATE` uses a 20-iteration solve with the documented `10%` default guess. `ISPMT` uses Excel's zero-based period convention.
 - `IPMT` and `PPMT` split the standard `PMT` result into interest and principal portions for one-based periods in the range `1..nper`.
 - `CUMIPMT` and `CUMPRINC` sum the corresponding interest or principal portions across a one-based inclusive period range.

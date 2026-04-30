@@ -8672,6 +8672,12 @@ enum FormulaScalarFunction {
     Combina,
     Cos,
     Cosh,
+    CoupDayBs,
+    CoupDays,
+    CoupDaysNc,
+    CoupNcd,
+    CoupNum,
+    CoupPcd,
     Cot,
     Coth,
     Csc,
@@ -8804,6 +8810,18 @@ impl FormulaScalarFunction {
             Some(Self::Cos)
         } else if name.eq_ignore_ascii_case("COSH") {
             Some(Self::Cosh)
+        } else if name.eq_ignore_ascii_case("COUPDAYBS") {
+            Some(Self::CoupDayBs)
+        } else if name.eq_ignore_ascii_case("COUPDAYS") {
+            Some(Self::CoupDays)
+        } else if name.eq_ignore_ascii_case("COUPDAYSNC") {
+            Some(Self::CoupDaysNc)
+        } else if name.eq_ignore_ascii_case("COUPNCD") {
+            Some(Self::CoupNcd)
+        } else if name.eq_ignore_ascii_case("COUPNUM") {
+            Some(Self::CoupNum)
+        } else if name.eq_ignore_ascii_case("COUPPCD") {
+            Some(Self::CoupPcd)
         } else if name.eq_ignore_ascii_case("COT") {
             Some(Self::Cot)
         } else if name.eq_ignore_ascii_case("COTH") {
@@ -9140,7 +9158,7 @@ impl FormulaScalarFunction {
                                maturity: i64,
                                frequency: i64,
                                basis: i64|
-         -> Result<(usize, f64), FormulaEvalError> {
+         -> Result<(usize, i64, i64, f64), FormulaEvalError> {
             let months_per_coupon = 12 / frequency;
             let mut next_coupon = maturity;
             loop {
@@ -9169,11 +9187,59 @@ impl FormulaScalarFunction {
                     if coupon_date != maturity {
                         return Err(FormulaEvalError::Num);
                     }
-                    return Ok((coupon_count, first_period_fraction));
+                    return Ok((
+                        coupon_count,
+                        previous_coupon,
+                        next_coupon,
+                        first_period_fraction,
+                    ));
                 }
                 next_coupon = previous_coupon;
             }
         };
+        let coupon_schedule_from_args =
+            |args: &[f64]| -> Result<(i64, i64, i64, i64, usize, i64, i64), FormulaEvalError> {
+                let (settlement, maturity, frequency, basis) = match args {
+                    [settlement, maturity, frequency] => (*settlement, *maturity, *frequency, 0.0),
+                    [settlement, maturity, frequency, basis] => {
+                        (*settlement, *maturity, *frequency, *basis)
+                    }
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if ![settlement, maturity, frequency, basis]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                let frequency = coupon_frequency(frequency)?;
+                let basis = yearfrac_basis(basis)?;
+                let settlement = financial_date_serial(settlement)?;
+                let maturity = financial_date_serial(maturity)?;
+                if settlement >= maturity {
+                    return Err(FormulaEvalError::Num);
+                }
+                let (coupon_count, previous_coupon, next_coupon, _) =
+                    coupon_schedule(settlement, maturity, frequency, basis)?;
+                Ok((
+                    settlement,
+                    maturity,
+                    frequency,
+                    basis,
+                    coupon_count,
+                    previous_coupon,
+                    next_coupon,
+                ))
+            };
+        let coupon_days_between =
+            |start_serial: i64, end_serial: i64, basis: i64| -> Result<f64, FormulaEvalError> {
+                match basis {
+                    0 => Ok(days360(start_serial, end_serial, false)? as f64),
+                    1 | 2 | 3 => Ok((end_serial - start_serial) as f64),
+                    4 => Ok(days360(start_serial, end_serial, true)? as f64),
+                    _ => Err(FormulaEvalError::Num),
+                }
+            };
         let duration_value = |settlement: f64,
                               maturity: f64,
                               coupon: f64,
@@ -9195,7 +9261,7 @@ impl FormulaScalarFunction {
             if coupon < 0.0 || yld < 0.0 || settlement >= maturity {
                 return Err(FormulaEvalError::Num);
             }
-            let (coupon_count, first_period_fraction) =
+            let (coupon_count, _, _, first_period_fraction) =
                 coupon_schedule(settlement, maturity, frequency, basis)?;
             let frequency = frequency as f64;
             let yield_per_period = yld / frequency;
@@ -9645,6 +9711,36 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Value);
                 };
                 checked_numeric_result(value.cosh())
+            }
+            FormulaScalarFunction::CoupDayBs => {
+                let (settlement, _, _, basis, _, previous_coupon, _) =
+                    coupon_schedule_from_args(args)?;
+                coupon_days_between(previous_coupon, settlement, basis)
+            }
+            FormulaScalarFunction::CoupDays => {
+                let (_, _, frequency, basis, _, previous_coupon, next_coupon) =
+                    coupon_schedule_from_args(args)?;
+                match basis {
+                    1 => Ok((next_coupon - previous_coupon) as f64),
+                    3 => Ok(365.0 / frequency as f64),
+                    _ => Ok(360.0 / frequency as f64),
+                }
+            }
+            FormulaScalarFunction::CoupDaysNc => {
+                let (settlement, _, _, basis, _, _, next_coupon) = coupon_schedule_from_args(args)?;
+                coupon_days_between(settlement, next_coupon, basis)
+            }
+            FormulaScalarFunction::CoupNcd => {
+                let (_, _, _, _, _, _, next_coupon) = coupon_schedule_from_args(args)?;
+                Ok(next_coupon as f64)
+            }
+            FormulaScalarFunction::CoupNum => {
+                let (_, _, _, _, coupon_count, _, _) = coupon_schedule_from_args(args)?;
+                Ok(coupon_count as f64)
+            }
+            FormulaScalarFunction::CoupPcd => {
+                let (_, _, _, _, _, previous_coupon, _) = coupon_schedule_from_args(args)?;
+                Ok(previous_coupon as f64)
             }
             FormulaScalarFunction::Cot => {
                 let [value] = args else {
@@ -25621,6 +25717,116 @@ mod tests {
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Number(3.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_coupon_schedule_financial_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A12".to_string())],
+                )
+                .expect("Range(A1:A12)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        12,
+                        1,
+                        vec![
+                            OmValue::Text(
+                                "=COUPDAYBS(DATE(2011,1,25),DATE(2011,11,15),2,1)".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=COUPDAYS(DATE(2011,1,25),DATE(2011,11,15),2,1)".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=COUPDAYSNC(DATE(2011,1,25),DATE(2011,11,15),2,1)".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=COUPNCD(DATE(2011,1,25),DATE(2011,11,15),2,1)".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=COUPNUM(DATE(2007,1,25),DATE(2008,11,15),2,1)".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=COUPPCD(DATE(2011,1,25),DATE(2011,11,15),2,1)".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=COUPDAYS(DATE(2011,1,25),DATE(2011,11,15),2,0)".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=COUPDAYBS(DATE(2011,1,25),DATE(2011,11,15),2,0)".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=COUPDAYS(DATE(2011,1,25),DATE(2011,11,15),3,1)".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=COUPDAYS(DATE(2011,1,25),DATE(2011,11,15),2,5)".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=COUPDAYS(DATE(2011,11,15),DATE(2011,1,25),2,1)".to_string(),
+                            ),
+                            OmValue::Text("=COUPDAYS(0,DATE(2011,11,15),2,1)".to_string()),
+                        ],
+                    )
+                    .expect("coupon schedule financial formulas"),
+                ),
+                &[],
+            )
+            .expect("set coupon schedule financial formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("coupon schedule financial values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected coupon schedule financial value array");
+        };
+        let next_coupon = super::formula_date_serial_from_args(2011.0, 5.0, 15.0)
+            .expect("next coupon date serial");
+        let previous_coupon = super::formula_date_serial_from_args(2010.0, 11.0, 15.0)
+            .expect("previous coupon date serial");
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(71.0),
+                OmValue::Number(181.0),
+                OmValue::Number(110.0),
+                OmValue::Number(next_coupon),
+                OmValue::Number(4.0),
+                OmValue::Number(previous_coupon),
+                OmValue::Number(180.0),
+                OmValue::Number(70.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
             ]
         );
     }
