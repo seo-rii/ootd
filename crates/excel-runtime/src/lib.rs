@@ -13016,6 +13016,184 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 return Err(FormulaEvalError::Unsupported);
             }
         }
+        if name.eq_ignore_ascii_case("XNPV") {
+            let rate = self.parse_comparison()?;
+            if !rate.is_finite() {
+                return Err(FormulaEvalError::Value);
+            }
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+
+            let mut values = Vec::new();
+            self.skip_whitespace();
+            let checkpoint = self.index;
+            if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
+                self.index = next_index;
+                self.skip_whitespace();
+                if self.peek_char().is_none_or(|ch| ch == ',') {
+                    for row in rect.row_first..=rect.row_last {
+                        for col in rect.col_first..=rect.col_last {
+                            match self
+                                .evaluator
+                                .cell_value_or_blank(target_sheet_id, row, col)?
+                            {
+                                CellValue::Number(number) => values.push(number),
+                                CellValue::Error(error) => {
+                                    return Err(formula_eval_error_from_cell_error(error));
+                                }
+                                CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {
+                                    return Err(FormulaEvalError::Value);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    self.index = checkpoint;
+                    if self.parse_string_literal()?.is_some() {
+                        return Err(FormulaEvalError::Value);
+                    }
+                    let identifier_checkpoint = self.index;
+                    if let Some(identifier) = self.parse_identifier() {
+                        self.skip_whitespace();
+                        if (identifier.eq_ignore_ascii_case("TRUE")
+                            || identifier.eq_ignore_ascii_case("FALSE"))
+                            && self.peek_char() != Some('(')
+                        {
+                            return Err(FormulaEvalError::Value);
+                        }
+                    }
+                    self.index = identifier_checkpoint;
+                    values.push(self.parse_comparison()?);
+                }
+            } else {
+                if self.parse_string_literal()?.is_some() {
+                    return Err(FormulaEvalError::Value);
+                }
+                let identifier_checkpoint = self.index;
+                if let Some(identifier) = self.parse_identifier() {
+                    self.skip_whitespace();
+                    if (identifier.eq_ignore_ascii_case("TRUE")
+                        || identifier.eq_ignore_ascii_case("FALSE"))
+                        && self.peek_char() != Some('(')
+                    {
+                        return Err(FormulaEvalError::Value);
+                    }
+                }
+                self.index = identifier_checkpoint;
+                values.push(self.parse_comparison()?);
+            }
+
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+
+            let mut dates = Vec::new();
+            self.skip_whitespace();
+            let checkpoint = self.index;
+            if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
+                self.index = next_index;
+                self.skip_whitespace();
+                if self.peek_char().is_some_and(|ch| ch == ')') {
+                    for row in rect.row_first..=rect.row_last {
+                        for col in rect.col_first..=rect.col_last {
+                            let date = match self.evaluator.cell_value_or_blank(
+                                target_sheet_id,
+                                row,
+                                col,
+                            )? {
+                                CellValue::Number(number) => number,
+                                CellValue::Error(error) => {
+                                    return Err(formula_eval_error_from_cell_error(error));
+                                }
+                                CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {
+                                    return Err(FormulaEvalError::Value);
+                                }
+                            };
+                            let serial = formula_serial_integer(date)
+                                .and_then(|serial| {
+                                    formula_ymd_from_serial(serial as f64).map(|_| serial)
+                                })
+                                .map_err(|_| FormulaEvalError::Value)?;
+                            dates.push(serial);
+                        }
+                    }
+                } else {
+                    self.index = checkpoint;
+                    if self.parse_string_literal()?.is_some() {
+                        return Err(FormulaEvalError::Value);
+                    }
+                    let identifier_checkpoint = self.index;
+                    if let Some(identifier) = self.parse_identifier() {
+                        self.skip_whitespace();
+                        if (identifier.eq_ignore_ascii_case("TRUE")
+                            || identifier.eq_ignore_ascii_case("FALSE"))
+                            && self.peek_char() != Some('(')
+                        {
+                            return Err(FormulaEvalError::Value);
+                        }
+                    }
+                    self.index = identifier_checkpoint;
+                    let serial = formula_serial_integer(self.parse_comparison()?)
+                        .and_then(|serial| formula_ymd_from_serial(serial as f64).map(|_| serial))
+                        .map_err(|_| FormulaEvalError::Value)?;
+                    dates.push(serial);
+                }
+            } else {
+                if self.parse_string_literal()?.is_some() {
+                    return Err(FormulaEvalError::Value);
+                }
+                let identifier_checkpoint = self.index;
+                if let Some(identifier) = self.parse_identifier() {
+                    self.skip_whitespace();
+                    if (identifier.eq_ignore_ascii_case("TRUE")
+                        || identifier.eq_ignore_ascii_case("FALSE"))
+                        && self.peek_char() != Some('(')
+                    {
+                        return Err(FormulaEvalError::Value);
+                    }
+                }
+                self.index = identifier_checkpoint;
+                let serial = formula_serial_integer(self.parse_comparison()?)
+                    .and_then(|serial| formula_ymd_from_serial(serial as f64).map(|_| serial))
+                    .map_err(|_| FormulaEvalError::Value)?;
+                dates.push(serial);
+            }
+
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            if values.len() != dates.len()
+                || !values.iter().any(|value| *value > 0.0)
+                || !values.iter().any(|value| *value < 0.0)
+            {
+                return Err(FormulaEvalError::Num);
+            }
+            if values.iter().any(|value| !value.is_finite()) {
+                return Err(FormulaEvalError::Value);
+            }
+            let start_date = dates[0];
+            let discount = 1.0 + rate;
+            let mut total = 0.0;
+            for (value, date) in values.iter().zip(dates.iter()) {
+                if *date < start_date {
+                    return Err(FormulaEvalError::Num);
+                }
+                let years = (*date - start_date) as f64 / 365.0;
+                let denominator = discount.powf(years);
+                if denominator == 0.0 || !denominator.is_finite() {
+                    return Err(FormulaEvalError::Num);
+                }
+                total += value / denominator;
+                if !total.is_finite() {
+                    return Err(FormulaEvalError::Num);
+                }
+            }
+            return Ok(total);
+        }
         if name.eq_ignore_ascii_case("MIRR") {
             let mut values = Vec::new();
             self.skip_whitespace();
@@ -24248,6 +24426,134 @@ mod tests {
                 OmValue::Number(5.0),
                 OmValue::Number(5.0),
                 OmValue::Error(CellError::Div0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_xnpv_financial_formula() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let values_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A4".to_string())])
+                .expect("Range(A1:A4)"),
+        );
+        let dates_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:D4".to_string())])
+                .expect("Range(B1:D4)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E1:E7".to_string())])
+                .expect("Range(E1:E7)"),
+        );
+
+        runtime
+            .dispatch_set(
+                values_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        1,
+                        vec![
+                            OmValue::Number(-100.0),
+                            OmValue::Number(200.0),
+                            OmValue::Number(10.0),
+                            OmValue::Text("bad".to_string()),
+                        ],
+                    )
+                    .expect("XNPV value source values"),
+                ),
+                &[],
+            )
+            .expect("set XNPV value source values");
+        runtime
+            .dispatch_set(
+                dates_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        3,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(366.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(366.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(0.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(1.0),
+                        ],
+                    )
+                    .expect("XNPV date source values"),
+                ),
+                &[],
+            )
+            .expect("set XNPV date source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        7,
+                        1,
+                        vec![
+                            OmValue::Text("=XNPV(1, A1:A2, B1:B2)".to_string()),
+                            OmValue::Text("=XNPV(1, A1:A3, B1:B3)".to_string()),
+                            OmValue::Text("=XNPV(1, A1:A2, B1:B3)".to_string()),
+                            OmValue::Text("=XNPV(1, A1:A2, C1:C2)".to_string()),
+                            OmValue::Text("=XNPV(1, A1:A4, B1:B4)".to_string()),
+                            OmValue::Text("=XNPV(1, A1:A2, D1:D2)".to_string()),
+                            OmValue::Text("=XNPV(1, A2:A3, B2:B3)".to_string()),
+                        ],
+                    )
+                    .expect("XNPV formulas"),
+                ),
+                &[],
+            )
+            .expect("set XNPV formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("XNPV values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected XNPV value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(0.0),
+                OmValue::Number(10.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Num),
             ]
         );
     }
