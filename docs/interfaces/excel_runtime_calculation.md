@@ -92,6 +92,8 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `DELTA`
 - `GESTEP`
 - `DECIMAL`
+- `ARABIC`
+- `ROMAN`
 - `BIN2DEC`
 - `BIN2HEX`
 - `BIN2OCT`
@@ -104,6 +106,11 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `OCT2BIN`
 - `OCT2DEC`
 - `OCT2HEX`
+
+Roman numeral notes:
+
+- `ROMAN` supports classic and simplified forms `0` through `4`; omitted form and `TRUE` use classic form, while `FALSE` uses simplified form.
+- `ARABIC` accepts classic and simplified Roman numerals, ignores case and surrounding spaces, returns `0` for empty text, and supports a leading negative sign.
 
 ### Logical and control helpers
 

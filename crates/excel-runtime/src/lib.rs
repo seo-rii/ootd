@@ -10265,6 +10265,7 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("HEX2OCT")
         || name.eq_ignore_ascii_case("OCT2BIN")
         || name.eq_ignore_ascii_case("OCT2HEX")
+        || name.eq_ignore_ascii_case("ROMAN")
         || name.eq_ignore_ascii_case("T")
         || name.eq_ignore_ascii_case("UNICHAR")
         || name.eq_ignore_ascii_case("UPPER")
@@ -10514,6 +10515,82 @@ fn formula_unsigned_radix_text(mut value: u128, radix: u32) -> String {
         value /= u128::from(radix);
     }
     output.chars().rev().collect()
+}
+
+fn formula_roman_text(value: i64, form: usize) -> Result<String, FormulaEvalError> {
+    if !(0..=3999).contains(&value) || form > 4 {
+        return Err(FormulaEvalError::Value);
+    }
+    if value == 0 {
+        return Ok(String::new());
+    }
+    let mut remaining = value;
+    let mut output = String::new();
+    for (candidate, text) in [
+        (1000, "M"),
+        (900, "CM"),
+        (500, "D"),
+        (400, "CD"),
+        (100, "C"),
+        (90, "XC"),
+        (50, "L"),
+        (40, "XL"),
+        (10, "X"),
+        (9, "IX"),
+        (5, "V"),
+        (4, "IV"),
+        (1, "I"),
+    ] {
+        while remaining >= candidate {
+            output.push_str(text);
+            remaining -= candidate;
+        }
+    }
+    if form == 0 {
+        return Ok(output);
+    }
+    const CONCISE_REPLACEMENTS: [&[(&str, &str)]; 5] = [
+        &[
+            ("XLV", "VL"),
+            ("XCV", "VC"),
+            ("CDL", "LD"),
+            ("CML", "LM"),
+            ("CMVC", "LMVL"),
+        ],
+        &[
+            ("CDXC", "LDXL"),
+            ("CDVC", "LDVL"),
+            ("CMXC", "LMXL"),
+            ("XCIX", "VCIV"),
+            ("XLIX", "VLIV"),
+        ],
+        &[
+            ("XLIX", "IL"),
+            ("XCIX", "IC"),
+            ("CDXC", "XD"),
+            ("CDVC", "XDV"),
+            ("CDIC", "XDIX"),
+            ("LMVL", "XMV"),
+            ("CMIC", "XMIX"),
+            ("CMXC", "XM"),
+        ],
+        &[
+            ("XDV", "VD"),
+            ("XDIX", "VDIV"),
+            ("XMV", "VM"),
+            ("XMIX", "VMIV"),
+        ],
+        &[("VDIV", "ID"), ("VMIV", "IM")],
+    ];
+    for (index, replacements) in CONCISE_REPLACEMENTS.iter().enumerate().take(form + 1) {
+        if index == 1 && form > 1 {
+            continue;
+        }
+        for (from, to) in *replacements {
+            output = output.replace(from, to);
+        }
+    }
+    Ok(output)
 }
 
 fn formula_radix_argument(value: f64) -> Result<u32, FormulaEvalError> {
@@ -12419,6 +12496,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("HEX2DEC") {
             return self.parse_engineering_decimal_function(16, 40, 10);
         }
+        if name.eq_ignore_ascii_case("ARABIC") {
+            return self.parse_arabic_function();
+        }
         if name.eq_ignore_ascii_case("CODE") || name.eq_ignore_ascii_case("UNICODE") {
             return self.parse_character_code_function();
         }
@@ -12945,6 +13025,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("HEX2OCT") {
             return self.parse_engineering_text_function(16, 40, 10, 8, 30, 10);
         }
+        if name.eq_ignore_ascii_case("ROMAN") {
+            return self.parse_roman_text_function();
+        }
         if name.eq_ignore_ascii_case("CHAR") {
             return self.parse_character_text_function(false);
         }
@@ -13261,6 +13344,47 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             formula_engineering_input(text.as_str(), source_radix, source_bits, source_max_digits)?;
         let places = self.parse_optional_engineering_places()?;
         formula_engineering_format(value, target_radix, target_bits, target_max_digits, places)
+    }
+
+    fn parse_roman_text_function(&mut self) -> Result<String, FormulaEvalError> {
+        let number = self.parse_comparison()?;
+        if !number.is_finite() {
+            return Err(FormulaEvalError::Value);
+        }
+        let number = number.trunc();
+        if !(0.0..=3999.0).contains(&number) {
+            return Err(FormulaEvalError::Value);
+        }
+        let mut form = 0_usize;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            form = match self.parse_value_probe_argument()? {
+                FormulaValueProbe::Bool(true) => 0,
+                FormulaValueProbe::Bool(false) => 4,
+                FormulaValueProbe::Number(value) => {
+                    if !value.is_finite() {
+                        return Err(FormulaEvalError::Value);
+                    }
+                    let value = value.trunc();
+                    if !(0.0..=4.0).contains(&value) {
+                        return Err(FormulaEvalError::Value);
+                    }
+                    value as usize
+                }
+                FormulaValueProbe::Error(error) => return Err(error),
+                FormulaValueProbe::Blank | FormulaValueProbe::Text(_) => {
+                    return Err(FormulaEvalError::Value);
+                }
+            };
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+        }
+        formula_roman_text(number as i64, form)
     }
 
     fn parse_optional_engineering_places(&mut self) -> Result<Option<usize>, FormulaEvalError> {
@@ -13726,6 +13850,72 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             formula_engineering_input(text.as_str(), source_radix, source_bits, source_max_digits)?
                 as f64,
         )
+    }
+
+    fn parse_arabic_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let text = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let trimmed = text.trim();
+        if trimmed.chars().count() > 255 {
+            return Err(FormulaEvalError::Value);
+        }
+        if trimmed.is_empty() {
+            return Ok(0.0);
+        }
+        let (negative, body) = if let Some(body) = trimmed.strip_prefix('-') {
+            (true, body)
+        } else {
+            (false, trimmed)
+        };
+        if body.is_empty() {
+            return Err(FormulaEvalError::Value);
+        }
+        let roman = body.to_ascii_uppercase();
+        let mut total = 0_i64;
+        let mut previous = 0_i64;
+        for ch in roman.chars().rev() {
+            let value = match ch {
+                'I' => 1,
+                'V' => 5,
+                'X' => 10,
+                'L' => 50,
+                'C' => 100,
+                'D' => 500,
+                'M' => 1000,
+                _ => return Err(FormulaEvalError::Value),
+            };
+            if value < previous {
+                total -= value;
+            } else {
+                total += value;
+                previous = value;
+            }
+        }
+        if total <= 0 {
+            return Err(FormulaEvalError::Value);
+        }
+        let thousands = usize::try_from(total / 1000).map_err(|_| FormulaEvalError::Value)?;
+        let suffix_value = total % 1000;
+        let prefix = "M".repeat(thousands);
+        let mut valid = false;
+        for form in 0..=4 {
+            let candidate = format!("{prefix}{}", formula_roman_text(suffix_value, form)?);
+            if roman == candidate {
+                valid = true;
+                break;
+            }
+        }
+        if !valid {
+            return Err(FormulaEvalError::Value);
+        }
+        Ok(if negative {
+            -(total as f64)
+        } else {
+            total as f64
+        })
     }
 
     fn parse_datevalue_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -21470,6 +21660,100 @@ mod tests {
                 OmValue::Number(-1.0),
                 OmValue::Text("00001111".to_string()),
                 OmValue::Text("0017".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_roman_arabic_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A17".to_string())],
+                )
+                .expect("Range(A1:A17)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        17,
+                        1,
+                        vec![
+                            OmValue::Text("=ROMAN(499, 0)".to_string()),
+                            OmValue::Text("=ROMAN(499, 1)".to_string()),
+                            OmValue::Text("=ROMAN(499, 2)".to_string()),
+                            OmValue::Text("=ROMAN(499, 3)".to_string()),
+                            OmValue::Text("=ROMAN(499, 4)".to_string()),
+                            OmValue::Text("=ROMAN(1999, FALSE)".to_string()),
+                            OmValue::Text("=ROMAN(1999, TRUE)".to_string()),
+                            OmValue::Text("=ROMAN(0)".to_string()),
+                            OmValue::Text("=ROMAN(4000)".to_string()),
+                            OmValue::Text(r#"=ARABIC("MCMXCIX")"#.to_string()),
+                            OmValue::Text(r#"=ARABIC("mim")"#.to_string()),
+                            OmValue::Text(r#"=ARABIC("-MMXI")"#.to_string()),
+                            OmValue::Text(r#"=ARABIC("")"#.to_string()),
+                            OmValue::Text(r#"=ARABIC("MMMM")"#.to_string()),
+                            OmValue::Text(r#"=ARABIC("IIII")"#.to_string()),
+                            OmValue::Text("=ROMAN(499.9, 4.9)".to_string()),
+                            OmValue::Text(r#"=ARABIC("text")"#.to_string()),
+                        ],
+                    )
+                    .expect("roman arabic formulas"),
+                ),
+                &[],
+            )
+            .expect("set roman arabic formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("roman arabic values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected roman arabic value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Text("CDXCIX".to_string()),
+                OmValue::Text("LDVLIV".to_string()),
+                OmValue::Text("XDIX".to_string()),
+                OmValue::Text("VDIV".to_string()),
+                OmValue::Text("ID".to_string()),
+                OmValue::Text("MIM".to_string()),
+                OmValue::Text("MCMXCIX".to_string()),
+                OmValue::Text(String::new()),
+                OmValue::Error(CellError::Value),
+                OmValue::Number(1999.0),
+                OmValue::Number(1999.0),
+                OmValue::Number(-2011.0),
+                OmValue::Number(0.0),
+                OmValue::Number(4000.0),
+                OmValue::Error(CellError::Value),
+                OmValue::Text("ID".to_string()),
+                OmValue::Error(CellError::Value),
             ]
         );
     }
