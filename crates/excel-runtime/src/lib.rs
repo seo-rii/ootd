@@ -13723,6 +13723,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("NPER") {
             return self.parse_nper_function();
         }
+        if name.eq_ignore_ascii_case("RATE") {
+            return self.parse_rate_function();
+        }
         if name.eq_ignore_ascii_case("ISPMT") {
             return self.parse_ispmt_function();
         }
@@ -15513,6 +15516,100 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         } else {
             Err(FormulaEvalError::Num)
         }
+    }
+
+    fn parse_rate_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let nper = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let pmt = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let pv = self.parse_comparison()?;
+        let mut fv = 0.0;
+        let mut payment_type = 0.0;
+        let mut guess = 0.1;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            fv = self.parse_comparison()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                payment_type = formula_financial_type_argument(self.parse_comparison()?)?;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    guess = self.parse_comparison()?;
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                }
+            }
+        }
+        if ![nper, pmt, pv, fv, guess]
+            .iter()
+            .all(|value| value.is_finite())
+        {
+            return Err(FormulaEvalError::Value);
+        }
+        if nper <= 0.0 || guess <= -1.0 {
+            return Err(FormulaEvalError::Num);
+        }
+
+        let rate_residual = |rate: f64| -> Result<f64, FormulaEvalError> {
+            if !rate.is_finite() || rate <= -1.0 {
+                return Err(FormulaEvalError::Num);
+            }
+            let value = if rate.abs() < 1e-10 {
+                pv + pmt * nper + fv
+            } else {
+                let growth = formula_annuity_growth(rate, nper)?;
+                pv * growth + pmt * (1.0 + rate * payment_type) * (growth - 1.0) / rate + fv
+            };
+            if value.is_finite() {
+                Ok(value)
+            } else {
+                Err(FormulaEvalError::Num)
+            }
+        };
+
+        const RATE_MAX_ITERATIONS: usize = 20;
+        const RATE_TOLERANCE: f64 = 1e-7;
+        let mut rate = guess;
+        for _ in 0..RATE_MAX_ITERATIONS {
+            let value = rate_residual(rate)?;
+            if value.abs() <= RATE_TOLERANCE {
+                return Ok(rate);
+            }
+            let step = (rate.abs() * 1e-6).max(1e-8);
+            let right_rate = rate + step;
+            let right_value = rate_residual(right_rate)?;
+            let derivative = (right_value - value) / (right_rate - rate);
+            if !derivative.is_finite() || derivative == 0.0 {
+                break;
+            }
+            let next_rate = rate - value / derivative;
+            if !next_rate.is_finite() || next_rate <= -1.0 {
+                break;
+            }
+            if (next_rate - rate).abs() <= RATE_TOLERANCE {
+                return Ok(next_rate);
+            }
+            rate = next_rate;
+        }
+        Err(FormulaEvalError::Num)
     }
 
     fn parse_ispmt_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -24831,6 +24928,82 @@ mod tests {
                 OmValue::Number(0.0),
                 OmValue::Number(0.0),
                 OmValue::Number(-20.0),
+                OmValue::Error(CellError::Num),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_rate_financial_formula() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A8".to_string())])
+                .expect("Range(A1:A8)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        8,
+                        1,
+                        vec![
+                            OmValue::Text("=RATE(1, -200, 100)".to_string()),
+                            OmValue::Text("=RATE(2, -10, -100, 460, 1, 0.5)".to_string()),
+                            OmValue::Text("=RATE(10, -100, 1000, 0, 0, 0)".to_string()),
+                            OmValue::Text("=RATE(2, 0, -100, 400)".to_string()),
+                            OmValue::Text("=RATE(48, -200, 8000)".to_string()),
+                            OmValue::Text("=RATE(0, -100, 1000)".to_string()),
+                            OmValue::Text("=RATE(1, -200, 100, 0, 2)".to_string()),
+                            OmValue::Text("=RATE(1, -200, 100, 0, 0, -1)".to_string()),
+                        ],
+                    )
+                    .expect("RATE formulas"),
+                ),
+                &[],
+            )
+            .expect("set RATE formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("RATE values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected RATE value array");
+        };
+        let expected_numbers = [1.0, 1.0, 0.0, 1.0, 0.007701472488];
+        for (index, expected) in expected_numbers.into_iter().enumerate() {
+            let number = expect_number(values.values[index].clone());
+            assert!(
+                (number - expected).abs() < 1e-9,
+                "RATE result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            &values.values[5..],
+            &[
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
             ]
         );

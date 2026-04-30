@@ -147,6 +147,7 @@ Roman numeral notes:
 - `RRI`
 - `PDURATION`
 - `NPER`
+- `RATE`
 - `ISPMT`
 
 Financial notes:
@@ -159,7 +160,7 @@ Financial notes:
 - `DISC`, `INTRATE`, `RECEIVED`, `PRICEDISC`, and `YIELDDISC` cover discounted securities using the same basis values as `YEARFRAC`.
 - `ACCRINTM` calculates interest accrued to maturity using `YEARFRAC` basis values and defaults omitted par to `1000`.
 - `TBILLEQ`, `TBILLPRICE`, and `TBILLYIELD` cover Treasury bill formulas, using actual days and rejecting maturities more than 365 days after settlement.
-- `FV`, `PV`, `PMT`, and `NPER` support omitted future/present value and payment timing arguments with the standard `0`/`1` timing modes. `ISPMT` uses Excel's zero-based period convention.
+- `FV`, `PV`, `PMT`, `NPER`, and `RATE` support omitted future/present value and payment timing arguments with the standard `0`/`1` timing modes. `RATE` uses a 20-iteration solve with the documented `10%` default guess. `ISPMT` uses Excel's zero-based period convention.
 - `IPMT` and `PPMT` split the standard `PMT` result into interest and principal portions for one-based periods in the range `1..nper`.
 - `CUMIPMT` and `CUMPRINC` sum the corresponding interest or principal portions across a one-based inclusive period range.
 - `SLN` and `SYD` cover straight-line and sum-of-years' digits depreciation with `#NUM!` for non-positive life or out-of-range periods.
