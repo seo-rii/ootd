@@ -12619,6 +12619,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("PMT") {
             return self.parse_pmt_function();
         }
+        if name.eq_ignore_ascii_case("NPER") {
+            return self.parse_nper_function();
+        }
         if name.eq_ignore_ascii_case("ISPMT") {
             return self.parse_ispmt_function();
         }
@@ -14249,6 +14252,70 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 return Err(FormulaEvalError::Div0);
             }
             -(pv * growth + fv) * rate / denominator
+        };
+        if value.is_finite() {
+            Ok(value)
+        } else {
+            Err(FormulaEvalError::Num)
+        }
+    }
+
+    fn parse_nper_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let rate = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let pmt = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let pv = self.parse_comparison()?;
+        let mut fv = 0.0;
+        let mut payment_type = 0.0;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            fv = self.parse_comparison()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                payment_type = formula_financial_type_argument(self.parse_comparison()?)?;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+            }
+        }
+        if ![rate, pmt, pv, fv].iter().all(|value| value.is_finite()) {
+            return Err(FormulaEvalError::Value);
+        }
+        let value = if rate == 0.0 {
+            if pmt == 0.0 {
+                return Err(FormulaEvalError::Div0);
+            }
+            -(pv + fv) / pmt
+        } else {
+            let base = 1.0 + rate;
+            if base <= 0.0 {
+                return Err(FormulaEvalError::Num);
+            }
+            let adjusted_payment = pmt * (1.0 + rate * payment_type) / rate;
+            let numerator = adjusted_payment - fv;
+            let denominator = pv + adjusted_payment;
+            if numerator == 0.0 || denominator == 0.0 {
+                return Err(FormulaEvalError::Div0);
+            }
+            let ratio = numerator / denominator;
+            if ratio <= 0.0 {
+                return Err(FormulaEvalError::Num);
+            }
+            ratio.ln() / base.ln()
         };
         if value.is_finite() {
             Ok(value)
@@ -23125,9 +23192,9 @@ mod tests {
                 .dispatch_invoke(
                     active_sheet,
                     "Range",
-                    &[OmValue::Text("A1:A12".to_string())],
+                    &[OmValue::Text("A1:A17".to_string())],
                 )
-                .expect("Range(A1:A12)"),
+                .expect("Range(A1:A17)"),
         );
 
         runtime
@@ -23136,7 +23203,7 @@ mod tests {
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        12,
+                        17,
                         1,
                         vec![
                             OmValue::Text("=FV(0, 10, -100, -1000)".to_string()),
@@ -23151,6 +23218,11 @@ mod tests {
                             OmValue::Text("=FV(1, 1, 0, -100, 2)".to_string()),
                             OmValue::Text("=PMT(0, 0, 100)".to_string()),
                             OmValue::Text("=PV(1, 2, 0, 400)".to_string()),
+                            OmValue::Text("=NPER(0, -100, 1000)".to_string()),
+                            OmValue::Text("=NPER(1, 0, -100, 400)".to_string()),
+                            OmValue::Text("=NPER(1, -10, -100, 460, 1)".to_string()),
+                            OmValue::Text("=NPER(0, 0, 100)".to_string()),
+                            OmValue::Text("=NPER(-2, -100, 1000)".to_string()),
                         ],
                     )
                     .expect("annuity financial formulas"),
@@ -23184,6 +23256,11 @@ mod tests {
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Div0),
                 OmValue::Number(-100.0),
+                OmValue::Number(10.0),
+                OmValue::Number(2.0),
+                OmValue::Number(2.0),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Num),
             ]
         );
     }

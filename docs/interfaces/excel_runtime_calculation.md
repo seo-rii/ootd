@@ -119,12 +119,13 @@ Roman numeral notes:
 - `FV`
 - `PV`
 - `PMT`
+- `NPER`
 - `ISPMT`
 
 Financial notes:
 
 - `DOLLARDE` and `DOLLARFR` truncate the denominator argument before conversion, return `#NUM!` for negative denominators, and return `#DIV/0!` when the truncated denominator is zero.
-- `FV`, `PV`, and `PMT` support omitted future/present value and payment timing arguments with the standard `0`/`1` timing modes. `ISPMT` uses Excel's zero-based period convention.
+- `FV`, `PV`, `PMT`, and `NPER` support omitted future/present value and payment timing arguments with the standard `0`/`1` timing modes. `ISPMT` uses Excel's zero-based period convention.
 
 ### Logical and control helpers
 
