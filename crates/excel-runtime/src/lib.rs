@@ -13016,6 +13016,105 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 return Err(FormulaEvalError::Unsupported);
             }
         }
+        if name.eq_ignore_ascii_case("MIRR") {
+            let mut values = Vec::new();
+            self.skip_whitespace();
+            let checkpoint = self.index;
+            if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
+                self.index = next_index;
+                self.skip_whitespace();
+                if self.peek_char().is_none_or(|ch| ch == ',') {
+                    for row in rect.row_first..=rect.row_last {
+                        for col in rect.col_first..=rect.col_last {
+                            match self
+                                .evaluator
+                                .cell_value_or_blank(target_sheet_id, row, col)?
+                            {
+                                CellValue::Number(number) => values.push(number),
+                                CellValue::Error(error) => {
+                                    return Err(formula_eval_error_from_cell_error(error));
+                                }
+                                CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {}
+                            }
+                        }
+                    }
+                } else {
+                    self.index = checkpoint;
+                    if self.parse_string_literal()?.is_some() {
+                        return Err(FormulaEvalError::Value);
+                    }
+                    values.push(self.parse_comparison()?);
+                }
+            } else {
+                if self.parse_string_literal()?.is_some() {
+                    return Err(FormulaEvalError::Value);
+                }
+                values.push(self.parse_comparison()?);
+            }
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let finance_rate = self.parse_comparison()?;
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let reinvest_rate = self.parse_comparison()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            if !finance_rate.is_finite()
+                || !reinvest_rate.is_finite()
+                || values.iter().any(|value| !value.is_finite())
+            {
+                return Err(FormulaEvalError::Value);
+            }
+            if values.len() < 2
+                || !values.iter().any(|value| *value > 0.0)
+                || !values.iter().any(|value| *value < 0.0)
+            {
+                return Err(FormulaEvalError::Div0);
+            }
+            let finance_factor = 1.0 + finance_rate;
+            let reinvest_factor = 1.0 + reinvest_rate;
+            let periods = values.len() - 1;
+            let mut future_positive = 0.0;
+            let mut present_negative = 0.0;
+            for (index, value) in values.iter().enumerate() {
+                if *value > 0.0 {
+                    let exponent =
+                        i32::try_from(periods - index).map_err(|_| FormulaEvalError::Num)?;
+                    future_positive += value * reinvest_factor.powi(exponent);
+                    if !future_positive.is_finite() {
+                        return Err(FormulaEvalError::Num);
+                    }
+                } else if *value < 0.0 {
+                    let exponent = i32::try_from(index).map_err(|_| FormulaEvalError::Num)?;
+                    let denominator = finance_factor.powi(exponent);
+                    if denominator == 0.0 {
+                        return Err(FormulaEvalError::Div0);
+                    }
+                    if !denominator.is_finite() {
+                        return Err(FormulaEvalError::Num);
+                    }
+                    present_negative += value / denominator;
+                    if !present_negative.is_finite() {
+                        return Err(FormulaEvalError::Num);
+                    }
+                }
+            }
+            if future_positive <= 0.0 || present_negative >= 0.0 {
+                return Err(FormulaEvalError::Num);
+            }
+            let result = (future_positive / -present_negative).powf(1.0 / periods as f64) - 1.0;
+            return if result.is_finite() {
+                Ok(result)
+            } else {
+                Err(FormulaEvalError::Num)
+            };
+        }
         if name.eq_ignore_ascii_case("FV") {
             return self.parse_fv_function();
         }
@@ -24148,6 +24247,108 @@ mod tests {
                 OmValue::Number(5.0),
                 OmValue::Number(5.0),
                 OmValue::Number(5.0),
+                OmValue::Error(CellError::Div0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_mirr_financial_formula() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A9".to_string())])
+                .expect("Range(A1:A9)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B8".to_string())])
+                .expect("Range(B1:B8)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        9,
+                        1,
+                        vec![
+                            OmValue::Number(-100.0),
+                            OmValue::Empty,
+                            OmValue::Number(0.0),
+                            OmValue::Text("ignored".to_string()),
+                            OmValue::Bool(true),
+                            OmValue::Number(400.0),
+                            OmValue::Error(CellError::NA),
+                            OmValue::Number(200.0),
+                            OmValue::Number(-100.0),
+                        ],
+                    )
+                    .expect("MIRR source values"),
+                ),
+                &[],
+            )
+            .expect("set MIRR source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        8,
+                        1,
+                        vec![
+                            OmValue::Text("=MIRR(A1:A6, 0, 0)".to_string()),
+                            OmValue::Text("=MIRR(A8:A9, 1, 0)".to_string()),
+                            OmValue::Text("=MIRR(A1:A1, 0, 0)".to_string()),
+                            OmValue::Text("=MIRR(A6:A6, 0, 0)".to_string()),
+                            OmValue::Text("=MIRR(A7:A7, 0, 0)".to_string()),
+                            OmValue::Text("=MIRR(A8:A9, -1, 0)".to_string()),
+                            OmValue::Text(r#"=MIRR("bad", 0, 0)"#.to_string()),
+                            OmValue::Text("=MIRR(-100, 0, 0)".to_string()),
+                        ],
+                    )
+                    .expect("MIRR formulas"),
+                ),
+                &[],
+            )
+            .expect("set MIRR formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("MIRR values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected MIRR value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(1.0),
+                OmValue::Number(3.0),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Div0),
             ]
         );
