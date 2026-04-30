@@ -8653,6 +8653,7 @@ enum FormulaScalarFunction {
     AccrIntM,
     Acos,
     Acosh,
+    AmorDegrc,
     AmorLinc,
     Acot,
     Acoth,
@@ -8778,6 +8779,8 @@ impl FormulaScalarFunction {
             Some(Self::Acos)
         } else if name.eq_ignore_ascii_case("ACOSH") {
             Some(Self::Acosh)
+        } else if name.eq_ignore_ascii_case("AMORDEGRC") {
+            Some(Self::AmorDegrc)
         } else if name.eq_ignore_ascii_case("AMORLINC") {
             Some(Self::AmorLinc)
         } else if name.eq_ignore_ascii_case("ACOT") {
@@ -9831,6 +9834,113 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Num);
                 }
                 checked_numeric_result(value.acosh())
+            }
+            FormulaScalarFunction::AmorDegrc => {
+                let (cost, date_purchased, first_period, salvage, period, rate, basis) = match args
+                {
+                    [cost, date_purchased, first_period, salvage, period, rate] => (
+                        *cost,
+                        *date_purchased,
+                        *first_period,
+                        *salvage,
+                        *period,
+                        *rate,
+                        0.0,
+                    ),
+                    [
+                        cost,
+                        date_purchased,
+                        first_period,
+                        salvage,
+                        period,
+                        rate,
+                        basis,
+                    ] => (
+                        *cost,
+                        *date_purchased,
+                        *first_period,
+                        *salvage,
+                        *period,
+                        *rate,
+                        *basis,
+                    ),
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if ![
+                    cost,
+                    date_purchased,
+                    first_period,
+                    salvage,
+                    period,
+                    rate,
+                    basis,
+                ]
+                .iter()
+                .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                let basis = yearfrac_basis(basis)?;
+                if basis == 2 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let date_purchased = financial_date_serial(date_purchased)?;
+                let first_period = financial_date_serial(first_period)?;
+                let period = period.trunc();
+                if cost <= 0.0
+                    || salvage < 0.0
+                    || salvage >= cost
+                    || period < 0.0
+                    || rate <= 0.0
+                    || date_purchased >= first_period
+                {
+                    return Err(FormulaEvalError::Num);
+                }
+                let asset_life = 1.0 / rate;
+                let coefficient = if asset_life > 6.0 {
+                    2.5
+                } else if asset_life >= 5.0 {
+                    2.0
+                } else if asset_life >= 3.0 && asset_life <= 4.0 {
+                    1.5
+                } else {
+                    return Err(FormulaEvalError::Num);
+                };
+                let depreciation_rate = rate * coefficient;
+                let first_depreciation = round_half_away_from_zero(
+                    cost * depreciation_rate
+                        * yearfrac_by_basis(date_purchased, first_period, basis)?,
+                );
+                if period == 0.0 {
+                    return checked_numeric_result(first_depreciation);
+                }
+                let mut accumulated_depreciation = first_depreciation;
+                let lifetime_periods = asset_life.floor();
+                let mut current_period = 1.0;
+                while current_period <= period {
+                    let depreciation = if accumulated_depreciation > cost - salvage {
+                        0.0
+                    } else {
+                        let remaining_value = cost - accumulated_depreciation;
+                        let period_rate = if current_period == lifetime_periods - 2.0 {
+                            0.5
+                        } else if current_period == lifetime_periods - 1.0 {
+                            1.0
+                        } else {
+                            depreciation_rate
+                        };
+                        round_half_away_from_zero(remaining_value * period_rate)
+                    };
+                    if current_period == period {
+                        return checked_numeric_result(depreciation);
+                    }
+                    accumulated_depreciation += depreciation;
+                    if !accumulated_depreciation.is_finite() {
+                        return Err(FormulaEvalError::Num);
+                    }
+                    current_period += 1.0;
+                }
+                Ok(0.0)
             }
             FormulaScalarFunction::AmorLinc => {
                 let (cost, date_purchased, first_period, salvage, period, rate, basis) = match args
@@ -27903,6 +28013,144 @@ mod tests {
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_amordegrc_depreciation_formula() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A16".to_string())],
+                )
+                .expect("Range(A1:A16)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        16,
+                        1,
+                        vec![
+                            OmValue::Text("=AMORDEGRC(2400,39679,39813,300,1,0.15,1)".to_string()),
+                            OmValue::Text("=AMORDEGRC(2400,39679,39813,300,0,0.15,1)".to_string()),
+                            OmValue::Text(
+                                "=AMORDEGRC(1200,DATE(2022,7,1),DATE(2022,12,31),200,0,0.15,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=AMORDEGRC(1200,DATE(2022,7,1),DATE(2022,12,31),200,1,0.15,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=AMORDEGRC(1200,DATE(2022,7,1),DATE(2022,12,31),200,2,0.15,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=AMORDEGRC(1200,DATE(2022,7,1),DATE(2022,12,31),200,3,0.15,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=AMORDEGRC(1200,DATE(2022,7,1),DATE(2022,12,31),200,4,0.15,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=AMORDEGRC(1200,DATE(2022,7,1),DATE(2022,12,31),200,5,0.15,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=AMORDEGRC(1200,DATE(2022,7,1),DATE(2022,12,31),0,5,0.15,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=AMORDEGRC(1000,DATE(2008,1,1),DATE(2008,7,1),100,1,0.24,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=AMORDEGRC(1000,DATE(2008,1,1),DATE(2008,7,1),100,1,0.5,2)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=AMORDEGRC(0,DATE(2008,1,1),DATE(2008,7,1),100,1,0.5,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=AMORDEGRC(1000,DATE(2008,1,1),DATE(2008,7,1),1000,1,0.5,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=AMORDEGRC(1000,DATE(2008,1,1),DATE(2008,7,1),100,-1,0.5,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=AMORDEGRC(1000,DATE(2008,7,1),DATE(2008,1,1),100,1,0.5,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=AMORDEGRC(1000,0,DATE(2008,7,1),100,1,0.5,0)".to_string(),
+                            ),
+                        ],
+                    )
+                    .expect("AMORDEGRC formulas"),
+                ),
+                &[],
+            )
+            .expect("set AMORDEGRC formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("AMORDEGRC values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected AMORDEGRC value array");
+        };
+        assert_eq!(
+            &values.values[..9],
+            &[
+                OmValue::Number(776.0),
+                OmValue::Number(330.0),
+                OmValue::Number(225.0),
+                OmValue::Number(366.0),
+                OmValue::Number(228.0),
+                OmValue::Number(143.0),
+                OmValue::Number(119.0),
+                OmValue::Number(0.0),
+                OmValue::Number(119.0),
+            ]
+        );
+        assert_eq!(
+            &values.values[9..],
+            &[
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
             ]
         );
     }
