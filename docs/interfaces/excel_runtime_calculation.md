@@ -119,8 +119,11 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `EXPON.DIST` / `EXPONDIST`
 - `GAUSS`
 - `LOGNORM.DIST` / `LOGNORMDIST`
+- `LOGNORM.INV` / `LOGINV`
 - `NORM.DIST` / `NORMDIST`
+- `NORM.INV` / `NORMINV`
 - `NORM.S.DIST` / `NORMSDIST`
+- `NORM.S.INV` / `NORMSINV`
 - `PHI`
 - `POISSON.DIST` / `POISSON`
 - `STANDARDIZE`
@@ -135,6 +138,7 @@ Roman numeral notes:
 - `ERF`, `ERF.PRECISE`, `ERFC`, and `ERFC.PRECISE` cover scalar error-function calculations. `ERF` also supports the legacy lower/upper integration form.
 - `GAMMALN` and `GAMMALN.PRECISE` return the natural logarithm of the gamma function for positive scalar inputs.
 - `EXPON.DIST`, `LOGNORM.DIST`, `NORM.DIST`, `NORM.S.DIST`, `POISSON.DIST`, and `WEIBULL.DIST` cover scalar probability and cumulative distribution calculations, with legacy function aliases mapped to the same implementations where their argument shapes match.
+- `LOGNORM.INV`, `NORM.INV`, and `NORM.S.INV` cover scalar inverse cumulative distribution calculations and include the legacy `LOGINV`, `NORMINV`, and `NORMSINV` aliases.
 - `GAUSS`, `PHI`, and `STANDARDIZE` cover scalar standard-normal helpers.
 
 ### Financial helpers

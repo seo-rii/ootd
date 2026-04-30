@@ -8727,6 +8727,8 @@ enum FormulaScalarFunction {
     Ln,
     LogNormDist,
     LogNormDistLegacy,
+    LogNormInv,
+    LogNormInvLegacy,
     Log,
     Log10,
     Minute,
@@ -8737,8 +8739,11 @@ enum FormulaScalarFunction {
     Multinomial,
     Nominal,
     NormDist,
+    NormInv,
     NormSDist,
     NormSDistLegacy,
+    NormSInv,
+    NormSInvLegacy,
     Not,
     Odd,
     Or,
@@ -8945,8 +8950,12 @@ impl FormulaScalarFunction {
             Some(Self::Int)
         } else if name.eq_ignore_ascii_case("LN") {
             Some(Self::Ln)
+        } else if name.eq_ignore_ascii_case("LOGNORM.INV") {
+            Some(Self::LogNormInv)
         } else if name.eq_ignore_ascii_case("LOGNORM.DIST") {
             Some(Self::LogNormDist)
+        } else if name.eq_ignore_ascii_case("LOGINV") {
+            Some(Self::LogNormInvLegacy)
         } else if name.eq_ignore_ascii_case("LOGNORMDIST") {
             Some(Self::LogNormDistLegacy)
         } else if name.eq_ignore_ascii_case("LOG") {
@@ -8967,10 +8976,16 @@ impl FormulaScalarFunction {
             Some(Self::Multinomial)
         } else if name.eq_ignore_ascii_case("NOMINAL") {
             Some(Self::Nominal)
+        } else if name.eq_ignore_ascii_case("NORM.INV") || name.eq_ignore_ascii_case("NORMINV") {
+            Some(Self::NormInv)
         } else if name.eq_ignore_ascii_case("NORM.DIST") || name.eq_ignore_ascii_case("NORMDIST") {
             Some(Self::NormDist)
+        } else if name.eq_ignore_ascii_case("NORM.S.INV") {
+            Some(Self::NormSInv)
         } else if name.eq_ignore_ascii_case("NORM.S.DIST") {
             Some(Self::NormSDist)
+        } else if name.eq_ignore_ascii_case("NORMSINV") {
+            Some(Self::NormSInvLegacy)
         } else if name.eq_ignore_ascii_case("NORMSDIST") {
             Some(Self::NormSDistLegacy)
         } else if name.eq_ignore_ascii_case("NOT") {
@@ -9725,6 +9740,62 @@ impl FormulaScalarFunction {
             INV_SQRT_2_PI * (-0.5 * z * z).exp()
         };
         let standard_normal_cdf = |z: f64| 0.5 * (1.0 + erf_approx(z / std::f64::consts::SQRT_2));
+        let inverse_standard_normal = |probability: f64| -> Result<f64, FormulaEvalError> {
+            if !probability.is_finite() {
+                return Err(FormulaEvalError::Value);
+            }
+            if probability <= 0.0 || probability >= 1.0 {
+                return Err(FormulaEvalError::Num);
+            }
+
+            const A: [f64; 6] = [
+                -3.969683028665376e1,
+                2.209460984245205e2,
+                -2.759285104469687e2,
+                1.383577518672690e2,
+                -3.066479806614716e1,
+                2.506628277459239,
+            ];
+            const B: [f64; 5] = [
+                -5.447609879822406e1,
+                1.615858368580409e2,
+                -1.556989798598866e2,
+                6.680131188771972e1,
+                -1.328068155288572e1,
+            ];
+            const C: [f64; 6] = [
+                -7.784894002430293e-3,
+                -3.223964580411365e-1,
+                -2.400758277161838,
+                -2.549732539343734,
+                4.374664141464968,
+                2.938163982698783,
+            ];
+            const D: [f64; 4] = [
+                7.784695709041462e-3,
+                3.224671290700398e-1,
+                2.445134137142996,
+                3.754408661907416,
+            ];
+            const P_LOW: f64 = 0.02425;
+            const P_HIGH: f64 = 1.0 - P_LOW;
+
+            let value = if probability < P_LOW {
+                let q = (-2.0 * probability.ln()).sqrt();
+                (((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
+                    / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0)
+            } else if probability <= P_HIGH {
+                let q = probability - 0.5;
+                let r = q * q;
+                (((((A[0] * r + A[1]) * r + A[2]) * r + A[3]) * r + A[4]) * r + A[5]) * q
+                    / (((((B[0] * r + B[1]) * r + B[2]) * r + B[3]) * r + B[4]) * r + 1.0)
+            } else {
+                let q = (-2.0 * (1.0 - probability).ln()).sqrt();
+                -(((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
+                    / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0)
+            };
+            checked_numeric_result(value)
+        };
         let gamma_ln_value = |value: f64| {
             const COEFFICIENTS: [f64; 9] = [
                 0.9999999999998099,
@@ -10852,6 +10923,22 @@ impl FormulaScalarFunction {
                 };
                 checked_numeric_result(value)
             }
+            FormulaScalarFunction::LogNormInv | FormulaScalarFunction::LogNormInvLegacy => {
+                let [probability, mean, standard_dev] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if ![probability, mean, standard_dev]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *standard_dev <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let z = inverse_standard_normal(*probability)?;
+                checked_numeric_result((*mean + *standard_dev * z).exp())
+            }
             FormulaScalarFunction::Log => {
                 let (number, base) = match args {
                     [number] => (*number, 10.0),
@@ -10978,6 +11065,22 @@ impl FormulaScalarFunction {
                 };
                 checked_numeric_result(value)
             }
+            FormulaScalarFunction::NormInv => {
+                let [probability, mean, standard_dev] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if ![probability, mean, standard_dev]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *standard_dev <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let z = inverse_standard_normal(*probability)?;
+                checked_numeric_result(*mean + *standard_dev * z)
+            }
             FormulaScalarFunction::NormSDist => {
                 let [z, cumulative] = args else {
                     return Err(FormulaEvalError::Value);
@@ -10999,6 +11102,12 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Value);
                 }
                 checked_numeric_result(standard_normal_cdf(*z))
+            }
+            FormulaScalarFunction::NormSInv | FormulaScalarFunction::NormSInvLegacy => {
+                let [probability] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                inverse_standard_normal(*probability)
             }
             FormulaScalarFunction::Not => {
                 let [value] = args else {
@@ -25136,6 +25245,99 @@ mod tests {
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Num),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_inverse_normal_distribution_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A15".to_string())],
+                )
+                .expect("Range(A1:A15)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        15,
+                        1,
+                        vec![
+                            OmValue::Text("=NORM.S.INV(0.8413447460685429)".to_string()),
+                            OmValue::Text("=NORMSINV(0.5)".to_string()),
+                            OmValue::Text("=NORM.INV(0.9087887802741321,40,1.5)".to_string()),
+                            OmValue::Text("=NORMINV(0.5,40,1.5)".to_string()),
+                            OmValue::Text("=LOGNORM.INV(0.0390835557068005,3.5,1.2)".to_string()),
+                            OmValue::Text("=LOGINV(0.5,3.5,1.2)".to_string()),
+                            OmValue::Text("=NORM.INV(0,40,1.5)".to_string()),
+                            OmValue::Text("=NORM.INV(1,40,1.5)".to_string()),
+                            OmValue::Text("=NORM.INV(0.5,40,0)".to_string()),
+                            OmValue::Text("=NORM.S.INV(0)".to_string()),
+                            OmValue::Text("=NORM.S.INV(1)".to_string()),
+                            OmValue::Text("=LOGNORM.INV(0.5,3.5,0)".to_string()),
+                            OmValue::Text("=NORM.S.INV(0.5,1)".to_string()),
+                            OmValue::Text("=NORMSINV(0.5,1)".to_string()),
+                            OmValue::Text("=LOGINV(0.5,3.5)".to_string()),
+                        ],
+                    )
+                    .expect("inverse normal distribution formulas"),
+                ),
+                &[],
+            )
+            .expect("set inverse normal distribution formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("inverse normal distribution values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected inverse normal distribution value array");
+        };
+        let expected_numbers = [1.0, 0.0, 42.0, 40.0, 4.0, 33.11545195869231];
+        for (index, expected) in expected_numbers.into_iter().enumerate() {
+            let number = expect_number(values.values[index].clone());
+            assert!(
+                (number - expected).abs() < 1e-5,
+                "inverse normal distribution result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            &values.values[6..],
+            &[
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
             ]
         );
     }
