@@ -12838,6 +12838,69 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("DOLLARFR") {
             return self.parse_dollarfr_function();
         }
+        if name.eq_ignore_ascii_case("FVSCHEDULE") {
+            self.skip_whitespace();
+            if self.parse_string_literal()?.is_some() {
+                return Err(FormulaEvalError::Value);
+            }
+            let mut value = self.parse_comparison()?;
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            self.skip_whitespace();
+            let mut schedule = Vec::new();
+            let checkpoint = self.index;
+            if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
+                self.index = next_index;
+                self.skip_whitespace();
+                if self.peek_char().is_some_and(|ch| ch == ')') {
+                    for row in rect.row_first..=rect.row_last {
+                        for col in rect.col_first..=rect.col_last {
+                            match self
+                                .evaluator
+                                .cell_value_or_blank(target_sheet_id, row, col)?
+                            {
+                                CellValue::Blank => schedule.push(0.0),
+                                CellValue::Number(number) => schedule.push(number),
+                                CellValue::Error(error) => {
+                                    return Err(formula_eval_error_from_cell_error(error));
+                                }
+                                CellValue::Bool(_) | CellValue::Text(_) => {
+                                    return Err(FormulaEvalError::Value);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    self.index = checkpoint;
+                    if self.parse_string_literal()?.is_some() {
+                        return Err(FormulaEvalError::Value);
+                    }
+                    schedule.push(self.parse_comparison()?);
+                }
+            } else {
+                if self.parse_string_literal()?.is_some() {
+                    return Err(FormulaEvalError::Value);
+                }
+                schedule.push(self.parse_comparison()?);
+            }
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            if !value.is_finite() || schedule.iter().any(|rate| !rate.is_finite()) {
+                return Err(FormulaEvalError::Value);
+            }
+            for rate in schedule {
+                value *= 1.0 + rate;
+            }
+            return if value.is_finite() {
+                Ok(value)
+            } else {
+                Err(FormulaEvalError::Num)
+            };
+        }
         if name.eq_ignore_ascii_case("FV") {
             return self.parse_fv_function();
         }
@@ -23779,6 +23842,99 @@ mod tests {
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Number(3.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_fvschedule_financial_formula() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A4".to_string())])
+                .expect("Range(A1:A4)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B6".to_string())])
+                .expect("Range(B1:B6)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        1,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Empty,
+                            OmValue::Number(-0.5),
+                            OmValue::Text("bad".to_string()),
+                        ],
+                    )
+                    .expect("FVSCHEDULE source values"),
+                ),
+                &[],
+            )
+            .expect("set FVSCHEDULE source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        6,
+                        1,
+                        vec![
+                            OmValue::Text("=FVSCHEDULE(100, A1:A3)".to_string()),
+                            OmValue::Text("=FVSCHEDULE(100, A1:A1)".to_string()),
+                            OmValue::Text("=FVSCHEDULE(100, A2:A2)".to_string()),
+                            OmValue::Text("=FVSCHEDULE(100, A3:A3)".to_string()),
+                            OmValue::Text("=FVSCHEDULE(100, -1)".to_string()),
+                            OmValue::Text("=FVSCHEDULE(100, A4:A4)".to_string()),
+                        ],
+                    )
+                    .expect("FVSCHEDULE formulas"),
+                ),
+                &[],
+            )
+            .expect("set FVSCHEDULE formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("FVSCHEDULE values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected FVSCHEDULE value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(100.0),
+                OmValue::Number(200.0),
+                OmValue::Number(100.0),
+                OmValue::Number(50.0),
+                OmValue::Number(0.0),
+                OmValue::Error(CellError::Value),
             ]
         );
     }
