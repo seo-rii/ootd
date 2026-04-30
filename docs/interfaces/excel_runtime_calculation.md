@@ -122,6 +122,7 @@ Roman numeral notes:
 - `NPV`
 - `XNPV`
 - `IRR`
+- `XIRR`
 - `MIRR`
 - `DISC`
 - `INTRATE`
@@ -158,6 +159,7 @@ Financial notes:
 - `NPV` discounts ordered end-of-period cash flows and ignores empty, logical, text, and error values inside value arguments.
 - `XNPV` discounts irregular cash flows over a 365-day year, truncates date serials to integers, and returns `#NUM!` for length mismatches or dates before the first date.
 - `IRR` preserves value order, ignores text, logical, and empty cells in range inputs, and uses a 20-iteration solve with the documented `10%` default guess.
+- `XIRR` solves the rate for irregular dated cash flows with the same date validation as `XNPV` and uses a 100-iteration solve with the documented `10%` default guess.
 - `MIRR` preserves value order, includes zero cash flows as periods, and ignores text, logical, and empty cells in range inputs.
 - `DISC`, `INTRATE`, `RECEIVED`, `PRICEDISC`, and `YIELDDISC` cover discounted securities using the same basis values as `YEARFRAC`.
 - `ACCRINTM` calculates interest accrued to maturity using `YEARFRAC` basis values and defaults omitted par to `1000`.
