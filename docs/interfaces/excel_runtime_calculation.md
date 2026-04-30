@@ -125,6 +125,7 @@ Roman numeral notes:
 - `RECEIVED`
 - `PRICEDISC`
 - `YIELDDISC`
+- `ACCRINTM`
 - `TBILLEQ`
 - `TBILLPRICE`
 - `TBILLYIELD`
@@ -154,6 +155,7 @@ Financial notes:
 - `XNPV` discounts irregular cash flows over a 365-day year, truncates date serials to integers, and returns `#NUM!` for length mismatches or dates before the first date.
 - `MIRR` preserves value order, includes zero cash flows as periods, and ignores text, logical, and empty cells in range inputs.
 - `DISC`, `INTRATE`, `RECEIVED`, `PRICEDISC`, and `YIELDDISC` cover discounted securities using the same basis values as `YEARFRAC`.
+- `ACCRINTM` calculates interest accrued to maturity using `YEARFRAC` basis values and defaults omitted par to `1000`.
 - `TBILLEQ`, `TBILLPRICE`, and `TBILLYIELD` cover Treasury bill formulas, using actual days and rejecting maturities more than 365 days after settlement.
 - `FV`, `PV`, `PMT`, and `NPER` support omitted future/present value and payment timing arguments with the standard `0`/`1` timing modes. `ISPMT` uses Excel's zero-based period convention.
 - `IPMT` and `PPMT` split the standard `PMT` result into interest and principal portions for one-based periods in the range `1..nper`.

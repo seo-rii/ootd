@@ -8649,6 +8649,7 @@ fn formula_eval_error_from_cell_error(error: CellError) -> FormulaEvalError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FormulaScalarFunction {
     Abs,
+    AccrIntM,
     Acos,
     Acosh,
     Acot,
@@ -8755,6 +8756,8 @@ impl FormulaScalarFunction {
     fn from_name(name: &str) -> Option<Self> {
         if name.eq_ignore_ascii_case("ABS") {
             Some(Self::Abs)
+        } else if name.eq_ignore_ascii_case("ACCRINTM") {
+            Some(Self::AccrIntM)
         } else if name.eq_ignore_ascii_case("ACOS") {
             Some(Self::Acos)
         } else if name.eq_ignore_ascii_case("ACOSH") {
@@ -9306,6 +9309,32 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Value);
                 };
                 Ok(value.abs())
+            }
+            FormulaScalarFunction::AccrIntM => {
+                let (issue, settlement, rate, par, basis) = match args {
+                    [issue, settlement, rate] => (*issue, *settlement, *rate, 1000.0, 0.0),
+                    [issue, settlement, rate, par] => (*issue, *settlement, *rate, *par, 0.0),
+                    [issue, settlement, rate, par, basis] => {
+                        (*issue, *settlement, *rate, *par, *basis)
+                    }
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if ![issue, settlement, rate, par, basis]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if rate <= 0.0 || par <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let basis = yearfrac_basis(basis)?;
+                let issue = financial_date_serial(issue)?;
+                let settlement = financial_date_serial(settlement)?;
+                if issue >= settlement {
+                    return Err(FormulaEvalError::Num);
+                }
+                checked_numeric_result(par * rate * yearfrac_by_basis(issue, settlement, basis)?)
             }
             FormulaScalarFunction::Acos => {
                 let [value] = args else {
@@ -24910,6 +24939,78 @@ mod tests {
                 OmValue::Number(1.0 / 9.0),
                 OmValue::Number(100.0),
                 OmValue::Number(1.0 / 9.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_accrintm_financial_formula() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A8".to_string())])
+                .expect("Range(A1:A8)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        8,
+                        1,
+                        vec![
+                            OmValue::Text("=ACCRINTM(1, 366, 0.1, 1000, 3)".to_string()),
+                            OmValue::Text("=ACCRINTM(1, 181, 0.1, 1000, 2)".to_string()),
+                            OmValue::Text("=ACCRINTM(1, 366, 0.1)".to_string()),
+                            OmValue::Text("=ACCRINTM(366, 1, 0.1, 1000, 3)".to_string()),
+                            OmValue::Text("=ACCRINTM(1, 366, 0, 1000, 3)".to_string()),
+                            OmValue::Text("=ACCRINTM(1, 366, 0.1, 0, 3)".to_string()),
+                            OmValue::Text("=ACCRINTM(1, 366, 0.1, 1000, 5)".to_string()),
+                            OmValue::Text("=ACCRINTM(0, 366, 0.1, 1000, 3)".to_string()),
+                        ],
+                    )
+                    .expect("ACCRINTM formulas"),
+                ),
+                &[],
+            )
+            .expect("set ACCRINTM formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("ACCRINTM values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected ACCRINTM value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(100.0),
+                OmValue::Number(50.0),
+                OmValue::Number(100.0),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
