@@ -8653,6 +8653,7 @@ enum FormulaScalarFunction {
     AccrIntM,
     Acos,
     Acosh,
+    AmorLinc,
     Acot,
     Acoth,
     And,
@@ -8777,6 +8778,8 @@ impl FormulaScalarFunction {
             Some(Self::Acos)
         } else if name.eq_ignore_ascii_case("ACOSH") {
             Some(Self::Acosh)
+        } else if name.eq_ignore_ascii_case("AMORLINC") {
+            Some(Self::AmorLinc)
         } else if name.eq_ignore_ascii_case("ACOT") {
             Some(Self::Acot)
         } else if name.eq_ignore_ascii_case("ACOTH") {
@@ -9828,6 +9831,85 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Num);
                 }
                 checked_numeric_result(value.acosh())
+            }
+            FormulaScalarFunction::AmorLinc => {
+                let (cost, date_purchased, first_period, salvage, period, rate, basis) = match args
+                {
+                    [cost, date_purchased, first_period, salvage, period, rate] => (
+                        *cost,
+                        *date_purchased,
+                        *first_period,
+                        *salvage,
+                        *period,
+                        *rate,
+                        0.0,
+                    ),
+                    [
+                        cost,
+                        date_purchased,
+                        first_period,
+                        salvage,
+                        period,
+                        rate,
+                        basis,
+                    ] => (
+                        *cost,
+                        *date_purchased,
+                        *first_period,
+                        *salvage,
+                        *period,
+                        *rate,
+                        *basis,
+                    ),
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if ![
+                    cost,
+                    date_purchased,
+                    first_period,
+                    salvage,
+                    period,
+                    rate,
+                    basis,
+                ]
+                .iter()
+                .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                let basis = yearfrac_basis(basis)?;
+                if basis == 2 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let date_purchased = financial_date_serial(date_purchased)?;
+                let first_period = financial_date_serial(first_period)?;
+                let period = period.trunc();
+                if cost <= 0.0
+                    || salvage < 0.0
+                    || salvage >= cost
+                    || period < 0.0
+                    || rate <= 0.0
+                    || date_purchased >= first_period
+                {
+                    return Err(FormulaEvalError::Num);
+                }
+                let depreciable_cost = cost - salvage;
+                let first_depreciation =
+                    cost * rate * yearfrac_by_basis(date_purchased, first_period, basis)?;
+                let depreciation = if period == 0.0 {
+                    first_depreciation
+                } else {
+                    cost * rate
+                };
+                let previous_depreciation = if period == 0.0 {
+                    0.0
+                } else {
+                    first_depreciation + (period - 1.0) * cost * rate
+                };
+                if previous_depreciation >= depreciable_cost {
+                    return Ok(0.0);
+                }
+                checked_numeric_result(depreciation.min(depreciable_cost - previous_depreciation))
             }
             FormulaScalarFunction::Acot => {
                 let [value] = args else {
@@ -27821,6 +27903,119 @@ mod tests {
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_amorlinc_depreciation_formula() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A11".to_string())],
+                )
+                .expect("Range(A1:A11)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        11,
+                        1,
+                        vec![
+                            OmValue::Text("=AMORLINC(2400,39679,39813,300,1,0.15,1)".to_string()),
+                            OmValue::Text("=AMORLINC(2400,39679,39813,300,0,0.15,1)".to_string()),
+                            OmValue::Text(
+                                "=AMORLINC(1000,DATE(2008,1,1),DATE(2008,7,1),100,2,0.5,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=AMORLINC(1000,DATE(2008,1,1),DATE(2008,7,1),100,3,0.5,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=AMORLINC(0,DATE(2008,1,1),DATE(2008,7,1),100,1,0.5,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=AMORLINC(1000,DATE(2008,1,1),DATE(2008,7,1),1000,1,0.5,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=AMORLINC(1000,DATE(2008,1,1),DATE(2008,7,1),100,-1,0.5,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=AMORLINC(1000,DATE(2008,1,1),DATE(2008,7,1),100,1,0,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=AMORLINC(1000,DATE(2008,1,1),DATE(2008,7,1),100,1,0.5,2)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=AMORLINC(1000,DATE(2008,7,1),DATE(2008,1,1),100,1,0.5,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=AMORLINC(1000,0,DATE(2008,7,1),100,1,0.5,0)".to_string(),
+                            ),
+                        ],
+                    )
+                    .expect("AMORLINC formulas"),
+                ),
+                &[],
+            )
+            .expect("set AMORLINC formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("AMORLINC values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected AMORLINC value array");
+        };
+        let expected_numbers = [360.0, 2400.0 * 0.15 * 134.0 / 366.0, 150.0, 0.0];
+        for (index, expected) in expected_numbers.into_iter().enumerate() {
+            let number = expect_number(values.values[index].clone());
+            assert!(
+                (number - expected).abs() < 1e-8,
+                "AMORLINC result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            &values.values[4..],
+            &[
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
             ]
         );
     }

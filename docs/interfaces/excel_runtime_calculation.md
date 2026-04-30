@@ -157,6 +157,7 @@ Roman numeral notes:
 - `SYD`
 - `DB`
 - `DDB`
+- `AMORLINC`
 - `EFFECT`
 - `NOMINAL`
 - `RRI`
@@ -188,6 +189,7 @@ Financial notes:
 - `SLN` and `SYD` cover straight-line and sum-of-years' digits depreciation with `#NUM!` for non-positive life or out-of-range periods.
 - `DB` covers fixed-declining balance depreciation with the optional first-year month argument and Excel's three-decimal fixed rate rounding.
 - `DDB` covers double-declining balance depreciation with an optional factor and caps each period so accumulated depreciation does not drop below salvage value.
+- `AMORLINC` covers French-accounting linear depreciation, including prorated first periods and salvage-value caps.
 - `EFFECT` and `NOMINAL` truncate compounding periods to an integer. `RRI` and `PDURATION` cover direct logarithmic/compound-growth rate helpers.
 
 ### Logical and control helpers
