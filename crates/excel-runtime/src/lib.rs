@@ -10653,6 +10653,34 @@ fn formula_fixed_number_text(
     }
 }
 
+fn formula_dollar_fraction_parts(fraction: f64) -> Result<(f64, f64), FormulaEvalError> {
+    if !fraction.is_finite() {
+        return Err(FormulaEvalError::Value);
+    }
+    if fraction < 0.0 {
+        return Err(FormulaEvalError::Num);
+    }
+    let denominator = fraction.trunc();
+    if denominator < 1.0 {
+        return Err(FormulaEvalError::Div0);
+    }
+    let scale = 10_f64.powf(denominator.log10().ceil());
+    if scale.is_finite() {
+        Ok((denominator, scale))
+    } else {
+        Err(FormulaEvalError::Num)
+    }
+}
+
+fn formula_dollar_fraction_near_integer(value: f64) -> f64 {
+    let rounded = value.round();
+    if (value - rounded).abs() <= 1e-9 {
+        rounded
+    } else {
+        value
+    }
+}
+
 fn formula_radix_argument(value: f64) -> Result<u32, FormulaEvalError> {
     let value = formula_integer_argument(value)?;
     if !(2..=36).contains(&value) {
@@ -12556,6 +12584,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("HEX2DEC") {
             return self.parse_engineering_decimal_function(16, 40, 10);
         }
+        if name.eq_ignore_ascii_case("DOLLARDE") {
+            return self.parse_dollarde_function();
+        }
+        if name.eq_ignore_ascii_case("DOLLARFR") {
+            return self.parse_dollarfr_function();
+        }
         if name.eq_ignore_ascii_case("ARABIC") {
             return self.parse_arabic_function();
         }
@@ -13975,6 +14009,66 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             formula_engineering_input(text.as_str(), source_radix, source_bits, source_max_digits)?
                 as f64,
         )
+    }
+
+    fn parse_dollarde_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let fractional_dollar = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let (denominator, scale) = formula_dollar_fraction_parts(self.parse_comparison()?)?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        if !fractional_dollar.is_finite() {
+            return Err(FormulaEvalError::Value);
+        }
+        let sign = if fractional_dollar.is_sign_negative() {
+            -1.0
+        } else {
+            1.0
+        };
+        let absolute = fractional_dollar.abs();
+        let whole = absolute.trunc();
+        let numerator = formula_dollar_fraction_near_integer((absolute - whole) * scale);
+        let value = sign * (whole + numerator / denominator);
+        if value.is_finite() {
+            Ok(value)
+        } else {
+            Err(FormulaEvalError::Num)
+        }
+    }
+
+    fn parse_dollarfr_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let decimal_dollar = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let (denominator, scale) = formula_dollar_fraction_parts(self.parse_comparison()?)?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        if !decimal_dollar.is_finite() {
+            return Err(FormulaEvalError::Value);
+        }
+        let sign = if decimal_dollar.is_sign_negative() {
+            -1.0
+        } else {
+            1.0
+        };
+        let absolute = decimal_dollar.abs();
+        let whole = absolute.trunc();
+        let numerator = formula_dollar_fraction_near_integer((absolute - whole) * denominator);
+        let value = sign * (whole + numerator / scale);
+        if value.is_finite() {
+            Ok(value)
+        } else {
+            Err(FormulaEvalError::Num)
+        }
     }
 
     fn parse_arabic_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -22696,6 +22790,92 @@ mod tests {
                 OmValue::Text("$1,200".to_string()),
                 OmValue::Text("$0.00".to_string()),
                 OmValue::Text("$12 / 12.3".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_dollar_fraction_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A13".to_string())],
+                )
+                .expect("Range(A1:A13)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        13,
+                        1,
+                        vec![
+                            OmValue::Text("=DOLLARDE(1.02, 16)".to_string()),
+                            OmValue::Text("=DOLLARDE(1.1, 32)".to_string()),
+                            OmValue::Text("=DOLLARDE(-1.02, 16)".to_string()),
+                            OmValue::Text("=DOLLARDE(1.02, 16.9)".to_string()),
+                            OmValue::Text("=DOLLARDE(1.02, 0)".to_string()),
+                            OmValue::Text("=DOLLARDE(1.02, -1)".to_string()),
+                            OmValue::Text("=DOLLARFR(1.125, 16)".to_string()),
+                            OmValue::Text("=DOLLARFR(1.125, 32)".to_string()),
+                            OmValue::Text("=DOLLARFR(-1.125, 16)".to_string()),
+                            OmValue::Text("=DOLLARFR(1.375, 8)".to_string()),
+                            OmValue::Text("=DOLLARFR(1.125, 16.9)".to_string()),
+                            OmValue::Text("=DOLLARFR(1.125, 0)".to_string()),
+                            OmValue::Text("=DOLLARFR(1.125, -1)".to_string()),
+                        ],
+                    )
+                    .expect("dollar fraction formulas"),
+                ),
+                &[],
+            )
+            .expect("set dollar fraction formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("dollar fraction values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected dollar fraction value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(1.125),
+                OmValue::Number(1.3125),
+                OmValue::Number(-1.125),
+                OmValue::Number(1.125),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Num),
+                OmValue::Number(1.02),
+                OmValue::Number(1.04),
+                OmValue::Number(-1.02),
+                OmValue::Number(1.3),
+                OmValue::Number(1.02),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Num),
             ]
         );
     }

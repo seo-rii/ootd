@@ -112,6 +112,15 @@ Roman numeral notes:
 - `ROMAN` supports classic and simplified forms `0` through `4`; omitted form and `TRUE` use classic form, while `FALSE` uses simplified form.
 - `ARABIC` accepts classic and simplified Roman numerals, ignores case and surrounding spaces, returns `0` for empty text, and supports a leading negative sign.
 
+### Financial helpers
+
+- `DOLLARDE`
+- `DOLLARFR`
+
+Financial notes:
+
+- `DOLLARDE` and `DOLLARFR` truncate the denominator argument before conversion, return `#NUM!` for negative denominators, and return `#DIV/0!` when the truncated denominator is zero.
+
 ### Logical and control helpers
 
 - `TRUE`
