@@ -13600,6 +13600,112 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
             return Ok(total);
         }
+        if name.eq_ignore_ascii_case("IRR") {
+            let mut values = Vec::new();
+            self.skip_whitespace();
+            let checkpoint = self.index;
+            if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
+                self.index = next_index;
+                self.skip_whitespace();
+                if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
+                    for row in rect.row_first..=rect.row_last {
+                        for col in rect.col_first..=rect.col_last {
+                            match self
+                                .evaluator
+                                .cell_value_or_blank(target_sheet_id, row, col)?
+                            {
+                                CellValue::Number(number) => values.push(number),
+                                CellValue::Error(error) => {
+                                    return Err(formula_eval_error_from_cell_error(error));
+                                }
+                                CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {}
+                            }
+                        }
+                    }
+                } else {
+                    self.index = checkpoint;
+                    if self.parse_string_literal()?.is_some() {
+                        return Err(FormulaEvalError::Value);
+                    }
+                    values.push(self.parse_comparison()?);
+                }
+            } else {
+                if self.parse_string_literal()?.is_some() {
+                    return Err(FormulaEvalError::Value);
+                }
+                values.push(self.parse_comparison()?);
+            }
+            self.skip_whitespace();
+            let mut guess = 0.1;
+            if self.consume_char(',') {
+                guess = self.parse_comparison()?;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+            } else if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            if !guess.is_finite() || values.iter().any(|value| !value.is_finite()) {
+                return Err(FormulaEvalError::Value);
+            }
+            if guess <= -1.0
+                || values.len() < 2
+                || !values.iter().any(|value| *value > 0.0)
+                || !values.iter().any(|value| *value < 0.0)
+            {
+                return Err(FormulaEvalError::Num);
+            }
+
+            let irr_value = |rate: f64| -> Result<(f64, f64), FormulaEvalError> {
+                if !rate.is_finite() || rate <= -1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let factor = 1.0 + rate;
+                let mut denominator = 1.0;
+                let mut value = 0.0;
+                let mut derivative = 0.0;
+                for (index, cash_flow) in values.iter().enumerate() {
+                    if index > 0 {
+                        denominator *= factor;
+                        if denominator == 0.0 || !denominator.is_finite() {
+                            return Err(FormulaEvalError::Num);
+                        }
+                    }
+                    value += cash_flow / denominator;
+                    if index > 0 {
+                        derivative -= index as f64 * cash_flow / (denominator * factor);
+                    }
+                }
+                if value.is_finite() && derivative.is_finite() {
+                    Ok((value, derivative))
+                } else {
+                    Err(FormulaEvalError::Num)
+                }
+            };
+
+            const IRR_MAX_ITERATIONS: usize = 20;
+            const IRR_TOLERANCE: f64 = 1e-7;
+            let mut rate = guess;
+            for _ in 0..IRR_MAX_ITERATIONS {
+                let (value, derivative) = irr_value(rate)?;
+                if value.abs() <= IRR_TOLERANCE {
+                    return Ok(rate);
+                }
+                if derivative == 0.0 {
+                    break;
+                }
+                let next_rate = rate - value / derivative;
+                if !next_rate.is_finite() || next_rate <= -1.0 {
+                    break;
+                }
+                if (next_rate - rate).abs() <= IRR_TOLERANCE {
+                    return Ok(next_rate);
+                }
+                rate = next_rate;
+            }
+            return Err(FormulaEvalError::Num);
+        }
         if name.eq_ignore_ascii_case("MIRR") {
             let mut values = Vec::new();
             self.skip_whitespace();
@@ -25721,6 +25827,110 @@ mod tests {
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_irr_financial_formula() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A9".to_string())])
+                .expect("Range(A1:A9)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B6".to_string())])
+                .expect("Range(B1:B6)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        9,
+                        1,
+                        vec![
+                            OmValue::Number(-100.0),
+                            OmValue::Text("ignored".to_string()),
+                            OmValue::Bool(false),
+                            OmValue::Empty,
+                            OmValue::Number(200.0),
+                            OmValue::Number(100.0),
+                            OmValue::Number(200.0),
+                            OmValue::Number(-100.0),
+                            OmValue::Number(110.0),
+                        ],
+                    )
+                    .expect("IRR source values"),
+                ),
+                &[],
+            )
+            .expect("set IRR source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        6,
+                        1,
+                        vec![
+                            OmValue::Text("=IRR(A1:A5)".to_string()),
+                            OmValue::Text("=IRR(A1:A5, 0.5)".to_string()),
+                            OmValue::Text("=IRR(A8:A9)".to_string()),
+                            OmValue::Text("=IRR(A6:A7)".to_string()),
+                            OmValue::Text(r#"=IRR("bad")"#.to_string()),
+                            OmValue::Text("=IRR(A8:A8)".to_string()),
+                        ],
+                    )
+                    .expect("IRR formulas"),
+                ),
+                &[],
+            )
+            .expect("set IRR formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("IRR values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected IRR value array");
+        };
+        let expected_numbers = [1.0, 1.0, 0.1];
+        for (index, expected) in expected_numbers.into_iter().enumerate() {
+            let number = expect_number(values.values[index].clone());
+            assert!(
+                (number - expected).abs() < 1e-9,
+                "IRR result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            &values.values[3..],
+            &[
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Num),
             ]
         );
     }
