@@ -8700,6 +8700,7 @@ enum FormulaScalarFunction {
     Effect,
     Even,
     Exp,
+    ExponDist,
     Fact,
     FactDouble,
     Fisher,
@@ -8733,6 +8734,7 @@ enum FormulaScalarFunction {
     Permut,
     PermutationA,
     Pi,
+    PoissonDist,
     Price,
     Radians,
     PriceDisc,
@@ -8764,6 +8766,7 @@ enum FormulaScalarFunction {
     Vdb,
     Weekday,
     WeekNum,
+    WeibullDist,
     Year,
     YearFrac,
     Yield,
@@ -8875,6 +8878,9 @@ impl FormulaScalarFunction {
             Some(Self::Effect)
         } else if name.eq_ignore_ascii_case("EVEN") {
             Some(Self::Even)
+        } else if name.eq_ignore_ascii_case("EXPON.DIST") || name.eq_ignore_ascii_case("EXPONDIST")
+        {
+            Some(Self::ExponDist)
         } else if name.eq_ignore_ascii_case("EXP") {
             Some(Self::Exp)
         } else if name.eq_ignore_ascii_case("FACT") {
@@ -8943,6 +8949,9 @@ impl FormulaScalarFunction {
             Some(Self::PermutationA)
         } else if name.eq_ignore_ascii_case("PI") {
             Some(Self::Pi)
+        } else if name.eq_ignore_ascii_case("POISSON.DIST") || name.eq_ignore_ascii_case("POISSON")
+        {
+            Some(Self::PoissonDist)
         } else if name.eq_ignore_ascii_case("PRICE") {
             Some(Self::Price)
         } else if name.eq_ignore_ascii_case("RADIANS") {
@@ -9005,6 +9014,9 @@ impl FormulaScalarFunction {
             Some(Self::Weekday)
         } else if name.eq_ignore_ascii_case("WEEKNUM") {
             Some(Self::WeekNum)
+        } else if name.eq_ignore_ascii_case("WEIBULL.DIST") || name.eq_ignore_ascii_case("WEIBULL")
+        {
+            Some(Self::WeibullDist)
         } else if name.eq_ignore_ascii_case("YEAR") {
             Some(Self::Year)
         } else if name.eq_ignore_ascii_case("YEARFRAC") {
@@ -10481,6 +10493,27 @@ impl FormulaScalarFunction {
                 };
                 round_away_to_integer_with_parity(*number, false)
             }
+            FormulaScalarFunction::ExponDist => {
+                let [x, lambda, cumulative] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if ![x, lambda, cumulative]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *x < 0.0 || *lambda <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let exponent = (-*lambda * *x).exp();
+                let value = if *cumulative != 0.0 {
+                    1.0 - exponent
+                } else {
+                    *lambda * exponent
+                };
+                checked_numeric_result(value)
+            }
             FormulaScalarFunction::Exp => {
                 let [value] = args else {
                     return Err(FormulaEvalError::Value);
@@ -11011,6 +11044,42 @@ impl FormulaScalarFunction {
                 }
                 Ok(std::f64::consts::PI)
             }
+            FormulaScalarFunction::PoissonDist => {
+                let [x, mean, cumulative] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if ![x, mean, cumulative].iter().all(|value| value.is_finite()) {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *x < 0.0 || *mean < 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let x = x.trunc();
+                if x > 100000.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let x = x as u64;
+                if *mean == 0.0 {
+                    return Ok(if *cumulative != 0.0 || x == 0 {
+                        1.0
+                    } else {
+                        0.0
+                    });
+                }
+                let mut term = (-*mean).exp();
+                let mut total = term;
+                for k in 1..=x {
+                    term *= *mean / k as f64;
+                    if !term.is_finite() {
+                        return Err(FormulaEvalError::Num);
+                    }
+                    total += term;
+                    if !total.is_finite() {
+                        return Err(FormulaEvalError::Num);
+                    }
+                }
+                checked_numeric_result(if *cumulative != 0.0 { total } else { term })
+            }
             FormulaScalarFunction::Radians => {
                 let [value] = args else {
                     return Err(FormulaEvalError::Value);
@@ -11315,6 +11384,30 @@ impl FormulaScalarFunction {
                 let days_since_week_start =
                     (jan1_weekday_monday0 - first_day_monday0).rem_euclid(7);
                 Ok((serial - jan1_serial + days_since_week_start).div_euclid(7) as f64 + 1.0)
+            }
+            FormulaScalarFunction::WeibullDist => {
+                let [x, alpha, beta, cumulative] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if ![x, alpha, beta, cumulative]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *x < 0.0 || *alpha <= 0.0 || *beta <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let scaled = *x / *beta;
+                let power = scaled.powf(*alpha);
+                let value = if *cumulative != 0.0 {
+                    1.0 - (-power).exp()
+                } else if *x == 0.0 && *alpha < 1.0 {
+                    return Err(FormulaEvalError::Num);
+                } else {
+                    *alpha / *beta * scaled.powf(*alpha - 1.0) * (-power).exp()
+                };
+                checked_numeric_result(value)
             }
             FormulaScalarFunction::Year => {
                 let [serial] = args else {
@@ -24501,6 +24594,112 @@ mod tests {
         assert_eq!(
             &values.values[6..],
             &[
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_basic_distribution_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A18".to_string())],
+                )
+                .expect("Range(A1:A18)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        18,
+                        1,
+                        vec![
+                            OmValue::Text("=EXPON.DIST(0.2,10,TRUE)".to_string()),
+                            OmValue::Text("=EXPONDIST(0.2,10,FALSE)".to_string()),
+                            OmValue::Text("=POISSON.DIST(2,5,FALSE)".to_string()),
+                            OmValue::Text("=POISSON(2,5,TRUE)".to_string()),
+                            OmValue::Text("=POISSON.DIST(2.9,5,FALSE)".to_string()),
+                            OmValue::Text("=POISSON.DIST(0,0,FALSE)".to_string()),
+                            OmValue::Text("=POISSON.DIST(2,0,FALSE)".to_string()),
+                            OmValue::Text("=WEIBULL.DIST(105,20,100,TRUE)".to_string()),
+                            OmValue::Text("=WEIBULL(105,20,100,FALSE)".to_string()),
+                            OmValue::Text("=EXPON.DIST(-1,10,TRUE)".to_string()),
+                            OmValue::Text("=EXPON.DIST(1,0,TRUE)".to_string()),
+                            OmValue::Text("=POISSON.DIST(-1,5,FALSE)".to_string()),
+                            OmValue::Text("=POISSON.DIST(2,-1,FALSE)".to_string()),
+                            OmValue::Text("=WEIBULL.DIST(-1,20,100,TRUE)".to_string()),
+                            OmValue::Text("=WEIBULL.DIST(105,0,100,TRUE)".to_string()),
+                            OmValue::Text("=WEIBULL.DIST(105,20,0,TRUE)".to_string()),
+                            OmValue::Text("=WEIBULL.DIST(0,0.5,100,FALSE)".to_string()),
+                            OmValue::Text("=EXPON.DIST(1,1)".to_string()),
+                        ],
+                    )
+                    .expect("basic distribution formulas"),
+                ),
+                &[],
+            )
+            .expect("set basic distribution formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("basic distribution values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected basic distribution value array");
+        };
+        let expected_numbers = [
+            0.8646647167633873,
+            1.353352832366127,
+            0.08422433748856833,
+            0.12465201948308113,
+            0.08422433748856833,
+            1.0,
+            0.0,
+            0.9295813900692769,
+            0.03558886402450434,
+        ];
+        for (index, expected) in expected_numbers.into_iter().enumerate() {
+            let number = expect_number(values.values[index].clone());
+            assert!(
+                (number - expected).abs() < 1e-8,
+                "basic distribution result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            &values.values[9..],
+            &[
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),

@@ -110,6 +110,9 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `OCT2HEX`
 - `FISHER`
 - `FISHERINV`
+- `EXPON.DIST` / `EXPONDIST`
+- `POISSON.DIST` / `POISSON`
+- `WEIBULL.DIST` / `WEIBULL`
 
 Roman numeral notes:
 
@@ -117,6 +120,7 @@ Roman numeral notes:
 - `ARABIC` accepts classic and simplified Roman numerals, ignores case and surrounding spaces, returns `0` for empty text, and supports a leading negative sign.
 - `SERIESSUM` supports scalar or rectangular coefficient inputs and ignores non-numeric cells in coefficient ranges.
 - `FISHER` and `FISHERINV` cover the Fisher transformation and its inverse for scalar numeric values.
+- `EXPON.DIST`, `POISSON.DIST`, and `WEIBULL.DIST` cover scalar probability and cumulative distribution calculations, with legacy function aliases mapped to the same implementations.
 
 ### Financial helpers
 
