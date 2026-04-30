@@ -8685,6 +8685,7 @@ enum FormulaScalarFunction {
     Degrees,
     Delta,
     Disc,
+    Duration,
     EDate,
     EOMonth,
     Effect,
@@ -8708,6 +8709,7 @@ enum FormulaScalarFunction {
     Log,
     Log10,
     Minute,
+    MDuration,
     Mod,
     Month,
     MRound,
@@ -8828,6 +8830,8 @@ impl FormulaScalarFunction {
             Some(Self::Delta)
         } else if name.eq_ignore_ascii_case("DISC") {
             Some(Self::Disc)
+        } else if name.eq_ignore_ascii_case("DURATION") {
+            Some(Self::Duration)
         } else if name.eq_ignore_ascii_case("EDATE") {
             Some(Self::EDate)
         } else if name.eq_ignore_ascii_case("EOMONTH") {
@@ -8874,6 +8878,8 @@ impl FormulaScalarFunction {
             Some(Self::Log10)
         } else if name.eq_ignore_ascii_case("MINUTE") {
             Some(Self::Minute)
+        } else if name.eq_ignore_ascii_case("MDURATION") {
+            Some(Self::MDuration)
         } else if name.eq_ignore_ascii_case("MOD") {
             Some(Self::Mod)
         } else if name.eq_ignore_ascii_case("MONTH") {
@@ -9121,6 +9127,109 @@ impl FormulaScalarFunction {
                 }
                 Ok((maturity - settlement) as f64)
             };
+        let coupon_frequency = |value: f64| -> Result<i64, FormulaEvalError> {
+            if !value.is_finite() {
+                return Err(FormulaEvalError::Value);
+            }
+            match value.trunc() as i64 {
+                1 | 2 | 4 => Ok(value.trunc() as i64),
+                _ => Err(FormulaEvalError::Num),
+            }
+        };
+        let coupon_schedule = |settlement: i64,
+                               maturity: i64,
+                               frequency: i64,
+                               basis: i64|
+         -> Result<(usize, f64), FormulaEvalError> {
+            let months_per_coupon = 12 / frequency;
+            let mut next_coupon = maturity;
+            loop {
+                let previous_coupon =
+                    formula_edate(next_coupon as f64, -(months_per_coupon as f64))? as i64;
+                if previous_coupon <= settlement {
+                    let full_period = yearfrac_by_basis(previous_coupon, next_coupon, basis)?;
+                    if full_period <= 0.0 {
+                        return Err(FormulaEvalError::Num);
+                    }
+                    let remaining = yearfrac_by_basis(settlement, next_coupon, basis)?;
+                    if remaining <= 0.0 {
+                        return Err(FormulaEvalError::Num);
+                    }
+                    let first_period_fraction = remaining / full_period;
+                    let mut coupon_count = 1_usize;
+                    let mut coupon_date = next_coupon;
+                    while coupon_date < maturity {
+                        coupon_date =
+                            formula_edate(coupon_date as f64, months_per_coupon as f64)? as i64;
+                        coupon_count = coupon_count.checked_add(1).ok_or(FormulaEvalError::Num)?;
+                        if coupon_count > 10000 {
+                            return Err(FormulaEvalError::Num);
+                        }
+                    }
+                    if coupon_date != maturity {
+                        return Err(FormulaEvalError::Num);
+                    }
+                    return Ok((coupon_count, first_period_fraction));
+                }
+                next_coupon = previous_coupon;
+            }
+        };
+        let duration_value = |settlement: f64,
+                              maturity: f64,
+                              coupon: f64,
+                              yld: f64,
+                              frequency: f64,
+                              basis: f64,
+                              modified: bool|
+         -> Result<f64, FormulaEvalError> {
+            if ![settlement, maturity, coupon, yld, frequency, basis]
+                .iter()
+                .all(|value| value.is_finite())
+            {
+                return Err(FormulaEvalError::Value);
+            }
+            let frequency = coupon_frequency(frequency)?;
+            let basis = yearfrac_basis(basis)?;
+            let settlement = financial_date_serial(settlement)?;
+            let maturity = financial_date_serial(maturity)?;
+            if coupon < 0.0 || yld < 0.0 || settlement >= maturity {
+                return Err(FormulaEvalError::Num);
+            }
+            let (coupon_count, first_period_fraction) =
+                coupon_schedule(settlement, maturity, frequency, basis)?;
+            let frequency = frequency as f64;
+            let yield_per_period = yld / frequency;
+            let discount = 1.0 + yield_per_period;
+            let coupon_payment = 100.0 * coupon / frequency;
+            let mut present_value_total = 0.0;
+            let mut weighted_present_value_total = 0.0;
+            for period in 1..=coupon_count {
+                let period_offset = period as f64 - 1.0 + first_period_fraction;
+                let cash_flow = coupon_payment + if period == coupon_count { 100.0 } else { 0.0 };
+                let denominator = discount.powf(period_offset);
+                if denominator == 0.0 || !denominator.is_finite() {
+                    return Err(FormulaEvalError::Num);
+                }
+                let present_value = cash_flow / denominator;
+                present_value_total += present_value;
+                weighted_present_value_total += present_value * period_offset / frequency;
+                if !present_value_total.is_finite() || !weighted_present_value_total.is_finite() {
+                    return Err(FormulaEvalError::Num);
+                }
+            }
+            if present_value_total == 0.0 {
+                return Err(FormulaEvalError::Num);
+            }
+            let mut duration = weighted_present_value_total / present_value_total;
+            if modified {
+                duration /= discount;
+            }
+            if duration.is_finite() {
+                Ok(duration)
+            } else {
+                Err(FormulaEvalError::Num)
+            }
+        };
         let normalize_zero = |value: f64| if value == 0.0 { 0.0 } else { value };
         let ceiling_floor_math = |number: f64,
                                   significance: f64,
@@ -9729,6 +9838,18 @@ impl FormulaScalarFunction {
                 let yearfrac = discount_security_yearfrac(settlement, maturity, basis)?;
                 checked_numeric_result((redemption - price) / redemption / yearfrac)
             }
+            FormulaScalarFunction::Duration => {
+                let (settlement, maturity, coupon, yld, frequency, basis) = match args {
+                    [settlement, maturity, coupon, yld, frequency] => {
+                        (*settlement, *maturity, *coupon, *yld, *frequency, 0.0)
+                    }
+                    [settlement, maturity, coupon, yld, frequency, basis] => {
+                        (*settlement, *maturity, *coupon, *yld, *frequency, *basis)
+                    }
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                duration_value(settlement, maturity, coupon, yld, frequency, basis, false)
+            }
             FormulaScalarFunction::EDate => {
                 let [serial, months] = args else {
                     return Err(FormulaEvalError::Value);
@@ -9942,6 +10063,18 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Value);
                 };
                 Ok(formula_time_parts_from_serial(*serial)?.1 as f64)
+            }
+            FormulaScalarFunction::MDuration => {
+                let (settlement, maturity, coupon, yld, frequency, basis) = match args {
+                    [settlement, maturity, coupon, yld, frequency] => {
+                        (*settlement, *maturity, *coupon, *yld, *frequency, 0.0)
+                    }
+                    [settlement, maturity, coupon, yld, frequency, basis] => {
+                        (*settlement, *maturity, *coupon, *yld, *frequency, *basis)
+                    }
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                duration_value(settlement, maturity, coupon, yld, frequency, basis, true)
             }
             FormulaScalarFunction::Mod => {
                 let [number, divisor] = args else {
@@ -25488,6 +25621,112 @@ mod tests {
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Number(3.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_duration_financial_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A10".to_string())],
+                )
+                .expect("Range(A1:A10)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        10,
+                        1,
+                        vec![
+                            OmValue::Text(
+                                "=DURATION(DATE(2018,7,1),DATE(2048,1,1),0.08,0.09,2,1)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=MDURATION(DATE(2008,1,1),DATE(2016,1,1),0.08,0.09,2,1)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text("=DURATION(1,367,0,0,1,3)".to_string()),
+                            OmValue::Text("=MDURATION(1,367,0,0,1,3)".to_string()),
+                            OmValue::Text(
+                                "=DURATION(DATE(2018,7,1),DATE(2048,1,1),-0.01,0.09,2,1)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=DURATION(DATE(2018,7,1),DATE(2048,1,1),0.08,-0.09,2,1)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=DURATION(DATE(2018,7,1),DATE(2048,1,1),0.08,0.09,3,1)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=DURATION(DATE(2018,7,1),DATE(2048,1,1),0.08,0.09,2,5)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=DURATION(DATE(2048,1,1),DATE(2018,7,1),0.08,0.09,2,1)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text("=DURATION(0,366,0.08,0.09,2,1)".to_string()),
+                        ],
+                    )
+                    .expect("duration financial formulas"),
+                ),
+                &[],
+            )
+            .expect("set duration financial formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("duration financial values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected duration financial value array");
+        };
+        let expected_numbers = [10.919145281591925, 5.735669813918838, 1.0, 1.0];
+        for (index, expected) in expected_numbers.into_iter().enumerate() {
+            let number = expect_number(values.values[index].clone());
+            assert!(
+                (number - expected).abs() < 1e-9,
+                "duration result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            &values.values[4..],
+            &[
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
             ]
         );
     }
