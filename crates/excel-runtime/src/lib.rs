@@ -10701,6 +10701,94 @@ fn formula_annuity_growth(rate: f64, nper: f64) -> Result<f64, FormulaEvalError>
     }
 }
 
+fn formula_fv_value(
+    rate: f64,
+    nper: f64,
+    pmt: f64,
+    pv: f64,
+    payment_type: f64,
+) -> Result<f64, FormulaEvalError> {
+    if ![rate, nper, pmt, pv].iter().all(|value| value.is_finite()) {
+        return Err(FormulaEvalError::Value);
+    }
+    let value = if rate == 0.0 {
+        -(pv + pmt * nper)
+    } else {
+        let growth = formula_annuity_growth(rate, nper)?;
+        -(pv * growth + pmt * (1.0 + rate * payment_type) * (growth - 1.0) / rate)
+    };
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(FormulaEvalError::Num)
+    }
+}
+
+fn formula_pmt_value(
+    rate: f64,
+    nper: f64,
+    pv: f64,
+    fv: f64,
+    payment_type: f64,
+) -> Result<f64, FormulaEvalError> {
+    if ![rate, nper, pv, fv].iter().all(|value| value.is_finite()) {
+        return Err(FormulaEvalError::Value);
+    }
+    if nper == 0.0 {
+        return Err(FormulaEvalError::Div0);
+    }
+    let value = if rate == 0.0 {
+        -(pv + fv) / nper
+    } else {
+        let growth = formula_annuity_growth(rate, nper)?;
+        let denominator = (1.0 + rate * payment_type) * (growth - 1.0);
+        if denominator == 0.0 {
+            return Err(FormulaEvalError::Div0);
+        }
+        -(pv * growth + fv) * rate / denominator
+    };
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(FormulaEvalError::Num)
+    }
+}
+
+fn formula_ipmt_value(
+    rate: f64,
+    period: f64,
+    nper: f64,
+    pv: f64,
+    fv: f64,
+    payment_type: f64,
+) -> Result<f64, FormulaEvalError> {
+    if ![rate, period, nper, pv, fv]
+        .iter()
+        .all(|value| value.is_finite())
+    {
+        return Err(FormulaEvalError::Value);
+    }
+    if period < 1.0 || period > nper || nper <= 0.0 {
+        return Err(FormulaEvalError::Num);
+    }
+    if rate == 0.0 {
+        return Ok(0.0);
+    }
+    if payment_type == 1.0 && period == 1.0 {
+        return Ok(0.0);
+    }
+    let payment = formula_pmt_value(rate, nper, pv, fv, payment_type)?;
+    let mut value = formula_fv_value(rate, period - 1.0, payment, pv, payment_type)? * rate;
+    if payment_type == 1.0 {
+        value /= 1.0 + rate;
+    }
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(FormulaEvalError::Num)
+    }
+}
+
 fn formula_radix_argument(value: f64) -> Result<u32, FormulaEvalError> {
     let value = formula_integer_argument(value)?;
     if !(2..=36).contains(&value) {
@@ -12619,6 +12707,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("PMT") {
             return self.parse_pmt_function();
         }
+        if name.eq_ignore_ascii_case("IPMT") {
+            return self.parse_ipmt_function();
+        }
+        if name.eq_ignore_ascii_case("PPMT") {
+            return self.parse_ppmt_function();
+        }
         if name.eq_ignore_ascii_case("NPER") {
             return self.parse_nper_function();
         }
@@ -14138,20 +14232,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 }
             }
         }
-        if ![rate, nper, pmt, pv].iter().all(|value| value.is_finite()) {
-            return Err(FormulaEvalError::Value);
-        }
-        let value = if rate == 0.0 {
-            -(pv + pmt * nper)
-        } else {
-            let growth = formula_annuity_growth(rate, nper)?;
-            -(pv * growth + pmt * (1.0 + rate * payment_type) * (growth - 1.0) / rate)
-        };
-        if value.is_finite() {
-            Ok(value)
-        } else {
-            Err(FormulaEvalError::Num)
-        }
+        formula_fv_value(rate, nper, pmt, pv, payment_type)
     }
 
     fn parse_pv_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -14237,27 +14318,60 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 }
             }
         }
-        if ![rate, nper, pv, fv].iter().all(|value| value.is_finite()) {
-            return Err(FormulaEvalError::Value);
+        formula_pmt_value(rate, nper, pv, fv, payment_type)
+    }
+
+    fn parse_ipmt_or_ppmt_function(&mut self, principal: bool) -> Result<f64, FormulaEvalError> {
+        let rate = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
         }
-        if nper == 0.0 {
-            return Err(FormulaEvalError::Div0);
+        let period = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
         }
-        let value = if rate == 0.0 {
-            -(pv + fv) / nper
-        } else {
-            let growth = formula_annuity_growth(rate, nper)?;
-            let denominator = (1.0 + rate * payment_type) * (growth - 1.0);
-            if denominator == 0.0 {
-                return Err(FormulaEvalError::Div0);
+        let nper = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let pv = self.parse_comparison()?;
+        let mut fv = 0.0;
+        let mut payment_type = 0.0;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
             }
-            -(pv * growth + fv) * rate / denominator
-        };
-        if value.is_finite() {
-            Ok(value)
-        } else {
-            Err(FormulaEvalError::Num)
+            fv = self.parse_comparison()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                payment_type = formula_financial_type_argument(self.parse_comparison()?)?;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+            }
         }
+        let interest = formula_ipmt_value(rate, period, nper, pv, fv, payment_type)?;
+        if principal {
+            Ok(formula_pmt_value(rate, nper, pv, fv, payment_type)? - interest)
+        } else {
+            Ok(interest)
+        }
+    }
+
+    fn parse_ipmt_function(&mut self) -> Result<f64, FormulaEvalError> {
+        self.parse_ipmt_or_ppmt_function(false)
+    }
+
+    fn parse_ppmt_function(&mut self) -> Result<f64, FormulaEvalError> {
+        self.parse_ipmt_or_ppmt_function(true)
     }
 
     fn parse_nper_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -23192,9 +23306,9 @@ mod tests {
                 .dispatch_invoke(
                     active_sheet,
                     "Range",
-                    &[OmValue::Text("A1:A17".to_string())],
+                    &[OmValue::Text("A1:A26".to_string())],
                 )
-                .expect("Range(A1:A17)"),
+                .expect("Range(A1:A26)"),
         );
 
         runtime
@@ -23203,7 +23317,7 @@ mod tests {
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        17,
+                        26,
                         1,
                         vec![
                             OmValue::Text("=FV(0, 10, -100, -1000)".to_string()),
@@ -23223,6 +23337,15 @@ mod tests {
                             OmValue::Text("=NPER(1, -10, -100, 460, 1)".to_string()),
                             OmValue::Text("=NPER(0, 0, 100)".to_string()),
                             OmValue::Text("=NPER(-2, -100, 1000)".to_string()),
+                            OmValue::Text("=IPMT(1, 1, 1, 100)".to_string()),
+                            OmValue::Text("=PPMT(1, 1, 1, 100)".to_string()),
+                            OmValue::Text("=IPMT(1, 1, 1, 100, 0, 1)".to_string()),
+                            OmValue::Text("=PPMT(1, 1, 1, 100, 0, 1)".to_string()),
+                            OmValue::Text("=IPMT(1, 2, 2, 100, -100, 1)".to_string()),
+                            OmValue::Text("=PPMT(1, 2, 2, 100, -100, 1)".to_string()),
+                            OmValue::Text("=IPMT(0, 2, 4, 100, -20)".to_string()),
+                            OmValue::Text("=PPMT(0, 2, 4, 100, -20)".to_string()),
+                            OmValue::Text("=IPMT(1, 0, 2, 100)".to_string()),
                         ],
                     )
                     .expect("annuity financial formulas"),
@@ -23260,6 +23383,15 @@ mod tests {
                 OmValue::Number(2.0),
                 OmValue::Number(2.0),
                 OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Num),
+                OmValue::Number(-100.0),
+                OmValue::Number(-100.0),
+                OmValue::Number(0.0),
+                OmValue::Number(-100.0),
+                OmValue::Number(-50.0),
+                OmValue::Number(0.0),
+                OmValue::Number(0.0),
+                OmValue::Number(-20.0),
                 OmValue::Error(CellError::Num),
             ]
         );
