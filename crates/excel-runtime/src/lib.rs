@@ -10254,8 +10254,17 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("RIGHT")
         || name.eq_ignore_ascii_case("MID")
         || name.eq_ignore_ascii_case("BASE")
+        || name.eq_ignore_ascii_case("BIN2HEX")
+        || name.eq_ignore_ascii_case("BIN2OCT")
         || name.eq_ignore_ascii_case("CHAR")
         || name.eq_ignore_ascii_case("CLEAN")
+        || name.eq_ignore_ascii_case("DEC2BIN")
+        || name.eq_ignore_ascii_case("DEC2HEX")
+        || name.eq_ignore_ascii_case("DEC2OCT")
+        || name.eq_ignore_ascii_case("HEX2BIN")
+        || name.eq_ignore_ascii_case("HEX2OCT")
+        || name.eq_ignore_ascii_case("OCT2BIN")
+        || name.eq_ignore_ascii_case("OCT2HEX")
         || name.eq_ignore_ascii_case("T")
         || name.eq_ignore_ascii_case("UNICHAR")
         || name.eq_ignore_ascii_case("UPPER")
@@ -10421,6 +10430,90 @@ fn formula_bit_shift_argument(value: f64) -> Result<i64, FormulaEvalError> {
         return Err(FormulaEvalError::Num);
     }
     Ok(value)
+}
+
+fn formula_engineering_input(
+    text: &str,
+    radix: u32,
+    bits: u32,
+    max_digits: usize,
+) -> Result<i64, FormulaEvalError> {
+    let text = text.trim();
+    if text.is_empty() || text.len() > max_digits {
+        return Err(FormulaEvalError::Num);
+    }
+    let mut value = 0_u64;
+    for ch in text.chars() {
+        let Some(digit) = ch.to_digit(radix) else {
+            return Err(FormulaEvalError::Num);
+        };
+        value = value
+            .checked_mul(u64::from(radix))
+            .and_then(|current| current.checked_add(u64::from(digit)))
+            .ok_or(FormulaEvalError::Num)?;
+    }
+    let sign_threshold = 1_u64 << (bits - 1);
+    let modulus = 1_u64 << bits;
+    if value >= modulus {
+        return Err(FormulaEvalError::Num);
+    }
+    if value >= sign_threshold {
+        Ok(value as i64 - modulus as i64)
+    } else {
+        Ok(value as i64)
+    }
+}
+
+fn formula_engineering_format(
+    value: i64,
+    radix: u32,
+    bits: u32,
+    max_digits: usize,
+    places: Option<usize>,
+) -> Result<String, FormulaEvalError> {
+    let minimum = -(1_i64 << (bits - 1));
+    let maximum = (1_i64 << (bits - 1)) - 1;
+    if value < minimum || value > maximum {
+        return Err(FormulaEvalError::Num);
+    }
+    let unsigned = if value < 0 {
+        ((1_i128 << bits) + i128::from(value)) as u128
+    } else {
+        value as u128
+    };
+    let mut output = formula_unsigned_radix_text(unsigned, radix);
+    if value < 0 {
+        if output.len() < max_digits {
+            output = "0".repeat(max_digits - output.len()) + output.as_str();
+        }
+        return Ok(output);
+    }
+    if let Some(places) = places {
+        if places == 0 || output.len() > places || places > max_digits {
+            return Err(FormulaEvalError::Num);
+        }
+        if output.len() < places {
+            output = "0".repeat(places - output.len()) + output.as_str();
+        }
+    }
+    Ok(output)
+}
+
+fn formula_unsigned_radix_text(mut value: u128, radix: u32) -> String {
+    if value == 0 {
+        return "0".to_string();
+    }
+    let mut output = String::new();
+    while value > 0 {
+        let digit = (value % u128::from(radix)) as u32;
+        output.push(
+            char::from_digit(digit, radix)
+                .expect("digit")
+                .to_ascii_uppercase(),
+        );
+        value /= u128::from(radix);
+    }
+    output.chars().rev().collect()
 }
 
 fn formula_radix_argument(value: f64) -> Result<u32, FormulaEvalError> {
@@ -12317,6 +12410,15 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("DECIMAL") {
             return self.parse_decimal_function();
         }
+        if name.eq_ignore_ascii_case("BIN2DEC") {
+            return self.parse_engineering_decimal_function(2, 10, 10);
+        }
+        if name.eq_ignore_ascii_case("OCT2DEC") {
+            return self.parse_engineering_decimal_function(8, 30, 10);
+        }
+        if name.eq_ignore_ascii_case("HEX2DEC") {
+            return self.parse_engineering_decimal_function(16, 40, 10);
+        }
         if name.eq_ignore_ascii_case("CODE") || name.eq_ignore_ascii_case("UNICODE") {
             return self.parse_character_code_function();
         }
@@ -12816,6 +12918,33 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("BASE") {
             return self.parse_base_text_function();
         }
+        if name.eq_ignore_ascii_case("DEC2BIN") {
+            return self.parse_decimal_engineering_text_function(2, 10, 10);
+        }
+        if name.eq_ignore_ascii_case("DEC2OCT") {
+            return self.parse_decimal_engineering_text_function(8, 30, 10);
+        }
+        if name.eq_ignore_ascii_case("DEC2HEX") {
+            return self.parse_decimal_engineering_text_function(16, 40, 10);
+        }
+        if name.eq_ignore_ascii_case("BIN2OCT") {
+            return self.parse_engineering_text_function(2, 10, 10, 8, 30, 10);
+        }
+        if name.eq_ignore_ascii_case("BIN2HEX") {
+            return self.parse_engineering_text_function(2, 10, 10, 16, 40, 10);
+        }
+        if name.eq_ignore_ascii_case("OCT2BIN") {
+            return self.parse_engineering_text_function(8, 30, 10, 2, 10, 10);
+        }
+        if name.eq_ignore_ascii_case("OCT2HEX") {
+            return self.parse_engineering_text_function(8, 30, 10, 16, 40, 10);
+        }
+        if name.eq_ignore_ascii_case("HEX2BIN") {
+            return self.parse_engineering_text_function(16, 40, 10, 2, 10, 10);
+        }
+        if name.eq_ignore_ascii_case("HEX2OCT") {
+            return self.parse_engineering_text_function(16, 40, 10, 8, 30, 10);
+        }
         if name.eq_ignore_ascii_case("CHAR") {
             return self.parse_character_text_function(false);
         }
@@ -13105,6 +13234,54 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             output = "0".repeat(min_length - output.len()) + output.as_str();
         }
         Ok(output)
+    }
+
+    fn parse_decimal_engineering_text_function(
+        &mut self,
+        radix: u32,
+        bits: u32,
+        max_digits: usize,
+    ) -> Result<String, FormulaEvalError> {
+        let value = formula_integer_argument(self.parse_comparison()?)?;
+        let places = self.parse_optional_engineering_places()?;
+        formula_engineering_format(value, radix, bits, max_digits, places)
+    }
+
+    fn parse_engineering_text_function(
+        &mut self,
+        source_radix: u32,
+        source_bits: u32,
+        source_max_digits: usize,
+        target_radix: u32,
+        target_bits: u32,
+        target_max_digits: usize,
+    ) -> Result<String, FormulaEvalError> {
+        let text = self.parse_text_value_argument()?;
+        let value =
+            formula_engineering_input(text.as_str(), source_radix, source_bits, source_max_digits)?;
+        let places = self.parse_optional_engineering_places()?;
+        formula_engineering_format(value, target_radix, target_bits, target_max_digits, places)
+    }
+
+    fn parse_optional_engineering_places(&mut self) -> Result<Option<usize>, FormulaEvalError> {
+        self.skip_whitespace();
+        if self.consume_char(')') {
+            return Ok(None);
+        }
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let places = formula_integer_argument(self.parse_comparison()?)?;
+        if places < 0 {
+            return Err(FormulaEvalError::Num);
+        }
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        usize::try_from(places)
+            .map(Some)
+            .map_err(|_| FormulaEvalError::Num)
     }
 
     fn parse_unary_text_function(
@@ -13532,6 +13709,23 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
         }
         Ok(total)
+    }
+
+    fn parse_engineering_decimal_function(
+        &mut self,
+        source_radix: u32,
+        source_bits: u32,
+        source_max_digits: usize,
+    ) -> Result<f64, FormulaEvalError> {
+        let text = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Ok(
+            formula_engineering_input(text.as_str(), source_radix, source_bits, source_max_digits)?
+                as f64,
+        )
     }
 
     fn parse_datevalue_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -21149,9 +21343,9 @@ mod tests {
                 .dispatch_invoke(
                     active_sheet,
                     "Range",
-                    &[OmValue::Text("A1:A22".to_string())],
+                    &[OmValue::Text("A1:A46".to_string())],
                 )
-                .expect("Range(A1:A22)"),
+                .expect("Range(A1:A46)"),
         );
 
         runtime
@@ -21160,7 +21354,7 @@ mod tests {
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        22,
+                        46,
                         1,
                         vec![
                             OmValue::Text("=BITAND(13, 11)".to_string()),
@@ -21185,6 +21379,30 @@ mod tests {
                             OmValue::Text(r#"=DECIMAL("FF", 16)"#.to_string()),
                             OmValue::Text(r#"=DECIMAL("1010", 2)"#.to_string()),
                             OmValue::Text(r#"=DECIMAL("2", 2)"#.to_string()),
+                            OmValue::Text("=DEC2BIN(10)".to_string()),
+                            OmValue::Text("=DEC2BIN(10, 8)".to_string()),
+                            OmValue::Text("=DEC2BIN(-1)".to_string()),
+                            OmValue::Text("=DEC2BIN(512)".to_string()),
+                            OmValue::Text("=DEC2OCT(64)".to_string()),
+                            OmValue::Text("=DEC2OCT(64, 4)".to_string()),
+                            OmValue::Text("=DEC2OCT(-1)".to_string()),
+                            OmValue::Text("=DEC2HEX(255)".to_string()),
+                            OmValue::Text("=DEC2HEX(255, 4)".to_string()),
+                            OmValue::Text("=DEC2HEX(-1)".to_string()),
+                            OmValue::Text(r#"=BIN2DEC("1010")"#.to_string()),
+                            OmValue::Text(r#"=BIN2DEC("1111111111")"#.to_string()),
+                            OmValue::Text(r#"=BIN2HEX("1010", 4)"#.to_string()),
+                            OmValue::Text(r#"=BIN2HEX("1111111111")"#.to_string()),
+                            OmValue::Text(r#"=BIN2OCT("1010", 4)"#.to_string()),
+                            OmValue::Text(r#"=BIN2OCT("1111111111")"#.to_string()),
+                            OmValue::Text(r#"=OCT2DEC("10")"#.to_string()),
+                            OmValue::Text(r#"=OCT2DEC("7777777777")"#.to_string()),
+                            OmValue::Text(r#"=OCT2BIN("10", 5)"#.to_string()),
+                            OmValue::Text(r#"=OCT2HEX("10", 3)"#.to_string()),
+                            OmValue::Text(r#"=HEX2DEC("FF")"#.to_string()),
+                            OmValue::Text(r#"=HEX2DEC("FFFFFFFFFF")"#.to_string()),
+                            OmValue::Text(r#"=HEX2BIN("F", 8)"#.to_string()),
+                            OmValue::Text(r#"=HEX2OCT("F", 4)"#.to_string()),
                         ],
                     )
                     .expect("engineering math formulas"),
@@ -21228,6 +21446,30 @@ mod tests {
                 OmValue::Number(255.0),
                 OmValue::Number(10.0),
                 OmValue::Error(CellError::Num),
+                OmValue::Text("1010".to_string()),
+                OmValue::Text("00001010".to_string()),
+                OmValue::Text("1111111111".to_string()),
+                OmValue::Error(CellError::Num),
+                OmValue::Text("100".to_string()),
+                OmValue::Text("0100".to_string()),
+                OmValue::Text("7777777777".to_string()),
+                OmValue::Text("FF".to_string()),
+                OmValue::Text("00FF".to_string()),
+                OmValue::Text("FFFFFFFFFF".to_string()),
+                OmValue::Number(10.0),
+                OmValue::Number(-1.0),
+                OmValue::Text("000A".to_string()),
+                OmValue::Text("FFFFFFFFFF".to_string()),
+                OmValue::Text("0012".to_string()),
+                OmValue::Text("7777777777".to_string()),
+                OmValue::Number(8.0),
+                OmValue::Number(-1.0),
+                OmValue::Text("01000".to_string()),
+                OmValue::Text("008".to_string()),
+                OmValue::Number(255.0),
+                OmValue::Number(-1.0),
+                OmValue::Text("00001111".to_string()),
+                OmValue::Text("0017".to_string()),
             ]
         );
     }

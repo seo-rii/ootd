@@ -92,6 +92,18 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `DELTA`
 - `GESTEP`
 - `DECIMAL`
+- `BIN2DEC`
+- `BIN2HEX`
+- `BIN2OCT`
+- `DEC2BIN`
+- `DEC2HEX`
+- `DEC2OCT`
+- `HEX2BIN`
+- `HEX2DEC`
+- `HEX2OCT`
+- `OCT2BIN`
+- `OCT2DEC`
+- `OCT2HEX`
 
 ### Logical and control helpers
 
