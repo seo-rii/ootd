@@ -10681,6 +10681,26 @@ fn formula_dollar_fraction_near_integer(value: f64) -> f64 {
     }
 }
 
+fn formula_financial_type_argument(value: f64) -> Result<f64, FormulaEvalError> {
+    if !value.is_finite() {
+        return Err(FormulaEvalError::Value);
+    }
+    match value.trunc() as i64 {
+        0 => Ok(0.0),
+        1 => Ok(1.0),
+        _ => Err(FormulaEvalError::Num),
+    }
+}
+
+fn formula_annuity_growth(rate: f64, nper: f64) -> Result<f64, FormulaEvalError> {
+    let growth = (1.0 + rate).powf(nper);
+    if growth.is_finite() {
+        Ok(growth)
+    } else {
+        Err(FormulaEvalError::Num)
+    }
+}
+
 fn formula_radix_argument(value: f64) -> Result<u32, FormulaEvalError> {
     let value = formula_integer_argument(value)?;
     if !(2..=36).contains(&value) {
@@ -12590,6 +12610,18 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("DOLLARFR") {
             return self.parse_dollarfr_function();
         }
+        if name.eq_ignore_ascii_case("FV") {
+            return self.parse_fv_function();
+        }
+        if name.eq_ignore_ascii_case("PV") {
+            return self.parse_pv_function();
+        }
+        if name.eq_ignore_ascii_case("PMT") {
+            return self.parse_pmt_function();
+        }
+        if name.eq_ignore_ascii_case("ISPMT") {
+            return self.parse_ispmt_function();
+        }
         if name.eq_ignore_ascii_case("ARABIC") {
             return self.parse_arabic_function();
         }
@@ -14064,6 +14096,198 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         let whole = absolute.trunc();
         let numerator = formula_dollar_fraction_near_integer((absolute - whole) * denominator);
         let value = sign * (whole + numerator / scale);
+        if value.is_finite() {
+            Ok(value)
+        } else {
+            Err(FormulaEvalError::Num)
+        }
+    }
+
+    fn parse_fv_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let rate = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let nper = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let pmt = self.parse_comparison()?;
+        let mut pv = 0.0;
+        let mut payment_type = 0.0;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            pv = self.parse_comparison()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                payment_type = formula_financial_type_argument(self.parse_comparison()?)?;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+            }
+        }
+        if ![rate, nper, pmt, pv].iter().all(|value| value.is_finite()) {
+            return Err(FormulaEvalError::Value);
+        }
+        let value = if rate == 0.0 {
+            -(pv + pmt * nper)
+        } else {
+            let growth = formula_annuity_growth(rate, nper)?;
+            -(pv * growth + pmt * (1.0 + rate * payment_type) * (growth - 1.0) / rate)
+        };
+        if value.is_finite() {
+            Ok(value)
+        } else {
+            Err(FormulaEvalError::Num)
+        }
+    }
+
+    fn parse_pv_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let rate = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let nper = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let pmt = self.parse_comparison()?;
+        let mut fv = 0.0;
+        let mut payment_type = 0.0;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            fv = self.parse_comparison()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                payment_type = formula_financial_type_argument(self.parse_comparison()?)?;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+            }
+        }
+        if ![rate, nper, pmt, fv].iter().all(|value| value.is_finite()) {
+            return Err(FormulaEvalError::Value);
+        }
+        let value = if rate == 0.0 {
+            -(fv + pmt * nper)
+        } else {
+            let growth = formula_annuity_growth(rate, nper)?;
+            if growth == 0.0 {
+                return Err(FormulaEvalError::Div0);
+            }
+            -(fv + pmt * (1.0 + rate * payment_type) * (growth - 1.0) / rate) / growth
+        };
+        if value.is_finite() {
+            Ok(value)
+        } else {
+            Err(FormulaEvalError::Num)
+        }
+    }
+
+    fn parse_pmt_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let rate = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let nper = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let pv = self.parse_comparison()?;
+        let mut fv = 0.0;
+        let mut payment_type = 0.0;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            fv = self.parse_comparison()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                payment_type = formula_financial_type_argument(self.parse_comparison()?)?;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+            }
+        }
+        if ![rate, nper, pv, fv].iter().all(|value| value.is_finite()) {
+            return Err(FormulaEvalError::Value);
+        }
+        if nper == 0.0 {
+            return Err(FormulaEvalError::Div0);
+        }
+        let value = if rate == 0.0 {
+            -(pv + fv) / nper
+        } else {
+            let growth = formula_annuity_growth(rate, nper)?;
+            let denominator = (1.0 + rate * payment_type) * (growth - 1.0);
+            if denominator == 0.0 {
+                return Err(FormulaEvalError::Div0);
+            }
+            -(pv * growth + fv) * rate / denominator
+        };
+        if value.is_finite() {
+            Ok(value)
+        } else {
+            Err(FormulaEvalError::Num)
+        }
+    }
+
+    fn parse_ispmt_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let rate = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let period = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let nper = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let pv = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        if ![rate, period, nper, pv]
+            .iter()
+            .all(|value| value.is_finite())
+        {
+            return Err(FormulaEvalError::Value);
+        }
+        if nper == 0.0 {
+            return Err(FormulaEvalError::Div0);
+        }
+        let value = pv * rate * (period / nper - 1.0);
         if value.is_finite() {
             Ok(value)
         } else {
@@ -22876,6 +23100,90 @@ mod tests {
                 OmValue::Number(1.02),
                 OmValue::Error(CellError::Div0),
                 OmValue::Error(CellError::Num),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_annuity_financial_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A12".to_string())],
+                )
+                .expect("Range(A1:A12)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        12,
+                        1,
+                        vec![
+                            OmValue::Text("=FV(0, 10, -100, -1000)".to_string()),
+                            OmValue::Text("=FV(1, 2, -10, -100, 1)".to_string()),
+                            OmValue::Text("=PV(0, 10, -100, 0)".to_string()),
+                            OmValue::Text("=PV(1, 2, -10, 460, 1)".to_string()),
+                            OmValue::Text("=PMT(0, 4, 100, -20)".to_string()),
+                            OmValue::Text("=PMT(1, 1, 100, 0)".to_string()),
+                            OmValue::Text("=PMT(1, 1, 100, 0, 1)".to_string()),
+                            OmValue::Text("=ISPMT(0.125, 0, 4, 4000)".to_string()),
+                            OmValue::Text("=ISPMT(0.125, 2, 4, 4000)".to_string()),
+                            OmValue::Text("=FV(1, 1, 0, -100, 2)".to_string()),
+                            OmValue::Text("=PMT(0, 0, 100)".to_string()),
+                            OmValue::Text("=PV(1, 2, 0, 400)".to_string()),
+                        ],
+                    )
+                    .expect("annuity financial formulas"),
+                ),
+                &[],
+            )
+            .expect("set annuity financial formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("annuity financial values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected annuity financial value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(2000.0),
+                OmValue::Number(460.0),
+                OmValue::Number(1000.0),
+                OmValue::Number(-100.0),
+                OmValue::Number(-20.0),
+                OmValue::Number(-200.0),
+                OmValue::Number(-100.0),
+                OmValue::Number(-500.0),
+                OmValue::Number(-250.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Div0),
+                OmValue::Number(-100.0),
             ]
         );
     }
