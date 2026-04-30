@@ -8708,6 +8708,7 @@ enum FormulaScalarFunction {
     Floor,
     FloorMath,
     FloorPrecise,
+    Gauss,
     GeStep,
     Hour,
     If,
@@ -8718,6 +8719,8 @@ enum FormulaScalarFunction {
     IsOdd,
     Int,
     Ln,
+    LogNormDist,
+    LogNormDistLegacy,
     Log,
     Log10,
     Minute,
@@ -8727,12 +8730,16 @@ enum FormulaScalarFunction {
     MRound,
     Multinomial,
     Nominal,
+    NormDist,
+    NormSDist,
+    NormSDistLegacy,
     Not,
     Odd,
     Or,
     PDuration,
     Permut,
     PermutationA,
+    Phi,
     Pi,
     PoissonDist,
     Price,
@@ -8752,6 +8759,7 @@ enum FormulaScalarFunction {
     Power,
     Sin,
     Sinh,
+    Standardize,
     Sqrt,
     SqrtPi,
     Second,
@@ -8897,6 +8905,8 @@ impl FormulaScalarFunction {
             Some(Self::FloorMath)
         } else if name.eq_ignore_ascii_case("FLOOR.PRECISE") {
             Some(Self::FloorPrecise)
+        } else if name.eq_ignore_ascii_case("GAUSS") {
+            Some(Self::Gauss)
         } else if name.eq_ignore_ascii_case("GESTEP") {
             Some(Self::GeStep)
         } else if name.eq_ignore_ascii_case("HOUR") {
@@ -8917,6 +8927,10 @@ impl FormulaScalarFunction {
             Some(Self::Int)
         } else if name.eq_ignore_ascii_case("LN") {
             Some(Self::Ln)
+        } else if name.eq_ignore_ascii_case("LOGNORM.DIST") {
+            Some(Self::LogNormDist)
+        } else if name.eq_ignore_ascii_case("LOGNORMDIST") {
+            Some(Self::LogNormDistLegacy)
         } else if name.eq_ignore_ascii_case("LOG") {
             Some(Self::Log)
         } else if name.eq_ignore_ascii_case("LOG10") {
@@ -8935,6 +8949,12 @@ impl FormulaScalarFunction {
             Some(Self::Multinomial)
         } else if name.eq_ignore_ascii_case("NOMINAL") {
             Some(Self::Nominal)
+        } else if name.eq_ignore_ascii_case("NORM.DIST") || name.eq_ignore_ascii_case("NORMDIST") {
+            Some(Self::NormDist)
+        } else if name.eq_ignore_ascii_case("NORM.S.DIST") {
+            Some(Self::NormSDist)
+        } else if name.eq_ignore_ascii_case("NORMSDIST") {
+            Some(Self::NormSDistLegacy)
         } else if name.eq_ignore_ascii_case("NOT") {
             Some(Self::Not)
         } else if name.eq_ignore_ascii_case("ODD") {
@@ -8947,6 +8967,8 @@ impl FormulaScalarFunction {
             Some(Self::Permut)
         } else if name.eq_ignore_ascii_case("PERMUTATIONA") {
             Some(Self::PermutationA)
+        } else if name.eq_ignore_ascii_case("PHI") {
+            Some(Self::Phi)
         } else if name.eq_ignore_ascii_case("PI") {
             Some(Self::Pi)
         } else if name.eq_ignore_ascii_case("POISSON.DIST") || name.eq_ignore_ascii_case("POISSON")
@@ -8986,6 +9008,8 @@ impl FormulaScalarFunction {
             Some(Self::Sin)
         } else if name.eq_ignore_ascii_case("SINH") {
             Some(Self::Sinh)
+        } else if name.eq_ignore_ascii_case("STANDARDIZE") {
+            Some(Self::Standardize)
         } else if name.eq_ignore_ascii_case("SQRT") {
             Some(Self::Sqrt)
         } else if name.eq_ignore_ascii_case("SQRTPI") {
@@ -9661,6 +9685,28 @@ impl FormulaScalarFunction {
                 Err(FormulaEvalError::Num)
             }
         };
+        let erf_approx = |value: f64| {
+            let sign = if value.is_sign_negative() { -1.0 } else { 1.0 };
+            let x = value.abs();
+            let t = 1.0 / (1.0 + 0.5 * x);
+            let tau = t
+                * (-x * x - 1.26551223
+                    + t * (1.00002368
+                        + t * (0.37409196
+                            + t * (0.09678418
+                                + t * (-0.18628806
+                                    + t * (0.27886807
+                                        + t * (-1.13520398
+                                            + t * (1.48851587
+                                                + t * (-0.82215223 + t * 0.17087277)))))))))
+                    .exp();
+            sign * (1.0 - tau)
+        };
+        let standard_normal_pdf = |z: f64| {
+            const INV_SQRT_2_PI: f64 = 0.3989422804014327;
+            INV_SQRT_2_PI * (-0.5 * z * z).exp()
+        };
+        let standard_normal_cdf = |z: f64| 0.5 * (1.0 + erf_approx(z / std::f64::consts::SQRT_2));
         let reciprocal_numeric_result = |denominator: f64| -> Result<f64, FormulaEvalError> {
             if denominator == 0.0 {
                 return Err(FormulaEvalError::Div0);
@@ -10585,6 +10631,12 @@ impl FormulaScalarFunction {
                 };
                 ceiling_floor_precise(number, significance, false)
             }
+            FormulaScalarFunction::Gauss => {
+                let [z] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                checked_numeric_result(standard_normal_cdf(*z) - 0.5)
+            }
             FormulaScalarFunction::GeStep => {
                 let (number, step) = match args {
                     [number] => (*number, 0.0),
@@ -10680,6 +10732,33 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Num);
                 }
                 Ok(value.ln())
+            }
+            FormulaScalarFunction::LogNormDist | FormulaScalarFunction::LogNormDistLegacy => {
+                let (x, mean, standard_dev, cumulative) = match (self, args) {
+                    (FormulaScalarFunction::LogNormDist, [x, mean, standard_dev, cumulative]) => {
+                        (*x, *mean, *standard_dev, *cumulative)
+                    }
+                    (FormulaScalarFunction::LogNormDistLegacy, [x, mean, standard_dev]) => {
+                        (*x, *mean, *standard_dev, 1.0)
+                    }
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if ![x, mean, standard_dev, cumulative]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if x <= 0.0 || standard_dev <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let z = (x.ln() - mean) / standard_dev;
+                let value = if cumulative != 0.0 {
+                    standard_normal_cdf(z)
+                } else {
+                    standard_normal_pdf(z) / (x * standard_dev)
+                };
+                checked_numeric_result(value)
             }
             FormulaScalarFunction::Log => {
                 let (number, base) = match args {
@@ -10785,6 +10864,49 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Num);
                 }
                 checked_numeric_result(npery * ((1.0 + effect_rate).powf(1.0 / npery) - 1.0))
+            }
+            FormulaScalarFunction::NormDist => {
+                let [x, mean, standard_dev, cumulative] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if ![x, mean, standard_dev, cumulative]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *standard_dev <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let z = (*x - *mean) / *standard_dev;
+                let value = if *cumulative != 0.0 {
+                    standard_normal_cdf(z)
+                } else {
+                    standard_normal_pdf(z) / *standard_dev
+                };
+                checked_numeric_result(value)
+            }
+            FormulaScalarFunction::NormSDist => {
+                let [z, cumulative] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if !z.is_finite() || !cumulative.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                checked_numeric_result(if *cumulative != 0.0 {
+                    standard_normal_cdf(*z)
+                } else {
+                    standard_normal_pdf(*z)
+                })
+            }
+            FormulaScalarFunction::NormSDistLegacy => {
+                let [z] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if !z.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                checked_numeric_result(standard_normal_cdf(*z))
             }
             FormulaScalarFunction::Not => {
                 let [value] = args else {
@@ -11038,6 +11160,12 @@ impl FormulaScalarFunction {
                     Err(FormulaEvalError::Num)
                 }
             }
+            FormulaScalarFunction::Phi => {
+                let [z] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                checked_numeric_result(standard_normal_pdf(*z))
+            }
             FormulaScalarFunction::Pi => {
                 if !args.is_empty() {
                     return Err(FormulaEvalError::Value);
@@ -11132,6 +11260,18 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Value);
                 };
                 checked_numeric_result(value.sinh())
+            }
+            FormulaScalarFunction::Standardize => {
+                let [x, mean, standard_dev] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if !x.is_finite() || !mean.is_finite() || !standard_dev.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *standard_dev <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                checked_numeric_result((*x - *mean) / *standard_dev)
             }
             FormulaScalarFunction::Sqrt => {
                 let [value] = args else {
@@ -24704,6 +24844,112 @@ mod tests {
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_normal_distribution_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A18".to_string())],
+                )
+                .expect("Range(A1:A18)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        18,
+                        1,
+                        vec![
+                            OmValue::Text("=NORM.DIST(42,40,1.5,TRUE)".to_string()),
+                            OmValue::Text("=NORMDIST(42,40,1.5,FALSE)".to_string()),
+                            OmValue::Text("=NORM.S.DIST(1,TRUE)".to_string()),
+                            OmValue::Text("=NORM.S.DIST(1,FALSE)".to_string()),
+                            OmValue::Text("=NORMSDIST(1)".to_string()),
+                            OmValue::Text("=LOGNORM.DIST(4,3.5,1.2,TRUE)".to_string()),
+                            OmValue::Text("=LOGNORM.DIST(4,3.5,1.2,FALSE)".to_string()),
+                            OmValue::Text("=LOGNORMDIST(4,3.5,1.2)".to_string()),
+                            OmValue::Text("=STANDARDIZE(42,40,1.5)".to_string()),
+                            OmValue::Text("=PHI(1)".to_string()),
+                            OmValue::Text("=GAUSS(1)".to_string()),
+                            OmValue::Text("=NORM.DIST(42,40,0,TRUE)".to_string()),
+                            OmValue::Text("=NORM.S.DIST(1)".to_string()),
+                            OmValue::Text("=NORMSDIST(1,TRUE)".to_string()),
+                            OmValue::Text("=LOGNORM.DIST(0,3.5,1.2,TRUE)".to_string()),
+                            OmValue::Text("=LOGNORM.DIST(4,3.5,0,TRUE)".to_string()),
+                            OmValue::Text("=LOGNORMDIST(4,3.5,1.2,TRUE)".to_string()),
+                            OmValue::Text("=STANDARDIZE(42,40,0)".to_string()),
+                        ],
+                    )
+                    .expect("normal distribution formulas"),
+                ),
+                &[],
+            )
+            .expect("set normal distribution formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("normal distribution values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected normal distribution value array");
+        };
+        let expected_numbers = [
+            0.9087887802741321,
+            0.10934004978399577,
+            0.8413447460685429,
+            0.24197072451914337,
+            0.8413447460685429,
+            0.0390835557068005,
+            0.01761759668181923,
+            0.0390835557068005,
+            4.0 / 3.0,
+            0.24197072451914337,
+            0.3413447460685429,
+        ];
+        for (index, expected) in expected_numbers.into_iter().enumerate() {
+            let number = expect_number(values.values[index].clone());
+            assert!(
+                (number - expected).abs() < 1e-6,
+                "normal distribution result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            &values.values[11..],
+            &[
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Num),
             ]
         );
     }
