@@ -8679,6 +8679,7 @@ enum FormulaScalarFunction {
     Day,
     Days,
     Days360,
+    Ddb,
     Degrees,
     Delta,
     EDate,
@@ -8801,6 +8802,8 @@ impl FormulaScalarFunction {
             Some(Self::Days)
         } else if name.eq_ignore_ascii_case("DAYS360") {
             Some(Self::Days360)
+        } else if name.eq_ignore_ascii_case("DDB") {
+            Some(Self::Ddb)
         } else if name.eq_ignore_ascii_case("DEGREES") {
             Some(Self::Degrees)
         } else if name.eq_ignore_ascii_case("DELTA") {
@@ -9488,6 +9491,46 @@ impl FormulaScalarFunction {
                     formula_serial_integer(end_date)?,
                     european,
                 )? as f64)
+            }
+            FormulaScalarFunction::Ddb => {
+                let (cost, salvage, life, period, factor) = match args {
+                    [cost, salvage, life, period] => (*cost, *salvage, *life, *period, 2.0),
+                    [cost, salvage, life, period, factor] => {
+                        (*cost, *salvage, *life, *period, *factor)
+                    }
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if ![cost, salvage, life, period, factor]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                let period = period.trunc();
+                if cost < 0.0
+                    || salvage < 0.0
+                    || salvage > cost
+                    || life <= 0.0
+                    || period < 1.0
+                    || period > life
+                    || factor <= 0.0
+                {
+                    return Err(FormulaEvalError::Num);
+                }
+                let mut prior_depreciation = 0.0;
+                let mut current_period = 1.0;
+                while current_period < period {
+                    let depreciation = ((cost - prior_depreciation) * factor / life)
+                        .min(cost - salvage - prior_depreciation)
+                        .max(0.0);
+                    prior_depreciation += depreciation;
+                    current_period += 1.0;
+                }
+                checked_numeric_result(
+                    ((cost - prior_depreciation) * factor / life)
+                        .min(cost - salvage - prior_depreciation)
+                        .max(0.0),
+                )
             }
             FormulaScalarFunction::Degrees => {
                 let [value] = args else {
@@ -23650,6 +23693,78 @@ mod tests {
                 OmValue::Number(100.0),
                 OmValue::Number(180.0),
                 OmValue::Number(20.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_declining_depreciation_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A8".to_string())])
+                .expect("Range(A1:A8)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        8,
+                        1,
+                        vec![
+                            OmValue::Text("=DDB(1000, 100, 5, 1)".to_string()),
+                            OmValue::Text("=DDB(1000, 100, 5, 2)".to_string()),
+                            OmValue::Text("=DDB(1000, 100, 5, 2, 1)".to_string()),
+                            OmValue::Text("=DDB(1000, 100, 5, 6)".to_string()),
+                            OmValue::Text("=DDB(1000, 100, 0, 1)".to_string()),
+                            OmValue::Text("=DDB(1000, 100, 5, 0)".to_string()),
+                            OmValue::Text("=DDB(1000, 100, 5, 1, 0)".to_string()),
+                            OmValue::Text("=DDB(100, 200, 5, 1)".to_string()),
+                        ],
+                    )
+                    .expect("declining depreciation formulas"),
+                ),
+                &[],
+            )
+            .expect("set declining depreciation formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("declining depreciation values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected declining depreciation value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(400.0),
+                OmValue::Number(240.0),
+                OmValue::Number(160.0),
+                OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),

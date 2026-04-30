@@ -125,6 +125,7 @@ Roman numeral notes:
 - `CUMPRINC`
 - `SLN`
 - `SYD`
+- `DDB`
 - `NPER`
 - `ISPMT`
 
@@ -135,6 +136,7 @@ Financial notes:
 - `IPMT` and `PPMT` split the standard `PMT` result into interest and principal portions for one-based periods in the range `1..nper`.
 - `CUMIPMT` and `CUMPRINC` sum the corresponding interest or principal portions across a one-based inclusive period range.
 - `SLN` and `SYD` cover straight-line and sum-of-years' digits depreciation with `#NUM!` for non-positive life or out-of-range periods.
+- `DDB` covers double-declining balance depreciation with an optional factor and caps each period so accumulated depreciation does not drop below salvage value.
 
 ### Logical and control helpers
 
