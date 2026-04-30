@@ -10261,6 +10261,8 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("DEC2BIN")
         || name.eq_ignore_ascii_case("DEC2HEX")
         || name.eq_ignore_ascii_case("DEC2OCT")
+        || name.eq_ignore_ascii_case("DOLLAR")
+        || name.eq_ignore_ascii_case("FIXED")
         || name.eq_ignore_ascii_case("HEX2BIN")
         || name.eq_ignore_ascii_case("HEX2OCT")
         || name.eq_ignore_ascii_case("OCT2BIN")
@@ -10591,6 +10593,64 @@ fn formula_roman_text(value: i64, form: usize) -> Result<String, FormulaEvalErro
         }
     }
     Ok(output)
+}
+
+fn formula_fixed_number_text(
+    number: f64,
+    decimals: i64,
+    use_commas: bool,
+) -> Result<String, FormulaEvalError> {
+    if !number.is_finite() || !(-127..=127).contains(&decimals) {
+        return Err(FormulaEvalError::Value);
+    }
+    let rounded = if decimals >= 0 {
+        let factor = formula_round_factor(decimals as f64)?;
+        let scaled = number * factor;
+        if !scaled.is_finite() {
+            return Err(FormulaEvalError::Num);
+        }
+        round_half_away_from_zero(scaled) / factor
+    } else {
+        let factor = formula_round_factor((-decimals) as f64)?;
+        let scaled = number / factor;
+        if !scaled.is_finite() {
+            return Err(FormulaEvalError::Num);
+        }
+        round_half_away_from_zero(scaled) * factor
+    };
+    if !rounded.is_finite() {
+        return Err(FormulaEvalError::Num);
+    }
+    let negative = rounded < 0.0;
+    let precision = decimals.max(0) as usize;
+    let mut body = format!("{:.*}", precision, rounded.abs());
+    if use_commas {
+        let grouped = {
+            let (integer, fraction) = body
+                .split_once('.')
+                .map(|(integer, fraction)| (integer, Some(fraction)))
+                .unwrap_or((body.as_str(), None));
+            let mut integer_grouped = String::new();
+            for (index, ch) in integer.chars().rev().enumerate() {
+                if index > 0 && index % 3 == 0 {
+                    integer_grouped.push(',');
+                }
+                integer_grouped.push(ch);
+            }
+            let mut grouped = integer_grouped.chars().rev().collect::<String>();
+            if let Some(fraction) = fraction {
+                grouped.push('.');
+                grouped.push_str(fraction);
+            }
+            grouped
+        };
+        body = grouped;
+    }
+    if negative {
+        Ok(format!("-{body}"))
+    } else {
+        Ok(body)
+    }
 }
 
 fn formula_radix_argument(value: f64) -> Result<u32, FormulaEvalError> {
@@ -13028,6 +13088,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("ROMAN") {
             return self.parse_roman_text_function();
         }
+        if name.eq_ignore_ascii_case("DOLLAR") {
+            return self.parse_dollar_text_function();
+        }
+        if name.eq_ignore_ascii_case("FIXED") {
+            return self.parse_fixed_text_function();
+        }
         if name.eq_ignore_ascii_case("CHAR") {
             return self.parse_character_text_function(false);
         }
@@ -13385,6 +13451,65 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
         }
         formula_roman_text(number as i64, form)
+    }
+
+    fn parse_text_format_decimals_argument(&mut self) -> Result<i64, FormulaEvalError> {
+        let value = self.parse_comparison()?;
+        if !value.is_finite() {
+            return Err(FormulaEvalError::Value);
+        }
+        let value = value.trunc();
+        if !(-127.0..=127.0).contains(&value) {
+            return Err(FormulaEvalError::Value);
+        }
+        Ok(value as i64)
+    }
+
+    fn parse_dollar_text_function(&mut self) -> Result<String, FormulaEvalError> {
+        let number = self.parse_comparison()?;
+        let mut decimals = 2_i64;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            decimals = self.parse_text_format_decimals_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+        }
+        let formatted = formula_fixed_number_text(number, decimals, true)?;
+        if let Some(positive) = formatted.strip_prefix('-') {
+            Ok(format!("(${positive})"))
+        } else {
+            Ok(format!("${formatted}"))
+        }
+    }
+
+    fn parse_fixed_text_function(&mut self) -> Result<String, FormulaEvalError> {
+        let number = self.parse_comparison()?;
+        let mut decimals = 2_i64;
+        let mut use_commas = true;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            decimals = self.parse_text_format_decimals_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                use_commas = self.parse_comparison()? == 0.0;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+            }
+        }
+        formula_fixed_number_text(number, decimals, use_commas)
     }
 
     fn parse_optional_engineering_places(&mut self) -> Result<Option<usize>, FormulaEvalError> {
@@ -22485,6 +22610,93 @@ mod tests {
                 )
                 .expect("Application.Evaluate text helper"),
             OmValue::Text("Eval7".to_string())
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_number_text_format_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A12".to_string())],
+                )
+                .expect("Range(A1:A12)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        12,
+                        1,
+                        vec![
+                            OmValue::Text("=FIXED(1234.567, 1)".to_string()),
+                            OmValue::Text("=FIXED(1234.567, -1)".to_string()),
+                            OmValue::Text("=FIXED(-1234.567, -1, TRUE)".to_string()),
+                            OmValue::Text("=FIXED(44.332)".to_string()),
+                            OmValue::Text("=FIXED(1234.5, 0, FALSE)".to_string()),
+                            OmValue::Text("=FIXED(1234.5, 0, TRUE)".to_string()),
+                            OmValue::Text("=FIXED(1, 128)".to_string()),
+                            OmValue::Text("=DOLLAR(1234.567, 2)".to_string()),
+                            OmValue::Text("=DOLLAR(-1234.567, 1)".to_string()),
+                            OmValue::Text("=DOLLAR(1234.567, -2)".to_string()),
+                            OmValue::Text("=DOLLAR(-0.004, 2)".to_string()),
+                            OmValue::Text(
+                                r#"=CONCAT(DOLLAR(12, 0), " / ", FIXED(12.3, 1, TRUE))"#
+                                    .to_string(),
+                            ),
+                        ],
+                    )
+                    .expect("number text format formulas"),
+                ),
+                &[],
+            )
+            .expect("set number text format formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("number text format values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected number text format value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Text("1,234.6".to_string()),
+                OmValue::Text("1,230".to_string()),
+                OmValue::Text("-1230".to_string()),
+                OmValue::Text("44.33".to_string()),
+                OmValue::Text("1,235".to_string()),
+                OmValue::Text("1235".to_string()),
+                OmValue::Error(CellError::Value),
+                OmValue::Text("$1,234.57".to_string()),
+                OmValue::Text("($1,234.6)".to_string()),
+                OmValue::Text("$1,200".to_string()),
+                OmValue::Text("$0.00".to_string()),
+                OmValue::Text("$12 / 12.3".to_string()),
+            ]
         );
     }
 

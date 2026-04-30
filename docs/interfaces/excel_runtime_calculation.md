@@ -310,6 +310,8 @@ Criteria notes:
 - `CHAR`
 - `CLEAN`
 - `CODE`
+- `DOLLAR`
+- `FIXED`
 - `LEFT`
 - `RIGHT`
 - `MID`
@@ -340,6 +342,7 @@ Text notes:
 - `SEARCH`, `XLOOKUP`, and `XMATCH` support Excel-style `*` and `?` wildcards with `~` escaping in their focused scalar paths.
 - `TEXTJOIN` supports scalar values and rectangular ranges, and `TEXTBEFORE` / `TEXTAFTER` support scalar delimiters, instance numbers, case-sensitivity mode, match-end mode, and scalar `if_not_found` fallbacks.
 - `VALUE` supports plain decimal numeric text and a trailing percent sign; `NUMBERVALUE` additionally supports configurable decimal and group separators. Currency symbols, date/time text, and locale-specific formatting beyond those focused paths are not implemented.
+- `FIXED` uses period decimal text and optional comma grouping; `DOLLAR` uses the invariant `$` currency symbol and Excel-style parentheses for negative values.
 - `REPT` returns `#VALUE!` for outputs beyond Excel's 32,767-character cell text limit.
 - Range flattening, locale-aware formatting, and full Excel text coercion are not implemented yet.
 
