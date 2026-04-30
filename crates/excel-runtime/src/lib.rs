@@ -8728,6 +8728,7 @@ enum FormulaScalarFunction {
     Permut,
     PermutationA,
     Pi,
+    Price,
     Radians,
     PriceDisc,
     Quotient,
@@ -8757,6 +8758,7 @@ enum FormulaScalarFunction {
     WeekNum,
     Year,
     YearFrac,
+    Yield,
     YieldDisc,
 }
 
@@ -8922,6 +8924,8 @@ impl FormulaScalarFunction {
             Some(Self::PermutationA)
         } else if name.eq_ignore_ascii_case("PI") {
             Some(Self::Pi)
+        } else if name.eq_ignore_ascii_case("PRICE") {
+            Some(Self::Price)
         } else if name.eq_ignore_ascii_case("RADIANS") {
             Some(Self::Radians)
         } else if name.eq_ignore_ascii_case("PRICEDISC") {
@@ -8980,6 +8984,8 @@ impl FormulaScalarFunction {
             Some(Self::Year)
         } else if name.eq_ignore_ascii_case("YEARFRAC") {
             Some(Self::YearFrac)
+        } else if name.eq_ignore_ascii_case("YIELD") {
+            Some(Self::Yield)
         } else if name.eq_ignore_ascii_case("YIELDDISC") {
             Some(Self::YieldDisc)
         } else {
@@ -9197,15 +9203,12 @@ impl FormulaScalarFunction {
                 next_coupon = previous_coupon;
             }
         };
-        let coupon_schedule_from_args =
-            |args: &[f64]| -> Result<(i64, i64, i64, i64, usize, i64, i64), FormulaEvalError> {
-                let (settlement, maturity, frequency, basis) = match args {
-                    [settlement, maturity, frequency] => (*settlement, *maturity, *frequency, 0.0),
-                    [settlement, maturity, frequency, basis] => {
-                        (*settlement, *maturity, *frequency, *basis)
-                    }
-                    _ => return Err(FormulaEvalError::Value),
-                };
+        let coupon_schedule_from_values =
+            |settlement: f64,
+             maturity: f64,
+             frequency: f64,
+             basis: f64|
+             -> Result<(i64, i64, i64, i64, usize, i64, i64), FormulaEvalError> {
                 if ![settlement, maturity, frequency, basis]
                     .iter()
                     .all(|value| value.is_finite())
@@ -9231,6 +9234,17 @@ impl FormulaScalarFunction {
                     next_coupon,
                 ))
             };
+        let coupon_schedule_from_args =
+            |args: &[f64]| -> Result<(i64, i64, i64, i64, usize, i64, i64), FormulaEvalError> {
+                let (settlement, maturity, frequency, basis) = match args {
+                    [settlement, maturity, frequency] => (*settlement, *maturity, *frequency, 0.0),
+                    [settlement, maturity, frequency, basis] => {
+                        (*settlement, *maturity, *frequency, *basis)
+                    }
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                coupon_schedule_from_values(settlement, maturity, frequency, basis)
+            };
         let coupon_days_between =
             |start_serial: i64, end_serial: i64, basis: i64| -> Result<f64, FormulaEvalError> {
                 match basis {
@@ -9240,6 +9254,119 @@ impl FormulaScalarFunction {
                     _ => Err(FormulaEvalError::Num),
                 }
             };
+        let coupon_period_days =
+            |previous_coupon: i64, next_coupon: i64, frequency: i64, basis: i64| -> f64 {
+                match basis {
+                    1 => (next_coupon - previous_coupon) as f64,
+                    3 => 365.0 / frequency as f64,
+                    _ => 360.0 / frequency as f64,
+                }
+            };
+        let regular_coupon_price = |settlement: f64,
+                                    maturity: f64,
+                                    rate: f64,
+                                    yld: f64,
+                                    redemption: f64,
+                                    frequency: f64,
+                                    basis: f64|
+         -> Result<f64, FormulaEvalError> {
+            if ![
+                settlement, maturity, rate, yld, redemption, frequency, basis,
+            ]
+            .iter()
+            .all(|value| value.is_finite())
+            {
+                return Err(FormulaEvalError::Value);
+            }
+            if rate < 0.0 || redemption <= 0.0 {
+                return Err(FormulaEvalError::Num);
+            }
+            let (settlement, _, frequency, basis, coupon_count, previous_coupon, next_coupon) =
+                coupon_schedule_from_values(settlement, maturity, frequency, basis)?;
+            let frequency = frequency as f64;
+            let yield_per_period = yld / frequency;
+            let discount = 1.0 + yield_per_period;
+            if discount <= 0.0 {
+                return Err(FormulaEvalError::Num);
+            }
+            let e = coupon_period_days(previous_coupon, next_coupon, frequency as i64, basis);
+            if e <= 0.0 {
+                return Err(FormulaEvalError::Num);
+            }
+            let dsc = coupon_days_between(settlement, next_coupon, basis)?;
+            let a = coupon_days_between(previous_coupon, settlement, basis)?;
+            let coupon_payment = 100.0 * rate / frequency;
+            let dsc_fraction = dsc / e;
+            let accrued = coupon_payment * a / e;
+            let price = if coupon_count == 1 {
+                (redemption + coupon_payment) / (1.0 + yield_per_period * dsc_fraction) - accrued
+            } else {
+                let mut total =
+                    redemption / discount.powf(coupon_count as f64 - 1.0 + dsc_fraction);
+                for period in 1..=coupon_count {
+                    total += coupon_payment / discount.powf(period as f64 - 1.0 + dsc_fraction);
+                }
+                total - accrued
+            };
+            if price.is_finite() {
+                Ok(price)
+            } else {
+                Err(FormulaEvalError::Num)
+            }
+        };
+        let regular_coupon_yield = |settlement: f64,
+                                    maturity: f64,
+                                    rate: f64,
+                                    price: f64,
+                                    redemption: f64,
+                                    frequency: f64,
+                                    basis: f64|
+         -> Result<f64, FormulaEvalError> {
+            if ![
+                settlement, maturity, rate, price, redemption, frequency, basis,
+            ]
+            .iter()
+            .all(|value| value.is_finite())
+            {
+                return Err(FormulaEvalError::Value);
+            }
+            if rate < 0.0 || price <= 0.0 || redemption <= 0.0 {
+                return Err(FormulaEvalError::Num);
+            }
+            let frequency = coupon_frequency(frequency)? as f64;
+            let price_difference = |yld: f64| -> Result<f64, FormulaEvalError> {
+                Ok(regular_coupon_price(
+                    settlement, maturity, rate, yld, redemption, frequency, basis,
+                )? - price)
+            };
+            let mut lower = -frequency + 1e-10;
+            let lower_value = price_difference(lower)?;
+            if lower_value < 0.0 {
+                return Err(FormulaEvalError::Num);
+            }
+            let mut upper = 1.0;
+            let mut upper_value = price_difference(upper)?;
+            while upper_value > 0.0 {
+                upper *= 2.0;
+                if upper > 1e10 {
+                    return Err(FormulaEvalError::Num);
+                }
+                upper_value = price_difference(upper)?;
+            }
+            for _ in 0..200 {
+                let midpoint = (lower + upper) / 2.0;
+                let midpoint_value = price_difference(midpoint)?;
+                if midpoint_value.abs() <= 1e-10 || (upper - lower).abs() <= 1e-10 {
+                    return Ok(midpoint);
+                }
+                if midpoint_value > 0.0 {
+                    lower = midpoint;
+                } else {
+                    upper = midpoint;
+                }
+            }
+            Ok((lower + upper) / 2.0)
+        };
         let duration_value = |settlement: f64,
                               maturity: f64,
                               coupon: f64,
@@ -10268,6 +10395,43 @@ impl FormulaScalarFunction {
                 }
                 checked_numeric_result((fv / pv).ln() / (1.0 + rate).ln())
             }
+            FormulaScalarFunction::Price => {
+                let (settlement, maturity, rate, yld, redemption, frequency, basis) = match args {
+                    [settlement, maturity, rate, yld, redemption, frequency] => (
+                        *settlement,
+                        *maturity,
+                        *rate,
+                        *yld,
+                        *redemption,
+                        *frequency,
+                        0.0,
+                    ),
+                    [
+                        settlement,
+                        maturity,
+                        rate,
+                        yld,
+                        redemption,
+                        frequency,
+                        basis,
+                    ] => (
+                        *settlement,
+                        *maturity,
+                        *rate,
+                        *yld,
+                        *redemption,
+                        *frequency,
+                        *basis,
+                    ),
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if yld < 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                regular_coupon_price(
+                    settlement, maturity, rate, yld, redemption, frequency, basis,
+                )
+            }
             FormulaScalarFunction::PriceDisc => {
                 let (settlement, maturity, discount, redemption, basis) = match args {
                     [settlement, maturity, discount, redemption] => {
@@ -10656,6 +10820,40 @@ impl FormulaScalarFunction {
                     4 => Ok(days360(start_serial, end_serial, true)? as f64 / 360.0),
                     _ => Err(FormulaEvalError::Num),
                 }
+            }
+            FormulaScalarFunction::Yield => {
+                let (settlement, maturity, rate, price, redemption, frequency, basis) = match args {
+                    [settlement, maturity, rate, price, redemption, frequency] => (
+                        *settlement,
+                        *maturity,
+                        *rate,
+                        *price,
+                        *redemption,
+                        *frequency,
+                        0.0,
+                    ),
+                    [
+                        settlement,
+                        maturity,
+                        rate,
+                        price,
+                        redemption,
+                        frequency,
+                        basis,
+                    ] => (
+                        *settlement,
+                        *maturity,
+                        *rate,
+                        *price,
+                        *redemption,
+                        *frequency,
+                        *basis,
+                    ),
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                regular_coupon_yield(
+                    settlement, maturity, rate, price, redemption, frequency, basis,
+                )
             }
             FormulaScalarFunction::YieldDisc => {
                 let (settlement, maturity, price, redemption, basis) = match args {
@@ -25823,6 +26021,119 @@ mod tests {
                 OmValue::Number(previous_coupon),
                 OmValue::Number(180.0),
                 OmValue::Number(70.0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_price_and_yield_financial_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A10".to_string())],
+                )
+                .expect("Range(A1:A10)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        10,
+                        1,
+                        vec![
+                            OmValue::Text(
+                                "=PRICE(DATE(2008,2,15),DATE(2017,11,15),0.0575,0.065,100,2,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=YIELD(DATE(2008,2,15),DATE(2017,11,15),0.0575,94.63436162132213,100,2,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=PRICE(DATE(2011,1,25),DATE(2011,5,15),0.06,0.05,100,2,1)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=YIELD(DATE(2011,1,25),DATE(2011,5,15),0.06,100.28170782125005,100,2,1)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=PRICE(DATE(2008,2,15),DATE(2017,11,15),0.0575,-0.065,100,2,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=PRICE(DATE(2008,2,15),DATE(2017,11,15),0.0575,0.065,0,2,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=PRICE(DATE(2008,2,15),DATE(2017,11,15),0.0575,0.065,100,3,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=YIELD(DATE(2008,2,15),DATE(2017,11,15),0.0575,0,100,2,0)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                "=PRICE(DATE(2008,2,15),DATE(2017,11,15),0.0575,0.065,100,2,5)"
+                                    .to_string(),
+                            ),
+                            OmValue::Text("=PRICE(0,DATE(2017,11,15),0.0575,0.065,100,2,0)"
+                                .to_string()),
+                        ],
+                    )
+                    .expect("price and yield financial formulas"),
+                ),
+                &[],
+            )
+            .expect("set price and yield financial formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("price and yield values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected price and yield value array");
+        };
+        let expected_numbers = [94.63436162132213, 0.065, 100.28170782125005, 0.05];
+        for (index, expected) in expected_numbers.into_iter().enumerate() {
+            let number = expect_number(values.values[index].clone());
+            assert!(
+                (number - expected).abs() < 1e-8,
+                "price/yield result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            &values.values[4..],
+            &[
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),

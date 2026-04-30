@@ -139,6 +139,8 @@ Roman numeral notes:
 - `COUPNCD`
 - `COUPNUM`
 - `COUPPCD`
+- `PRICE`
+- `YIELD`
 - `DURATION`
 - `MDURATION`
 - `FV`
@@ -173,6 +175,7 @@ Financial notes:
 - `ACCRINTM` calculates interest accrued to maturity using `YEARFRAC` basis values and defaults omitted par to `1000`.
 - `TBILLEQ`, `TBILLPRICE`, and `TBILLYIELD` cover Treasury bill formulas, using actual days and rejecting maturities more than 365 days after settlement.
 - `COUPDAYBS`, `COUPDAYS`, `COUPDAYSNC`, `COUPNCD`, `COUPNUM`, and `COUPPCD` cover regular coupon schedules with annual, semiannual, and quarterly frequencies and basis values `0` through `4`.
+- `PRICE` and `YIELD` calculate regular coupon security price and yield over the same schedule model, including one-coupon and multi-coupon pricing paths.
 - `DURATION` and `MDURATION` calculate Macauley and modified duration over the same regular coupon schedules.
 - `FV`, `PV`, `PMT`, `NPER`, and `RATE` support omitted future/present value and payment timing arguments with the standard `0`/`1` timing modes. `RATE` uses a 20-iteration solve with the documented `10%` default guess. `ISPMT` uses Excel's zero-based period convention.
 - `IPMT` and `PPMT` split the standard `PMT` result into interest and principal portions for one-based periods in the range `1..nper`.
