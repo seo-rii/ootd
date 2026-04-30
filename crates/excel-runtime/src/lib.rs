@@ -12901,6 +12901,121 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 Err(FormulaEvalError::Num)
             };
         }
+        if name.eq_ignore_ascii_case("NPV") {
+            let rate = self.parse_comparison()?;
+            if !rate.is_finite() {
+                return Err(FormulaEvalError::Value);
+            }
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let discount = 1.0 + rate;
+            let mut discount_factor = 1.0;
+            let mut total = 0.0;
+            let mut saw_value_argument = false;
+            macro_rules! record_cash_flow {
+                ($cash_flow:expr) => {{
+                    let cash_flow = $cash_flow;
+                    if !cash_flow.is_finite() {
+                        return Err(FormulaEvalError::Value);
+                    }
+                    discount_factor *= discount;
+                    if discount_factor == 0.0 {
+                        return Err(FormulaEvalError::Div0);
+                    }
+                    if !discount_factor.is_finite() {
+                        return Err(FormulaEvalError::Num);
+                    }
+                    total += cash_flow / discount_factor;
+                    if !total.is_finite() {
+                        return Err(FormulaEvalError::Num);
+                    }
+                }};
+            }
+            loop {
+                self.skip_whitespace();
+                if self.consume_char(')') {
+                    return if saw_value_argument {
+                        Ok(total)
+                    } else {
+                        Err(FormulaEvalError::Value)
+                    };
+                }
+                saw_value_argument = true;
+                let checkpoint = self.index;
+                if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
+                    self.index = next_index;
+                    self.skip_whitespace();
+                    if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
+                        for row in rect.row_first..=rect.row_last {
+                            for col in rect.col_first..=rect.col_last {
+                                match self
+                                    .evaluator
+                                    .cell_value_or_blank(target_sheet_id, row, col)
+                                {
+                                    Ok(CellValue::Number(number)) => record_cash_flow!(number),
+                                    Ok(_) => {}
+                                    Err(FormulaEvalError::Unsupported) => {
+                                        return Err(FormulaEvalError::Unsupported);
+                                    }
+                                    Err(_) => {}
+                                }
+                            }
+                        }
+                    } else {
+                        self.index = checkpoint;
+                        if self.parse_string_literal()?.is_none() {
+                            let identifier_checkpoint = self.index;
+                            if let Some(identifier) = self.parse_identifier() {
+                                self.skip_whitespace();
+                                if !(identifier.eq_ignore_ascii_case("TRUE")
+                                    || identifier.eq_ignore_ascii_case("FALSE"))
+                                    || self.peek_char() == Some('(')
+                                {
+                                    self.index = identifier_checkpoint;
+                                    if let Ok(value) = self.parse_catchable_argument()? {
+                                        record_cash_flow!(value);
+                                    }
+                                }
+                            } else {
+                                self.index = identifier_checkpoint;
+                                if let Ok(value) = self.parse_catchable_argument()? {
+                                    record_cash_flow!(value);
+                                }
+                            }
+                        }
+                    }
+                } else if self.parse_string_literal()?.is_none() {
+                    let identifier_checkpoint = self.index;
+                    if let Some(identifier) = self.parse_identifier() {
+                        self.skip_whitespace();
+                        if !(identifier.eq_ignore_ascii_case("TRUE")
+                            || identifier.eq_ignore_ascii_case("FALSE"))
+                            || self.peek_char() == Some('(')
+                        {
+                            self.index = identifier_checkpoint;
+                            if let Ok(value) = self.parse_catchable_argument()? {
+                                record_cash_flow!(value);
+                            }
+                        }
+                    } else {
+                        self.index = identifier_checkpoint;
+                        if let Ok(value) = self.parse_catchable_argument()? {
+                            record_cash_flow!(value);
+                        }
+                    }
+                }
+                self.skip_whitespace();
+                if self.consume_char(',') {
+                    continue;
+                }
+                if self.consume_char(')') {
+                    return Ok(total);
+                }
+                return Err(FormulaEvalError::Unsupported);
+            }
+        }
         if name.eq_ignore_ascii_case("FV") {
             return self.parse_fv_function();
         }
@@ -23935,6 +24050,105 @@ mod tests {
                 OmValue::Number(50.0),
                 OmValue::Number(0.0),
                 OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_npv_financial_formula() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A6".to_string())])
+                .expect("Range(A1:A6)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B8".to_string())])
+                .expect("Range(B1:B8)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        6,
+                        1,
+                        vec![
+                            OmValue::Number(100.0),
+                            OmValue::Empty,
+                            OmValue::Number(50.0),
+                            OmValue::Text("ignored".to_string()),
+                            OmValue::Bool(true),
+                            OmValue::Error(CellError::Div0),
+                        ],
+                    )
+                    .expect("NPV source values"),
+                ),
+                &[],
+            )
+            .expect("set NPV source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        8,
+                        1,
+                        vec![
+                            OmValue::Text("=NPV(1, 100, 100)".to_string()),
+                            OmValue::Text("=NPV(0, A1:A6, 25)".to_string()),
+                            OmValue::Text("=NPV(0, A2:A2)".to_string()),
+                            OmValue::Text("=NPV(0, A4:A6)".to_string()),
+                            OmValue::Text("=NPV(0, 1/0, 5)".to_string()),
+                            OmValue::Text(r#"=NPV(0, "bad", 5)"#.to_string()),
+                            OmValue::Text("=NPV(0, TRUE, 5)".to_string()),
+                            OmValue::Text("=NPV(-1, 100)".to_string()),
+                        ],
+                    )
+                    .expect("NPV formulas"),
+                ),
+                &[],
+            )
+            .expect("set NPV formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("NPV values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected NPV value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(75.0),
+                OmValue::Number(175.0),
+                OmValue::Number(0.0),
+                OmValue::Number(0.0),
+                OmValue::Number(5.0),
+                OmValue::Number(5.0),
+                OmValue::Number(5.0),
+                OmValue::Error(CellError::Div0),
             ]
         );
     }
