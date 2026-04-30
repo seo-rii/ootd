@@ -10868,6 +10868,17 @@ fn formula_integer_argument(value: f64) -> Result<i64, FormulaEvalError> {
     Ok(value as i64)
 }
 
+fn formula_source_has_top_level_function(formula: &FormulaSource, name: &str) -> bool {
+    let text = formula.text.trim_start();
+    let Some(prefix) = text.get(..name.len()) else {
+        return false;
+    };
+    if !prefix.eq_ignore_ascii_case(name) {
+        return false;
+    }
+    text[name.len()..].trim_start().starts_with('(')
+}
+
 fn formula_bitwise_argument(value: f64) -> Result<u64, FormulaEvalError> {
     let value = formula_integer_argument(value)?;
     let value = u64::try_from(value).map_err(|_| FormulaEvalError::Num)?;
@@ -12332,6 +12343,85 @@ impl<'a> FormulaEvaluator<'a> {
             .count() as u64)
     }
 
+    fn subtotal_numeric_values_in_rect(
+        &mut self,
+        sheet_id: SheetId,
+        rect: Rect,
+    ) -> Result<Vec<f64>, FormulaEvalError> {
+        let Some(worksheet) = self.state.worksheet_data.get(&sheet_id) else {
+            return Err(FormulaEvalError::Ref);
+        };
+        let keys = worksheet
+            .cells
+            .keys()
+            .copied()
+            .filter(|(row, col)| {
+                (rect.row_first..=rect.row_last).contains(row)
+                    && (rect.col_first..=rect.col_last).contains(col)
+            })
+            .collect::<Vec<_>>();
+        let mut values = Vec::new();
+        for (row, col) in keys {
+            if self
+                .state
+                .worksheet_data
+                .get(&sheet_id)
+                .and_then(|worksheet| worksheet.cells.get(&(row, col)))
+                .and_then(|cell| cell.formula.as_ref())
+                .is_some_and(|formula| formula_source_has_top_level_function(formula, "SUBTOTAL"))
+            {
+                continue;
+            }
+            match self.evaluate_cell(sheet_id, row, col) {
+                Ok(CellValue::Number(number)) => values.push(number),
+                Ok(CellValue::Error(error)) => {
+                    return Err(formula_eval_error_from_cell_error(error));
+                }
+                Ok(CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_)) => {}
+                Err(FormulaEvalError::Unsupported) => {
+                    if let Some(cell) = self
+                        .state
+                        .worksheet_data
+                        .get(&sheet_id)
+                        .and_then(|worksheet| worksheet.cells.get(&(row, col)))
+                    {
+                        match cell.value {
+                            CellValue::Number(number) => values.push(number),
+                            CellValue::Error(error) => {
+                                return Err(formula_eval_error_from_cell_error(error));
+                            }
+                            CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {}
+                        }
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(values)
+    }
+
+    fn subtotal_counta_values_in_rect(
+        &self,
+        sheet_id: SheetId,
+        rect: Rect,
+    ) -> Result<u64, FormulaEvalError> {
+        let Some(worksheet) = self.state.worksheet_data.get(&sheet_id) else {
+            return Err(FormulaEvalError::Ref);
+        };
+        Ok(worksheet
+            .cells
+            .iter()
+            .filter(|((row, col), cell)| {
+                (rect.row_first..=rect.row_last).contains(row)
+                    && (rect.col_first..=rect.col_last).contains(col)
+                    && !cell.formula.as_ref().is_some_and(|formula| {
+                        formula_source_has_top_level_function(formula, "SUBTOTAL")
+                    })
+                    && (cell.formula.is_some() || !matches!(cell.value, CellValue::Blank))
+            })
+            .count() as u64)
+    }
+
     fn countblank_values_in_rect(
         &self,
         sheet_id: SheetId,
@@ -13031,6 +13121,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         if name.eq_ignore_ascii_case("SERIESSUM") {
             return self.parse_series_sum_function();
+        }
+        if name.eq_ignore_ascii_case("SUBTOTAL") {
+            return self.parse_subtotal_function();
         }
         if let Some(function) = FormulaScalarFunction::from_name(name) {
             return self.parse_scalar_function(function);
@@ -16536,6 +16629,67 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         Ok(total)
     }
 
+    fn parse_subtotal_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let function_num = formula_integer_argument(self.parse_comparison()?)?;
+        let function_num = match function_num {
+            1..=11 => function_num,
+            101..=111 => function_num - 100,
+            _ => return Err(FormulaEvalError::Value),
+        };
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+
+        let aggregate_function = match function_num {
+            1 => Some(FormulaAggregateFunction::Average),
+            2 => Some(FormulaAggregateFunction::Count),
+            3 => None,
+            4 => Some(FormulaAggregateFunction::Max),
+            5 => Some(FormulaAggregateFunction::Min),
+            6 => Some(FormulaAggregateFunction::Product),
+            7 => Some(FormulaAggregateFunction::StDevS),
+            8 => Some(FormulaAggregateFunction::StDevP),
+            9 => Some(FormulaAggregateFunction::Sum),
+            10 => Some(FormulaAggregateFunction::VarS),
+            11 => Some(FormulaAggregateFunction::VarP),
+            _ => unreachable!("validated SUBTOTAL function number"),
+        };
+        let mut saw_argument = false;
+        let mut values = Vec::new();
+        let mut counta = 0_u64;
+
+        loop {
+            self.skip_whitespace();
+            if self.consume_char(')') {
+                if !saw_argument {
+                    return Err(FormulaEvalError::Value);
+                }
+                return match aggregate_function {
+                    Some(function) => function.evaluate(values.as_slice()),
+                    None => Ok(counta as f64),
+                };
+            }
+            saw_argument = true;
+            if aggregate_function.is_some() {
+                values.extend(self.parse_subtotal_numeric_argument()?);
+            } else {
+                counta += self.parse_subtotal_counta_argument()?;
+            }
+            self.skip_whitespace();
+            if self.consume_char(',') {
+                continue;
+            }
+            if self.consume_char(')') {
+                return match aggregate_function {
+                    Some(function) => function.evaluate(values.as_slice()),
+                    None => Ok(counta as f64),
+                };
+            }
+            return Err(FormulaEvalError::Unsupported);
+        }
+    }
+
     fn parse_counta_function(&mut self) -> Result<f64, FormulaEvalError> {
         let mut count = 0_u64;
         loop {
@@ -16758,6 +16912,37 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         self.index = checkpoint;
         Ok(vec![self.parse_comparison()?])
+    }
+
+    fn parse_subtotal_numeric_argument(&mut self) -> Result<Vec<f64>, FormulaEvalError> {
+        let checkpoint = self.index;
+        if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
+            self.index = next_index;
+            self.skip_whitespace();
+            if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
+                return self
+                    .evaluator
+                    .subtotal_numeric_values_in_rect(target_sheet_id, rect);
+            }
+        }
+        self.index = checkpoint;
+        Ok(vec![self.parse_comparison()?])
+    }
+
+    fn parse_subtotal_counta_argument(&mut self) -> Result<u64, FormulaEvalError> {
+        let checkpoint = self.index;
+        if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
+            self.index = next_index;
+            self.skip_whitespace();
+            if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
+                return self
+                    .evaluator
+                    .subtotal_counta_values_in_rect(target_sheet_id, rect);
+            }
+        }
+        self.index = checkpoint;
+        self.parse_comparison()?;
+        Ok(1)
     }
 
     fn parse_aggregate_a_argument(&mut self) -> Result<Vec<f64>, FormulaEvalError> {
@@ -19652,6 +19837,133 @@ mod tests {
                 OmValue::Number(8.0),
                 OmValue::Number(5.0),
                 OmValue::Number(3.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_subtotal_formula() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A5".to_string())])
+                .expect("Range(A1:A5)"),
+        );
+        let nested_subtotal = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A6".to_string())])
+                .expect("Range(A6)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("B1:B14".to_string())],
+                )
+                .expect("Range(B1:B14)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        5,
+                        1,
+                        vec![
+                            OmValue::Number(10.0),
+                            OmValue::Number(20.0),
+                            OmValue::Text("text".to_string()),
+                            OmValue::Bool(false),
+                            OmValue::Empty,
+                        ],
+                    )
+                    .expect("SUBTOTAL source values"),
+                ),
+                &[],
+            )
+            .expect("set SUBTOTAL source values");
+        runtime
+            .dispatch_set(
+                nested_subtotal,
+                "Formula",
+                OmValue::Text("=SUBTOTAL(9,A1:A2)".to_string()),
+                &[],
+            )
+            .expect("set nested SUBTOTAL formula");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        14,
+                        1,
+                        vec![
+                            OmValue::Text("=SUBTOTAL(9,A1:A6)".to_string()),
+                            OmValue::Text("=SUBTOTAL(109,A1:A2)".to_string()),
+                            OmValue::Text("=SUBTOTAL(1,A1:A2)".to_string()),
+                            OmValue::Text("=SUBTOTAL(2,A1:A6)".to_string()),
+                            OmValue::Text("=SUBTOTAL(3,A1:A6)".to_string()),
+                            OmValue::Text("=SUBTOTAL(4,A1:A6)".to_string()),
+                            OmValue::Text("=SUBTOTAL(5,A1:A6)".to_string()),
+                            OmValue::Text("=SUBTOTAL(6,A1:A2)".to_string()),
+                            OmValue::Text("=SUBTOTAL(7,A1:A2)".to_string()),
+                            OmValue::Text("=SUBTOTAL(8,A1:A2)".to_string()),
+                            OmValue::Text("=SUBTOTAL(10,A1:A2)".to_string()),
+                            OmValue::Text("=SUBTOTAL(11,A1:A2)".to_string()),
+                            OmValue::Text("=SUBTOTAL(12,A1:A2)".to_string()),
+                            OmValue::Text("=SUBTOTAL(9, 5, A1:A2)".to_string()),
+                        ],
+                    )
+                    .expect("SUBTOTAL formulas"),
+                ),
+                &[],
+            )
+            .expect("set SUBTOTAL formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("SUBTOTAL values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected SUBTOTAL value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(30.0),
+                OmValue::Number(30.0),
+                OmValue::Number(15.0),
+                OmValue::Number(2.0),
+                OmValue::Number(4.0),
+                OmValue::Number(20.0),
+                OmValue::Number(10.0),
+                OmValue::Number(200.0),
+                OmValue::Number(50.0_f64.sqrt()),
+                OmValue::Number(5.0),
+                OmValue::Number(50.0),
+                OmValue::Number(25.0),
+                OmValue::Error(CellError::Value),
+                OmValue::Number(35.0),
             ]
         );
     }
