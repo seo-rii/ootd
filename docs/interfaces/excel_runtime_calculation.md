@@ -52,6 +52,7 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `MULTINOMIAL`
 - `POWER`
 - `SQRT`
+- `SQRTPI`
 - `EXP`
 - `LN`
 - `LOG`
@@ -107,12 +108,15 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `OCT2BIN`
 - `OCT2DEC`
 - `OCT2HEX`
+- `FISHER`
+- `FISHERINV`
 
 Roman numeral notes:
 
 - `ROMAN` supports classic and simplified forms `0` through `4`; omitted form and `TRUE` use classic form, while `FALSE` uses simplified form.
 - `ARABIC` accepts classic and simplified Roman numerals, ignores case and surrounding spaces, returns `0` for empty text, and supports a leading negative sign.
 - `SERIESSUM` supports scalar or rectangular coefficient inputs and ignores non-numeric cells in coefficient ranges.
+- `FISHER` and `FISHERINV` cover the Fisher transformation and its inverse for scalar numeric values.
 
 ### Financial helpers
 

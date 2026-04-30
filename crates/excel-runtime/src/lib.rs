@@ -8702,6 +8702,8 @@ enum FormulaScalarFunction {
     Exp,
     Fact,
     FactDouble,
+    Fisher,
+    FisherInv,
     Floor,
     FloorMath,
     FloorPrecise,
@@ -8749,6 +8751,7 @@ enum FormulaScalarFunction {
     Sin,
     Sinh,
     Sqrt,
+    SqrtPi,
     Second,
     Syd,
     Tan,
@@ -8878,6 +8881,10 @@ impl FormulaScalarFunction {
             Some(Self::Fact)
         } else if name.eq_ignore_ascii_case("FACTDOUBLE") {
             Some(Self::FactDouble)
+        } else if name.eq_ignore_ascii_case("FISHER") {
+            Some(Self::Fisher)
+        } else if name.eq_ignore_ascii_case("FISHERINV") {
+            Some(Self::FisherInv)
         } else if name.eq_ignore_ascii_case("FLOOR") {
             Some(Self::Floor)
         } else if name.eq_ignore_ascii_case("FLOOR.MATH") {
@@ -8972,6 +8979,8 @@ impl FormulaScalarFunction {
             Some(Self::Sinh)
         } else if name.eq_ignore_ascii_case("SQRT") {
             Some(Self::Sqrt)
+        } else if name.eq_ignore_ascii_case("SQRTPI") {
+            Some(Self::SqrtPi)
         } else if name.eq_ignore_ascii_case("SECOND") {
             Some(Self::Second)
         } else if name.eq_ignore_ascii_case("SYD") {
@@ -10505,6 +10514,21 @@ impl FormulaScalarFunction {
                 }
                 Ok(total)
             }
+            FormulaScalarFunction::Fisher => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if *value <= -1.0 || *value >= 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                checked_numeric_result(0.5 * ((1.0 + *value) / (1.0 - *value)).ln())
+            }
+            FormulaScalarFunction::FisherInv => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                checked_numeric_result(value.tanh())
+            }
             FormulaScalarFunction::Floor => {
                 let [number, significance] = args else {
                     return Err(FormulaEvalError::Value);
@@ -11048,6 +11072,15 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Num);
                 }
                 Ok(value.sqrt())
+            }
+            FormulaScalarFunction::SqrtPi => {
+                let [value] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if *value < 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                checked_numeric_result((*value * std::f64::consts::PI).sqrt())
             }
             FormulaScalarFunction::Second => {
                 let [serial] = args else {
@@ -24382,6 +24415,96 @@ mod tests {
                 OmValue::Number(-1.3),
                 OmValue::Number(-1.2),
                 OmValue::Number(130.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_scalar_statistical_math_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A10".to_string())],
+                )
+                .expect("Range(A1:A10)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        10,
+                        1,
+                        vec![
+                            OmValue::Text("=SQRTPI(1)".to_string()),
+                            OmValue::Text("=SQRTPI(2)".to_string()),
+                            OmValue::Text("=FISHER(0.75)".to_string()),
+                            OmValue::Text("=FISHERINV(0.972955)".to_string()),
+                            OmValue::Text("=FISHERINV(FISHER(0.5))".to_string()),
+                            OmValue::Text("=FISHER(0)".to_string()),
+                            OmValue::Text("=SQRTPI(-1)".to_string()),
+                            OmValue::Text("=FISHER(1)".to_string()),
+                            OmValue::Text("=FISHER(-1)".to_string()),
+                            OmValue::Text("=FISHER(0.5, 1)".to_string()),
+                        ],
+                    )
+                    .expect("scalar statistical math formulas"),
+                ),
+                &[],
+            )
+            .expect("set scalar statistical math formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("scalar statistical math values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected scalar statistical math value array");
+        };
+        let expected_numbers = [
+            std::f64::consts::PI.sqrt(),
+            (2.0 * std::f64::consts::PI).sqrt(),
+            0.9729550745276566,
+            0.972955_f64.tanh(),
+            0.5,
+            0.0,
+        ];
+        for (index, expected) in expected_numbers.into_iter().enumerate() {
+            let number = expect_number(values.values[index].clone());
+            assert!(
+                (number - expected).abs() < 1e-8,
+                "scalar statistical math result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            &values.values[6..],
+            &[
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
             ]
         );
     }
