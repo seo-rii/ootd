@@ -8663,6 +8663,10 @@ enum FormulaScalarFunction {
     Atan,
     Atan2,
     Atanh,
+    BesselI,
+    BesselJ,
+    BesselK,
+    BesselY,
     BinomDist,
     BinomDistRange,
     BinomInv,
@@ -8836,6 +8840,14 @@ impl FormulaScalarFunction {
             Some(Self::Atan2)
         } else if name.eq_ignore_ascii_case("ATANH") {
             Some(Self::Atanh)
+        } else if name.eq_ignore_ascii_case("BESSELI") {
+            Some(Self::BesselI)
+        } else if name.eq_ignore_ascii_case("BESSELJ") {
+            Some(Self::BesselJ)
+        } else if name.eq_ignore_ascii_case("BESSELK") {
+            Some(Self::BesselK)
+        } else if name.eq_ignore_ascii_case("BESSELY") {
+            Some(Self::BesselY)
         } else if name.eq_ignore_ascii_case("BINOM.DIST") || name.eq_ignore_ascii_case("BINOMDIST")
         {
             Some(Self::BinomDist)
@@ -10382,6 +10394,30 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Num);
                 }
                 checked_numeric_result(value.atanh())
+            }
+            FormulaScalarFunction::BesselI => {
+                let [value, order] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                checked_numeric_result(formula_bessel_i(*value, formula_bessel_order(*order)?)?)
+            }
+            FormulaScalarFunction::BesselJ => {
+                let [value, order] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                checked_numeric_result(formula_bessel_j(*value, formula_bessel_order(*order)?)?)
+            }
+            FormulaScalarFunction::BesselK => {
+                let [value, order] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                checked_numeric_result(formula_bessel_k(*value, formula_bessel_order(*order)?)?)
+            }
+            FormulaScalarFunction::BesselY => {
+                let [value, order] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                checked_numeric_result(formula_bessel_y(*value, formula_bessel_order(*order)?)?)
             }
             FormulaScalarFunction::BinomDist => {
                 let [number_s, trials, probability, cumulative] = args else {
@@ -12831,6 +12867,392 @@ fn formula_complex_sqrt(
     let imaginary_sign = if value.imaginary < 0.0 { -1.0 } else { 1.0 };
     let imaginary = imaginary_sign * ((magnitude - value.real) / 2.0).sqrt();
     formula_complex_number(real, imaginary, value.suffix)
+}
+
+fn formula_bessel_order(value: f64) -> Result<usize, FormulaEvalError> {
+    if !value.is_finite() {
+        return Err(FormulaEvalError::Value);
+    }
+    let value = value.trunc();
+    if value < 0.0 {
+        return Err(FormulaEvalError::Num);
+    }
+    if value > 10_000.0 {
+        return Err(FormulaEvalError::Num);
+    }
+    Ok(value as usize)
+}
+
+fn formula_bessel_j0(value: f64) -> f64 {
+    let absolute = value.abs();
+    if absolute < 8.0 {
+        let y = value * value;
+        let numerator = 57_568_490_574.0
+            + y * (-13_362_590_354.0
+                + y * (651_619_640.7
+                    + y * (-11_214_424.18 + y * (77_392.33017 + y * -184.9052456))));
+        let denominator = 57_568_490_411.0
+            + y * (1_029_532_985.0
+                + y * (9_494_680.718 + y * (59_272.64853 + y * (267.8532712 + y))));
+        numerator / denominator
+    } else {
+        let z = 8.0 / absolute;
+        let y = z * z;
+        let angle = absolute - std::f64::consts::FRAC_PI_4;
+        let first = 1.0
+            + y * (-0.001098628627
+                + y * (0.00002734510407 + y * (-0.000002073370639 + y * 0.0000002093887211)));
+        let second = -0.01562499995
+            + y * (0.0001430488765
+                + y * (-0.000006911147651 + y * (0.0000007621095161 - y * 0.0000000934945152)));
+        (0.636619772 / absolute).sqrt() * (angle.cos() * first - z * angle.sin() * second)
+    }
+}
+
+fn formula_bessel_j1(value: f64) -> f64 {
+    let absolute = value.abs();
+    let result = if absolute < 8.0 {
+        let y = value * value;
+        let numerator = absolute
+            * (72_362_614_232.0
+                + y * (-7_895_059_235.0
+                    + y * (242_396_853.1
+                        + y * (-2_972_611.439 + y * (15_704.48260 + y * -30.16036606)))));
+        let denominator = 144_725_228_442.0
+            + y * (2_300_535_178.0
+                + y * (18_583_304.74 + y * (99_447.43394 + y * (376.9991397 + y))));
+        numerator / denominator
+    } else {
+        let z = 8.0 / absolute;
+        let y = z * z;
+        let angle = absolute - 3.0 * std::f64::consts::FRAC_PI_4;
+        let first = 1.0
+            + y * (0.00183105
+                + y * (-0.00003516396496 + y * (0.000002457520174 - y * 0.000000240337019)));
+        let second = 0.04687499995
+            + y * (-0.0002002690873
+                + y * (0.000008449199096 + y * (-0.00000088228987 + y * 0.000000105787412)));
+        (0.636619772 / absolute).sqrt() * (angle.cos() * first - z * angle.sin() * second)
+    };
+    if value < 0.0 { -result } else { result }
+}
+
+fn formula_bessel_y0(value: f64) -> Result<f64, FormulaEvalError> {
+    if value <= 0.0 || !value.is_finite() {
+        return Err(if value.is_finite() {
+            FormulaEvalError::Num
+        } else {
+            FormulaEvalError::Value
+        });
+    }
+    if value < 8.0 {
+        let y = value * value;
+        let numerator = -2_957_821_389.0
+            + y * (7_062_834_065.0
+                + y * (-512_359_803.6
+                    + y * (10_879_881.29 + y * (-86_327.92757 + y * 228.4622733))));
+        let denominator = 40_076_544_269.0
+            + y * (745_249_964.8
+                + y * (7_189_466.438 + y * (47_447.26470 + y * (226.1030244 + y))));
+        Ok(numerator / denominator + 0.636619772 * formula_bessel_j0(value) * value.ln())
+    } else {
+        let z = 8.0 / value;
+        let y = z * z;
+        let angle = value - std::f64::consts::FRAC_PI_4;
+        let first = 1.0
+            + y * (-0.001098628627
+                + y * (0.00002734510407 + y * (-0.000002073370639 + y * 0.0000002093887211)));
+        let second = -0.01562499995
+            + y * (0.0001430488765
+                + y * (-0.000006911147651 + y * (0.0000007621095161 - y * 0.0000000934945152)));
+        Ok((0.636619772 / value).sqrt() * (angle.sin() * first + z * angle.cos() * second))
+    }
+}
+
+fn formula_bessel_y1(value: f64) -> Result<f64, FormulaEvalError> {
+    if value <= 0.0 || !value.is_finite() {
+        return Err(if value.is_finite() {
+            FormulaEvalError::Num
+        } else {
+            FormulaEvalError::Value
+        });
+    }
+    if value < 8.0 {
+        let y = value * value;
+        let numerator = value
+            * (-4_900_604_943_000.0
+                + y * (1_275_274_390_000.0
+                    + y * (-51_534_381_390.0
+                        + y * (734_926_455.1 + y * (-4_237_922.726 + y * 8_511.937935)))));
+        let denominator = 24_995_805_700_000.0
+            + y * (424_441_966_400.0
+                + y * (3_733_650_367.0
+                    + y * (22_459_040.02 + y * (102_042.6050 + y * (354.9632885 + y)))));
+        Ok(numerator / denominator
+            + 0.636619772 * (formula_bessel_j1(value) * value.ln() - 1.0 / value))
+    } else {
+        let z = 8.0 / value;
+        let y = z * z;
+        let angle = value - 3.0 * std::f64::consts::FRAC_PI_4;
+        let first = 1.0
+            + y * (0.00183105
+                + y * (-0.00003516396496 + y * (0.000002457520174 - y * 0.000000240337019)));
+        let second = 0.04687499995
+            + y * (-0.0002002690873
+                + y * (0.000008449199096 + y * (-0.00000088228987 + y * 0.000000105787412)));
+        Ok((0.636619772 / value).sqrt() * (angle.sin() * first + z * angle.cos() * second))
+    }
+}
+
+fn formula_bessel_i0(value: f64) -> f64 {
+    let absolute = value.abs();
+    if absolute < 3.75 {
+        let y = (value / 3.75).powi(2);
+        1.0 + y
+            * (3.5156229
+                + y * (3.0899424
+                    + y * (1.2067492 + y * (0.2659732 + y * (0.0360768 + y * 0.0045813)))))
+    } else {
+        let y = 3.75 / absolute;
+        absolute.exp() / absolute.sqrt()
+            * (0.39894228
+                + y * (0.01328592
+                    + y * (0.00225319
+                        + y * (-0.00157565
+                            + y * (0.00916281
+                                + y * (-0.02057706
+                                    + y * (0.02635537 + y * (-0.01647633 + y * 0.00392377))))))))
+    }
+}
+
+fn formula_bessel_i1(value: f64) -> f64 {
+    let absolute = value.abs();
+    let result = if absolute < 3.75 {
+        let y = (value / 3.75).powi(2);
+        absolute
+            * (0.5
+                + y * (0.87890594
+                    + y * (0.51498869
+                        + y * (0.15084934 + y * (0.02658733 + y * (0.00301532 + y * 0.00032411))))))
+    } else {
+        let y = 3.75 / absolute;
+        absolute.exp() / absolute.sqrt()
+            * (0.39894228
+                + y * (-0.03988024
+                    + y * (-0.00362018
+                        + y * (0.00163801
+                            + y * (-0.01031555
+                                + y * (0.02282967
+                                    + y * (-0.02895312 + y * (0.01787654 - y * 0.00420059))))))))
+    };
+    if value < 0.0 { -result } else { result }
+}
+
+fn formula_bessel_k0(value: f64) -> Result<f64, FormulaEvalError> {
+    if value <= 0.0 || !value.is_finite() {
+        return Err(if value.is_finite() {
+            FormulaEvalError::Num
+        } else {
+            FormulaEvalError::Value
+        });
+    }
+    if value <= 2.0 {
+        let y = value * value / 4.0;
+        Ok(-(value / 2.0).ln() * formula_bessel_i0(value)
+            + (-0.57721566
+                + y * (0.42278420
+                    + y * (0.23069756
+                        + y * (0.03488590
+                            + y * (0.00262698 + y * (0.00010750 + y * 0.00000740)))))))
+    } else {
+        let y = 2.0 / value;
+        Ok((-value).exp() / value.sqrt()
+            * (1.25331414
+                + y * (-0.07832358
+                    + y * (0.02189568
+                        + y * (-0.01062446
+                            + y * (0.00587872 + y * (-0.00251540 + y * 0.00053208)))))))
+    }
+}
+
+fn formula_bessel_k1(value: f64) -> Result<f64, FormulaEvalError> {
+    if value <= 0.0 || !value.is_finite() {
+        return Err(if value.is_finite() {
+            FormulaEvalError::Num
+        } else {
+            FormulaEvalError::Value
+        });
+    }
+    if value <= 2.0 {
+        let y = value * value / 4.0;
+        Ok((value / 2.0).ln() * formula_bessel_i1(value)
+            + (1.0 / value)
+                * (1.0
+                    + y * (0.15443144
+                        + y * (-0.67278579
+                            + y * (-0.18156897
+                                + y * (-0.01919402 + y * (-0.00110404 - y * 0.00004686)))))))
+    } else {
+        let y = 2.0 / value;
+        Ok((-value).exp() / value.sqrt()
+            * (1.25331414
+                + y * (0.23498619
+                    + y * (-0.03655620
+                        + y * (0.01504268
+                            + y * (-0.00780353 + y * (0.00325614 - y * 0.00068245)))))))
+    }
+}
+
+fn formula_bessel_i(value: f64, order: usize) -> Result<f64, FormulaEvalError> {
+    if !value.is_finite() {
+        return Err(FormulaEvalError::Value);
+    }
+    if order == 0 {
+        return Ok(formula_bessel_i0(value));
+    }
+    if order == 1 {
+        return Ok(formula_bessel_i1(value));
+    }
+    let absolute = value.abs();
+    if absolute == 0.0 {
+        return Ok(0.0);
+    }
+    const BIGNO: f64 = 1e100;
+    const BIGNI: f64 = 1e-100;
+    let tox = 2.0 / absolute;
+    let mut bip = 0.0;
+    let mut bi = 1.0;
+    let mut answer = 0.0;
+    let m = 2 * (order + (40.0 * order as f64).sqrt() as usize);
+    for j in (1..=m).rev() {
+        let bim = bip + j as f64 * tox * bi;
+        bip = bi;
+        bi = bim;
+        if bi.abs() > BIGNO {
+            answer *= BIGNI;
+            bi *= BIGNI;
+            bip *= BIGNI;
+        }
+        if j == order {
+            answer = bip;
+        }
+    }
+    answer *= formula_bessel_i0(absolute) / bi;
+    if value < 0.0 && order % 2 == 1 {
+        answer = -answer;
+    }
+    if answer.is_finite() {
+        Ok(answer)
+    } else {
+        Err(FormulaEvalError::Num)
+    }
+}
+
+fn formula_bessel_j(value: f64, order: usize) -> Result<f64, FormulaEvalError> {
+    if !value.is_finite() {
+        return Err(FormulaEvalError::Value);
+    }
+    if order == 0 {
+        return Ok(formula_bessel_j0(value));
+    }
+    if order == 1 {
+        return Ok(formula_bessel_j1(value));
+    }
+    let absolute = value.abs();
+    if absolute == 0.0 {
+        return Ok(0.0);
+    }
+    let tox = 2.0 / absolute;
+    let mut answer;
+    if absolute > order as f64 {
+        let mut previous = formula_bessel_j0(absolute);
+        let mut current = formula_bessel_j1(absolute);
+        for j in 1..order {
+            let next = j as f64 * tox * current - previous;
+            previous = current;
+            current = next;
+        }
+        answer = current;
+    } else {
+        const BIGNO: f64 = 1e100;
+        const BIGNI: f64 = 1e-100;
+        let mut next = 0.0;
+        let mut current = 1.0;
+        let mut sum = 0.0;
+        let mut include_in_sum = false;
+        answer = 0.0;
+        let m = 2 * ((order + (40.0 * order as f64).sqrt() as usize) / 2);
+        for j in (1..=m).rev() {
+            let previous = j as f64 * tox * current - next;
+            next = current;
+            current = previous;
+            if current.abs() > BIGNO {
+                answer *= BIGNI;
+                current *= BIGNI;
+                next *= BIGNI;
+                sum *= BIGNI;
+            }
+            if include_in_sum {
+                sum += current;
+            }
+            include_in_sum = !include_in_sum;
+            if j == order {
+                answer = next;
+            }
+        }
+        sum = 2.0 * sum - current;
+        answer /= sum;
+    }
+    if value < 0.0 && order % 2 == 1 {
+        answer = -answer;
+    }
+    if answer.is_finite() {
+        Ok(answer)
+    } else {
+        Err(FormulaEvalError::Num)
+    }
+}
+
+fn formula_bessel_k(value: f64, order: usize) -> Result<f64, FormulaEvalError> {
+    if order == 0 {
+        return formula_bessel_k0(value);
+    }
+    if order == 1 {
+        return formula_bessel_k1(value);
+    }
+    let mut previous = formula_bessel_k0(value)?;
+    let mut current = formula_bessel_k1(value)?;
+    let tox = 2.0 / value;
+    for j in 1..order {
+        let next = previous + j as f64 * tox * current;
+        previous = current;
+        current = next;
+        if !current.is_finite() {
+            return Err(FormulaEvalError::Num);
+        }
+    }
+    Ok(current)
+}
+
+fn formula_bessel_y(value: f64, order: usize) -> Result<f64, FormulaEvalError> {
+    if order == 0 {
+        return formula_bessel_y0(value);
+    }
+    if order == 1 {
+        return formula_bessel_y1(value);
+    }
+    let mut previous = formula_bessel_y0(value)?;
+    let mut current = formula_bessel_y1(value)?;
+    let tox = 2.0 / value;
+    for j in 1..order {
+        let next = j as f64 * tox * current - previous;
+        previous = current;
+        current = next;
+        if !current.is_finite() {
+            return Err(FormulaEvalError::Num);
+        }
+    }
+    Ok(current)
 }
 
 fn formula_numbervalue(
@@ -27843,6 +28265,126 @@ mod tests {
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Num),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_bessel_engineering_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A25".to_string())],
+                )
+                .expect("Range(A1:A25)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        25,
+                        1,
+                        vec![
+                            OmValue::Text("=BESSELI(1,0)".to_string()),
+                            OmValue::Text("=BESSELI(1,1)".to_string()),
+                            OmValue::Text("=BESSELI(2.5,2)".to_string()),
+                            OmValue::Text("=BESSELI(5,3)".to_string()),
+                            OmValue::Text("=BESSELI(-1,1)".to_string()),
+                            OmValue::Text("=BESSELI(-1,2)".to_string()),
+                            OmValue::Text("=BESSELJ(1,0)".to_string()),
+                            OmValue::Text("=BESSELJ(1,1)".to_string()),
+                            OmValue::Text("=BESSELJ(2.5,2)".to_string()),
+                            OmValue::Text("=BESSELJ(5,3)".to_string()),
+                            OmValue::Text("=BESSELJ(-1,1)".to_string()),
+                            OmValue::Text("=BESSELJ(-1,2)".to_string()),
+                            OmValue::Text("=BESSELK(1,0)".to_string()),
+                            OmValue::Text("=BESSELK(1,1)".to_string()),
+                            OmValue::Text("=BESSELK(2.5,2)".to_string()),
+                            OmValue::Text("=BESSELK(5,3)".to_string()),
+                            OmValue::Text("=BESSELY(1,0)".to_string()),
+                            OmValue::Text("=BESSELY(1,1)".to_string()),
+                            OmValue::Text("=BESSELY(2.5,2)".to_string()),
+                            OmValue::Text("=BESSELY(5,3)".to_string()),
+                            OmValue::Text("=BESSELJ(2.5,2.9)".to_string()),
+                            OmValue::Text("=BESSELI(1,-1)".to_string()),
+                            OmValue::Text("=BESSELK(0,0)".to_string()),
+                            OmValue::Text("=BESSELY(-1,0)".to_string()),
+                            OmValue::Text("=BESSELJ(1)".to_string()),
+                        ],
+                    )
+                    .expect("Bessel engineering formulas"),
+                ),
+                &[],
+            )
+            .expect("set Bessel engineering formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("Bessel engineering values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected Bessel engineering value array");
+        };
+        let expected_numbers = [
+            1.2660658777520083,
+            0.565159103992485,
+            1.2764661478191643,
+            10.331150169151138,
+            -0.565159103992485,
+            0.13574766976703828,
+            0.7651976865579666,
+            0.4400505857449335,
+            0.4460590584396172,
+            0.364831230613667,
+            -0.4400505857449335,
+            0.11490348493190048,
+            0.42102443824070833,
+            0.6019072301972346,
+            0.12146020627856384,
+            0.008291768415230932,
+            0.08825696421567696,
+            -0.7812128213002887,
+            -0.38133584924180325,
+            0.14626716269319277,
+            0.4460590584396172,
+        ];
+        for (index, expected) in expected_numbers.into_iter().enumerate() {
+            let number = expect_number(values.values[index].clone());
+            assert!(
+                (number - expected).abs() < 1e-6,
+                "Bessel engineering result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            &values.values[21..],
+            &[
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
             ]
         );
     }

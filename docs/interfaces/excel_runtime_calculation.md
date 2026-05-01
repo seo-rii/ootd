@@ -101,6 +101,10 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `DECIMAL`
 - `ARABIC`
 - `ROMAN`
+- `BESSELI`
+- `BESSELJ`
+- `BESSELK`
+- `BESSELY`
 - `BIN2DEC`
 - `BIN2HEX`
 - `BIN2OCT`
@@ -183,6 +187,7 @@ Roman numeral notes:
 - `LOGNORM.INV`, `NORM.INV`, and `NORM.S.INV` cover scalar inverse cumulative distribution calculations and include the legacy `LOGINV`, `NORMINV`, and `NORMSINV` aliases.
 - `GAUSS`, `PHI`, and `STANDARDIZE` cover scalar standard-normal helpers.
 - Complex engineering helpers parse Excel-style text values with lowercase `i` or `j` suffixes; text-returning `IM*` helpers preserve the suffix when the result includes an imaginary component.
+- `BESSELI`, `BESSELJ`, `BESSELK`, and `BESSELY` support non-negative integer orders, truncating fractional order arguments to match Excel's scalar argument handling.
 
 ### Financial helpers
 
