@@ -113,6 +113,32 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `OCT2BIN`
 - `OCT2DEC`
 - `OCT2HEX`
+- `COMPLEX`
+- `IMABS`
+- `IMAGINARY`
+- `IMARGUMENT`
+- `IMCONJUGATE`
+- `IMCOS`
+- `IMCOSH`
+- `IMCOT`
+- `IMCSC`
+- `IMCSCH`
+- `IMDIV`
+- `IMEXP`
+- `IMLN`
+- `IMLOG10`
+- `IMLOG2`
+- `IMPOWER`
+- `IMPRODUCT`
+- `IMREAL`
+- `IMSEC`
+- `IMSECH`
+- `IMSIN`
+- `IMSINH`
+- `IMSQRT`
+- `IMSUB`
+- `IMSUM`
+- `IMTAN`
 - `BINOM.DIST` / `BINOMDIST`
 - `BINOM.DIST.RANGE`
 - `BINOM.INV` / `CRITBINOM`
@@ -156,6 +182,7 @@ Roman numeral notes:
 - `GAMMA`, `CONFIDENCE.NORM`, `FORECAST`, and `STEYX` cover scalar gamma, confidence interval, and linear regression calculations.
 - `LOGNORM.INV`, `NORM.INV`, and `NORM.S.INV` cover scalar inverse cumulative distribution calculations and include the legacy `LOGINV`, `NORMINV`, and `NORMSINV` aliases.
 - `GAUSS`, `PHI`, and `STANDARDIZE` cover scalar standard-normal helpers.
+- Complex engineering helpers parse Excel-style text values with lowercase `i` or `j` suffixes; text-returning `IM*` helpers preserve the suffix when the result includes an imaginary component.
 
 ### Financial helpers
 

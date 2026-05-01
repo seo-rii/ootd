@@ -12477,6 +12477,7 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("BIN2OCT")
         || name.eq_ignore_ascii_case("CHAR")
         || name.eq_ignore_ascii_case("CLEAN")
+        || name.eq_ignore_ascii_case("COMPLEX")
         || name.eq_ignore_ascii_case("DEC2BIN")
         || name.eq_ignore_ascii_case("DEC2HEX")
         || name.eq_ignore_ascii_case("DEC2OCT")
@@ -12484,6 +12485,27 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("FIXED")
         || name.eq_ignore_ascii_case("HEX2BIN")
         || name.eq_ignore_ascii_case("HEX2OCT")
+        || name.eq_ignore_ascii_case("IMCONJUGATE")
+        || name.eq_ignore_ascii_case("IMCOS")
+        || name.eq_ignore_ascii_case("IMCOSH")
+        || name.eq_ignore_ascii_case("IMCOT")
+        || name.eq_ignore_ascii_case("IMCSC")
+        || name.eq_ignore_ascii_case("IMCSCH")
+        || name.eq_ignore_ascii_case("IMDIV")
+        || name.eq_ignore_ascii_case("IMEXP")
+        || name.eq_ignore_ascii_case("IMLN")
+        || name.eq_ignore_ascii_case("IMLOG10")
+        || name.eq_ignore_ascii_case("IMLOG2")
+        || name.eq_ignore_ascii_case("IMPOWER")
+        || name.eq_ignore_ascii_case("IMPRODUCT")
+        || name.eq_ignore_ascii_case("IMSEC")
+        || name.eq_ignore_ascii_case("IMSECH")
+        || name.eq_ignore_ascii_case("IMSIN")
+        || name.eq_ignore_ascii_case("IMSINH")
+        || name.eq_ignore_ascii_case("IMSQRT")
+        || name.eq_ignore_ascii_case("IMSUB")
+        || name.eq_ignore_ascii_case("IMSUM")
+        || name.eq_ignore_ascii_case("IMTAN")
         || name.eq_ignore_ascii_case("OCT2BIN")
         || name.eq_ignore_ascii_case("OCT2HEX")
         || name.eq_ignore_ascii_case("ROMAN")
@@ -12521,6 +12543,294 @@ fn formula_text_from_number(value: f64) -> Result<String, FormulaEvalError> {
         return Ok((value as i64).to_string());
     }
     Ok(value.to_string())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct FormulaComplexNumber {
+    real: f64,
+    imaginary: f64,
+    suffix: Option<char>,
+}
+
+fn formula_complex_clean_component(value: f64) -> f64 {
+    if value.abs() < 1e-12 { 0.0 } else { value }
+}
+
+fn formula_complex_number(
+    real: f64,
+    imaginary: f64,
+    suffix: Option<char>,
+) -> Result<FormulaComplexNumber, FormulaEvalError> {
+    if !real.is_finite() || !imaginary.is_finite() {
+        return Err(FormulaEvalError::Num);
+    }
+    if suffix.is_some_and(|suffix| !matches!(suffix, 'i' | 'j')) {
+        return Err(FormulaEvalError::Value);
+    }
+    Ok(FormulaComplexNumber {
+        real: formula_complex_clean_component(real),
+        imaginary: formula_complex_clean_component(imaginary),
+        suffix,
+    })
+}
+
+fn formula_complex_suffix(text: &str) -> Result<char, FormulaEvalError> {
+    match text {
+        "i" => Ok('i'),
+        "j" => Ok('j'),
+        _ => Err(FormulaEvalError::Value),
+    }
+}
+
+fn formula_complex_component(text: &str) -> Result<f64, FormulaEvalError> {
+    let value = text.parse::<f64>().map_err(|_| FormulaEvalError::Value)?;
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(FormulaEvalError::Num)
+    }
+}
+
+fn formula_complex_imaginary_coefficient(text: &str) -> Result<f64, FormulaEvalError> {
+    match text {
+        "" | "+" => Ok(1.0),
+        "-" => Ok(-1.0),
+        _ => formula_complex_component(text),
+    }
+}
+
+fn formula_complex_split_imaginary(text: &str) -> Option<usize> {
+    let mut split = None;
+    for (index, ch) in text.char_indices().skip(1) {
+        if matches!(ch, '+' | '-')
+            && !text[..index]
+                .chars()
+                .next_back()
+                .is_some_and(|previous| matches!(previous, 'e' | 'E'))
+        {
+            split = Some(index);
+        }
+    }
+    split
+}
+
+fn formula_complex_from_text(text: &str) -> Result<FormulaComplexNumber, FormulaEvalError> {
+    let text = text.trim();
+    if text.is_empty() || text.chars().any(char::is_whitespace) {
+        return Err(FormulaEvalError::Value);
+    }
+    if text.ends_with('I') || text.ends_with('J') {
+        return Err(FormulaEvalError::Value);
+    }
+    let Some(suffix) = text.chars().last().filter(|ch| matches!(ch, 'i' | 'j')) else {
+        return formula_complex_number(formula_complex_component(text)?, 0.0, None);
+    };
+    let value = &text[..text.len() - suffix.len_utf8()];
+    let (real, imaginary) = if let Some(split) = formula_complex_split_imaginary(value) {
+        (
+            formula_complex_component(&value[..split])?,
+            formula_complex_imaginary_coefficient(&value[split..])?,
+        )
+    } else {
+        (0.0, formula_complex_imaginary_coefficient(value)?)
+    };
+    formula_complex_number(real, imaginary, Some(suffix))
+}
+
+fn formula_complex_format(value: FormulaComplexNumber) -> Result<String, FormulaEvalError> {
+    let real = formula_complex_clean_component(value.real);
+    let imaginary = formula_complex_clean_component(value.imaginary);
+    if imaginary == 0.0 {
+        return formula_text_from_number(real);
+    }
+    let suffix = value.suffix.unwrap_or('i');
+    let imaginary_text = |magnitude: f64| -> Result<String, FormulaEvalError> {
+        if magnitude == 1.0 {
+            Ok(suffix.to_string())
+        } else {
+            Ok(format!(
+                "{}{}",
+                formula_text_from_number(magnitude)?,
+                suffix
+            ))
+        }
+    };
+    if real == 0.0 {
+        if imaginary < 0.0 {
+            return Ok(format!("-{}", imaginary_text(-imaginary)?));
+        }
+        return imaginary_text(imaginary);
+    }
+    let sign = if imaginary < 0.0 { "-" } else { "+" };
+    Ok(format!(
+        "{}{}{}",
+        formula_text_from_number(real)?,
+        sign,
+        imaginary_text(imaginary.abs())?
+    ))
+}
+
+fn formula_complex_join_suffix(
+    left: FormulaComplexNumber,
+    right: FormulaComplexNumber,
+) -> Result<Option<char>, FormulaEvalError> {
+    match (left.suffix, right.suffix) {
+        (Some(left), Some(right)) if left != right => Err(FormulaEvalError::Value),
+        (Some(suffix), _) | (_, Some(suffix)) => Ok(Some(suffix)),
+        (None, None) => Ok(None),
+    }
+}
+
+fn formula_complex_add(
+    left: FormulaComplexNumber,
+    right: FormulaComplexNumber,
+) -> Result<FormulaComplexNumber, FormulaEvalError> {
+    formula_complex_number(
+        left.real + right.real,
+        left.imaginary + right.imaginary,
+        formula_complex_join_suffix(left, right)?,
+    )
+}
+
+fn formula_complex_subtract(
+    left: FormulaComplexNumber,
+    right: FormulaComplexNumber,
+) -> Result<FormulaComplexNumber, FormulaEvalError> {
+    formula_complex_number(
+        left.real - right.real,
+        left.imaginary - right.imaginary,
+        formula_complex_join_suffix(left, right)?,
+    )
+}
+
+fn formula_complex_multiply(
+    left: FormulaComplexNumber,
+    right: FormulaComplexNumber,
+) -> Result<FormulaComplexNumber, FormulaEvalError> {
+    formula_complex_number(
+        left.real * right.real - left.imaginary * right.imaginary,
+        left.real * right.imaginary + left.imaginary * right.real,
+        formula_complex_join_suffix(left, right)?,
+    )
+}
+
+fn formula_complex_divide(
+    left: FormulaComplexNumber,
+    right: FormulaComplexNumber,
+) -> Result<FormulaComplexNumber, FormulaEvalError> {
+    let denominator = right.real * right.real + right.imaginary * right.imaginary;
+    if denominator == 0.0 {
+        return Err(FormulaEvalError::Num);
+    }
+    formula_complex_number(
+        (left.real * right.real + left.imaginary * right.imaginary) / denominator,
+        (left.imaginary * right.real - left.real * right.imaginary) / denominator,
+        formula_complex_join_suffix(left, right)?,
+    )
+}
+
+fn formula_complex_reciprocal(
+    value: FormulaComplexNumber,
+) -> Result<FormulaComplexNumber, FormulaEvalError> {
+    formula_complex_divide(formula_complex_number(1.0, 0.0, value.suffix)?, value)
+}
+
+fn formula_complex_exp(
+    value: FormulaComplexNumber,
+) -> Result<FormulaComplexNumber, FormulaEvalError> {
+    let magnitude = value.real.exp();
+    formula_complex_number(
+        magnitude * value.imaginary.cos(),
+        magnitude * value.imaginary.sin(),
+        value.suffix,
+    )
+}
+
+fn formula_complex_ln(
+    value: FormulaComplexNumber,
+) -> Result<FormulaComplexNumber, FormulaEvalError> {
+    let magnitude = value.real.hypot(value.imaginary);
+    if magnitude == 0.0 {
+        return Err(FormulaEvalError::Num);
+    }
+    formula_complex_number(
+        magnitude.ln(),
+        value.imaginary.atan2(value.real),
+        value.suffix,
+    )
+}
+
+fn formula_complex_power(
+    value: FormulaComplexNumber,
+    power: f64,
+) -> Result<FormulaComplexNumber, FormulaEvalError> {
+    if !power.is_finite() {
+        return Err(FormulaEvalError::Value);
+    }
+    let magnitude = value.real.hypot(value.imaginary);
+    if magnitude == 0.0 {
+        if power <= 0.0 {
+            return Err(FormulaEvalError::Num);
+        }
+        return formula_complex_number(0.0, 0.0, value.suffix);
+    }
+    let powered_magnitude = magnitude.powf(power);
+    let argument = value.imaginary.atan2(value.real) * power;
+    formula_complex_number(
+        powered_magnitude * argument.cos(),
+        powered_magnitude * argument.sin(),
+        value.suffix,
+    )
+}
+
+fn formula_complex_sin(
+    value: FormulaComplexNumber,
+) -> Result<FormulaComplexNumber, FormulaEvalError> {
+    formula_complex_number(
+        value.real.sin() * value.imaginary.cosh(),
+        value.real.cos() * value.imaginary.sinh(),
+        value.suffix,
+    )
+}
+
+fn formula_complex_cos(
+    value: FormulaComplexNumber,
+) -> Result<FormulaComplexNumber, FormulaEvalError> {
+    formula_complex_number(
+        value.real.cos() * value.imaginary.cosh(),
+        -value.real.sin() * value.imaginary.sinh(),
+        value.suffix,
+    )
+}
+
+fn formula_complex_sinh(
+    value: FormulaComplexNumber,
+) -> Result<FormulaComplexNumber, FormulaEvalError> {
+    formula_complex_number(
+        value.real.sinh() * value.imaginary.cos(),
+        value.real.cosh() * value.imaginary.sin(),
+        value.suffix,
+    )
+}
+
+fn formula_complex_cosh(
+    value: FormulaComplexNumber,
+) -> Result<FormulaComplexNumber, FormulaEvalError> {
+    formula_complex_number(
+        value.real.cosh() * value.imaginary.cos(),
+        value.real.sinh() * value.imaginary.sin(),
+        value.suffix,
+    )
+}
+
+fn formula_complex_sqrt(
+    value: FormulaComplexNumber,
+) -> Result<FormulaComplexNumber, FormulaEvalError> {
+    let magnitude = value.real.hypot(value.imaginary);
+    let real = ((magnitude + value.real) / 2.0).sqrt();
+    let imaginary_sign = if value.imaginary < 0.0 { -1.0 } else { 1.0 };
+    let imaginary = imaginary_sign * ((magnitude - value.real) / 2.0).sqrt();
+    formula_complex_number(real, imaginary, value.suffix)
 }
 
 fn formula_numbervalue(
@@ -15095,6 +15405,35 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("DECIMAL") {
             return self.parse_decimal_function();
         }
+        if name.eq_ignore_ascii_case("IMABS")
+            || name.eq_ignore_ascii_case("IMAGINARY")
+            || name.eq_ignore_ascii_case("IMARGUMENT")
+            || name.eq_ignore_ascii_case("IMREAL")
+        {
+            let value = self.parse_complex_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            if name.eq_ignore_ascii_case("IMABS") {
+                let result = value.real.hypot(value.imaginary);
+                return if result.is_finite() {
+                    Ok(result)
+                } else {
+                    Err(FormulaEvalError::Num)
+                };
+            }
+            if name.eq_ignore_ascii_case("IMAGINARY") {
+                return Ok(value.imaginary);
+            }
+            if name.eq_ignore_ascii_case("IMARGUMENT") {
+                if value.real == 0.0 && value.imaginary == 0.0 {
+                    return Err(FormulaEvalError::Div0);
+                }
+                return Ok(value.imaginary.atan2(value.real));
+            }
+            return Ok(value.real);
+        }
         if name.eq_ignore_ascii_case("BIN2DEC") {
             return self.parse_engineering_decimal_function(2, 10, 10);
         }
@@ -16557,6 +16896,256 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         if name.eq_ignore_ascii_case("HEX2OCT") {
             return self.parse_engineering_text_function(16, 40, 10, 8, 30, 10);
+        }
+        if name.eq_ignore_ascii_case("COMPLEX") {
+            let real = self.parse_comparison()?;
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let imaginary = self.parse_comparison()?;
+            self.skip_whitespace();
+            let suffix = if self.consume_char(')') {
+                'i'
+            } else {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                let suffix = formula_complex_suffix(self.parse_text_value_argument()?.as_str())?;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                suffix
+            };
+            return formula_complex_format(formula_complex_number(real, imaginary, Some(suffix))?);
+        }
+        if name.eq_ignore_ascii_case("IMCONJUGATE") {
+            let value = self.parse_complex_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return formula_complex_format(formula_complex_number(
+                value.real,
+                -value.imaginary,
+                value.suffix,
+            )?);
+        }
+        if name.eq_ignore_ascii_case("IMCOS") {
+            let value = self.parse_complex_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return formula_complex_format(formula_complex_cos(value)?);
+        }
+        if name.eq_ignore_ascii_case("IMCOSH") {
+            let value = self.parse_complex_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return formula_complex_format(formula_complex_cosh(value)?);
+        }
+        if name.eq_ignore_ascii_case("IMCOT") {
+            let value = self.parse_complex_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return formula_complex_format(formula_complex_divide(
+                formula_complex_cos(value)?,
+                formula_complex_sin(value)?,
+            )?);
+        }
+        if name.eq_ignore_ascii_case("IMCSC") {
+            let value = self.parse_complex_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return formula_complex_format(formula_complex_reciprocal(formula_complex_sin(
+                value,
+            )?)?);
+        }
+        if name.eq_ignore_ascii_case("IMCSCH") {
+            let value = self.parse_complex_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return formula_complex_format(formula_complex_reciprocal(formula_complex_sinh(
+                value,
+            )?)?);
+        }
+        if name.eq_ignore_ascii_case("IMDIV") {
+            let left = self.parse_complex_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let right = self.parse_complex_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return formula_complex_format(formula_complex_divide(left, right)?);
+        }
+        if name.eq_ignore_ascii_case("IMEXP") {
+            let value = self.parse_complex_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return formula_complex_format(formula_complex_exp(value)?);
+        }
+        if name.eq_ignore_ascii_case("IMLN") {
+            let value = self.parse_complex_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return formula_complex_format(formula_complex_ln(value)?);
+        }
+        if name.eq_ignore_ascii_case("IMLOG10") {
+            let value = self.parse_complex_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let value = formula_complex_ln(value)?;
+            let base = 10.0_f64.ln();
+            return formula_complex_format(formula_complex_number(
+                value.real / base,
+                value.imaginary / base,
+                value.suffix,
+            )?);
+        }
+        if name.eq_ignore_ascii_case("IMLOG2") {
+            let value = self.parse_complex_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let value = formula_complex_ln(value)?;
+            let base = 2.0_f64.ln();
+            return formula_complex_format(formula_complex_number(
+                value.real / base,
+                value.imaginary / base,
+                value.suffix,
+            )?);
+        }
+        if name.eq_ignore_ascii_case("IMPOWER") {
+            let value = self.parse_complex_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let power = self.parse_comparison()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return formula_complex_format(formula_complex_power(value, power)?);
+        }
+        if name.eq_ignore_ascii_case("IMPRODUCT") || name.eq_ignore_ascii_case("IMSUM") {
+            let product = name.eq_ignore_ascii_case("IMPRODUCT");
+            let mut value = formula_complex_number(if product { 1.0 } else { 0.0 }, 0.0, None)?;
+            let mut saw_argument = false;
+            loop {
+                self.skip_whitespace();
+                if self.consume_char(')') {
+                    return if saw_argument {
+                        formula_complex_format(value)
+                    } else {
+                        Err(FormulaEvalError::Value)
+                    };
+                }
+                let argument = self.parse_complex_argument()?;
+                value = if product {
+                    formula_complex_multiply(value, argument)?
+                } else {
+                    formula_complex_add(value, argument)?
+                };
+                saw_argument = true;
+                self.skip_whitespace();
+                if self.consume_char(',') {
+                    continue;
+                }
+                if self.consume_char(')') {
+                    return formula_complex_format(value);
+                }
+                return Err(FormulaEvalError::Unsupported);
+            }
+        }
+        if name.eq_ignore_ascii_case("IMSEC") {
+            let value = self.parse_complex_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return formula_complex_format(formula_complex_reciprocal(formula_complex_cos(
+                value,
+            )?)?);
+        }
+        if name.eq_ignore_ascii_case("IMSECH") {
+            let value = self.parse_complex_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return formula_complex_format(formula_complex_reciprocal(formula_complex_cosh(
+                value,
+            )?)?);
+        }
+        if name.eq_ignore_ascii_case("IMSIN") {
+            let value = self.parse_complex_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return formula_complex_format(formula_complex_sin(value)?);
+        }
+        if name.eq_ignore_ascii_case("IMSINH") {
+            let value = self.parse_complex_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return formula_complex_format(formula_complex_sinh(value)?);
+        }
+        if name.eq_ignore_ascii_case("IMSQRT") {
+            let value = self.parse_complex_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return formula_complex_format(formula_complex_sqrt(value)?);
+        }
+        if name.eq_ignore_ascii_case("IMSUB") {
+            let left = self.parse_complex_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let right = self.parse_complex_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return formula_complex_format(formula_complex_subtract(left, right)?);
+        }
+        if name.eq_ignore_ascii_case("IMTAN") {
+            let value = self.parse_complex_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return formula_complex_format(formula_complex_divide(
+                formula_complex_sin(value)?,
+                formula_complex_cos(value)?,
+            )?);
         }
         if name.eq_ignore_ascii_case("ROMAN") {
             return self.parse_roman_text_function();
@@ -19580,6 +20169,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
     }
 
+    fn parse_complex_argument(&mut self) -> Result<FormulaComplexNumber, FormulaEvalError> {
+        let text = self.parse_text_value_argument()?;
+        formula_complex_from_text(text.as_str())
+    }
+
     fn parse_text_value_argument(&mut self) -> Result<String, FormulaEvalError> {
         self.skip_whitespace();
         if let Some(text) = self.parse_string_literal()? {
@@ -20907,7 +21501,8 @@ mod tests {
     use super::{
         APPLICATION_NAME, APPLICATION_VERSION, ExcelRuntime, XL_A1, XL_CALCULATION_AUTOMATIC,
         XL_CALCULATION_MANUAL, XL_CALCULATION_SEMIAUTOMATIC, XL_DECIMAL_SEPARATOR,
-        XL_LIST_SEPARATOR, XL_R1C1, XL_THOUSANDS_SEPARATOR, blank_workbook_bytes, supports_format,
+        XL_LIST_SEPARATOR, XL_R1C1, XL_THOUSANDS_SEPARATOR, blank_workbook_bytes,
+        formula_complex_from_text, supports_format,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -27093,6 +27688,161 @@ mod tests {
                 OmValue::Number(-1.0),
                 OmValue::Text("00001111".to_string()),
                 OmValue::Text("0017".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_complex_engineering_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A35".to_string())],
+                )
+                .expect("Range(A1:A35)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        35,
+                        1,
+                        vec![
+                            OmValue::Text("=COMPLEX(3,4)".to_string()),
+                            OmValue::Text(r#"=COMPLEX(3,-1,"j")"#.to_string()),
+                            OmValue::Text(r#"=IMCONJUGATE("3+4i")"#.to_string()),
+                            OmValue::Text(r#"=IMCOS("0")"#.to_string()),
+                            OmValue::Text(r#"=IMCOSH("0")"#.to_string()),
+                            OmValue::Text(r#"=IMCOT("1")"#.to_string()),
+                            OmValue::Text(r#"=IMCSC("1")"#.to_string()),
+                            OmValue::Text(r#"=IMCSCH("1")"#.to_string()),
+                            OmValue::Text(r#"=IMDIV("3+4i","1-i")"#.to_string()),
+                            OmValue::Text(r#"=IMEXP("0")"#.to_string()),
+                            OmValue::Text(r#"=IMLN("1")"#.to_string()),
+                            OmValue::Text(r#"=IMLOG10("1")"#.to_string()),
+                            OmValue::Text(r#"=IMLOG2("1")"#.to_string()),
+                            OmValue::Text(r#"=IMPOWER("i",2)"#.to_string()),
+                            OmValue::Text(r#"=IMPRODUCT("1+i","1-i")"#.to_string()),
+                            OmValue::Text(r#"=IMSEC("0")"#.to_string()),
+                            OmValue::Text(r#"=IMSECH("0")"#.to_string()),
+                            OmValue::Text(r#"=IMSIN("0")"#.to_string()),
+                            OmValue::Text(r#"=IMSINH("0")"#.to_string()),
+                            OmValue::Text(r#"=IMSQRT("-1")"#.to_string()),
+                            OmValue::Text(r#"=IMSUB("5+5i","2+i")"#.to_string()),
+                            OmValue::Text(r#"=IMSUM("1+i","2+3i")"#.to_string()),
+                            OmValue::Text(r#"=IMSUM(COMPLEX(1,1,"j"),"2+3j")"#.to_string()),
+                            OmValue::Text(r#"=IMTAN("0")"#.to_string()),
+                            OmValue::Text(r#"=IMABS("3+4i")"#.to_string()),
+                            OmValue::Text(r#"=IMREAL("3+4i")"#.to_string()),
+                            OmValue::Text(r#"=IMAGINARY("3+4i")"#.to_string()),
+                            OmValue::Text(r#"=IMARGUMENT("1+i")"#.to_string()),
+                            OmValue::Text(r#"=COMPLEX(1,2,"x")"#.to_string()),
+                            OmValue::Text(r#"=IMSUM("1+i","1+j")"#.to_string()),
+                            OmValue::Text(r#"=IMARGUMENT("0")"#.to_string()),
+                            OmValue::Text(r#"=IMDIV("1+i","0")"#.to_string()),
+                            OmValue::Text(r#"=IMLN("0")"#.to_string()),
+                            OmValue::Text(r#"=IMREAL("bad")"#.to_string()),
+                            OmValue::Text(r#"=IMCSC("0")"#.to_string()),
+                        ],
+                    )
+                    .expect("complex engineering formulas"),
+                ),
+                &[],
+            )
+            .expect("set complex engineering formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("complex engineering values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected complex engineering value array");
+        };
+        assert_eq!(
+            &values.values[..5],
+            &[
+                OmValue::Text("3+4i".to_string()),
+                OmValue::Text("3-j".to_string()),
+                OmValue::Text("3-4i".to_string()),
+                OmValue::Text("1".to_string()),
+                OmValue::Text("1".to_string()),
+            ]
+        );
+        for (index, expected) in [
+            1.0 / 1.0_f64.tan(),
+            1.0 / 1.0_f64.sin(),
+            1.0 / 1.0_f64.sinh(),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let text = expect_text(values.values[5 + index].clone());
+            let value = formula_complex_from_text(text.as_str()).expect("complex text result");
+            assert!(
+                (value.real - expected).abs() < 1e-12 && value.imaginary == 0.0,
+                "complex engineering text result {} expected {expected}, got {value:?}",
+                6 + index
+            );
+        }
+        assert_eq!(
+            &values.values[8..24],
+            &[
+                OmValue::Text("-0.5+3.5i".to_string()),
+                OmValue::Text("1".to_string()),
+                OmValue::Text("0".to_string()),
+                OmValue::Text("0".to_string()),
+                OmValue::Text("0".to_string()),
+                OmValue::Text("-1".to_string()),
+                OmValue::Text("2".to_string()),
+                OmValue::Text("1".to_string()),
+                OmValue::Text("1".to_string()),
+                OmValue::Text("0".to_string()),
+                OmValue::Text("0".to_string()),
+                OmValue::Text("i".to_string()),
+                OmValue::Text("3+4i".to_string()),
+                OmValue::Text("3+4i".to_string()),
+                OmValue::Text("3+4j".to_string()),
+                OmValue::Text("0".to_string()),
+            ]
+        );
+        assert_eq!(expect_number(values.values[24].clone()), 5.0);
+        assert_eq!(expect_number(values.values[25].clone()), 3.0);
+        assert_eq!(expect_number(values.values[26].clone()), 4.0);
+        assert!(
+            (expect_number(values.values[27].clone()) - std::f64::consts::FRAC_PI_4).abs() < 1e-12
+        );
+        assert_eq!(
+            &values.values[28..],
+            &[
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Num),
             ]
         );
     }
