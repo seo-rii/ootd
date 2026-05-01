@@ -8663,6 +8663,9 @@ enum FormulaScalarFunction {
     Atan,
     Atan2,
     Atanh,
+    BinomDist,
+    BinomDistRange,
+    BinomInv,
     BitAnd,
     BitLShift,
     BitOr,
@@ -8681,6 +8684,7 @@ enum FormulaScalarFunction {
     CoupNcd,
     CoupNum,
     CoupPcd,
+    CritBinom,
     Cot,
     Coth,
     Csc,
@@ -8717,6 +8721,8 @@ enum FormulaScalarFunction {
     GammaLnPrecise,
     GeStep,
     Hour,
+    HypGeomDist,
+    HypGeomDistLegacy,
     If,
     Intrate,
     IsoCeiling,
@@ -8737,6 +8743,8 @@ enum FormulaScalarFunction {
     Month,
     MRound,
     Multinomial,
+    NegBinomDist,
+    NegBinomDistLegacy,
     Nominal,
     NormDist,
     NormInv,
@@ -8825,6 +8833,13 @@ impl FormulaScalarFunction {
             Some(Self::Atan2)
         } else if name.eq_ignore_ascii_case("ATANH") {
             Some(Self::Atanh)
+        } else if name.eq_ignore_ascii_case("BINOM.DIST") || name.eq_ignore_ascii_case("BINOMDIST")
+        {
+            Some(Self::BinomDist)
+        } else if name.eq_ignore_ascii_case("BINOM.DIST.RANGE") {
+            Some(Self::BinomDistRange)
+        } else if name.eq_ignore_ascii_case("BINOM.INV") {
+            Some(Self::BinomInv)
         } else if name.eq_ignore_ascii_case("BITAND") {
             Some(Self::BitAnd)
         } else if name.eq_ignore_ascii_case("BITLSHIFT") {
@@ -8861,6 +8876,8 @@ impl FormulaScalarFunction {
             Some(Self::CoupNum)
         } else if name.eq_ignore_ascii_case("COUPPCD") {
             Some(Self::CoupPcd)
+        } else if name.eq_ignore_ascii_case("CRITBINOM") {
+            Some(Self::CritBinom)
         } else if name.eq_ignore_ascii_case("COT") {
             Some(Self::Cot)
         } else if name.eq_ignore_ascii_case("COTH") {
@@ -8934,6 +8951,10 @@ impl FormulaScalarFunction {
             Some(Self::GeStep)
         } else if name.eq_ignore_ascii_case("HOUR") {
             Some(Self::Hour)
+        } else if name.eq_ignore_ascii_case("HYPGEOM.DIST") {
+            Some(Self::HypGeomDist)
+        } else if name.eq_ignore_ascii_case("HYPGEOMDIST") {
+            Some(Self::HypGeomDistLegacy)
         } else if name.eq_ignore_ascii_case("IF") {
             Some(Self::If)
         } else if name.eq_ignore_ascii_case("INTRATE") {
@@ -8974,6 +8995,10 @@ impl FormulaScalarFunction {
             Some(Self::MRound)
         } else if name.eq_ignore_ascii_case("MULTINOMIAL") {
             Some(Self::Multinomial)
+        } else if name.eq_ignore_ascii_case("NEGBINOM.DIST") {
+            Some(Self::NegBinomDist)
+        } else if name.eq_ignore_ascii_case("NEGBINOMDIST") {
+            Some(Self::NegBinomDistLegacy)
         } else if name.eq_ignore_ascii_case("NOMINAL") {
             Some(Self::Nominal)
         } else if name.eq_ignore_ascii_case("NORM.INV") || name.eq_ignore_ascii_case("NORMINV") {
@@ -9825,6 +9850,82 @@ impl FormulaScalarFunction {
                 lanczos(value)
             }
         };
+        let log_combination = |number: u64, chosen: u64| -> Result<f64, FormulaEvalError> {
+            if chosen > number {
+                return Err(FormulaEvalError::Num);
+            }
+            let number_plus_one = number.checked_add(1).ok_or(FormulaEvalError::Num)?;
+            let chosen_plus_one = chosen.checked_add(1).ok_or(FormulaEvalError::Num)?;
+            let remainder_plus_one = (number - chosen)
+                .checked_add(1)
+                .ok_or(FormulaEvalError::Num)?;
+            checked_numeric_result(
+                gamma_ln_value(number_plus_one as f64)
+                    - gamma_ln_value(chosen_plus_one as f64)
+                    - gamma_ln_value(remainder_plus_one as f64),
+            )
+        };
+        let binomial_probability =
+            |successes: u64, trials: u64, probability: f64| -> Result<f64, FormulaEvalError> {
+                if successes > trials {
+                    return Err(FormulaEvalError::Num);
+                }
+                if probability == 0.0 {
+                    return Ok(if successes == 0 { 1.0 } else { 0.0 });
+                }
+                if probability == 1.0 {
+                    return Ok(if successes == trials { 1.0 } else { 0.0 });
+                }
+                let failure_probability = 1.0 - probability;
+                let log_probability = log_combination(trials, successes)?
+                    + successes as f64 * probability.ln()
+                    + (trials - successes) as f64 * failure_probability.ln();
+                checked_numeric_result(log_probability.exp())
+            };
+        let cumulative_binomial_probability =
+            |successes: u64, trials: u64, probability: f64| -> Result<f64, FormulaEvalError> {
+                let mut total = 0.0;
+                for value in 0..=successes {
+                    total += binomial_probability(value, trials, probability)?;
+                    if !total.is_finite() {
+                        return Err(FormulaEvalError::Num);
+                    }
+                }
+                checked_numeric_result(total.min(1.0))
+            };
+        let negative_binomial_probability =
+            |failures: u64, successes: u64, probability: f64| -> Result<f64, FormulaEvalError> {
+                if probability == 0.0 {
+                    return Ok(0.0);
+                }
+                if probability == 1.0 {
+                    return Ok(if failures == 0 { 1.0 } else { 0.0 });
+                }
+                let total_before_last = failures
+                    .checked_add(successes)
+                    .and_then(|value| value.checked_sub(1))
+                    .ok_or(FormulaEvalError::Num)?;
+                let log_probability = log_combination(total_before_last, failures)?
+                    + failures as f64 * (1.0 - probability).ln()
+                    + successes as f64 * probability.ln();
+                checked_numeric_result(log_probability.exp())
+            };
+        let hypergeometric_probability = |sample_successes: u64,
+                                          sample_size: u64,
+                                          population_successes: u64,
+                                          population_size: u64|
+         -> Result<f64, FormulaEvalError> {
+            let sample_failures = sample_size
+                .checked_sub(sample_successes)
+                .ok_or(FormulaEvalError::Num)?;
+            let population_failures = population_size
+                .checked_sub(population_successes)
+                .ok_or(FormulaEvalError::Num)?;
+            let log_probability = log_combination(population_successes, sample_successes)?
+                + log_combination(population_failures, sample_failures)?
+                - log_combination(population_size, sample_size)?;
+            checked_numeric_result(log_probability.exp())
+        };
         let reciprocal_numeric_result = |denominator: f64| -> Result<f64, FormulaEvalError> {
             if denominator == 0.0 {
                 return Err(FormulaEvalError::Div0);
@@ -10272,6 +10373,87 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Num);
                 }
                 checked_numeric_result(value.atanh())
+            }
+            FormulaScalarFunction::BinomDist => {
+                let [number_s, trials, probability, cumulative] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if ![number_s, trials, probability, cumulative]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *probability < 0.0 || *probability > 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let number_s = trunc_nonnegative_integer(*number_s)?;
+                let trials = trunc_nonnegative_integer(*trials)?;
+                if number_s > trials {
+                    return Err(FormulaEvalError::Num);
+                }
+                if *cumulative != 0.0 {
+                    cumulative_binomial_probability(number_s, trials, *probability)
+                } else {
+                    binomial_probability(number_s, trials, *probability)
+                }
+            }
+            FormulaScalarFunction::BinomDistRange => {
+                let (trials, probability, number_s, number_s2) = match args {
+                    [trials, probability, number_s] => {
+                        (*trials, *probability, *number_s, *number_s)
+                    }
+                    [trials, probability, number_s, number_s2] => {
+                        (*trials, *probability, *number_s, *number_s2)
+                    }
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if ![trials, probability, number_s, number_s2]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if probability < 0.0 || probability > 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let trials = trunc_nonnegative_integer(trials)?;
+                let number_s = trunc_nonnegative_integer(number_s)?;
+                let number_s2 = trunc_nonnegative_integer(number_s2)?;
+                if number_s > trials || number_s2 < number_s || number_s2 > trials {
+                    return Err(FormulaEvalError::Num);
+                }
+                let mut total = 0.0;
+                for successes in number_s..=number_s2 {
+                    total += binomial_probability(successes, trials, probability)?;
+                    if !total.is_finite() {
+                        return Err(FormulaEvalError::Num);
+                    }
+                }
+                checked_numeric_result(total.min(1.0))
+            }
+            FormulaScalarFunction::BinomInv | FormulaScalarFunction::CritBinom => {
+                let [trials, probability, alpha] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if ![trials, probability, alpha]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *probability <= 0.0 || *probability >= 1.0 || *alpha <= 0.0 || *alpha >= 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let trials = trunc_nonnegative_integer(*trials)?;
+                for successes in 0..=trials {
+                    let cumulative =
+                        cumulative_binomial_probability(successes, trials, *probability)?;
+                    if cumulative >= *alpha {
+                        return Ok(successes as f64);
+                    }
+                }
+                Ok(trials as f64)
             }
             FormulaScalarFunction::BitAnd => {
                 let [left, right] = args else {
@@ -10814,6 +10996,100 @@ impl FormulaScalarFunction {
                 };
                 Ok(formula_time_parts_from_serial(*serial)?.0 as f64)
             }
+            FormulaScalarFunction::HypGeomDist | FormulaScalarFunction::HypGeomDistLegacy => {
+                let (
+                    sample_successes,
+                    sample_size,
+                    population_successes,
+                    population_size,
+                    cumulative,
+                ) = match (self, args) {
+                    (
+                        FormulaScalarFunction::HypGeomDist,
+                        [
+                            sample_successes,
+                            sample_size,
+                            population_successes,
+                            population_size,
+                            cumulative,
+                        ],
+                    ) => (
+                        *sample_successes,
+                        *sample_size,
+                        *population_successes,
+                        *population_size,
+                        *cumulative,
+                    ),
+                    (
+                        FormulaScalarFunction::HypGeomDistLegacy,
+                        [
+                            sample_successes,
+                            sample_size,
+                            population_successes,
+                            population_size,
+                        ],
+                    ) => (
+                        *sample_successes,
+                        *sample_size,
+                        *population_successes,
+                        *population_size,
+                        0.0,
+                    ),
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if ![
+                    sample_successes,
+                    sample_size,
+                    population_successes,
+                    population_size,
+                    cumulative,
+                ]
+                .iter()
+                .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                let sample_successes = trunc_nonnegative_integer(sample_successes)?;
+                let sample_size = trunc_nonnegative_integer(sample_size)?;
+                let population_successes = trunc_nonnegative_integer(population_successes)?;
+                let population_size = trunc_nonnegative_integer(population_size)?;
+                if sample_size == 0
+                    || population_successes == 0
+                    || population_size == 0
+                    || sample_size > population_size
+                    || population_successes > population_size
+                {
+                    return Err(FormulaEvalError::Num);
+                }
+                let lower_successes =
+                    sample_size.saturating_sub(population_size - population_successes);
+                let upper_successes = sample_size.min(population_successes);
+                if sample_successes < lower_successes || sample_successes > upper_successes {
+                    return Err(FormulaEvalError::Num);
+                }
+                if cumulative != 0.0 {
+                    let mut total = 0.0;
+                    for successes in lower_successes..=sample_successes {
+                        total += hypergeometric_probability(
+                            successes,
+                            sample_size,
+                            population_successes,
+                            population_size,
+                        )?;
+                        if !total.is_finite() {
+                            return Err(FormulaEvalError::Num);
+                        }
+                    }
+                    checked_numeric_result(total.min(1.0))
+                } else {
+                    hypergeometric_probability(
+                        sample_successes,
+                        sample_size,
+                        population_successes,
+                        population_size,
+                    )
+                }
+            }
             FormulaScalarFunction::If => {
                 let [condition, true_value, false_value] = args else {
                     return Err(FormulaEvalError::Value);
@@ -11030,6 +11306,46 @@ impl FormulaScalarFunction {
                     }
                 }
                 Ok(factorial(sum)? / denominator)
+            }
+            FormulaScalarFunction::NegBinomDist | FormulaScalarFunction::NegBinomDistLegacy => {
+                let (failures, successes, probability, cumulative) = match (self, args) {
+                    (
+                        FormulaScalarFunction::NegBinomDist,
+                        [failures, successes, probability, cumulative],
+                    ) => (*failures, *successes, *probability, *cumulative),
+                    (
+                        FormulaScalarFunction::NegBinomDistLegacy,
+                        [failures, successes, probability],
+                    ) => (*failures, *successes, *probability, 0.0),
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if ![failures, successes, probability, cumulative]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if probability < 0.0 || probability > 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let failures = trunc_nonnegative_integer(failures)?;
+                let successes = trunc_nonnegative_integer(successes)?;
+                if successes < 1 {
+                    return Err(FormulaEvalError::Num);
+                }
+                if cumulative != 0.0 {
+                    let mut total = 0.0;
+                    for failure_count in 0..=failures {
+                        total +=
+                            negative_binomial_probability(failure_count, successes, probability)?;
+                        if !total.is_finite() {
+                            return Err(FormulaEvalError::Num);
+                        }
+                    }
+                    checked_numeric_result(total.min(1.0))
+                } else {
+                    negative_binomial_probability(failures, successes, probability)
+                }
             }
             FormulaScalarFunction::Nominal => {
                 let [effect_rate, npery] = args else {
@@ -25135,6 +25451,138 @@ mod tests {
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_discrete_distribution_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A31".to_string())],
+                )
+                .expect("Range(A1:A31)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        31,
+                        1,
+                        vec![
+                            OmValue::Text("=BINOM.DIST(6,10,0.5,FALSE)".to_string()),
+                            OmValue::Text("=BINOM.DIST(6,10,0.5,TRUE)".to_string()),
+                            OmValue::Text("=BINOMDIST(6,10,0.5,FALSE)".to_string()),
+                            OmValue::Text("=BINOM.DIST.RANGE(10,0.5,6)".to_string()),
+                            OmValue::Text("=BINOM.DIST.RANGE(10,0.5,4,6)".to_string()),
+                            OmValue::Text("=BINOM.INV(6,0.5,0.75)".to_string()),
+                            OmValue::Text("=CRITBINOM(6,0.5,0.75)".to_string()),
+                            OmValue::Text("=NEGBINOM.DIST(10,5,0.25,TRUE)".to_string()),
+                            OmValue::Text("=NEGBINOM.DIST(10,5,0.25,FALSE)".to_string()),
+                            OmValue::Text("=NEGBINOMDIST(10,5,0.25)".to_string()),
+                            OmValue::Text("=HYPGEOM.DIST(2,4,5,10,FALSE)".to_string()),
+                            OmValue::Text("=HYPGEOM.DIST(2,4,5,10,TRUE)".to_string()),
+                            OmValue::Text("=HYPGEOMDIST(2,4,5,10)".to_string()),
+                            OmValue::Text("=BINOM.DIST(11,10,0.5,FALSE)".to_string()),
+                            OmValue::Text("=BINOM.DIST(6,10,1.1,FALSE)".to_string()),
+                            OmValue::Text("=BINOM.DIST(6,10,0.5)".to_string()),
+                            OmValue::Text("=BINOM.DIST.RANGE(10,0.5,8,7)".to_string()),
+                            OmValue::Text("=BINOM.DIST.RANGE(10,0.5,11)".to_string()),
+                            OmValue::Text("=BINOM.DIST.RANGE(10,0.5)".to_string()),
+                            OmValue::Text("=BINOM.INV(6,0,0.75)".to_string()),
+                            OmValue::Text("=BINOM.INV(6,0.5,1)".to_string()),
+                            OmValue::Text("=CRITBINOM(6,0.5,0)".to_string()),
+                            OmValue::Text("=NEGBINOM.DIST(-1,5,0.25,TRUE)".to_string()),
+                            OmValue::Text("=NEGBINOM.DIST(10,0,0.25,TRUE)".to_string()),
+                            OmValue::Text("=NEGBINOM.DIST(10,5,1.1,TRUE)".to_string()),
+                            OmValue::Text("=NEGBINOM.DIST(10,5,0.25)".to_string()),
+                            OmValue::Text("=NEGBINOMDIST(10,5,0.25,TRUE)".to_string()),
+                            OmValue::Text("=HYPGEOM.DIST(5,4,5,10,FALSE)".to_string()),
+                            OmValue::Text("=HYPGEOM.DIST(2,0,5,10,FALSE)".to_string()),
+                            OmValue::Text("=HYPGEOM.DIST(2,4,0,10,FALSE)".to_string()),
+                            OmValue::Text("=HYPGEOMDIST(2,4,5,10,FALSE)".to_string()),
+                        ],
+                    )
+                    .expect("discrete distribution formulas"),
+                ),
+                &[],
+            )
+            .expect("set discrete distribution formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("discrete distribution values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected discrete distribution value array");
+        };
+        let expected_numbers = [
+            0.205078125,
+            0.828125,
+            0.205078125,
+            0.205078125,
+            0.65625,
+            4.0,
+            4.0,
+            0.3135140584781766,
+            0.05504866037517786,
+            0.05504866037517786,
+            0.47619047619047616,
+            0.738095238095238,
+            0.47619047619047616,
+        ];
+        for (index, expected) in expected_numbers.into_iter().enumerate() {
+            let number = expect_number(values.values[index].clone());
+            assert!(
+                (number - expected).abs() < 1e-10,
+                "discrete distribution result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            &values.values[13..],
+            &[
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
