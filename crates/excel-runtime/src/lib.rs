@@ -8655,6 +8655,10 @@ enum FormulaScalarFunction {
     BesselJ,
     BesselK,
     BesselY,
+    BetaDist,
+    BetaDistLegacy,
+    BetaInv,
+    BetaInvLegacy,
     BinomDist,
     BinomDistRange,
     BinomInv,
@@ -8670,6 +8674,7 @@ enum FormulaScalarFunction {
     Combina,
     ConfidenceNorm,
     ConfidenceNormLegacy,
+    ConfidenceT,
     Cos,
     Cosh,
     CoupDayBs,
@@ -8679,6 +8684,12 @@ enum FormulaScalarFunction {
     CoupNum,
     CoupPcd,
     CritBinom,
+    ChiDistLegacy,
+    ChiInvLegacy,
+    ChiSqDist,
+    ChiSqDistRt,
+    ChiSqInv,
+    ChiSqInvRt,
     Cot,
     Coth,
     Csc,
@@ -8705,6 +8716,12 @@ enum FormulaScalarFunction {
     ExponDist,
     Fact,
     FactDouble,
+    FDist,
+    FDistLegacy,
+    FDistRt,
+    FInv,
+    FInvLegacy,
+    FInvRt,
     Fisher,
     FisherInv,
     Floor,
@@ -8712,6 +8729,10 @@ enum FormulaScalarFunction {
     FloorPrecise,
     Gauss,
     Gamma,
+    GammaDist,
+    GammaDistLegacy,
+    GammaInv,
+    GammaInvLegacy,
     GammaLn,
     GammaLnPrecise,
     GeStep,
@@ -8781,6 +8802,13 @@ enum FormulaScalarFunction {
     SqrtPi,
     Second,
     Syd,
+    TDist,
+    TDistLegacy,
+    TDist2T,
+    TDistRt,
+    TInv,
+    TInvLegacy,
+    TInv2T,
     Tan,
     Tanh,
     TBillEq,
@@ -8840,6 +8868,14 @@ impl FormulaScalarFunction {
             Some(Self::BesselK)
         } else if name.eq_ignore_ascii_case("BESSELY") {
             Some(Self::BesselY)
+        } else if name.eq_ignore_ascii_case("BETA.DIST") {
+            Some(Self::BetaDist)
+        } else if name.eq_ignore_ascii_case("BETADIST") {
+            Some(Self::BetaDistLegacy)
+        } else if name.eq_ignore_ascii_case("BETA.INV") {
+            Some(Self::BetaInv)
+        } else if name.eq_ignore_ascii_case("BETAINV") {
+            Some(Self::BetaInvLegacy)
         } else if name.eq_ignore_ascii_case("BINOM.DIST") || name.eq_ignore_ascii_case("BINOMDIST")
         {
             Some(Self::BinomDist)
@@ -8871,6 +8907,8 @@ impl FormulaScalarFunction {
             Some(Self::ConfidenceNorm)
         } else if name.eq_ignore_ascii_case("CONFIDENCE") {
             Some(Self::ConfidenceNormLegacy)
+        } else if name.eq_ignore_ascii_case("CONFIDENCE.T") {
+            Some(Self::ConfidenceT)
         } else if name.eq_ignore_ascii_case("COS") {
             Some(Self::Cos)
         } else if name.eq_ignore_ascii_case("COSH") {
@@ -8889,6 +8927,18 @@ impl FormulaScalarFunction {
             Some(Self::CoupPcd)
         } else if name.eq_ignore_ascii_case("CRITBINOM") {
             Some(Self::CritBinom)
+        } else if name.eq_ignore_ascii_case("CHIDIST") {
+            Some(Self::ChiDistLegacy)
+        } else if name.eq_ignore_ascii_case("CHIINV") {
+            Some(Self::ChiInvLegacy)
+        } else if name.eq_ignore_ascii_case("CHISQ.DIST") {
+            Some(Self::ChiSqDist)
+        } else if name.eq_ignore_ascii_case("CHISQ.DIST.RT") {
+            Some(Self::ChiSqDistRt)
+        } else if name.eq_ignore_ascii_case("CHISQ.INV") {
+            Some(Self::ChiSqInv)
+        } else if name.eq_ignore_ascii_case("CHISQ.INV.RT") {
+            Some(Self::ChiSqInvRt)
         } else if name.eq_ignore_ascii_case("COT") {
             Some(Self::Cot)
         } else if name.eq_ignore_ascii_case("COTH") {
@@ -8942,6 +8992,18 @@ impl FormulaScalarFunction {
             Some(Self::Fact)
         } else if name.eq_ignore_ascii_case("FACTDOUBLE") {
             Some(Self::FactDouble)
+        } else if name.eq_ignore_ascii_case("F.DIST") {
+            Some(Self::FDist)
+        } else if name.eq_ignore_ascii_case("FDIST") {
+            Some(Self::FDistLegacy)
+        } else if name.eq_ignore_ascii_case("F.DIST.RT") {
+            Some(Self::FDistRt)
+        } else if name.eq_ignore_ascii_case("F.INV") {
+            Some(Self::FInv)
+        } else if name.eq_ignore_ascii_case("FINV") {
+            Some(Self::FInvLegacy)
+        } else if name.eq_ignore_ascii_case("F.INV.RT") {
+            Some(Self::FInvRt)
         } else if name.eq_ignore_ascii_case("FISHER") {
             Some(Self::Fisher)
         } else if name.eq_ignore_ascii_case("FISHERINV") {
@@ -8956,6 +9018,14 @@ impl FormulaScalarFunction {
             Some(Self::Gauss)
         } else if name.eq_ignore_ascii_case("GAMMA") {
             Some(Self::Gamma)
+        } else if name.eq_ignore_ascii_case("GAMMA.DIST") {
+            Some(Self::GammaDist)
+        } else if name.eq_ignore_ascii_case("GAMMADIST") {
+            Some(Self::GammaDistLegacy)
+        } else if name.eq_ignore_ascii_case("GAMMA.INV") {
+            Some(Self::GammaInv)
+        } else if name.eq_ignore_ascii_case("GAMMAINV") {
+            Some(Self::GammaInvLegacy)
         } else if name.eq_ignore_ascii_case("GAMMALN") {
             Some(Self::GammaLn)
         } else if name.eq_ignore_ascii_case("GAMMALN.PRECISE") {
@@ -9095,6 +9165,20 @@ impl FormulaScalarFunction {
             Some(Self::Second)
         } else if name.eq_ignore_ascii_case("SYD") {
             Some(Self::Syd)
+        } else if name.eq_ignore_ascii_case("T.DIST") {
+            Some(Self::TDist)
+        } else if name.eq_ignore_ascii_case("TDIST") {
+            Some(Self::TDistLegacy)
+        } else if name.eq_ignore_ascii_case("T.DIST.2T") {
+            Some(Self::TDist2T)
+        } else if name.eq_ignore_ascii_case("T.DIST.RT") {
+            Some(Self::TDistRt)
+        } else if name.eq_ignore_ascii_case("T.INV") {
+            Some(Self::TInv)
+        } else if name.eq_ignore_ascii_case("TINV") {
+            Some(Self::TInvLegacy)
+        } else if name.eq_ignore_ascii_case("T.INV.2T") {
+            Some(Self::TInv2T)
         } else if name.eq_ignore_ascii_case("TAN") {
             Some(Self::Tan)
         } else if name.eq_ignore_ascii_case("TANH") {
@@ -9947,6 +10031,240 @@ impl FormulaScalarFunction {
                 - log_combination(population_size, sample_size)?;
             checked_numeric_result(log_probability.exp())
         };
+        let regularized_gamma_p = |shape: f64, x: f64| -> Result<f64, FormulaEvalError> {
+            if !shape.is_finite() || !x.is_finite() {
+                return Err(FormulaEvalError::Value);
+            }
+            if shape <= 0.0 || x < 0.0 {
+                return Err(FormulaEvalError::Num);
+            }
+            if x == 0.0 {
+                return Ok(0.0);
+            }
+            const EPSILON: f64 = 1e-14;
+            const FLOOR: f64 = 1e-300;
+            const MAX_ITERATIONS: usize = 200;
+            let gamma_ln = gamma_ln_value(shape);
+            if x < shape + 1.0 {
+                let mut term = 1.0 / shape;
+                let mut sum = term;
+                let mut ap = shape;
+                for _ in 0..MAX_ITERATIONS {
+                    ap += 1.0;
+                    term *= x / ap;
+                    sum += term;
+                    if term.abs() <= sum.abs() * EPSILON {
+                        return checked_numeric_result(
+                            (sum * (-x + shape * x.ln() - gamma_ln).exp()).clamp(0.0, 1.0),
+                        );
+                    }
+                }
+                return checked_numeric_result(
+                    (sum * (-x + shape * x.ln() - gamma_ln).exp()).clamp(0.0, 1.0),
+                );
+            }
+
+            let mut b = x + 1.0 - shape;
+            let mut c = 1.0 / FLOOR;
+            let mut d = 1.0 / b.max(FLOOR);
+            let mut h = d;
+            for i in 1..=MAX_ITERATIONS {
+                let i = i as f64;
+                let an = -i * (i - shape);
+                b += 2.0;
+                d = an * d + b;
+                if d.abs() < FLOOR {
+                    d = FLOOR;
+                }
+                c = b + an / c;
+                if c.abs() < FLOOR {
+                    c = FLOOR;
+                }
+                d = 1.0 / d;
+                let delta = d * c;
+                h *= delta;
+                if (delta - 1.0).abs() <= EPSILON {
+                    let q = (-x + shape * x.ln() - gamma_ln).exp() * h;
+                    return checked_numeric_result((1.0 - q).clamp(0.0, 1.0));
+                }
+            }
+            let q = (-x + shape * x.ln() - gamma_ln).exp() * h;
+            checked_numeric_result((1.0 - q).clamp(0.0, 1.0))
+        };
+        let regularized_gamma_q = |shape: f64, x: f64| -> Result<f64, FormulaEvalError> {
+            regularized_gamma_p(shape, x).map(|value| (1.0 - value).clamp(0.0, 1.0))
+        };
+        let beta_fraction = |alpha: f64, beta: f64, x: f64| -> Result<f64, FormulaEvalError> {
+            const EPSILON: f64 = 1e-14;
+            const FLOOR: f64 = 1e-300;
+            const MAX_ITERATIONS: usize = 200;
+            let qab = alpha + beta;
+            let qap = alpha + 1.0;
+            let qam = alpha - 1.0;
+            let mut c = 1.0;
+            let mut d = 1.0 - qab * x / qap;
+            if d.abs() < FLOOR {
+                d = FLOOR;
+            }
+            d = 1.0 / d;
+            let mut h = d;
+            for m in 1..=MAX_ITERATIONS {
+                let m_f = m as f64;
+                let m2 = 2.0 * m_f;
+                let mut aa = m_f * (beta - m_f) * x / ((qam + m2) * (alpha + m2));
+                d = 1.0 + aa * d;
+                if d.abs() < FLOOR {
+                    d = FLOOR;
+                }
+                c = 1.0 + aa / c;
+                if c.abs() < FLOOR {
+                    c = FLOOR;
+                }
+                d = 1.0 / d;
+                h *= d * c;
+                aa = -(alpha + m_f) * (qab + m_f) * x / ((alpha + m2) * (qap + m2));
+                d = 1.0 + aa * d;
+                if d.abs() < FLOOR {
+                    d = FLOOR;
+                }
+                c = 1.0 + aa / c;
+                if c.abs() < FLOOR {
+                    c = FLOOR;
+                }
+                d = 1.0 / d;
+                let delta = d * c;
+                h *= delta;
+                if (delta - 1.0).abs() <= EPSILON {
+                    return checked_numeric_result(h);
+                }
+            }
+            checked_numeric_result(h)
+        };
+        let regularized_beta = |x: f64, alpha: f64, beta: f64| -> Result<f64, FormulaEvalError> {
+            if ![x, alpha, beta].iter().all(|value| value.is_finite()) {
+                return Err(FormulaEvalError::Value);
+            }
+            if alpha <= 0.0 || beta <= 0.0 || !(0.0..=1.0).contains(&x) {
+                return Err(FormulaEvalError::Num);
+            }
+            if x == 0.0 || x == 1.0 {
+                return Ok(x);
+            }
+            let log_beta =
+                gamma_ln_value(alpha) + gamma_ln_value(beta) - gamma_ln_value(alpha + beta);
+            let front = (alpha * x.ln() + beta * (-x).ln_1p() - log_beta).exp();
+            if x < (alpha + 1.0) / (alpha + beta + 2.0) {
+                checked_numeric_result(
+                    (front * beta_fraction(alpha, beta, x)? / alpha).clamp(0.0, 1.0),
+                )
+            } else {
+                checked_numeric_result(
+                    (1.0 - front * beta_fraction(beta, alpha, 1.0 - x)? / beta).clamp(0.0, 1.0),
+                )
+            }
+        };
+        let beta_pdf = |x: f64, alpha: f64, beta: f64| -> Result<f64, FormulaEvalError> {
+            if ![x, alpha, beta].iter().all(|value| value.is_finite()) {
+                return Err(FormulaEvalError::Value);
+            }
+            if alpha <= 0.0 || beta <= 0.0 || !(0.0..=1.0).contains(&x) {
+                return Err(FormulaEvalError::Num);
+            }
+            if x == 0.0 {
+                if alpha < 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                return Ok(if alpha == 1.0 { beta } else { 0.0 });
+            }
+            if x == 1.0 {
+                if beta < 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                return Ok(if beta == 1.0 { alpha } else { 0.0 });
+            }
+            let log_beta =
+                gamma_ln_value(alpha) + gamma_ln_value(beta) - gamma_ln_value(alpha + beta);
+            checked_numeric_result(
+                ((alpha - 1.0) * x.ln() + (beta - 1.0) * (-x).ln_1p() - log_beta).exp(),
+            )
+        };
+        let inverse_unit_cdf = |probability: f64,
+                                cdf: &mut dyn FnMut(f64) -> Result<f64, FormulaEvalError>|
+         -> Result<f64, FormulaEvalError> {
+            if !probability.is_finite() {
+                return Err(FormulaEvalError::Value);
+            }
+            if probability <= 0.0 || probability >= 1.0 {
+                return Err(FormulaEvalError::Num);
+            }
+            let mut low = 0.0;
+            let mut high = 1.0;
+            for _ in 0..100 {
+                let mid = (low + high) / 2.0;
+                if cdf(mid)? < probability {
+                    low = mid;
+                } else {
+                    high = mid;
+                }
+            }
+            checked_numeric_result((low + high) / 2.0)
+        };
+        let inverse_positive_cdf = |probability: f64,
+                                    cdf: &mut dyn FnMut(f64) -> Result<f64, FormulaEvalError>|
+         -> Result<f64, FormulaEvalError> {
+            if !probability.is_finite() {
+                return Err(FormulaEvalError::Value);
+            }
+            if probability <= 0.0 || probability >= 1.0 {
+                return Err(FormulaEvalError::Num);
+            }
+            let mut low = 0.0;
+            let mut high = 1.0;
+            let mut guard = 0;
+            while cdf(high)? < probability {
+                low = high;
+                high *= 2.0;
+                guard += 1;
+                if guard > 1024 || !high.is_finite() {
+                    return Err(FormulaEvalError::Num);
+                }
+            }
+            for _ in 0..120 {
+                let mid = (low + high) / 2.0;
+                if cdf(mid)? < probability {
+                    low = mid;
+                } else {
+                    high = mid;
+                }
+            }
+            checked_numeric_result((low + high) / 2.0)
+        };
+        let student_t_cdf = |x: f64, degrees: f64| -> Result<f64, FormulaEvalError> {
+            if !x.is_finite() || !degrees.is_finite() {
+                return Err(FormulaEvalError::Value);
+            }
+            if degrees < 1.0 {
+                return Err(FormulaEvalError::Num);
+            }
+            let degrees = degrees.trunc();
+            let beta_x = degrees / (degrees + x * x);
+            let tail = 0.5 * regularized_beta(beta_x, degrees / 2.0, 0.5)?;
+            Ok(if x >= 0.0 { 1.0 - tail } else { tail })
+        };
+        let student_t_pdf = |x: f64, degrees: f64| -> Result<f64, FormulaEvalError> {
+            if !x.is_finite() || !degrees.is_finite() {
+                return Err(FormulaEvalError::Value);
+            }
+            if degrees < 1.0 {
+                return Err(FormulaEvalError::Num);
+            }
+            let degrees = degrees.trunc();
+            let log_density = gamma_ln_value((degrees + 1.0) / 2.0)
+                - gamma_ln_value(degrees / 2.0)
+                - 0.5 * (degrees * std::f64::consts::PI).ln()
+                - (degrees + 1.0) / 2.0 * (1.0 + x * x / degrees).ln();
+            checked_numeric_result(log_density.exp())
+        };
         let reciprocal_numeric_result = |denominator: f64| -> Result<f64, FormulaEvalError> {
             if denominator == 0.0 {
                 return Err(FormulaEvalError::Div0);
@@ -10419,6 +10737,67 @@ impl FormulaScalarFunction {
                 };
                 checked_numeric_result(formula_bessel_y(*value, formula_bessel_order(*order)?)?)
             }
+            FormulaScalarFunction::BetaDist | FormulaScalarFunction::BetaDistLegacy => {
+                let (x, alpha, beta, cumulative, lower, upper) = match (self, args) {
+                    (FormulaScalarFunction::BetaDist, [x, alpha, beta, cumulative]) => {
+                        (*x, *alpha, *beta, *cumulative, 0.0, 1.0)
+                    }
+                    (FormulaScalarFunction::BetaDist, [x, alpha, beta, cumulative, lower]) => {
+                        (*x, *alpha, *beta, *cumulative, *lower, 1.0)
+                    }
+                    (
+                        FormulaScalarFunction::BetaDist,
+                        [x, alpha, beta, cumulative, lower, upper],
+                    ) => (*x, *alpha, *beta, *cumulative, *lower, *upper),
+                    (FormulaScalarFunction::BetaDistLegacy, [x, alpha, beta]) => {
+                        (*x, *alpha, *beta, 1.0, 0.0, 1.0)
+                    }
+                    (FormulaScalarFunction::BetaDistLegacy, [x, alpha, beta, lower]) => {
+                        (*x, *alpha, *beta, 1.0, *lower, 1.0)
+                    }
+                    (FormulaScalarFunction::BetaDistLegacy, [x, alpha, beta, lower, upper]) => {
+                        (*x, *alpha, *beta, 1.0, *lower, *upper)
+                    }
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if ![x, alpha, beta, cumulative, lower, upper]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if alpha <= 0.0 || beta <= 0.0 || lower >= upper || x < lower || x > upper {
+                    return Err(FormulaEvalError::Num);
+                }
+                let scaled = (x - lower) / (upper - lower);
+                if cumulative != 0.0 {
+                    regularized_beta(scaled, alpha, beta)
+                } else {
+                    checked_numeric_result(beta_pdf(scaled, alpha, beta)? / (upper - lower))
+                }
+            }
+            FormulaScalarFunction::BetaInv | FormulaScalarFunction::BetaInvLegacy => {
+                let (probability, alpha, beta, lower, upper) = match args {
+                    [probability, alpha, beta] => (*probability, *alpha, *beta, 0.0, 1.0),
+                    [probability, alpha, beta, lower] => (*probability, *alpha, *beta, *lower, 1.0),
+                    [probability, alpha, beta, lower, upper] => {
+                        (*probability, *alpha, *beta, *lower, *upper)
+                    }
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if ![probability, alpha, beta, lower, upper]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if alpha <= 0.0 || beta <= 0.0 || lower >= upper {
+                    return Err(FormulaEvalError::Num);
+                }
+                let mut cdf = |scaled: f64| regularized_beta(scaled, alpha, beta);
+                let scaled = inverse_unit_cdf(probability, &mut cdf)?;
+                checked_numeric_result(lower + scaled * (upper - lower))
+            }
             FormulaScalarFunction::BinomDist => {
                 let [number_s, trials, probability, cumulative] = args else {
                     return Err(FormulaEvalError::Value);
@@ -10499,6 +10878,79 @@ impl FormulaScalarFunction {
                     }
                 }
                 Ok(trials as f64)
+            }
+            FormulaScalarFunction::ChiDistLegacy | FormulaScalarFunction::ChiSqDistRt => {
+                let [x, degrees] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if !x.is_finite() || !degrees.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *x < 0.0 || *degrees < 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                regularized_gamma_q(degrees.trunc() / 2.0, *x / 2.0)
+            }
+            FormulaScalarFunction::ChiInvLegacy | FormulaScalarFunction::ChiSqInvRt => {
+                let [probability, degrees] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if !probability.is_finite() || !degrees.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *probability <= 0.0 || *probability >= 1.0 || *degrees < 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let shape = degrees.trunc() / 2.0;
+                let target = 1.0 - *probability;
+                let mut cdf = |x: f64| regularized_gamma_p(shape, x / 2.0);
+                inverse_positive_cdf(target, &mut cdf)
+            }
+            FormulaScalarFunction::ChiSqDist => {
+                let [x, degrees, cumulative] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if ![x, degrees, cumulative]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *x < 0.0 || *degrees < 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let degrees = degrees.trunc();
+                if *cumulative != 0.0 {
+                    regularized_gamma_p(degrees / 2.0, *x / 2.0)
+                } else if *x == 0.0 {
+                    Ok(if degrees == 2.0 {
+                        0.5
+                    } else if degrees > 2.0 {
+                        0.0
+                    } else {
+                        return Err(FormulaEvalError::Num);
+                    })
+                } else {
+                    let log_density = (degrees / 2.0 - 1.0) * x.ln()
+                        - *x / 2.0
+                        - (degrees / 2.0) * 2.0_f64.ln()
+                        - gamma_ln_value(degrees / 2.0);
+                    checked_numeric_result(log_density.exp())
+                }
+            }
+            FormulaScalarFunction::ChiSqInv => {
+                let [probability, degrees] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if !probability.is_finite() || !degrees.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *probability <= 0.0 || *probability >= 1.0 || *degrees < 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let shape = degrees.trunc() / 2.0;
+                let mut cdf = |x: f64| regularized_gamma_p(shape, x / 2.0);
+                inverse_positive_cdf(*probability, &mut cdf)
             }
             FormulaScalarFunction::BitAnd => {
                 let [left, right] = args else {
@@ -10614,6 +11066,23 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Num);
                 }
                 let critical_value = inverse_standard_normal(1.0 - *alpha / 2.0)?;
+                checked_numeric_result(critical_value * *standard_dev / size.sqrt())
+            }
+            FormulaScalarFunction::ConfidenceT => {
+                let [alpha, standard_dev, size] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if !alpha.is_finite() || !standard_dev.is_finite() || !size.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                let size = size.trunc();
+                if *alpha <= 0.0 || *alpha >= 1.0 || *standard_dev <= 0.0 || size < 2.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let target = 1.0 - *alpha / 2.0;
+                let degrees = size - 1.0;
+                let mut cdf = |x: f64| student_t_cdf(x, degrees);
+                let critical_value = inverse_positive_cdf(target, &mut cdf)?;
                 checked_numeric_result(critical_value * *standard_dev / size.sqrt())
             }
             FormulaScalarFunction::Cos => {
@@ -10985,6 +11454,115 @@ impl FormulaScalarFunction {
                 }
                 Ok(total)
             }
+            FormulaScalarFunction::FDist | FormulaScalarFunction::FDistRt => {
+                let (x, degrees1, degrees2, cumulative) = match (self, args) {
+                    (FormulaScalarFunction::FDist, [x, degrees1, degrees2, cumulative]) => {
+                        (*x, *degrees1, *degrees2, *cumulative)
+                    }
+                    (FormulaScalarFunction::FDistRt, [x, degrees1, degrees2]) => {
+                        (*x, *degrees1, *degrees2, 1.0)
+                    }
+                    _ => return Err(FormulaEvalError::Value),
+                };
+                if ![x, degrees1, degrees2, cumulative]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if x < 0.0 || degrees1 < 1.0 || degrees2 < 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let degrees1 = degrees1.trunc();
+                let degrees2 = degrees2.trunc();
+                if matches!(self, FormulaScalarFunction::FDistRt) || cumulative != 0.0 {
+                    let transformed = degrees1 * x / (degrees1 * x + degrees2);
+                    let cdf = regularized_beta(transformed, degrees1 / 2.0, degrees2 / 2.0)?;
+                    return Ok(if matches!(self, FormulaScalarFunction::FDistRt) {
+                        (1.0 - cdf).clamp(0.0, 1.0)
+                    } else {
+                        cdf
+                    });
+                }
+                if x == 0.0 {
+                    return Ok(0.0);
+                }
+                let alpha = degrees1 / 2.0;
+                let beta = degrees2 / 2.0;
+                let log_beta =
+                    gamma_ln_value(alpha) + gamma_ln_value(beta) - gamma_ln_value(alpha + beta);
+                let log_density = alpha * (degrees1 / degrees2).ln() + (alpha - 1.0) * x.ln()
+                    - (alpha + beta) * (1.0 + degrees1 * x / degrees2).ln()
+                    - log_beta;
+                checked_numeric_result(log_density.exp())
+            }
+            FormulaScalarFunction::FDistLegacy => {
+                let [x, degrees1, degrees2] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if ![x, degrees1, degrees2]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *x < 0.0 || *degrees1 < 1.0 || *degrees2 < 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let degrees1 = degrees1.trunc();
+                let degrees2 = degrees2.trunc();
+                let transformed = degrees1 * *x / (degrees1 * *x + degrees2);
+                let cdf = regularized_beta(transformed, degrees1 / 2.0, degrees2 / 2.0)?;
+                Ok((1.0 - cdf).clamp(0.0, 1.0))
+            }
+            FormulaScalarFunction::FInv | FormulaScalarFunction::FInvRt => {
+                let [probability, degrees1, degrees2] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if ![probability, degrees1, degrees2]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *degrees1 < 1.0 || *degrees2 < 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let degrees1 = degrees1.trunc();
+                let degrees2 = degrees2.trunc();
+                let target = if matches!(self, FormulaScalarFunction::FInvRt) {
+                    1.0 - *probability
+                } else {
+                    *probability
+                };
+                let mut cdf = |x: f64| {
+                    let transformed = degrees1 * x / (degrees1 * x + degrees2);
+                    regularized_beta(transformed, degrees1 / 2.0, degrees2 / 2.0)
+                };
+                inverse_positive_cdf(target, &mut cdf)
+            }
+            FormulaScalarFunction::FInvLegacy => {
+                let [probability, degrees1, degrees2] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if ![probability, degrees1, degrees2]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *degrees1 < 1.0 || *degrees2 < 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let degrees1 = degrees1.trunc();
+                let degrees2 = degrees2.trunc();
+                let target = 1.0 - *probability;
+                let mut cdf = |x: f64| {
+                    let transformed = degrees1 * x / (degrees1 * x + degrees2);
+                    regularized_beta(transformed, degrees1 / 2.0, degrees2 / 2.0)
+                };
+                inverse_positive_cdf(target, &mut cdf)
+            }
             FormulaScalarFunction::Fisher => {
                 let [value] = args else {
                     return Err(FormulaEvalError::Value);
@@ -11047,6 +11625,52 @@ impl FormulaScalarFunction {
                     gamma_ln_value(*number).exp()
                 };
                 checked_numeric_result(value)
+            }
+            FormulaScalarFunction::GammaDist | FormulaScalarFunction::GammaDistLegacy => {
+                let [x, alpha, beta, cumulative] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if ![x, alpha, beta, cumulative]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *x < 0.0 || *alpha <= 0.0 || *beta <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                if *cumulative != 0.0 {
+                    regularized_gamma_p(*alpha, *x / *beta)
+                } else if *x == 0.0 {
+                    Ok(if *alpha == 1.0 {
+                        1.0 / *beta
+                    } else if *alpha > 1.0 {
+                        0.0
+                    } else {
+                        return Err(FormulaEvalError::Num);
+                    })
+                } else {
+                    let scaled = *x / *beta;
+                    let log_density =
+                        (*alpha - 1.0) * scaled.ln() - scaled - gamma_ln_value(*alpha) - beta.ln();
+                    checked_numeric_result(log_density.exp())
+                }
+            }
+            FormulaScalarFunction::GammaInv | FormulaScalarFunction::GammaInvLegacy => {
+                let [probability, alpha, beta] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if ![probability, alpha, beta]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *alpha <= 0.0 || *beta <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let mut cdf = |x: f64| regularized_gamma_p(*alpha, x / *beta);
+                inverse_positive_cdf(*probability, &mut cdf)
             }
             FormulaScalarFunction::GammaLn | FormulaScalarFunction::GammaLnPrecise => {
                 let [x] = args else {
@@ -11926,6 +12550,110 @@ impl FormulaScalarFunction {
                 checked_numeric_result(
                     (cost - salvage) * (life - period + 1.0) * 2.0 / (life * (life + 1.0)),
                 )
+            }
+            FormulaScalarFunction::TDist => {
+                let [x, degrees, cumulative] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if ![x, degrees, cumulative]
+                    .iter()
+                    .all(|value| value.is_finite())
+                {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *degrees < 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                if *cumulative != 0.0 {
+                    student_t_cdf(*x, *degrees)
+                } else {
+                    student_t_pdf(*x, *degrees)
+                }
+            }
+            FormulaScalarFunction::TDistLegacy => {
+                let [x, degrees, tails] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if ![x, degrees, tails].iter().all(|value| value.is_finite()) {
+                    return Err(FormulaEvalError::Value);
+                }
+                let tails = formula_integer_argument(*tails)?;
+                if *x < 0.0 || *degrees < 1.0 || !matches!(tails, 1 | 2) {
+                    return Err(FormulaEvalError::Num);
+                }
+                let right_tail = 1.0 - student_t_cdf(*x, *degrees)?;
+                Ok(if tails == 1 {
+                    right_tail
+                } else {
+                    (2.0 * right_tail).min(1.0)
+                })
+            }
+            FormulaScalarFunction::TDist2T | FormulaScalarFunction::TDistRt => {
+                let [x, degrees] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if !x.is_finite() || !degrees.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *x < 0.0 || *degrees < 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let right_tail = 1.0 - student_t_cdf(*x, *degrees)?;
+                Ok(if matches!(self, FormulaScalarFunction::TDist2T) {
+                    (2.0 * right_tail).min(1.0)
+                } else {
+                    right_tail
+                })
+            }
+            FormulaScalarFunction::TInv => {
+                let [probability, degrees] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if !probability.is_finite() || !degrees.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *probability <= 0.0 || *probability >= 1.0 || *degrees < 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let mut low = -1.0;
+                let mut high = 1.0;
+                while student_t_cdf(low, *degrees)? > *probability {
+                    high = low;
+                    low *= 2.0;
+                    if !low.is_finite() {
+                        return Err(FormulaEvalError::Num);
+                    }
+                }
+                while student_t_cdf(high, *degrees)? < *probability {
+                    low = high;
+                    high *= 2.0;
+                    if !high.is_finite() {
+                        return Err(FormulaEvalError::Num);
+                    }
+                }
+                for _ in 0..120 {
+                    let mid = (low + high) / 2.0;
+                    if student_t_cdf(mid, *degrees)? < *probability {
+                        low = mid;
+                    } else {
+                        high = mid;
+                    }
+                }
+                checked_numeric_result((low + high) / 2.0)
+            }
+            FormulaScalarFunction::TInvLegacy | FormulaScalarFunction::TInv2T => {
+                let [probability, degrees] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if !probability.is_finite() || !degrees.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *degrees < 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let target = 1.0 - *probability / 2.0;
+                let mut cdf = |x: f64| student_t_cdf(x, *degrees);
+                inverse_positive_cdf(target, &mut cdf)
             }
             FormulaScalarFunction::Tan => {
                 let [value] = args else {
@@ -28119,6 +28847,169 @@ mod tests {
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_continuous_distribution_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A46".to_string())],
+                )
+                .expect("Range(A1:A46)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        46,
+                        1,
+                        vec![
+                            OmValue::Text("=BETA.DIST(0.25,1,1,TRUE)".to_string()),
+                            OmValue::Text("=BETA.DIST(0.25,1,1,FALSE)".to_string()),
+                            OmValue::Text("=BETADIST(3,1,1,1,5)".to_string()),
+                            OmValue::Text("=BETA.INV(0.25,1,1)".to_string()),
+                            OmValue::Text("=BETAINV(0.5,1,1,1,5)".to_string()),
+                            OmValue::Text("=BETA.INV(BETA.DIST(0.4,2,3,TRUE),2,3)".to_string()),
+                            OmValue::Text("=GAMMA.DIST(2,1,2,TRUE)".to_string()),
+                            OmValue::Text("=GAMMA.DIST(2,1,2,FALSE)".to_string()),
+                            OmValue::Text("=GAMMADIST(2,1,2,TRUE)".to_string()),
+                            OmValue::Text("=GAMMA.INV(0.6321205588285577,1,2)".to_string()),
+                            OmValue::Text("=GAMMAINV(0.5,1,2)".to_string()),
+                            OmValue::Text("=GAMMA.INV(GAMMA.DIST(3,2,2,TRUE),2,2)".to_string()),
+                            OmValue::Text("=CHISQ.DIST(2,2,TRUE)".to_string()),
+                            OmValue::Text("=CHISQ.DIST(2,2,FALSE)".to_string()),
+                            OmValue::Text("=CHISQ.DIST.RT(2,2)".to_string()),
+                            OmValue::Text("=CHIDIST(2,2)".to_string()),
+                            OmValue::Text("=CHISQ.INV(0.6321205588285577,2)".to_string()),
+                            OmValue::Text("=CHISQ.INV.RT(0.36787944117144233,2)".to_string()),
+                            OmValue::Text("=CHIINV(0.36787944117144233,2)".to_string()),
+                            OmValue::Text("=CHISQ.INV(CHISQ.DIST(4,5,TRUE),5)".to_string()),
+                            OmValue::Text("=F.DIST(3,2,2,TRUE)".to_string()),
+                            OmValue::Text("=F.DIST(3,2,2,FALSE)".to_string()),
+                            OmValue::Text("=F.DIST.RT(3,2,2)".to_string()),
+                            OmValue::Text("=FDIST(3,2,2)".to_string()),
+                            OmValue::Text("=F.INV(0.75,2,2)".to_string()),
+                            OmValue::Text("=F.INV.RT(0.25,2,2)".to_string()),
+                            OmValue::Text("=FINV(0.25,2,2)".to_string()),
+                            OmValue::Text("=F.INV(F.DIST(2,5,7,TRUE),5,7)".to_string()),
+                            OmValue::Text("=T.DIST(1,1,TRUE)".to_string()),
+                            OmValue::Text("=T.DIST(1,1,FALSE)".to_string()),
+                            OmValue::Text("=T.DIST.RT(1,1)".to_string()),
+                            OmValue::Text("=T.DIST.2T(1,1)".to_string()),
+                            OmValue::Text("=TDIST(1,1,1)".to_string()),
+                            OmValue::Text("=TDIST(1,1,2)".to_string()),
+                            OmValue::Text("=T.INV(0.75,1)".to_string()),
+                            OmValue::Text("=T.INV.2T(0.5,1)".to_string()),
+                            OmValue::Text("=TINV(0.5,1)".to_string()),
+                            OmValue::Text("=T.INV(T.DIST(-0.75,9,TRUE),9)".to_string()),
+                            OmValue::Text("=CONFIDENCE.T(0.5,2,2)".to_string()),
+                            OmValue::Text("=BETA.DIST(0.5,0,1,TRUE)".to_string()),
+                            OmValue::Text("=GAMMA.DIST(-1,1,2,TRUE)".to_string()),
+                            OmValue::Text("=CHISQ.DIST(1,0,TRUE)".to_string()),
+                            OmValue::Text("=F.DIST(1,0,2,TRUE)".to_string()),
+                            OmValue::Text("=T.DIST.RT(-1,1)".to_string()),
+                            OmValue::Text("=CONFIDENCE.T(0,2,2)".to_string()),
+                            OmValue::Text("=T.INV(0,1)".to_string()),
+                        ],
+                    )
+                    .expect("continuous distribution formulas"),
+                ),
+                &[],
+            )
+            .expect("set continuous distribution formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("continuous distribution values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected continuous distribution value array");
+        };
+        let exp_minus_one = (-1.0_f64).exp();
+        let expected_numbers = [
+            0.25,
+            1.0,
+            0.5,
+            0.25,
+            3.0,
+            0.4,
+            1.0 - exp_minus_one,
+            exp_minus_one / 2.0,
+            1.0 - exp_minus_one,
+            2.0,
+            -2.0 * 0.5_f64.ln(),
+            3.0,
+            1.0 - exp_minus_one,
+            exp_minus_one / 2.0,
+            exp_minus_one,
+            exp_minus_one,
+            2.0,
+            2.0,
+            2.0,
+            4.0,
+            0.75,
+            0.0625,
+            0.25,
+            0.25,
+            3.0,
+            3.0,
+            3.0,
+            2.0,
+            0.75,
+            std::f64::consts::FRAC_1_PI / 2.0,
+            0.25,
+            0.5,
+            0.25,
+            0.5,
+            1.0,
+            1.0,
+            1.0,
+            -0.75,
+            std::f64::consts::SQRT_2,
+        ];
+        for (index, expected) in expected_numbers.into_iter().enumerate() {
+            let number = expect_number(values.values[index].clone());
+            assert!(
+                (number - expected).abs() < 1e-6,
+                "continuous distribution result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            &values.values[39..],
+            &[
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
             ]
         );
     }

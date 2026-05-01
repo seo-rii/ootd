@@ -107,6 +107,8 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `BESSELJ`
 - `BESSELK`
 - `BESSELY`
+- `BETA.DIST` / `BETADIST`
+- `BETA.INV` / `BETAINV`
 - `BIN2DEC`
 - `BIN2HEX`
 - `BIN2OCT`
@@ -149,10 +151,23 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `BINOM.DIST` / `BINOMDIST`
 - `BINOM.DIST.RANGE`
 - `BINOM.INV` / `CRITBINOM`
+- `CHIDIST`
+- `CHIINV`
+- `CHISQ.DIST`
+- `CHISQ.DIST.RT`
+- `CHISQ.INV`
+- `CHISQ.INV.RT`
+- `CONFIDENCE.T`
+- `F.DIST`
+- `F.DIST.RT` / `FDIST`
+- `F.INV`
+- `F.INV.RT` / `FINV`
 - `FISHER`
 - `FISHERINV`
 - `FORECAST`
 - `GAMMA`
+- `GAMMA.DIST` / `GAMMADIST`
+- `GAMMA.INV` / `GAMMAINV`
 - `GAMMALN`
 - `GAMMALN.PRECISE`
 - `EXPON.DIST` / `EXPONDIST`
@@ -173,6 +188,13 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `SKEW.P`
 - `STANDARDIZE`
 - `STEYX`
+- `T.DIST`
+- `T.DIST.2T`
+- `T.DIST.RT`
+- `T.INV`
+- `T.INV.2T`
+- `TDIST`
+- `TINV`
 - `WEIBULL.DIST` / `WEIBULL`
 
 Roman numeral notes:
@@ -183,11 +205,12 @@ Roman numeral notes:
 - `FISHER` and `FISHERINV` cover the Fisher transformation and its inverse for scalar numeric values.
 - `ERF`, `ERF.PRECISE`, `ERFC`, and `ERFC.PRECISE` cover scalar error-function calculations. `ERF` also supports the legacy lower/upper integration form.
 - `GAMMALN` and `GAMMALN.PRECISE` return the natural logarithm of the gamma function for positive scalar inputs.
-- `EXPON.DIST`, `LOGNORM.DIST`, `NORM.DIST`, `NORM.S.DIST`, `POISSON.DIST`, and `WEIBULL.DIST` cover scalar probability and cumulative distribution calculations, with legacy function aliases mapped to the same implementations where their argument shapes match.
+- `BETA.DIST`, `CHISQ.DIST`, `EXPON.DIST`, `F.DIST`, `GAMMA.DIST`, `LOGNORM.DIST`, `NORM.DIST`, `NORM.S.DIST`, `POISSON.DIST`, `T.DIST`, and `WEIBULL.DIST` cover scalar probability and cumulative distribution calculations, with legacy function aliases mapped to the same implementations where their argument shapes match.
 - `BINOM.DIST`, `BINOM.DIST.RANGE`, `BINOM.INV`, `HYPGEOM.DIST`, and `NEGBINOM.DIST` cover scalar discrete statistical distribution calculations, including compatibility aliases where Excel exposes them.
 - `KURT`, `SKEW`, `SKEW.P`, and `PROB` cover scalar statistical shape and probability calculations over numeric arguments and ranges.
-- `GAMMA`, `CONFIDENCE.NORM`, `FORECAST`, and `STEYX` cover scalar gamma, confidence interval, and linear regression calculations.
-- `LOGNORM.INV`, `NORM.INV`, and `NORM.S.INV` cover scalar inverse cumulative distribution calculations and include the legacy `LOGINV`, `NORMINV`, and `NORMSINV` aliases.
+- `GAMMA`, `CONFIDENCE.NORM`, `CONFIDENCE.T`, `FORECAST`, and `STEYX` cover scalar gamma, confidence interval, and linear regression calculations.
+- `BETA.INV`, `CHISQ.INV`, `F.INV`, `GAMMA.INV`, `LOGNORM.INV`, `NORM.INV`, `NORM.S.INV`, and `T.INV` cover scalar inverse cumulative distribution calculations and include the legacy aliases currently listed above.
+- Continuous distribution helpers use iterative approximations for regularized beta/gamma and inverse CDF calculations, so they target practical worksheet compatibility rather than bit-for-bit Excel parity.
 - `GAUSS`, `PHI`, and `STANDARDIZE` cover scalar standard-normal helpers.
 - Complex engineering helpers parse Excel-style text values with lowercase `i` or `j` suffixes; text-returning `IM*` helpers preserve the suffix when the result includes an imaginary component.
 - `BESSELI`, `BESSELJ`, `BESSELK`, and `BESSELY` support non-negative integer orders, truncating fractional order arguments to match Excel's scalar argument handling.
