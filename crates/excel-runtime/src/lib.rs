@@ -13676,8 +13676,11 @@ enum FormulaAggregateFunction {
     Gcd,
     GeoMean,
     HarMean,
+    Kurt,
     Lcm,
     ModeSngl,
+    Skew,
+    SkewP,
     AveDev,
     DevSq,
     VarP,
@@ -13709,10 +13712,16 @@ impl FormulaAggregateFunction {
             Some(Self::GeoMean)
         } else if name.eq_ignore_ascii_case("HARMEAN") {
             Some(Self::HarMean)
+        } else if name.eq_ignore_ascii_case("KURT") {
+            Some(Self::Kurt)
         } else if name.eq_ignore_ascii_case("LCM") {
             Some(Self::Lcm)
         } else if name.eq_ignore_ascii_case("MODE") || name.eq_ignore_ascii_case("MODE.SNGL") {
             Some(Self::ModeSngl)
+        } else if name.eq_ignore_ascii_case("SKEW") {
+            Some(Self::Skew)
+        } else if name.eq_ignore_ascii_case("SKEW.P") {
+            Some(Self::SkewP)
         } else if name.eq_ignore_ascii_case("AVEDEV") {
             Some(Self::AveDev)
         } else if name.eq_ignore_ascii_case("DEVSQ") {
@@ -13749,6 +13758,13 @@ impl FormulaAggregateFunction {
                     deviation * deviation
                 })
                 .sum())
+        };
+        let checked_numeric_result = |value: f64| -> Result<f64, FormulaEvalError> {
+            if value.is_finite() {
+                Ok(value)
+            } else {
+                Err(FormulaEvalError::Num)
+            }
         };
         const EXCEL_INTEGER_LIMIT: u64 = 1_u64 << 53;
         let trunc_excel_nonnegative_integer = |value: f64| -> Result<u64, FormulaEvalError> {
@@ -13836,6 +13852,34 @@ impl FormulaAggregateFunction {
                 }
                 Ok(values.len() as f64 / reciprocal_sum)
             }
+            FormulaAggregateFunction::Kurt => {
+                let count = values.len();
+                if count < 4 {
+                    return Err(FormulaEvalError::Div0);
+                }
+                let mean = mean(values)?;
+                let mut deviation_square_sum = 0.0_f64;
+                let mut deviation_fourth_sum = 0.0_f64;
+                for value in values {
+                    let deviation = value - mean;
+                    let deviation_square = deviation * deviation;
+                    deviation_square_sum += deviation_square;
+                    deviation_fourth_sum += deviation_square * deviation_square;
+                }
+                if deviation_square_sum == 0.0 {
+                    return Err(FormulaEvalError::Div0);
+                }
+                let count = count as f64;
+                let sample_variance = deviation_square_sum / (count - 1.0);
+                let kurtosis = count * (count + 1.0) * deviation_fourth_sum
+                    / ((count - 1.0)
+                        * (count - 2.0)
+                        * (count - 3.0)
+                        * sample_variance
+                        * sample_variance)
+                    - 3.0 * (count - 1.0) * (count - 1.0) / ((count - 2.0) * (count - 3.0));
+                checked_numeric_result(kurtosis)
+            }
             FormulaAggregateFunction::Lcm => {
                 if values.is_empty() {
                     return Err(FormulaEvalError::Value);
@@ -13870,6 +13914,59 @@ impl FormulaAggregateFunction {
                     }
                 }
                 mode.ok_or(FormulaEvalError::NA)
+            }
+            FormulaAggregateFunction::Skew => {
+                let count = values.len();
+                if count < 3 {
+                    return Err(FormulaEvalError::Div0);
+                }
+                let mean = mean(values)?;
+                let mut deviation_square_sum = 0.0_f64;
+                let mut deviation_cube_sum = 0.0_f64;
+                for value in values {
+                    let deviation = value - mean;
+                    deviation_square_sum += deviation * deviation;
+                    deviation_cube_sum += deviation * deviation * deviation;
+                }
+                if deviation_square_sum == 0.0 {
+                    return Err(FormulaEvalError::Div0);
+                }
+                let count = count as f64;
+                let sample_standard_deviation = (deviation_square_sum / (count - 1.0)).sqrt();
+                checked_numeric_result(
+                    count * deviation_cube_sum
+                        / ((count - 1.0)
+                            * (count - 2.0)
+                            * sample_standard_deviation
+                            * sample_standard_deviation
+                            * sample_standard_deviation),
+                )
+            }
+            FormulaAggregateFunction::SkewP => {
+                let count = values.len();
+                if count < 3 {
+                    return Err(FormulaEvalError::Div0);
+                }
+                let mean = mean(values)?;
+                let mut deviation_square_sum = 0.0_f64;
+                let mut deviation_cube_sum = 0.0_f64;
+                for value in values {
+                    let deviation = value - mean;
+                    deviation_square_sum += deviation * deviation;
+                    deviation_cube_sum += deviation * deviation * deviation;
+                }
+                if deviation_square_sum == 0.0 {
+                    return Err(FormulaEvalError::Div0);
+                }
+                let count = count as f64;
+                let population_standard_deviation = (deviation_square_sum / count).sqrt();
+                checked_numeric_result(
+                    deviation_cube_sum
+                        / count
+                        / (population_standard_deviation
+                            * population_standard_deviation
+                            * population_standard_deviation),
+                )
             }
             FormulaAggregateFunction::AveDev => {
                 let mean = mean(values)?;
@@ -16055,6 +16152,77 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 return Ok(correlation * correlation);
             }
             return Ok(correlation);
+        }
+        if name.eq_ignore_ascii_case("PROB") {
+            let x_values = self.parse_aggregate_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let probabilities = self.parse_aggregate_argument()?;
+            if x_values.len() != probabilities.len() {
+                return Err(FormulaEvalError::NA);
+            }
+            let mut probability_sum = 0.0_f64;
+            for probability in &probabilities {
+                if !probability.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *probability <= 0.0 || *probability > 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                probability_sum += probability;
+            }
+            if (probability_sum - 1.0).abs() > 1e-7 {
+                return Err(FormulaEvalError::Num);
+            }
+
+            self.skip_whitespace();
+            let (lower_limit, upper_limit) = if self.consume_char(')') {
+                (0.0, None)
+            } else {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                let lower_limit = self.parse_comparison()?;
+                if !lower_limit.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                self.skip_whitespace();
+                if self.consume_char(')') {
+                    (lower_limit, None)
+                } else {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    let upper_limit = self.parse_comparison()?;
+                    if !upper_limit.is_finite() {
+                        return Err(FormulaEvalError::Value);
+                    }
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    if upper_limit < lower_limit {
+                        return Err(FormulaEvalError::Num);
+                    }
+                    (lower_limit, Some(upper_limit))
+                }
+            };
+
+            let total = x_values
+                .iter()
+                .zip(probabilities.iter())
+                .filter_map(|(x_value, probability)| {
+                    let matches = if let Some(upper_limit) = upper_limit {
+                        *x_value >= lower_limit && *x_value <= upper_limit
+                    } else {
+                        *x_value == lower_limit
+                    };
+                    matches.then_some(*probability)
+                })
+                .sum::<f64>();
+            return Ok(total);
         }
         if name.eq_ignore_ascii_case("PERCENTILE")
             || name.eq_ignore_ascii_case("PERCENTILE.INC")
@@ -21974,6 +22142,174 @@ mod tests {
                 OmValue::Number(8.0),
                 OmValue::Number(5.0),
                 OmValue::Number(3.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_statistical_shape_probability_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let shape_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A10".to_string())],
+                )
+                .expect("Range(A1:A10)"),
+        );
+        let probability_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1:G4".to_string())])
+                .expect("Range(D1:G4)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("I1:I13".to_string())],
+                )
+                .expect("Range(I1:I13)"),
+        );
+
+        runtime
+            .dispatch_set(
+                shape_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        10,
+                        1,
+                        vec![
+                            OmValue::Number(3.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(5.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(5.0),
+                            OmValue::Number(6.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(7.0),
+                        ],
+                    )
+                    .expect("statistical shape source values"),
+                ),
+                &[],
+            )
+            .expect("set statistical shape source values");
+        runtime
+            .dispatch_set(
+                probability_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        4,
+                        vec![
+                            OmValue::Number(0.0),
+                            OmValue::Number(0.2),
+                            OmValue::Number(0.2),
+                            OmValue::Number(0.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(0.3),
+                            OmValue::Number(0.3),
+                            OmValue::Number(0.3),
+                            OmValue::Number(2.0),
+                            OmValue::Number(0.1),
+                            OmValue::Number(0.1),
+                            OmValue::Number(0.1),
+                            OmValue::Number(3.0),
+                            OmValue::Number(0.4),
+                            OmValue::Number(0.5),
+                            OmValue::Number(0.6),
+                        ],
+                    )
+                    .expect("PROB source values"),
+                ),
+                &[],
+            )
+            .expect("set PROB source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        13,
+                        1,
+                        vec![
+                            OmValue::Text("=KURT(A1:A10)".to_string()),
+                            OmValue::Text("=SKEW(A1:A10)".to_string()),
+                            OmValue::Text("=SKEW.P(A1:A10)".to_string()),
+                            OmValue::Text("=PROB(D1:D4,E1:E4,2)".to_string()),
+                            OmValue::Text("=PROB(D1:D4,E1:E4,1,3)".to_string()),
+                            OmValue::Text("=PROB(D1:D4,E1:E4)".to_string()),
+                            OmValue::Text("=KURT(A1:A3)".to_string()),
+                            OmValue::Text("=SKEW(A1:A2)".to_string()),
+                            OmValue::Text("=SKEW.P(A1:A2)".to_string()),
+                            OmValue::Text("=PROB(D1:D4,E1:E3,1)".to_string()),
+                            OmValue::Text("=PROB(D1:D4,E1:E4,3,1)".to_string()),
+                            OmValue::Text("=PROB(D1:D4,F1:F4,1)".to_string()),
+                            OmValue::Text("=PROB(D1:D4,G1:G4,1)".to_string()),
+                        ],
+                    )
+                    .expect("statistical shape and probability formulas"),
+                ),
+                &[],
+            )
+            .expect("set statistical shape and probability formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("statistical shape and probability values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected statistical shape and probability value array");
+        };
+        let expected_numbers = [
+            -0.15179963720841627,
+            0.35954307140679737,
+            0.30319333935414383,
+            0.1,
+            0.8,
+            0.2,
+        ];
+        for (index, expected) in expected_numbers.into_iter().enumerate() {
+            let number = expect_number(values.values[index].clone());
+            assert!(
+                (number - expected).abs() < 1e-10,
+                "statistical shape/probability result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            &values.values[6..],
+            &[
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
             ]
         );
     }

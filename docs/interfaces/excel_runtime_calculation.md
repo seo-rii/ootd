@@ -122,6 +122,7 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `EXPON.DIST` / `EXPONDIST`
 - `GAUSS`
 - `HYPGEOM.DIST` / `HYPGEOMDIST`
+- `KURT`
 - `LOGNORM.DIST` / `LOGNORMDIST`
 - `LOGNORM.INV` / `LOGINV`
 - `NEGBINOM.DIST` / `NEGBINOMDIST`
@@ -131,6 +132,9 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `NORM.S.INV` / `NORMSINV`
 - `PHI`
 - `POISSON.DIST` / `POISSON`
+- `PROB`
+- `SKEW`
+- `SKEW.P`
 - `STANDARDIZE`
 - `WEIBULL.DIST` / `WEIBULL`
 
@@ -144,6 +148,7 @@ Roman numeral notes:
 - `GAMMALN` and `GAMMALN.PRECISE` return the natural logarithm of the gamma function for positive scalar inputs.
 - `EXPON.DIST`, `LOGNORM.DIST`, `NORM.DIST`, `NORM.S.DIST`, `POISSON.DIST`, and `WEIBULL.DIST` cover scalar probability and cumulative distribution calculations, with legacy function aliases mapped to the same implementations where their argument shapes match.
 - `BINOM.DIST`, `BINOM.DIST.RANGE`, `BINOM.INV`, `HYPGEOM.DIST`, and `NEGBINOM.DIST` cover scalar discrete statistical distribution calculations, including compatibility aliases where Excel exposes them.
+- `KURT`, `SKEW`, `SKEW.P`, and `PROB` cover scalar statistical shape and probability calculations over numeric arguments and ranges.
 - `LOGNORM.INV`, `NORM.INV`, and `NORM.S.INV` cover scalar inverse cumulative distribution calculations and include the legacy `LOGINV`, `NORMINV`, and `NORMSINV` aliases.
 - `GAUSS`, `PHI`, and `STANDARDIZE` cover scalar standard-normal helpers.
 
