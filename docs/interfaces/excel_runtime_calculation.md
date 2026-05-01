@@ -47,6 +47,7 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `FACTDOUBLE`
 - `COMBIN`
 - `COMBINA`
+- `CONFIDENCE` / `CONFIDENCE.NORM`
 - `PERMUT`
 - `PERMUTATIONA`
 - `MULTINOMIAL`
@@ -117,6 +118,8 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `BINOM.INV` / `CRITBINOM`
 - `FISHER`
 - `FISHERINV`
+- `FORECAST`
+- `GAMMA`
 - `GAMMALN`
 - `GAMMALN.PRECISE`
 - `EXPON.DIST` / `EXPONDIST`
@@ -136,6 +139,7 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `SKEW`
 - `SKEW.P`
 - `STANDARDIZE`
+- `STEYX`
 - `WEIBULL.DIST` / `WEIBULL`
 
 Roman numeral notes:
@@ -149,6 +153,7 @@ Roman numeral notes:
 - `EXPON.DIST`, `LOGNORM.DIST`, `NORM.DIST`, `NORM.S.DIST`, `POISSON.DIST`, and `WEIBULL.DIST` cover scalar probability and cumulative distribution calculations, with legacy function aliases mapped to the same implementations where their argument shapes match.
 - `BINOM.DIST`, `BINOM.DIST.RANGE`, `BINOM.INV`, `HYPGEOM.DIST`, and `NEGBINOM.DIST` cover scalar discrete statistical distribution calculations, including compatibility aliases where Excel exposes them.
 - `KURT`, `SKEW`, `SKEW.P`, and `PROB` cover scalar statistical shape and probability calculations over numeric arguments and ranges.
+- `GAMMA`, `CONFIDENCE.NORM`, `FORECAST`, and `STEYX` cover scalar gamma, confidence interval, and linear regression calculations.
 - `LOGNORM.INV`, `NORM.INV`, and `NORM.S.INV` cover scalar inverse cumulative distribution calculations and include the legacy `LOGINV`, `NORMINV`, and `NORMSINV` aliases.
 - `GAUSS`, `PHI`, and `STANDARDIZE` cover scalar standard-normal helpers.
 

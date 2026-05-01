@@ -8676,6 +8676,8 @@ enum FormulaScalarFunction {
     CeilingPrecise,
     Combin,
     Combina,
+    ConfidenceNorm,
+    ConfidenceNormLegacy,
     Cos,
     Cosh,
     CoupDayBs,
@@ -8717,6 +8719,7 @@ enum FormulaScalarFunction {
     FloorMath,
     FloorPrecise,
     Gauss,
+    Gamma,
     GammaLn,
     GammaLnPrecise,
     GeStep,
@@ -8860,6 +8863,10 @@ impl FormulaScalarFunction {
             Some(Self::Combin)
         } else if name.eq_ignore_ascii_case("COMBINA") {
             Some(Self::Combina)
+        } else if name.eq_ignore_ascii_case("CONFIDENCE.NORM") {
+            Some(Self::ConfidenceNorm)
+        } else if name.eq_ignore_ascii_case("CONFIDENCE") {
+            Some(Self::ConfidenceNormLegacy)
         } else if name.eq_ignore_ascii_case("COS") {
             Some(Self::Cos)
         } else if name.eq_ignore_ascii_case("COSH") {
@@ -8943,6 +8950,8 @@ impl FormulaScalarFunction {
             Some(Self::FloorPrecise)
         } else if name.eq_ignore_ascii_case("GAUSS") {
             Some(Self::Gauss)
+        } else if name.eq_ignore_ascii_case("GAMMA") {
+            Some(Self::Gamma)
         } else if name.eq_ignore_ascii_case("GAMMALN") {
             Some(Self::GammaLn)
         } else if name.eq_ignore_ascii_case("GAMMALN.PRECISE") {
@@ -10557,6 +10566,20 @@ impl FormulaScalarFunction {
                     .ok_or(FormulaEvalError::Num)?;
                 combination(expanded, chosen)
             }
+            FormulaScalarFunction::ConfidenceNorm | FormulaScalarFunction::ConfidenceNormLegacy => {
+                let [alpha, standard_dev, size] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if !alpha.is_finite() || !standard_dev.is_finite() || !size.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                let size = size.trunc();
+                if *alpha <= 0.0 || *alpha >= 1.0 || *standard_dev <= 0.0 || size < 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let critical_value = inverse_standard_normal(1.0 - *alpha / 2.0)?;
+                checked_numeric_result(critical_value * *standard_dev / size.sqrt())
+            }
             FormulaScalarFunction::Cos => {
                 let [value] = args else {
                     return Err(FormulaEvalError::Value);
@@ -10969,6 +10992,25 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Value);
                 };
                 checked_numeric_result(standard_normal_cdf(*z) - 0.5)
+            }
+            FormulaScalarFunction::Gamma => {
+                let [number] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                if !number.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                if *number == 0.0 || (*number < 0.0 && number.fract() == 0.0) {
+                    return Err(FormulaEvalError::Num);
+                }
+                let value = if *number < 0.5 {
+                    std::f64::consts::PI
+                        / ((std::f64::consts::PI * *number).sin()
+                            * gamma_ln_value(1.0 - *number).exp())
+                } else {
+                    gamma_ln_value(*number).exp()
+                };
+                checked_numeric_result(value)
             }
             FormulaScalarFunction::GammaLn | FormulaScalarFunction::GammaLnPrecise => {
                 let [x] = args else {
@@ -16073,6 +16115,46 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
             return Ok(total);
         }
+        if name.eq_ignore_ascii_case("FORECAST") {
+            let x = self.parse_comparison()?;
+            if !x.is_finite() {
+                return Err(FormulaEvalError::Value);
+            }
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            self.skip_whitespace();
+            let known_y = self.parse_aggregate_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            self.skip_whitespace();
+            let known_x = self.parse_aggregate_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            if known_y.len() != known_x.len() || known_y.is_empty() {
+                return Err(FormulaEvalError::NA);
+            }
+            let count = known_y.len() as f64;
+            let mean_y = known_y.iter().sum::<f64>() / count;
+            let mean_x = known_x.iter().sum::<f64>() / count;
+            let mut sum_xy_deviation = 0.0_f64;
+            let mut sum_x_deviation_square = 0.0_f64;
+            for (y_value, x_value) in known_y.iter().zip(known_x.iter()) {
+                let y_deviation = y_value - mean_y;
+                let x_deviation = x_value - mean_x;
+                sum_xy_deviation += y_deviation * x_deviation;
+                sum_x_deviation_square += x_deviation * x_deviation;
+            }
+            if sum_x_deviation_square == 0.0 {
+                return Err(FormulaEvalError::Div0);
+            }
+            return Ok(mean_y + sum_xy_deviation / sum_x_deviation_square * (x - mean_x));
+        }
         if name.eq_ignore_ascii_case("CORREL")
             || name.eq_ignore_ascii_case("PEARSON")
             || name.eq_ignore_ascii_case("COVAR")
@@ -16081,6 +16163,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             || name.eq_ignore_ascii_case("SLOPE")
             || name.eq_ignore_ascii_case("INTERCEPT")
             || name.eq_ignore_ascii_case("RSQ")
+            || name.eq_ignore_ascii_case("STEYX")
         {
             self.skip_whitespace();
             let first_values = self.parse_aggregate_argument()?;
@@ -16141,6 +16224,15 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                     return Ok(slope);
                 }
                 return Ok(first_mean - slope * second_mean);
+            }
+            if name.eq_ignore_ascii_case("STEYX") {
+                if count < 3 || sum_second_deviation_square == 0.0 {
+                    return Err(FormulaEvalError::Div0);
+                }
+                let residual_square_sum = sum_first_deviation_square
+                    - sum_first_second_deviation * sum_first_second_deviation
+                        / sum_second_deviation_square;
+                return Ok((residual_square_sum.max(0.0) / (count - 2) as f64).sqrt());
             }
 
             let denominator = sum_first_deviation_square * sum_second_deviation_square;
@@ -23422,6 +23514,190 @@ mod tests {
                 OmValue::Error(CellError::Div0),
                 OmValue::Error(CellError::NA),
                 OmValue::Error(CellError::NA),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_scalar_statistical_regression_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let known_y = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A5".to_string())])
+                .expect("Range(A1:A5)"),
+        );
+        let known_x = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B5".to_string())])
+                .expect("Range(B1:B5)"),
+        );
+        let constant_x = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1:D5".to_string())])
+                .expect("Range(D1:D5)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("E1:E18".to_string())],
+                )
+                .expect("Range(E1:E18)"),
+        );
+
+        runtime
+            .dispatch_set(
+                known_y,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        5,
+                        1,
+                        vec![
+                            OmValue::Number(6.0),
+                            OmValue::Number(7.0),
+                            OmValue::Number(9.0),
+                            OmValue::Number(15.0),
+                            OmValue::Number(21.0),
+                        ],
+                    )
+                    .expect("known y values"),
+                ),
+                &[],
+            )
+            .expect("set known y values");
+        runtime
+            .dispatch_set(
+                known_x,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        5,
+                        1,
+                        vec![
+                            OmValue::Number(20.0),
+                            OmValue::Number(28.0),
+                            OmValue::Number(31.0),
+                            OmValue::Number(38.0),
+                            OmValue::Number(40.0),
+                        ],
+                    )
+                    .expect("known x values"),
+                ),
+                &[],
+            )
+            .expect("set known x values");
+        runtime
+            .dispatch_set(
+                constant_x,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        5,
+                        1,
+                        vec![
+                            OmValue::Number(4.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(4.0),
+                        ],
+                    )
+                    .expect("constant x values"),
+                ),
+                &[],
+            )
+            .expect("set constant x values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        18,
+                        1,
+                        vec![
+                            OmValue::Text("=GAMMA(2.5)".to_string()),
+                            OmValue::Text("=GAMMA(-3.75)".to_string()),
+                            OmValue::Text("=CONFIDENCE.NORM(0.05,2.5,50)".to_string()),
+                            OmValue::Text("=CONFIDENCE(0.05,2.5,50.9)".to_string()),
+                            OmValue::Text("=FORECAST(30,A1:A5,B1:B5)".to_string()),
+                            OmValue::Text("=STEYX(A1:A5,B1:B5)".to_string()),
+                            OmValue::Text("=GAMMA(0)".to_string()),
+                            OmValue::Text("=GAMMA(-2)".to_string()),
+                            OmValue::Text("=GAMMA(1,2)".to_string()),
+                            OmValue::Text("=CONFIDENCE.NORM(0,2.5,50)".to_string()),
+                            OmValue::Text("=CONFIDENCE.NORM(0.05,0,50)".to_string()),
+                            OmValue::Text("=CONFIDENCE.NORM(0.05,2.5,0)".to_string()),
+                            OmValue::Text("=CONFIDENCE(0.05,2.5)".to_string()),
+                            OmValue::Text("=FORECAST(30,A1:A5,B1:B4)".to_string()),
+                            OmValue::Text("=FORECAST(30,A1:A5,D1:D5)".to_string()),
+                            OmValue::Text("=STEYX(A1:A5,B1:B4)".to_string()),
+                            OmValue::Text("=STEYX(A1:A2,B1:B2)".to_string()),
+                            OmValue::Text("=STEYX(A1:A5,D1:D5)".to_string()),
+                        ],
+                    )
+                    .expect("scalar statistical regression formulas"),
+                ),
+                &[],
+            )
+            .expect("set scalar statistical regression formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("scalar statistical regression values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected scalar statistical regression value array");
+        };
+        let expected_numbers = [
+            1.3293403881791372,
+            0.2678661288614166,
+            0.6929519121748389,
+            0.6929519121748389,
+            10.607253086419753,
+            3.1019624082011394,
+        ];
+        for (index, expected) in expected_numbers.into_iter().enumerate() {
+            let number = expect_number(values.values[index].clone());
+            assert!(
+                (number - expected).abs() < 1e-6,
+                "scalar statistical regression result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            &values.values[6..],
+            &[
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Div0),
             ]
         );
     }
