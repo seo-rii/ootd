@@ -86,6 +86,8 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `ACOTH`
 - `DEGREES`
 - `RADIANS`
+- `RAND`
+- `RANDBETWEEN`
 - `ISEVEN`
 - `ISODD`
 - `GCD`
@@ -403,6 +405,8 @@ Lookup notes:
 ### Date and time serial helpers
 
 - `DATE`
+- `TODAY`
+- `NOW`
 - `YEAR`
 - `MONTH`
 - `DAY`
@@ -437,7 +441,8 @@ Date/time notes:
 - `TIME` produces fractional-day serial values, with hour/minute/second rollover for non-negative arguments.
 - `DATEVALUE` supports ISO-like `yyyy-mm-dd`, `yyyy/m/d`, and numeric `m/d/yyyy` text.
 - `TIMEVALUE` supports `h:mm`, `h:mm:ss`, and `AM`/`PM` suffixes.
-- Locale-sensitive date/time text parsing beyond that focused subset and volatile clock functions are not implemented.
+- `TODAY` and `NOW` return volatile serial values from the host clock; `NOW` includes the fractional day.
+- Locale-sensitive date/time text parsing beyond that focused subset is not implemented.
 
 Criteria notes:
 

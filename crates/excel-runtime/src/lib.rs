@@ -83,6 +83,8 @@ const PINNED_OM_TEMPLATE_JSON: &str = include_str!(concat!(
     "/../../specs/pinned/office_idl_excel_om.template.json"
 ));
 
+static FORMULA_RANDOM_STATE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 #[derive(Debug)]
 struct RuntimeWorkbook {
     loaded: LoadedXlsxWorkbook,
@@ -8760,6 +8762,7 @@ enum FormulaScalarFunction {
     NormSInv,
     NormSInvLegacy,
     Not,
+    Now,
     Odd,
     Or,
     PDuration,
@@ -8770,6 +8773,8 @@ enum FormulaScalarFunction {
     PoissonDist,
     Price,
     Radians,
+    Rand,
+    RandBetween,
     PriceDisc,
     PriceMat,
     Quotient,
@@ -8796,6 +8801,7 @@ enum FormulaScalarFunction {
     TBillPrice,
     TBillYield,
     Time,
+    Today,
     Trunc,
     Vdb,
     Weekday,
@@ -9036,6 +9042,8 @@ impl FormulaScalarFunction {
             Some(Self::NormSDistLegacy)
         } else if name.eq_ignore_ascii_case("NOT") {
             Some(Self::Not)
+        } else if name.eq_ignore_ascii_case("NOW") {
+            Some(Self::Now)
         } else if name.eq_ignore_ascii_case("ODD") {
             Some(Self::Odd)
         } else if name.eq_ignore_ascii_case("OR") {
@@ -9057,6 +9065,10 @@ impl FormulaScalarFunction {
             Some(Self::Price)
         } else if name.eq_ignore_ascii_case("RADIANS") {
             Some(Self::Radians)
+        } else if name.eq_ignore_ascii_case("RAND") {
+            Some(Self::Rand)
+        } else if name.eq_ignore_ascii_case("RANDBETWEEN") {
+            Some(Self::RandBetween)
         } else if name.eq_ignore_ascii_case("PRICEDISC") {
             Some(Self::PriceDisc)
         } else if name.eq_ignore_ascii_case("PRICEMAT") {
@@ -9109,6 +9121,8 @@ impl FormulaScalarFunction {
             Some(Self::TBillYield)
         } else if name.eq_ignore_ascii_case("TIME") {
             Some(Self::Time)
+        } else if name.eq_ignore_ascii_case("TODAY") {
+            Some(Self::Today)
         } else if name.eq_ignore_ascii_case("TRUNC") {
             Some(Self::Trunc)
         } else if name.eq_ignore_ascii_case("VDB") {
@@ -11509,6 +11523,12 @@ impl FormulaScalarFunction {
                 };
                 Ok(if *value == 0.0 { 1.0 } else { 0.0 })
             }
+            FormulaScalarFunction::Now => {
+                let [] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                formula_current_excel_serial()
+            }
             FormulaScalarFunction::Odd => {
                 let [number] = args else {
                     return Err(FormulaEvalError::Value);
@@ -11814,6 +11834,18 @@ impl FormulaScalarFunction {
                     Err(FormulaEvalError::Num)
                 }
             }
+            FormulaScalarFunction::Rand => {
+                let [] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                Ok(formula_rand())
+            }
+            FormulaScalarFunction::RandBetween => {
+                let [bottom, top] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                formula_rand_between(*bottom, *top)
+            }
             FormulaScalarFunction::Power => {
                 let [base, exponent] = args else {
                     return Err(FormulaEvalError::Value);
@@ -11983,6 +12015,12 @@ impl FormulaScalarFunction {
                     return Err(FormulaEvalError::Value);
                 };
                 formula_time_serial_from_args(*hour, *minute, *second)
+            }
+            FormulaScalarFunction::Today => {
+                let [] = args else {
+                    return Err(FormulaEvalError::Value);
+                };
+                formula_current_excel_serial().map(f64::floor)
             }
             FormulaScalarFunction::Trunc => {
                 let (value, digits) = match args {
@@ -14165,6 +14203,74 @@ fn formula_serial_integer(serial: f64) -> Result<i64, FormulaEvalError> {
         return Err(FormulaEvalError::Num);
     }
     Ok(serial as i64)
+}
+
+fn formula_current_excel_serial() -> Result<f64, FormulaEvalError> {
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| FormulaEvalError::Num)?;
+    Ok(25_569.0 + elapsed.as_secs_f64() / 86_400.0)
+}
+
+fn formula_random_u64() -> u64 {
+    loop {
+        let current = FORMULA_RANDOM_STATE.load(std::sync::atomic::Ordering::Relaxed);
+        let state = if current == 0 {
+            let seed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos() as u64)
+                .unwrap_or(0x9e37_79b9_7f4a_7c15);
+            let seed = seed ^ 0xa076_1d64_78bd_642f;
+            if seed == 0 {
+                0xe703_7ed1_a0b4_28db
+            } else {
+                seed
+            }
+        } else {
+            current
+        };
+        let next = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        match FORMULA_RANDOM_STATE.compare_exchange_weak(
+            current,
+            next,
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+        ) {
+            Ok(_) => return next,
+            Err(_) => continue,
+        }
+    }
+}
+
+fn formula_rand() -> f64 {
+    const SCALE: f64 = 1.0 / ((1_u64 << 53) as f64);
+    ((formula_random_u64() >> 11) as f64) * SCALE
+}
+
+fn formula_rand_between(bottom: f64, top: f64) -> Result<f64, FormulaEvalError> {
+    if !bottom.is_finite() || !top.is_finite() {
+        return Err(FormulaEvalError::Value);
+    }
+    let bottom = bottom.trunc();
+    let top = top.trunc();
+    if bottom < i64::MIN as f64
+        || bottom > i64::MAX as f64
+        || top < i64::MIN as f64
+        || top > i64::MAX as f64
+    {
+        return Err(FormulaEvalError::Num);
+    }
+    let bottom = bottom as i64;
+    let top = top as i64;
+    if bottom > top {
+        return Err(FormulaEvalError::Num);
+    }
+    let span = i128::from(top) - i128::from(bottom) + 1;
+    let span = u64::try_from(span).map_err(|_| FormulaEvalError::Num)?;
+    let offset = (formula_random_u64() % span) as i128;
+    Ok((i128::from(bottom) + offset) as f64)
 }
 
 fn formula_edate(serial: f64, months: f64) -> Result<f64, FormulaEvalError> {
@@ -33778,6 +33884,112 @@ mod tests {
                 OmValue::Number(45382.0),
                 OmValue::Number(60.0),
                 OmValue::Number(29.0),
+                OmValue::Error(CellError::Num),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_volatile_scalar_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A10".to_string())],
+                )
+                .expect("Range(A1:A10)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        10,
+                        1,
+                        vec![
+                            OmValue::Text("=TODAY()".to_string()),
+                            OmValue::Text("=NOW()".to_string()),
+                            OmValue::Text("=RAND()".to_string()),
+                            OmValue::Text("=RANDBETWEEN(1,3)".to_string()),
+                            OmValue::Text("=RANDBETWEEN(-2,2)".to_string()),
+                            OmValue::Text("=RANDBETWEEN(1.9,3.1)".to_string()),
+                            OmValue::Text("=RAND(1)".to_string()),
+                            OmValue::Text("=TODAY(1)".to_string()),
+                            OmValue::Text("=NOW(1)".to_string()),
+                            OmValue::Text("=RANDBETWEEN(5,1)".to_string()),
+                        ],
+                    )
+                    .expect("volatile scalar formulas"),
+                ),
+                &[],
+            )
+            .expect("set volatile scalar formulas");
+
+        let before = super::formula_current_excel_serial().expect("before serial");
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+        let after = super::formula_current_excel_serial().expect("after serial");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("volatile scalar values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected volatile scalar value array");
+        };
+        let today = expect_number(values.values[0].clone());
+        assert!(
+            today == before.floor() || today == after.floor(),
+            "TODAY expected current serial day around {before}..{after}, got {today}"
+        );
+        let now = expect_number(values.values[1].clone());
+        assert!(
+            now >= before && now <= after + 1.0 / 86_400.0,
+            "NOW expected serial in calculation window {before}..{after}, got {now}"
+        );
+        let rand = expect_number(values.values[2].clone());
+        assert!(
+            (0.0..1.0).contains(&rand),
+            "RAND expected [0,1), got {rand}"
+        );
+        let between = expect_number(values.values[3].clone());
+        assert!(
+            (1.0..=3.0).contains(&between) && between.fract() == 0.0,
+            "RANDBETWEEN(1,3) expected integer range, got {between}"
+        );
+        let negative_between = expect_number(values.values[4].clone());
+        assert!(
+            (-2.0..=2.0).contains(&negative_between) && negative_between.fract() == 0.0,
+            "RANDBETWEEN(-2,2) expected integer range, got {negative_between}"
+        );
+        let truncated_between = expect_number(values.values[5].clone());
+        assert!(
+            (1.0..=3.0).contains(&truncated_between) && truncated_between.fract() == 0.0,
+            "RANDBETWEEN decimal bounds expected truncated integer range, got {truncated_between}"
+        );
+        assert_eq!(
+            &values.values[6..],
+            &[
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Num),
             ]
         );
