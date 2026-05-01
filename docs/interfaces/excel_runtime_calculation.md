@@ -472,17 +472,24 @@ Criteria notes:
 
 ### Text helpers
 
+- `ARRAYTOTEXT`
+- `ASC`
 - `CONCAT`
 - `CONCATENATE`
 - `BASE`
 - `CHAR`
 - `CLEAN`
 - `CODE`
+- `DBCS`
 - `DOLLAR`
 - `FIXED`
 - `LEFT`
+- `LEFTB`
 - `RIGHT`
+- `RIGHTB`
 - `MID`
+- `MIDB`
+- `JIS`
 - `T`
 - `UNICHAR`
 - `UNICODE`
@@ -495,24 +502,39 @@ Criteria notes:
 - `TEXTAFTER`
 - `REPT`
 - `REPLACE`
+- `REPLACEB`
 - `SUBSTITUTE`
 - `LEN`
+- `LENB`
 - `FIND`
+- `FINDB`
 - `SEARCH`
+- `SEARCHB`
 - `EXACT`
 - `VALUE`
+- `VALUETOTEXT`
 - `NUMBERVALUE`
 
 Text notes:
 
 - text-returning helpers produce `CellValue::Text` and support scalar literals, booleans, numbers, single-cell references, and nested text helpers.
-- `FIND` is case-sensitive, `SEARCH` is case-insensitive, and both return 1-based character positions.
+- `FIND` is case-sensitive, `SEARCH` is case-insensitive, and both return 1-based character positions. The `*B` variants use focused byte-width positions, treating ASCII as width 1 and non-ASCII scalar values as width 2.
 - `SEARCH`, `XLOOKUP`, and `XMATCH` support Excel-style `*` and `?` wildcards with `~` escaping in their focused scalar paths.
 - `TEXTJOIN` supports scalar values and rectangular ranges, and `TEXTBEFORE` / `TEXTAFTER` support scalar delimiters, instance numbers, case-sensitivity mode, match-end mode, and scalar `if_not_found` fallbacks.
 - `VALUE` supports plain decimal numeric text and a trailing percent sign; `NUMBERVALUE` additionally supports configurable decimal and group separators. Currency symbols, date/time text, and locale-specific formatting beyond those focused paths are not implemented.
 - `FIXED` uses period decimal text and optional comma grouping; `DOLLAR` uses the invariant `$` currency symbol and Excel-style parentheses for negative values.
+- `VALUETOTEXT` and `ARRAYTOTEXT` support concise and strict formatting for scalar values and rectangular references; strict text values use Excel-style doubled quotes.
+- `ASC`, `DBCS`, and `JIS` preserve text in the current non-DBCS focused path.
 - `REPT` returns `#VALUE!` for outputs beyond Excel's 32,767-character cell text limit.
-- Range flattening, locale-aware formatting, and full Excel text coercion are not implemented yet.
+- General-purpose range flattening beyond the listed helpers, locale-aware formatting, and full Excel text coercion are not implemented yet.
+
+### Web helpers
+
+- `ENCODEURL`
+
+Web notes:
+
+- `ENCODEURL` percent-encodes UTF-8 bytes and leaves ASCII letters, digits, `-`, `_`, `.`, and `~` unescaped.
 
 ## Current Boundaries
 

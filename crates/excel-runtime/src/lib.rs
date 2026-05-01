@@ -4023,21 +4023,7 @@ impl ExcelRuntime {
                     OmValue::Bool(false) => "FALSE".to_string(),
                     OmValue::Number(number) => number.to_string(),
                     OmValue::Text(text) => text.clone(),
-                    OmValue::Error(error) => match error {
-                        office_common::CellError::Null => "#NULL!".to_string(),
-                        office_common::CellError::Div0 => "#DIV/0!".to_string(),
-                        office_common::CellError::Value => "#VALUE!".to_string(),
-                        office_common::CellError::Ref => "#REF!".to_string(),
-                        office_common::CellError::Name => "#NAME?".to_string(),
-                        office_common::CellError::Num => "#NUM!".to_string(),
-                        office_common::CellError::NA => "#N/A".to_string(),
-                        office_common::CellError::GettingData => "#GETTING_DATA".to_string(),
-                        office_common::CellError::Spill => "#SPILL!".to_string(),
-                        office_common::CellError::Calc => "#CALC!".to_string(),
-                        office_common::CellError::Field => "#FIELD!".to_string(),
-                        office_common::CellError::Blocked => "#BLOCKED!".to_string(),
-                        office_common::CellError::Unknown => "#UNKNOWN!".to_string(),
-                    },
+                    OmValue::Error(error) => formula_cell_error_text(*error).to_string(),
                     OmValue::Object(_) | OmValue::Array(_) => String::new(),
                 };
                 let Some(first) = array.values.first() else {
@@ -12527,6 +12513,108 @@ fn formula_text_from_value_probe(value: FormulaValueProbe) -> Result<String, For
     }
 }
 
+fn formula_cell_error_text(error: CellError) -> &'static str {
+    match error {
+        CellError::Null => "#NULL!",
+        CellError::Div0 => "#DIV/0!",
+        CellError::Value => "#VALUE!",
+        CellError::Ref => "#REF!",
+        CellError::Name => "#NAME?",
+        CellError::Num => "#NUM!",
+        CellError::NA => "#N/A",
+        CellError::GettingData => "#GETTING_DATA",
+        CellError::Spill => "#SPILL!",
+        CellError::Calc => "#CALC!",
+        CellError::Field => "#FIELD!",
+        CellError::Blocked => "#BLOCKED!",
+        CellError::Unknown => "#UNKNOWN!",
+    }
+}
+
+fn formula_eval_error_text(error: FormulaEvalError) -> &'static str {
+    match error {
+        FormulaEvalError::Unsupported => "#VALUE!",
+        FormulaEvalError::Div0 => "#DIV/0!",
+        FormulaEvalError::Value => "#VALUE!",
+        FormulaEvalError::Ref => "#REF!",
+        FormulaEvalError::Name => "#NAME?",
+        FormulaEvalError::NA => "#N/A",
+        FormulaEvalError::Num => "#NUM!",
+        FormulaEvalError::Calc => "#CALC!",
+    }
+}
+
+fn formula_strict_text_literal(text: &str) -> String {
+    format!("\"{}\"", text.replace('"', "\"\""))
+}
+
+fn formula_value_to_text(
+    value: FormulaValueProbe,
+    strict: bool,
+) -> Result<String, FormulaEvalError> {
+    match value {
+        FormulaValueProbe::Blank => Ok(String::new()),
+        FormulaValueProbe::Bool(value) => Ok(if value { "TRUE" } else { "FALSE" }.to_string()),
+        FormulaValueProbe::Number(value) => formula_text_from_number(value),
+        FormulaValueProbe::Text(value) if strict => Ok(formula_strict_text_literal(value.as_str())),
+        FormulaValueProbe::Text(value) => Ok(value),
+        FormulaValueProbe::Error(error) => Ok(formula_eval_error_text(error).to_string()),
+    }
+}
+
+fn formula_text_byte_width(ch: char) -> usize {
+    if ch.is_ascii() { 1 } else { 2 }
+}
+
+fn formula_text_byte_len(text: &str) -> usize {
+    text.chars().map(formula_text_byte_width).sum()
+}
+
+fn formula_text_byte_slice(text: &str, start: usize, count: usize) -> String {
+    if count == 0 {
+        return String::new();
+    }
+    let end = start.saturating_add(count);
+    let mut position = 1_usize;
+    let mut output = String::new();
+    for ch in text.chars() {
+        let width = formula_text_byte_width(ch);
+        let next_position = position + width;
+        if position >= end {
+            break;
+        }
+        if position >= start && next_position <= end {
+            output.push(ch);
+        }
+        position = next_position;
+    }
+    output
+}
+
+fn formula_text_char_position_to_byte_position(text: &str, char_position: usize) -> usize {
+    let units = text
+        .chars()
+        .take(char_position.saturating_sub(1))
+        .map(formula_text_byte_width)
+        .sum::<usize>();
+    units + 1
+}
+
+fn formula_encode_url(text: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut output = String::new();
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            output.push(byte as char);
+        } else {
+            output.push('%');
+            output.push(HEX[(byte >> 4) as usize] as char);
+            output.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+    }
+    output
+}
+
 fn formula_selected_text_from_value_probe(
     value: FormulaValueProbe,
 ) -> Result<String, FormulaEvalError> {
@@ -12541,11 +12629,18 @@ fn formula_selected_text_from_value_probe(
 
 fn formula_text_function_name(name: &str) -> bool {
     name.eq_ignore_ascii_case("ADDRESS")
+        || name.eq_ignore_ascii_case("ARRAYTOTEXT")
+        || name.eq_ignore_ascii_case("ASC")
         || name.eq_ignore_ascii_case("CONCAT")
         || name.eq_ignore_ascii_case("CONCATENATE")
+        || name.eq_ignore_ascii_case("DBCS")
+        || name.eq_ignore_ascii_case("ENCODEURL")
         || name.eq_ignore_ascii_case("LEFT")
+        || name.eq_ignore_ascii_case("LEFTB")
         || name.eq_ignore_ascii_case("RIGHT")
+        || name.eq_ignore_ascii_case("RIGHTB")
         || name.eq_ignore_ascii_case("MID")
+        || name.eq_ignore_ascii_case("MIDB")
         || name.eq_ignore_ascii_case("BASE")
         || name.eq_ignore_ascii_case("BIN2HEX")
         || name.eq_ignore_ascii_case("BIN2OCT")
@@ -12580,6 +12675,7 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("IMSUB")
         || name.eq_ignore_ascii_case("IMSUM")
         || name.eq_ignore_ascii_case("IMTAN")
+        || name.eq_ignore_ascii_case("JIS")
         || name.eq_ignore_ascii_case("OCT2BIN")
         || name.eq_ignore_ascii_case("OCT2HEX")
         || name.eq_ignore_ascii_case("ROMAN")
@@ -12594,7 +12690,9 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("TEXTAFTER")
         || name.eq_ignore_ascii_case("REPT")
         || name.eq_ignore_ascii_case("REPLACE")
+        || name.eq_ignore_ascii_case("REPLACEB")
         || name.eq_ignore_ascii_case("SUBSTITUTE")
+        || name.eq_ignore_ascii_case("VALUETOTEXT")
         || name.eq_ignore_ascii_case("FORMULATEXT")
         || name.eq_ignore_ascii_case("IF")
         || name.eq_ignore_ascii_case("IFS")
@@ -17105,13 +17203,22 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return self.parse_character_code_function();
         }
         if name.eq_ignore_ascii_case("LEN") {
-            return self.parse_len_function();
+            return self.parse_len_function(false);
+        }
+        if name.eq_ignore_ascii_case("LENB") {
+            return self.parse_len_function(true);
         }
         if name.eq_ignore_ascii_case("FIND") {
-            return self.parse_find_function(false);
+            return self.parse_find_function(false, false);
+        }
+        if name.eq_ignore_ascii_case("FINDB") {
+            return self.parse_find_function(false, true);
         }
         if name.eq_ignore_ascii_case("SEARCH") {
-            return self.parse_find_function(true);
+            return self.parse_find_function(true, false);
+        }
+        if name.eq_ignore_ascii_case("SEARCHB") {
+            return self.parse_find_function(true, true);
         }
         if name.eq_ignore_ascii_case("EXACT") {
             return self.parse_exact_function();
@@ -17706,17 +17813,38 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("ADDRESS") {
             return self.parse_address_text_function();
         }
+        if name.eq_ignore_ascii_case("ARRAYTOTEXT") {
+            return self.parse_arraytotext_function();
+        }
+        if name.eq_ignore_ascii_case("ASC")
+            || name.eq_ignore_ascii_case("DBCS")
+            || name.eq_ignore_ascii_case("JIS")
+        {
+            return self.parse_unary_text_function(|text| text);
+        }
         if name.eq_ignore_ascii_case("CONCAT") || name.eq_ignore_ascii_case("CONCATENATE") {
             return self.parse_concat_text_function();
         }
+        if name.eq_ignore_ascii_case("ENCODEURL") {
+            return self.parse_unary_text_function(|text| formula_encode_url(text.as_str()));
+        }
         if name.eq_ignore_ascii_case("LEFT") {
-            return self.parse_left_text_function();
+            return self.parse_left_text_function(false);
+        }
+        if name.eq_ignore_ascii_case("LEFTB") {
+            return self.parse_left_text_function(true);
         }
         if name.eq_ignore_ascii_case("RIGHT") {
-            return self.parse_right_text_function();
+            return self.parse_right_text_function(false);
+        }
+        if name.eq_ignore_ascii_case("RIGHTB") {
+            return self.parse_right_text_function(true);
         }
         if name.eq_ignore_ascii_case("MID") {
-            return self.parse_mid_text_function();
+            return self.parse_mid_text_function(false);
+        }
+        if name.eq_ignore_ascii_case("MIDB") {
+            return self.parse_mid_text_function(true);
         }
         if name.eq_ignore_ascii_case("BASE") {
             return self.parse_base_text_function();
@@ -18061,10 +18189,16 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return self.parse_rept_text_function();
         }
         if name.eq_ignore_ascii_case("REPLACE") {
-            return self.parse_replace_text_function();
+            return self.parse_replace_text_function(false);
+        }
+        if name.eq_ignore_ascii_case("REPLACEB") {
+            return self.parse_replace_text_function(true);
         }
         if name.eq_ignore_ascii_case("SUBSTITUTE") {
             return self.parse_substitute_text_function();
+        }
+        if name.eq_ignore_ascii_case("VALUETOTEXT") {
+            return self.parse_valuetotext_function();
         }
         if name.eq_ignore_ascii_case("FORMULATEXT") {
             return self.parse_formulatext_function();
@@ -18199,15 +18333,24 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         Ok(address)
     }
 
-    fn parse_left_text_function(&mut self) -> Result<String, FormulaEvalError> {
+    fn parse_left_text_function(&mut self, byte_mode: bool) -> Result<String, FormulaEvalError> {
         let text = self.parse_text_value_argument()?;
         let count = self.parse_optional_text_count_argument(1)?;
-        Ok(text.chars().take(count).collect())
+        if byte_mode {
+            Ok(formula_text_byte_slice(text.as_str(), 1, count))
+        } else {
+            Ok(text.chars().take(count).collect())
+        }
     }
 
-    fn parse_right_text_function(&mut self) -> Result<String, FormulaEvalError> {
+    fn parse_right_text_function(&mut self, byte_mode: bool) -> Result<String, FormulaEvalError> {
         let text = self.parse_text_value_argument()?;
         let count = self.parse_optional_text_count_argument(1)?;
+        if byte_mode {
+            let len = formula_text_byte_len(text.as_str());
+            let start = len.saturating_sub(count) + 1;
+            return Ok(formula_text_byte_slice(text.as_str(), start, count));
+        }
         let chars = text.chars().collect::<Vec<_>>();
         Ok(chars
             .iter()
@@ -18215,7 +18358,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             .collect())
     }
 
-    fn parse_mid_text_function(&mut self) -> Result<String, FormulaEvalError> {
+    fn parse_mid_text_function(&mut self, byte_mode: bool) -> Result<String, FormulaEvalError> {
         let text = self.parse_text_value_argument()?;
         self.skip_whitespace();
         if !self.consume_char(',') {
@@ -18231,7 +18374,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if !self.consume_char(')') {
             return Err(FormulaEvalError::Unsupported);
         }
-        Ok(text.chars().skip(start - 1).take(count).collect())
+        if byte_mode {
+            Ok(formula_text_byte_slice(text.as_str(), start, count))
+        } else {
+            Ok(text.chars().skip(start - 1).take(count).collect())
+        }
     }
 
     fn parse_character_text_function(&mut self, unicode: bool) -> Result<String, FormulaEvalError> {
@@ -18613,7 +18760,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         Ok(text.repeat(count))
     }
 
-    fn parse_replace_text_function(&mut self) -> Result<String, FormulaEvalError> {
+    fn parse_replace_text_function(&mut self, byte_mode: bool) -> Result<String, FormulaEvalError> {
         let old_text = self.parse_text_value_argument()?;
         self.skip_whitespace();
         if !self.consume_char(',') {
@@ -18633,6 +18780,17 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         self.skip_whitespace();
         if !self.consume_char(')') {
             return Err(FormulaEvalError::Unsupported);
+        }
+        if byte_mode {
+            let len = formula_text_byte_len(old_text.as_str());
+            if start > len + 1 {
+                return Err(FormulaEvalError::Value);
+            }
+            let prefix = formula_text_byte_slice(old_text.as_str(), 1, start - 1);
+            let suffix_start = start.saturating_add(count);
+            let suffix_count = len.saturating_sub(suffix_start.saturating_sub(1));
+            let suffix = formula_text_byte_slice(old_text.as_str(), suffix_start, suffix_count);
+            return Ok(format!("{prefix}{new_text}{suffix}"));
         }
         let chars = old_text.chars().collect::<Vec<_>>();
         if start > chars.len() + 1 {
@@ -18715,13 +18873,88 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         })
     }
 
-    fn parse_len_function(&mut self) -> Result<f64, FormulaEvalError> {
+    fn parse_value_text_format_argument(&mut self) -> Result<bool, FormulaEvalError> {
+        self.skip_whitespace();
+        if self.consume_char(')') {
+            return Ok(false);
+        }
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let format = formula_integer_argument(self.parse_comparison()?)?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        match format {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(FormulaEvalError::Value),
+        }
+    }
+
+    fn parse_valuetotext_function(&mut self) -> Result<String, FormulaEvalError> {
+        let value = self.parse_value_probe_argument()?;
+        let strict = self.parse_value_text_format_argument()?;
+        formula_value_to_text(value, strict)
+    }
+
+    fn parse_arraytotext_function(&mut self) -> Result<String, FormulaEvalError> {
+        self.skip_whitespace();
+        let checkpoint = self.index;
+        let mut rows = Vec::new();
+        if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
+            self.index = next_index;
+            self.skip_whitespace();
+            if self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                for row in rect.row_first..=rect.row_last {
+                    let mut values = Vec::new();
+                    for col in rect.col_first..=rect.col_last {
+                        let value =
+                            self.evaluator
+                                .cell_value_or_blank(target_sheet_id, row, col)?;
+                        values.push(formula_value_probe_from_cell_value(value));
+                    }
+                    rows.push(values);
+                }
+            } else {
+                self.index = checkpoint;
+            }
+        }
+        if rows.is_empty() {
+            rows.push(vec![self.parse_value_probe_argument()?]);
+        }
+        let strict = self.parse_value_text_format_argument()?;
+        if !strict {
+            return rows
+                .into_iter()
+                .flatten()
+                .map(|value| formula_value_to_text(value, false))
+                .collect::<Result<Vec<_>, _>>()
+                .map(|values| values.join(", "));
+        }
+        let mut row_texts = Vec::new();
+        for row in rows {
+            let values = row
+                .into_iter()
+                .map(|value| formula_value_to_text(value, true))
+                .collect::<Result<Vec<_>, _>>()?;
+            row_texts.push(values.join(","));
+        }
+        Ok(format!("{{{}}}", row_texts.join(";")))
+    }
+
+    fn parse_len_function(&mut self, byte_mode: bool) -> Result<f64, FormulaEvalError> {
         let text = self.parse_text_value_argument()?;
         self.skip_whitespace();
         if !self.consume_char(')') {
             return Err(FormulaEvalError::Unsupported);
         }
-        Ok(text.chars().count() as f64)
+        Ok(if byte_mode {
+            formula_text_byte_len(text.as_str()) as f64
+        } else {
+            text.chars().count() as f64
+        })
     }
 
     fn parse_character_code_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -18736,7 +18969,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             .ok_or(FormulaEvalError::Value)
     }
 
-    fn parse_find_function(&mut self, case_insensitive: bool) -> Result<f64, FormulaEvalError> {
+    fn parse_find_function(
+        &mut self,
+        case_insensitive: bool,
+        byte_mode: bool,
+    ) -> Result<f64, FormulaEvalError> {
         let needle = self.parse_text_value_argument()?;
         self.skip_whitespace();
         if !self.consume_char(',') {
@@ -18767,13 +19004,22 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             else {
                 return Err(FormulaEvalError::Value);
             };
-            return Ok(position as f64);
+            return Ok(if byte_mode {
+                formula_text_char_position_to_byte_position(haystack.as_str(), position) as f64
+            } else {
+                position as f64
+            });
         }
         let searchable = haystack.chars().skip(start - 1).collect::<String>();
         let Some(byte_index) = searchable.find(needle.as_str()) else {
             return Err(FormulaEvalError::Value);
         };
-        Ok((start + searchable[..byte_index].chars().count()) as f64)
+        let position = start + searchable[..byte_index].chars().count();
+        Ok(if byte_mode {
+            formula_text_char_position_to_byte_position(haystack.as_str(), position) as f64
+        } else {
+            position as f64
+        })
     }
 
     fn parse_exact_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -29802,6 +30048,131 @@ mod tests {
                 )
                 .expect("Application.Evaluate text helper"),
             OmValue::Text("Eval7".to_string())
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_text_byte_and_value_text_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B2".to_string())])
+                .expect("Range(A1:B2)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("C1:C20".to_string())],
+                )
+                .expect("Range(C1:C20)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        2,
+                        vec![
+                            OmValue::Text("alpha".to_string()),
+                            OmValue::Number(42.0),
+                            OmValue::Bool(true),
+                            OmValue::Text("z".to_string()),
+                        ],
+                    )
+                    .expect("value text source values"),
+                ),
+                &[],
+            )
+            .expect("set value text source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        20,
+                        1,
+                        vec![
+                            OmValue::Text(r#"=LEFTB("abcdef", 3)"#.to_string()),
+                            OmValue::Text(r#"=RIGHTB("abcdef", 2)"#.to_string()),
+                            OmValue::Text(r#"=MIDB("abcdef", 2, 3)"#.to_string()),
+                            OmValue::Text(r#"=REPLACEB("abcdef", 2, 3, "ZZ")"#.to_string()),
+                            OmValue::Text(r#"=ASC("ABC")"#.to_string()),
+                            OmValue::Text(r#"=DBCS("ABC")"#.to_string()),
+                            OmValue::Text(r#"=JIS("ABC")"#.to_string()),
+                            OmValue::Text(r#"=ENCODEURL("a b?=한")"#.to_string()),
+                            OmValue::Text(r#"=VALUETOTEXT("a ""quote""", 1)"#.to_string()),
+                            OmValue::Text("=VALUETOTEXT(42)".to_string()),
+                            OmValue::Text("=VALUETOTEXT(TRUE, 1)".to_string()),
+                            OmValue::Text("=VALUETOTEXT(NA(), 1)".to_string()),
+                            OmValue::Text("=ARRAYTOTEXT(A1:B2, 1)".to_string()),
+                            OmValue::Text("=ARRAYTOTEXT(A1:B2)".to_string()),
+                            OmValue::Text(r#"=LENB("abcdef")"#.to_string()),
+                            OmValue::Text(r#"=LENB("한A")"#.to_string()),
+                            OmValue::Text(r#"=FINDB("cd", "abcdef")"#.to_string()),
+                            OmValue::Text(r#"=SEARCHB("C?", "abcdef")"#.to_string()),
+                            OmValue::Text(r#"=FINDB("z", "abcdef")"#.to_string()),
+                            OmValue::Text(r#"=VALUETOTEXT("x", 2)"#.to_string()),
+                        ],
+                    )
+                    .expect("text byte and value text formulas"),
+                ),
+                &[],
+            )
+            .expect("set text byte and value text formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("text byte and value text values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected text byte and value text value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Text("abc".to_string()),
+                OmValue::Text("ef".to_string()),
+                OmValue::Text("bcd".to_string()),
+                OmValue::Text("aZZef".to_string()),
+                OmValue::Text("ABC".to_string()),
+                OmValue::Text("ABC".to_string()),
+                OmValue::Text("ABC".to_string()),
+                OmValue::Text("a%20b%3F%3D%ED%95%9C".to_string()),
+                OmValue::Text("\"a \"\"quote\"\"\"".to_string()),
+                OmValue::Text("42".to_string()),
+                OmValue::Text("TRUE".to_string()),
+                OmValue::Text("#N/A".to_string()),
+                OmValue::Text(r#"{"alpha",42;TRUE,"z"}"#.to_string()),
+                OmValue::Text("alpha, 42, TRUE, z".to_string()),
+                OmValue::Number(6.0),
+                OmValue::Number(3.0),
+                OmValue::Number(3.0),
+                OmValue::Number(3.0),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
+            ]
         );
     }
 
