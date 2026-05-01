@@ -108,6 +108,7 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `BIN2DEC`
 - `BIN2HEX`
 - `BIN2OCT`
+- `CONVERT`
 - `DEC2BIN`
 - `DEC2HEX`
 - `DEC2OCT`
@@ -188,6 +189,7 @@ Roman numeral notes:
 - `GAUSS`, `PHI`, and `STANDARDIZE` cover scalar standard-normal helpers.
 - Complex engineering helpers parse Excel-style text values with lowercase `i` or `j` suffixes; text-returning `IM*` helpers preserve the suffix when the result includes an imaginary component.
 - `BESSELI`, `BESSELJ`, `BESSELK`, and `BESSELY` support non-negative integer orders, truncating fractional order arguments to match Excel's scalar argument handling.
+- `CONVERT` supports Excel's documented measurement groups, case-sensitive unit aliases, metric prefixes, binary prefixes for information units, and affine temperature conversions.
 
 ### Financial helpers
 

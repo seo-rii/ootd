@@ -13255,6 +13255,326 @@ fn formula_bessel_y(value: f64, order: usize) -> Result<f64, FormulaEvalError> {
     Ok(current)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormulaConvertDimension {
+    Area,
+    Distance,
+    Energy,
+    Force,
+    Information,
+    Magnetism,
+    Mass,
+    Power,
+    Pressure,
+    Speed,
+    Temperature,
+    Time,
+    Volume,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormulaConvertTemperatureUnit {
+    Celsius,
+    Fahrenheit,
+    Kelvin,
+    Rankine,
+    Reaumur,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FormulaConvertScale {
+    Ratio(f64),
+    Temperature(FormulaConvertTemperatureUnit),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FormulaConvertUnit {
+    dimension: FormulaConvertDimension,
+    scale: FormulaConvertScale,
+    metric_power: i32,
+    binary_prefixable: bool,
+}
+
+fn formula_convert_ratio_unit(
+    dimension: FormulaConvertDimension,
+    factor: f64,
+    metric_power: i32,
+    binary_prefixable: bool,
+) -> FormulaConvertUnit {
+    FormulaConvertUnit {
+        dimension,
+        scale: FormulaConvertScale::Ratio(factor),
+        metric_power,
+        binary_prefixable,
+    }
+}
+
+fn formula_convert_temperature_unit(unit: FormulaConvertTemperatureUnit) -> FormulaConvertUnit {
+    FormulaConvertUnit {
+        dimension: FormulaConvertDimension::Temperature,
+        scale: FormulaConvertScale::Temperature(unit),
+        metric_power: 0,
+        binary_prefixable: false,
+    }
+}
+
+fn formula_convert_exact_unit(unit: &str) -> Option<FormulaConvertUnit> {
+    use FormulaConvertDimension::*;
+    const INCH: f64 = 0.0254;
+    const FOOT: f64 = 0.3048;
+    const YARD: f64 = 0.9144;
+    const MILE: f64 = 1609.344;
+    const SURVEY_MILE: f64 = 1609.3472186944373;
+    const NAUTICAL_MILE: f64 = 1852.0;
+    const LIGHT_YEAR: f64 = 9_460_730_472_580_800.0;
+    const PARSEC: f64 = 30_856_775_814_913_670.0;
+    const PICA_POINT: f64 = INCH / 72.0;
+    const PICA: f64 = INCH / 6.0;
+    const US_FLUID_OUNCE: f64 = 0.0000295735295625;
+    const UK_PINT: f64 = 0.00056826125;
+    const UK_GALLON: f64 = 0.00454609;
+    let unit = match unit {
+        "g" => formula_convert_ratio_unit(Mass, 1.0, 1, false),
+        "sg" => formula_convert_ratio_unit(Mass, 14_593.90294, 0, false),
+        "lbm" => formula_convert_ratio_unit(Mass, 453.59237, 0, false),
+        "u" => formula_convert_ratio_unit(Mass, 1.660_539_066_6e-24, 0, false),
+        "ozm" => formula_convert_ratio_unit(Mass, 28.349523125, 0, false),
+        "grain" => formula_convert_ratio_unit(Mass, 0.06479891, 0, false),
+        "cwt" | "shweight" => formula_convert_ratio_unit(Mass, 45_359.237, 0, false),
+        "uk_cwt" | "lcwt" | "hweight" => formula_convert_ratio_unit(Mass, 50_802.34544, 0, false),
+        "stone" => formula_convert_ratio_unit(Mass, 6_350.29318, 0, false),
+        "ton" => formula_convert_ratio_unit(Mass, 907_184.74, 0, false),
+        "uk_ton" | "LTON" | "brton" => formula_convert_ratio_unit(Mass, 1_016_046.9088, 0, false),
+        "m" => formula_convert_ratio_unit(Distance, 1.0, 1, false),
+        "mi" => formula_convert_ratio_unit(Distance, MILE, 0, false),
+        "Nmi" => formula_convert_ratio_unit(Distance, NAUTICAL_MILE, 0, false),
+        "in" => formula_convert_ratio_unit(Distance, INCH, 0, false),
+        "ft" => formula_convert_ratio_unit(Distance, FOOT, 0, false),
+        "yd" => formula_convert_ratio_unit(Distance, YARD, 0, false),
+        "ang" => formula_convert_ratio_unit(Distance, 1e-10, 0, false),
+        "ell" => formula_convert_ratio_unit(Distance, 45.0 * INCH, 0, false),
+        "ly" => formula_convert_ratio_unit(Distance, LIGHT_YEAR, 0, false),
+        "parsec" | "pc" => formula_convert_ratio_unit(Distance, PARSEC, 0, false),
+        "Picapt" | "Pica" => formula_convert_ratio_unit(Distance, PICA_POINT, 0, false),
+        "pica" => formula_convert_ratio_unit(Distance, PICA, 0, false),
+        "survey_mi" => formula_convert_ratio_unit(Distance, SURVEY_MILE, 0, false),
+        "yr" => formula_convert_ratio_unit(Time, 31_557_600.0, 0, false),
+        "day" | "d" => formula_convert_ratio_unit(Time, 86_400.0, 0, false),
+        "hr" => formula_convert_ratio_unit(Time, 3_600.0, 0, false),
+        "mn" | "min" => formula_convert_ratio_unit(Time, 60.0, 0, false),
+        "sec" | "s" => formula_convert_ratio_unit(Time, 1.0, 1, false),
+        "Pa" | "p" => formula_convert_ratio_unit(Pressure, 1.0, 1, false),
+        "atm" | "at" => formula_convert_ratio_unit(Pressure, 101_325.0, 0, false),
+        "mmHg" => formula_convert_ratio_unit(Pressure, 133.322, 0, false),
+        "psi" => formula_convert_ratio_unit(Pressure, 6_894.757293168361, 0, false),
+        "Torr" => formula_convert_ratio_unit(Pressure, 101_325.0 / 760.0, 0, false),
+        "N" => formula_convert_ratio_unit(Force, 1.0, 1, false),
+        "dyn" | "dy" => formula_convert_ratio_unit(Force, 1e-5, 1, false),
+        "lbf" => formula_convert_ratio_unit(Force, 4.4482216152605, 0, false),
+        "J" => formula_convert_ratio_unit(Energy, 1.0, 1, false),
+        "e" => formula_convert_ratio_unit(Energy, 1e-7, 1, false),
+        "c" => formula_convert_ratio_unit(Energy, 4.184, 1, false),
+        "cal" => formula_convert_ratio_unit(Energy, 4.1868, 1, false),
+        "eV" | "ev" => formula_convert_ratio_unit(Energy, 1.602_176_634e-19, 1, false),
+        "HPh" | "hh" => formula_convert_ratio_unit(Energy, 2_684_519.538, 0, false),
+        "Wh" | "wh" => formula_convert_ratio_unit(Energy, 3_600.0, 1, false),
+        "flb" => formula_convert_ratio_unit(Energy, 1.3558179483314004, 0, false),
+        "BTU" | "btu" => formula_convert_ratio_unit(Energy, 1_055.05585262, 0, false),
+        "HP" | "h" => formula_convert_ratio_unit(Power, 745.6998715822702, 0, false),
+        "PS" => formula_convert_ratio_unit(Power, 735.49875, 0, false),
+        "W" | "w" => formula_convert_ratio_unit(Power, 1.0, 1, false),
+        "T" => formula_convert_ratio_unit(Magnetism, 1.0, 1, false),
+        "ga" => formula_convert_ratio_unit(Magnetism, 1e-4, 0, false),
+        "C" | "cel" => formula_convert_temperature_unit(FormulaConvertTemperatureUnit::Celsius),
+        "F" | "fah" => formula_convert_temperature_unit(FormulaConvertTemperatureUnit::Fahrenheit),
+        "K" | "kel" => formula_convert_temperature_unit(FormulaConvertTemperatureUnit::Kelvin),
+        "Rank" => formula_convert_temperature_unit(FormulaConvertTemperatureUnit::Rankine),
+        "Reau" => formula_convert_temperature_unit(FormulaConvertTemperatureUnit::Reaumur),
+        "tsp" => formula_convert_ratio_unit(Volume, US_FLUID_OUNCE / 6.0, 0, false),
+        "tspm" => formula_convert_ratio_unit(Volume, 0.000005, 0, false),
+        "tbs" => formula_convert_ratio_unit(Volume, US_FLUID_OUNCE / 2.0, 0, false),
+        "oz" => formula_convert_ratio_unit(Volume, US_FLUID_OUNCE, 0, false),
+        "cup" => formula_convert_ratio_unit(Volume, US_FLUID_OUNCE * 8.0, 0, false),
+        "pt" | "us_pt" => formula_convert_ratio_unit(Volume, US_FLUID_OUNCE * 16.0, 0, false),
+        "uk_pt" => formula_convert_ratio_unit(Volume, UK_PINT, 0, false),
+        "qt" => formula_convert_ratio_unit(Volume, US_FLUID_OUNCE * 32.0, 0, false),
+        "uk_qt" => formula_convert_ratio_unit(Volume, UK_PINT * 2.0, 0, false),
+        "gal" => formula_convert_ratio_unit(Volume, US_FLUID_OUNCE * 128.0, 0, false),
+        "uk_gal" => formula_convert_ratio_unit(Volume, UK_GALLON, 0, false),
+        "l" | "L" | "lt" => formula_convert_ratio_unit(Volume, 0.001, 1, false),
+        "ang3" | "ang^3" => formula_convert_ratio_unit(Volume, 1e-30, 0, false),
+        "barrel" => formula_convert_ratio_unit(Volume, US_FLUID_OUNCE * 128.0 * 42.0, 0, false),
+        "bushel" => formula_convert_ratio_unit(Volume, 2_150.42 * INCH.powi(3), 0, false),
+        "ft3" | "ft^3" => formula_convert_ratio_unit(Volume, FOOT.powi(3), 0, false),
+        "in3" | "in^3" => formula_convert_ratio_unit(Volume, INCH.powi(3), 0, false),
+        "ly3" | "ly^3" => formula_convert_ratio_unit(Volume, LIGHT_YEAR.powi(3), 0, false),
+        "m3" | "m^3" => formula_convert_ratio_unit(Volume, 1.0, 3, false),
+        "mi3" | "mi^3" => formula_convert_ratio_unit(Volume, MILE.powi(3), 0, false),
+        "yd3" | "yd^3" => formula_convert_ratio_unit(Volume, YARD.powi(3), 0, false),
+        "Nmi3" | "Nmi^3" => formula_convert_ratio_unit(Volume, NAUTICAL_MILE.powi(3), 0, false),
+        "Picapt3" | "Picapt^3" | "Pica3" | "Pica^3" => {
+            formula_convert_ratio_unit(Volume, PICA_POINT.powi(3), 0, false)
+        }
+        "GRT" | "regton" => formula_convert_ratio_unit(Volume, 100.0 * FOOT.powi(3), 0, false),
+        "MTON" => formula_convert_ratio_unit(Volume, 40.0 * FOOT.powi(3), 0, false),
+        "uk_acre" => formula_convert_ratio_unit(Area, 4_046.8564224, 0, false),
+        "us_acre" => formula_convert_ratio_unit(Area, 4_046.872609874252, 0, false),
+        "ang2" | "ang^2" => formula_convert_ratio_unit(Area, 1e-20, 0, false),
+        "ar" => formula_convert_ratio_unit(Area, 100.0, 1, false),
+        "ft2" | "ft^2" => formula_convert_ratio_unit(Area, FOOT.powi(2), 0, false),
+        "ha" => formula_convert_ratio_unit(Area, 10_000.0, 0, false),
+        "in2" | "in^2" => formula_convert_ratio_unit(Area, INCH.powi(2), 0, false),
+        "ly2" | "ly^2" => formula_convert_ratio_unit(Area, LIGHT_YEAR.powi(2), 0, false),
+        "m2" | "m^2" => formula_convert_ratio_unit(Area, 1.0, 2, false),
+        "Morgen" => formula_convert_ratio_unit(Area, 2_500.0, 0, false),
+        "mi2" | "mi^2" => formula_convert_ratio_unit(Area, MILE.powi(2), 0, false),
+        "Nmi2" | "Nmi^2" => formula_convert_ratio_unit(Area, NAUTICAL_MILE.powi(2), 0, false),
+        "Picapt2" | "Pica2" | "Pica^2" | "Picapt^2" => {
+            formula_convert_ratio_unit(Area, PICA_POINT.powi(2), 0, false)
+        }
+        "yd2" | "yd^2" => formula_convert_ratio_unit(Area, YARD.powi(2), 0, false),
+        "bit" => formula_convert_ratio_unit(Information, 1.0, 1, true),
+        "byte" => formula_convert_ratio_unit(Information, 8.0, 1, true),
+        "admkn" => formula_convert_ratio_unit(Speed, 6080.0 * FOOT / 3600.0, 0, false),
+        "kn" => formula_convert_ratio_unit(Speed, NAUTICAL_MILE / 3600.0, 0, false),
+        "m/h" | "m/hr" => formula_convert_ratio_unit(Speed, 1.0 / 3600.0, 1, false),
+        "m/s" | "m/sec" => formula_convert_ratio_unit(Speed, 1.0, 1, false),
+        "mph" => formula_convert_ratio_unit(Speed, MILE / 3600.0, 0, false),
+        _ => return None,
+    };
+    Some(unit)
+}
+
+fn formula_convert_metric_prefix(unit: &str) -> Option<(f64, &str)> {
+    const PREFIXES: [(&str, f64); 21] = [
+        ("da", 1e1),
+        ("Y", 1e24),
+        ("Z", 1e21),
+        ("E", 1e18),
+        ("P", 1e15),
+        ("T", 1e12),
+        ("G", 1e9),
+        ("M", 1e6),
+        ("k", 1e3),
+        ("h", 1e2),
+        ("e", 1e1),
+        ("d", 1e-1),
+        ("c", 1e-2),
+        ("m", 1e-3),
+        ("u", 1e-6),
+        ("n", 1e-9),
+        ("p", 1e-12),
+        ("f", 1e-15),
+        ("a", 1e-18),
+        ("z", 1e-21),
+        ("y", 1e-24),
+    ];
+    PREFIXES
+        .iter()
+        .find_map(|(prefix, factor)| unit.strip_prefix(prefix).map(|rest| (*factor, rest)))
+        .filter(|(_, rest)| !rest.is_empty())
+}
+
+fn formula_convert_binary_prefix(unit: &str) -> Option<(f64, &str)> {
+    const PREFIXES: [(&str, f64); 8] = [
+        ("Yi", 1_208_925_819_614_629_174_706_176.0),
+        ("Zi", 1_180_591_620_717_411_303_424.0),
+        ("Ei", 1_152_921_504_606_846_976.0),
+        ("Pi", 1_125_899_906_842_624.0),
+        ("Ti", 1_099_511_627_776.0),
+        ("Gi", 1_073_741_824.0),
+        ("Mi", 1_048_576.0),
+        ("ki", 1_024.0),
+    ];
+    PREFIXES
+        .iter()
+        .find_map(|(prefix, factor)| unit.strip_prefix(prefix).map(|rest| (*factor, rest)))
+        .filter(|(_, rest)| !rest.is_empty())
+}
+
+fn formula_convert_unit(unit: &str) -> Result<FormulaConvertUnit, FormulaEvalError> {
+    if let Some(unit) = formula_convert_exact_unit(unit) {
+        return Ok(unit);
+    }
+    if let Some((factor, suffix)) = formula_convert_binary_prefix(unit) {
+        if let Some(mut unit) = formula_convert_exact_unit(suffix) {
+            if unit.binary_prefixable {
+                if let FormulaConvertScale::Ratio(base_factor) = unit.scale {
+                    unit.scale = FormulaConvertScale::Ratio(base_factor * factor);
+                    return Ok(unit);
+                }
+            }
+        }
+        return Err(FormulaEvalError::NA);
+    }
+    if let Some((factor, suffix)) = formula_convert_metric_prefix(unit) {
+        if let Some(mut unit) = formula_convert_exact_unit(suffix) {
+            if unit.metric_power > 0 {
+                if let FormulaConvertScale::Ratio(base_factor) = unit.scale {
+                    unit.scale =
+                        FormulaConvertScale::Ratio(base_factor * factor.powi(unit.metric_power));
+                    return Ok(unit);
+                }
+            }
+        }
+        return Err(FormulaEvalError::NA);
+    }
+    Err(FormulaEvalError::NA)
+}
+
+fn formula_convert_temperature_to_kelvin(value: f64, unit: FormulaConvertTemperatureUnit) -> f64 {
+    match unit {
+        FormulaConvertTemperatureUnit::Celsius => value + 273.15,
+        FormulaConvertTemperatureUnit::Fahrenheit => (value + 459.67) * 5.0 / 9.0,
+        FormulaConvertTemperatureUnit::Kelvin => value,
+        FormulaConvertTemperatureUnit::Rankine => value * 5.0 / 9.0,
+        FormulaConvertTemperatureUnit::Reaumur => value * 1.25 + 273.15,
+    }
+}
+
+fn formula_convert_temperature_from_kelvin(value: f64, unit: FormulaConvertTemperatureUnit) -> f64 {
+    match unit {
+        FormulaConvertTemperatureUnit::Celsius => value - 273.15,
+        FormulaConvertTemperatureUnit::Fahrenheit => value * 9.0 / 5.0 - 459.67,
+        FormulaConvertTemperatureUnit::Kelvin => value,
+        FormulaConvertTemperatureUnit::Rankine => value * 9.0 / 5.0,
+        FormulaConvertTemperatureUnit::Reaumur => (value - 273.15) * 0.8,
+    }
+}
+
+fn formula_convert_value(
+    value: f64,
+    from_unit: &str,
+    to_unit: &str,
+) -> Result<f64, FormulaEvalError> {
+    if !value.is_finite() {
+        return Err(FormulaEvalError::Value);
+    }
+    let from_unit = formula_convert_unit(from_unit)?;
+    let to_unit = formula_convert_unit(to_unit)?;
+    if from_unit.dimension != to_unit.dimension {
+        return Err(FormulaEvalError::NA);
+    }
+    let result = match (from_unit.scale, to_unit.scale) {
+        (FormulaConvertScale::Ratio(from_factor), FormulaConvertScale::Ratio(to_factor)) => {
+            value * from_factor / to_factor
+        }
+        (
+            FormulaConvertScale::Temperature(from_unit),
+            FormulaConvertScale::Temperature(to_unit),
+        ) => formula_convert_temperature_from_kelvin(
+            formula_convert_temperature_to_kelvin(value, from_unit),
+            to_unit,
+        ),
+        _ => return Err(FormulaEvalError::NA),
+    };
+    if result.is_finite() {
+        Ok(result)
+    } else {
+        Err(FormulaEvalError::Num)
+    }
+}
+
 fn formula_numbervalue(
     text: &str,
     decimal_separator: &str,
@@ -15826,6 +16146,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         if name.eq_ignore_ascii_case("DECIMAL") {
             return self.parse_decimal_function();
+        }
+        if name.eq_ignore_ascii_case("CONVERT") {
+            return self.parse_convert_function();
         }
         if name.eq_ignore_ascii_case("IMABS")
             || name.eq_ignore_ascii_case("IMAGINARY")
@@ -20594,6 +20917,35 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
     fn parse_complex_argument(&mut self) -> Result<FormulaComplexNumber, FormulaEvalError> {
         let text = self.parse_text_value_argument()?;
         formula_complex_from_text(text.as_str())
+    }
+
+    fn parse_convert_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let value = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let from_unit = self.parse_convert_unit_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let to_unit = self.parse_convert_unit_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        formula_convert_value(value, from_unit.as_str(), to_unit.as_str())
+    }
+
+    fn parse_convert_unit_argument(&mut self) -> Result<String, FormulaEvalError> {
+        match self.parse_value_probe_argument()? {
+            FormulaValueProbe::Text(value) => Ok(value),
+            FormulaValueProbe::Error(error) => Err(error),
+            FormulaValueProbe::Blank
+            | FormulaValueProbe::Bool(_)
+            | FormulaValueProbe::Number(_) => Err(FormulaEvalError::Value),
+        }
     }
 
     fn parse_text_value_argument(&mut self) -> Result<String, FormulaEvalError> {
@@ -28384,6 +28736,140 @@ mod tests {
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_convert_engineering_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A31".to_string())],
+                )
+                .expect("Range(A1:A31)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        31,
+                        1,
+                        vec![
+                            OmValue::Text(r#"=CONVERT(1,"lbm","kg")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(68,"F","C")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(1,"K","C")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(6,"tsp","tbs")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(6,"gal","l")"#.to_string()),
+                            OmValue::Text(
+                                r#"=CONVERT(CONVERT(100,"ft","m"),"ft","m")"#.to_string(),
+                            ),
+                            OmValue::Text(r#"=CONVERT(6,"mi","km")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(6,"km","mi")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(6,"in","ft")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(6,"cm","in")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(1,"atm","kPa")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(1,"N","dyn")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(1,"Wh","J")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(1,"HP","W")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(1,"T","ga")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(1,"cup","oz")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(1,"m3","l")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(1,"cm3","ml")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(1,"ft2","in2")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(1,"ha","m2")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(1,"byte","bit")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(1,"Mibyte","byte")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(1,"Mbyte","byte")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(1,"km/hr","m/sec")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(1,"mph","m/s")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(1,"mmHg","Pa")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(1,"BTU","J")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(2.5,"ft","sec")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(1,"bad","m")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(1,"kim","m")"#.to_string()),
+                            OmValue::Text(r#"=CONVERT(1,1,"m")"#.to_string()),
+                        ],
+                    )
+                    .expect("CONVERT engineering formulas"),
+                ),
+                &[],
+            )
+            .expect("set CONVERT engineering formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("CONVERT engineering values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected CONVERT engineering value array");
+        };
+        let expected_numbers = [
+            0.45359237,
+            20.0,
+            -272.15,
+            2.0,
+            22.712470704,
+            9.290304,
+            9.656064,
+            3.728227153424003,
+            0.5,
+            2.3622047244094486,
+            101.325,
+            100_000.0,
+            3_600.0,
+            745.6998715822702,
+            10_000.0,
+            8.0,
+            1_000.0,
+            1.0,
+            144.0,
+            10_000.0,
+            8.0,
+            1_048_576.0,
+            1_000_000.0,
+            0.2777777777777778,
+            0.44704,
+            133.322,
+            1_055.05585262,
+        ];
+        for (index, expected) in expected_numbers.into_iter().enumerate() {
+            let number = expect_number(values.values[index].clone());
+            assert!(
+                (number - expected).abs() < 1e-8,
+                "CONVERT engineering result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            &values.values[27..],
+            &[
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::NA),
                 OmValue::Error(CellError::Value),
             ]
         );
