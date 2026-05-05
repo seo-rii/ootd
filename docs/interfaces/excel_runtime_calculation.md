@@ -675,6 +675,27 @@ Web notes:
 - `ENCODEURL` percent-encodes UTF-8 bytes and leaves ASCII letters, digits, `-`, `_`, `.`, and `~` unescaped.
 - `WEBSERVICE` intentionally avoids runtime network I/O and supports deterministic `data:` URL payload decoding for formulas that feed local text or XML helpers.
 
+### External data and platform helpers
+
+- `CALL`
+- `COPILOT`
+- `CUBEKPIMEMBER`
+- `CUBEMEMBER`
+- `CUBEMEMBERPROPERTY`
+- `CUBERANKEDMEMBER`
+- `CUBESET`
+- `CUBESETCOUNT`
+- `CUBEVALUE`
+- `REGISTER.ID`
+- `RTD`
+- `STOCKHISTORY`
+
+External data notes:
+
+- Cube member and set helpers preserve scalar captions or expressions locally so dependent formulas can continue to parse without a cube server.
+- Cube value/property lookups, RTD, stock history, and Copilot return deterministic `#N/A` when no external provider is configured.
+- Legacy native add-in entry points `CALL` and `REGISTER.ID` parse their arguments but return `#VALUE!`; the runtime does not execute host-native code.
+
 ## Current Boundaries
 
 - The evaluator is still numeric-first. It includes focused scalar text and date/time text-parse subsets, but broader string semantics, locale-sensitive date/time parsing, and richer coercion rules are not implemented.

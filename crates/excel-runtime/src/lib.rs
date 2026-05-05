@@ -14179,6 +14179,11 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("CHAR")
         || name.eq_ignore_ascii_case("CLEAN")
         || name.eq_ignore_ascii_case("COMPLEX")
+        || name.eq_ignore_ascii_case("CUBEKPIMEMBER")
+        || name.eq_ignore_ascii_case("CUBEMEMBER")
+        || name.eq_ignore_ascii_case("CUBEMEMBERPROPERTY")
+        || name.eq_ignore_ascii_case("CUBERANKEDMEMBER")
+        || name.eq_ignore_ascii_case("CUBESET")
         || name.eq_ignore_ascii_case("DEC2BIN")
         || name.eq_ignore_ascii_case("DEC2HEX")
         || name.eq_ignore_ascii_case("DEC2OCT")
@@ -19387,6 +19392,19 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("GETPIVOTDATA") {
             return formula_number_from_value_probe(self.parse_getpivotdata_value_function()?);
         }
+        if name.eq_ignore_ascii_case("CUBESETCOUNT") {
+            return self.parse_cubesetcount_function();
+        }
+        if name.eq_ignore_ascii_case("CUBEVALUE")
+            || name.eq_ignore_ascii_case("RTD")
+            || name.eq_ignore_ascii_case("STOCKHISTORY")
+            || name.eq_ignore_ascii_case("COPILOT")
+        {
+            return self.parse_external_data_unavailable_function();
+        }
+        if name.eq_ignore_ascii_case("CALL") || name.eq_ignore_ascii_case("REGISTER.ID") {
+            return self.parse_external_platform_unavailable_function();
+        }
         if name.eq_ignore_ascii_case("INDIRECT")
             || name.eq_ignore_ascii_case("OFFSET")
             || name.eq_ignore_ascii_case("TRIMRANGE")
@@ -20049,6 +20067,16 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return formula_selected_text_from_value_probe(
                 self.parse_getpivotdata_value_function()?,
             );
+        }
+        if name.eq_ignore_ascii_case("CUBEKPIMEMBER")
+            || name.eq_ignore_ascii_case("CUBEMEMBER")
+            || name.eq_ignore_ascii_case("CUBERANKEDMEMBER")
+            || name.eq_ignore_ascii_case("CUBESET")
+        {
+            return self.parse_cube_caption_text_function(name);
+        }
+        if name.eq_ignore_ascii_case("CUBEMEMBERPROPERTY") {
+            return self.parse_cubememberproperty_text_function();
         }
         if formula_array_projection_function_name(name) {
             return formula_selected_text_from_value_probe(
@@ -23411,6 +23439,82 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
     }
 
+    fn parse_external_data_unavailable_function(&mut self) -> Result<f64, FormulaEvalError> {
+        self.consume_all_value_arguments()?;
+        Err(FormulaEvalError::NA)
+    }
+
+    fn parse_external_platform_unavailable_function(&mut self) -> Result<f64, FormulaEvalError> {
+        self.consume_all_value_arguments()?;
+        Err(FormulaEvalError::Value)
+    }
+
+    fn parse_cube_caption_text_function(&mut self, name: &str) -> Result<String, FormulaEvalError> {
+        self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let fallback = self.parse_text_value_argument()?;
+        if name.eq_ignore_ascii_case("CUBEKPIMEMBER") {
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            self.parse_value_probe_argument()?;
+        } else if name.eq_ignore_ascii_case("CUBERANKEDMEMBER") {
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            self.parse_comparison()?;
+        }
+
+        self.skip_whitespace();
+        if self.consume_char(')') {
+            return Ok(fallback);
+        }
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        self.skip_whitespace();
+        let caption = if self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+            fallback
+        } else {
+            self.parse_text_value_argument()?
+        };
+        self.consume_remaining_optional_value_arguments()?;
+        Ok(caption)
+    }
+
+    fn parse_cubememberproperty_text_function(&mut self) -> Result<String, FormulaEvalError> {
+        self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Err(FormulaEvalError::NA)
+    }
+
+    fn parse_cubesetcount_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let set = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Ok(if set.trim().is_empty() { 0.0 } else { 1.0 })
+    }
+
     fn parse_groupby_aggregation_argument(
         &mut self,
     ) -> Result<FormulaGroupByAggregation, FormulaEvalError> {
@@ -23453,6 +23557,37 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 self.index = checkpoint;
                 self.parse_value_probe_argument()?;
             }
+        }
+    }
+
+    fn consume_all_value_arguments(&mut self) -> Result<(), FormulaEvalError> {
+        let mut needs_separator = false;
+        loop {
+            self.skip_whitespace();
+            if self.consume_char(')') {
+                return Ok(());
+            }
+            if needs_separator {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                self.skip_whitespace();
+                if self.consume_char(')') {
+                    return Ok(());
+                }
+            }
+            if self.peek_char().is_some_and(|ch| ch == ',') {
+                needs_separator = true;
+                continue;
+            }
+            let checkpoint = self.index;
+            if let Some((_, _, next_index)) = self.try_parse_reference()? {
+                self.index = next_index;
+            } else {
+                self.index = checkpoint;
+                self.parse_value_probe_argument()?;
+            }
+            needs_separator = true;
         }
     }
 
@@ -41674,6 +41809,123 @@ mod tests {
                 OmValue::Number(2.0),
                 OmValue::Number(42.0),
                 OmValue::Text("ready".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_external_data_formula_fallbacks() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let seed = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        runtime
+            .dispatch_set(seed, "Value2", OmValue::Text("context".to_string()), &[])
+            .expect("set seed");
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("D1:D13".to_string())],
+                )
+                .expect("Range(D1:D13)"),
+        );
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        13,
+                        1,
+                        vec![
+                            OmValue::Text(
+                                r#"=CUBEMEMBER("ThisWorkbookDataModel","[Measures].[Sales]","Sales")"#
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                r#"=CUBEMEMBER("ThisWorkbookDataModel","[Measures].[Sales]")"#
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                r#"=CUBEKPIMEMBER("ThisWorkbookDataModel","Margin","Value","Margin KPI")"#
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                r#"=CUBERANKEDMEMBER("ThisWorkbookDataModel","[Top Stores]",1,"Top store")"#
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                r#"=CUBESET("ThisWorkbookDataModel","[Stores]","Top stores")"#
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                r#"=CUBESETCOUNT(CUBESET("ThisWorkbookDataModel","[Stores]","Top stores"))"#
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                r#"=CUBEMEMBERPROPERTY("ThisWorkbookDataModel","[Store].[A]","Caption")"#
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                r#"=CUBEVALUE("ThisWorkbookDataModel","[Measures].[Sales]")"#
+                                    .to_string(),
+                            ),
+                            OmValue::Text(r#"=STOCKHISTORY("MSFT",DATE(2024,1,1))"#.to_string()),
+                            OmValue::Text(r#"=RTD("prog.id",,"topic")"#.to_string()),
+                            OmValue::Text(r#"=CALL("lib","proc","J")"#.to_string()),
+                            OmValue::Text(r#"=REGISTER.ID("lib","proc","J")"#.to_string()),
+                            OmValue::Text(r#"=COPILOT("summarize",A1)"#.to_string()),
+                        ],
+                    )
+                    .expect("external formula fallbacks"),
+                ),
+                &[],
+            )
+            .expect("set external formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("external values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected external value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Text("Sales".to_string()),
+                OmValue::Text("[Measures].[Sales]".to_string()),
+                OmValue::Text("Margin KPI".to_string()),
+                OmValue::Text("Top store".to_string()),
+                OmValue::Text("Top stores".to_string()),
+                OmValue::Number(1.0),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::NA),
             ]
         );
     }
