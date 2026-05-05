@@ -482,6 +482,26 @@ Criteria notes:
 - criteria strings support numeric comparison prefixes such as `">3"`, text equality/inequality prefixes such as `"=north*"` and `"<>north*"`, the blank-string criterion `""`, and the nonblank criterion `"<>"`.
 - Text criteria support Excel-style `*` and `?` wildcards with `~` escaping.
 
+### Database helpers
+
+- `DAVERAGE`
+- `DCOUNT`
+- `DCOUNTA`
+- `DGET`
+- `DMAX`
+- `DMIN`
+- `DPRODUCT`
+- `DSTDEV`
+- `DSTDEVP`
+- `DSUM`
+- `DVAR`
+- `DVARP`
+
+Database notes:
+
+- `D*` helpers support a rectangular database with header row, numeric field indexes or field-name text, and criteria ranges where rows are OR clauses and nonblank columns are AND criteria.
+- Database criteria reuse the same numeric/text/wildcard matching rules as the criteria aggregate helpers.
+
 ### Error and information helpers
 
 - `NA`

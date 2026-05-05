@@ -13362,6 +13362,7 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("BAHTTEXT")
         || name.eq_ignore_ascii_case("CONCAT")
         || name.eq_ignore_ascii_case("CONCATENATE")
+        || name.eq_ignore_ascii_case("DGET")
         || name.eq_ignore_ascii_case("DBCS")
         || name.eq_ignore_ascii_case("ENCODEURL")
         || name.eq_ignore_ascii_case("LEFT")
@@ -18021,6 +18022,21 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("CHISQ.TEST") || name.eq_ignore_ascii_case("CHITEST") {
             return self.parse_chisq_test_function();
         }
+        if name.eq_ignore_ascii_case("DAVERAGE")
+            || name.eq_ignore_ascii_case("DCOUNT")
+            || name.eq_ignore_ascii_case("DCOUNTA")
+            || name.eq_ignore_ascii_case("DGET")
+            || name.eq_ignore_ascii_case("DMAX")
+            || name.eq_ignore_ascii_case("DMIN")
+            || name.eq_ignore_ascii_case("DPRODUCT")
+            || name.eq_ignore_ascii_case("DSTDEV")
+            || name.eq_ignore_ascii_case("DSTDEVP")
+            || name.eq_ignore_ascii_case("DSUM")
+            || name.eq_ignore_ascii_case("DVAR")
+            || name.eq_ignore_ascii_case("DVARP")
+        {
+            return formula_number_from_value_probe(self.parse_database_value_function(name)?);
+        }
         if name.eq_ignore_ascii_case("SUMIF") {
             return self.parse_sumif_function();
         }
@@ -18574,6 +18590,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         if name.eq_ignore_ascii_case("CONCAT") || name.eq_ignore_ascii_case("CONCATENATE") {
             return self.parse_concat_text_function();
+        }
+        if name.eq_ignore_ascii_case("DGET") {
+            return formula_selected_text_from_value_probe(
+                self.parse_database_value_function(name)?,
+            );
         }
         if name.eq_ignore_ascii_case("ENCODEURL") {
             return self.parse_unary_text_function(|text| formula_encode_url(text.as_str()));
@@ -21877,6 +21898,210 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         };
         regularized_gamma_p(degrees as f64 / 2.0, statistic / 2.0)
             .map(|value| (1.0 - value).clamp(0.0, 1.0))
+    }
+
+    fn parse_database_value_function(
+        &mut self,
+        name: &str,
+    ) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let (database_sheet_id, database_rect) = self.parse_reference_argument()?;
+        if database_rect.height() < 2 || database_rect.width() < 1 {
+            return Err(FormulaEvalError::Value);
+        }
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let field = self.parse_value_probe_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let (criteria_sheet_id, criteria_rect) = self.parse_reference_argument()?;
+        if criteria_rect.height() < 1 || criteria_rect.width() < 1 {
+            return Err(FormulaEvalError::Value);
+        }
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+
+        macro_rules! database_header_text {
+            ($sheet_id:expr, $row:expr, $col:expr) => {{
+                let value = self.evaluator.cell_value_or_blank($sheet_id, $row, $col)?;
+                formula_text_from_value_probe(formula_value_probe_from_cell_value(value))?
+            }};
+        }
+        macro_rules! database_field_offset {
+            ($field:expr) => {{
+                match $field {
+                    FormulaValueProbe::Number(value) => {
+                        let index = formula_integer_argument(value)?;
+                        if index < 1 || index > i64::from(database_rect.width()) {
+                            return Err(FormulaEvalError::Value);
+                        }
+                        index as u32 - 1
+                    }
+                    FormulaValueProbe::Text(label) => {
+                        let mut found = None;
+                        for col_offset in 0..database_rect.width() {
+                            let header = database_header_text!(
+                                database_sheet_id,
+                                database_rect.row_first,
+                                database_rect.col_first + col_offset
+                            );
+                            if header.eq_ignore_ascii_case(label.as_str()) {
+                                found = Some(col_offset);
+                                break;
+                            }
+                        }
+                        found.ok_or(FormulaEvalError::Value)?
+                    }
+                    FormulaValueProbe::Error(error) => return Err(error),
+                    FormulaValueProbe::Blank | FormulaValueProbe::Bool(_) => {
+                        return Err(FormulaEvalError::Value);
+                    }
+                }
+            }};
+        }
+        let field_offset = database_field_offset!(field);
+
+        let mut criteria_rows = Vec::<Vec<(u32, FormulaCriteria)>>::new();
+        if criteria_rect.height() == 1 {
+            criteria_rows.push(Vec::new());
+        } else {
+            for criteria_row in criteria_rect.row_first + 1..=criteria_rect.row_last {
+                let mut terms = Vec::new();
+                for criteria_col in criteria_rect.col_first..=criteria_rect.col_last {
+                    let criteria_value = self.evaluator.cell_value_or_blank(
+                        criteria_sheet_id,
+                        criteria_row,
+                        criteria_col,
+                    )?;
+                    let criteria = match criteria_value {
+                        CellValue::Blank => continue,
+                        CellValue::Number(value) => FormulaCriteria::from_numeric_value(value),
+                        CellValue::Bool(value) => {
+                            FormulaCriteria::from_numeric_value(if value { 1.0 } else { 0.0 })
+                        }
+                        CellValue::Text(value) => FormulaCriteria::from_string_literal(value),
+                        CellValue::Error(error) => {
+                            return Err(formula_eval_error_from_cell_error(error));
+                        }
+                    };
+                    let label = database_header_text!(
+                        criteria_sheet_id,
+                        criteria_rect.row_first,
+                        criteria_col
+                    );
+                    let col_offset = database_field_offset!(FormulaValueProbe::Text(label));
+                    terms.push((col_offset, criteria));
+                }
+                criteria_rows.push(terms);
+            }
+        }
+
+        let mut numeric_values = Vec::new();
+        let mut counta = 0_u64;
+        let mut dget_value = None::<FormulaValueProbe>;
+        let mut dget_count = 0_u64;
+        for row in database_rect.row_first + 1..=database_rect.row_last {
+            let mut matches_any_criteria_row = false;
+            for criteria_row in criteria_rows.iter() {
+                let mut matches_all_terms = true;
+                for (criteria_col_offset, criteria) in criteria_row {
+                    let value = self.evaluator.cell_value_or_blank(
+                        database_sheet_id,
+                        row,
+                        database_rect.col_first + *criteria_col_offset,
+                    )?;
+                    if let CellValue::Error(error) = value {
+                        return Err(formula_eval_error_from_cell_error(error));
+                    }
+                    if !criteria.matches(&value) {
+                        matches_all_terms = false;
+                        break;
+                    }
+                }
+                if matches_all_terms {
+                    matches_any_criteria_row = true;
+                    break;
+                }
+            }
+            if !matches_any_criteria_row {
+                continue;
+            }
+            let field_value = self.evaluator.cell_value_or_blank(
+                database_sheet_id,
+                row,
+                database_rect.col_first + field_offset,
+            )?;
+            match name.to_ascii_uppercase().as_str() {
+                "DGET" => {
+                    dget_count += 1;
+                    dget_value = Some(formula_value_probe_from_cell_value(field_value));
+                }
+                "DCOUNTA" => match field_value {
+                    CellValue::Blank => {}
+                    CellValue::Error(error) => {
+                        return Err(formula_eval_error_from_cell_error(error));
+                    }
+                    CellValue::Bool(_) | CellValue::Number(_) | CellValue::Text(_) => counta += 1,
+                },
+                "DCOUNT" => match field_value {
+                    CellValue::Number(_) => counta += 1,
+                    CellValue::Error(error) => {
+                        return Err(formula_eval_error_from_cell_error(error));
+                    }
+                    CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {}
+                },
+                _ => match field_value {
+                    CellValue::Number(value) => numeric_values.push(value),
+                    CellValue::Error(error) => {
+                        return Err(formula_eval_error_from_cell_error(error));
+                    }
+                    CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {}
+                },
+            }
+        }
+
+        if name.eq_ignore_ascii_case("DGET") {
+            if dget_count == 0 {
+                return Err(FormulaEvalError::Value);
+            }
+            if dget_count > 1 {
+                return Err(FormulaEvalError::Num);
+            }
+            return dget_value.ok_or(FormulaEvalError::Value);
+        }
+        if name.eq_ignore_ascii_case("DCOUNT") || name.eq_ignore_ascii_case("DCOUNTA") {
+            return Ok(FormulaValueProbe::Number(counta as f64));
+        }
+
+        let function = if name.eq_ignore_ascii_case("DAVERAGE") {
+            FormulaAggregateFunction::Average
+        } else if name.eq_ignore_ascii_case("DMAX") {
+            FormulaAggregateFunction::Max
+        } else if name.eq_ignore_ascii_case("DMIN") {
+            FormulaAggregateFunction::Min
+        } else if name.eq_ignore_ascii_case("DPRODUCT") {
+            FormulaAggregateFunction::Product
+        } else if name.eq_ignore_ascii_case("DSTDEV") {
+            FormulaAggregateFunction::StDevS
+        } else if name.eq_ignore_ascii_case("DSTDEVP") {
+            FormulaAggregateFunction::StDevP
+        } else if name.eq_ignore_ascii_case("DSUM") {
+            FormulaAggregateFunction::Sum
+        } else if name.eq_ignore_ascii_case("DVAR") {
+            FormulaAggregateFunction::VarS
+        } else if name.eq_ignore_ascii_case("DVARP") {
+            FormulaAggregateFunction::VarP
+        } else {
+            return Err(FormulaEvalError::Unsupported);
+        };
+        Ok(FormulaValueProbe::Number(
+            function.evaluate(numeric_values.as_slice())?,
+        ))
     }
 
     fn parse_sumif_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -28512,6 +28737,264 @@ mod tests {
                 OmValue::Number(30.0),
                 OmValue::Number(0.0),
                 OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_database_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let database = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:C6".to_string())])
+                .expect("Range(A1:C6)"),
+        );
+        let criteria = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E1:F3".to_string())])
+                .expect("Range(E1:F3)"),
+        );
+        let single_south_criteria = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("H1:H2".to_string())])
+                .expect("Range(H1:H2)"),
+        );
+        let single_units_criteria = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("J1:J2".to_string())])
+                .expect("Range(J1:J2)"),
+        );
+        let multi_match_criteria = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("L1:L2".to_string())])
+                .expect("Range(L1:L2)"),
+        );
+        let no_match_criteria = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("N1:N2".to_string())])
+                .expect("Range(N1:N2)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("Q1:Q16".to_string())],
+                )
+                .expect("Range(Q1:Q16)"),
+        );
+
+        runtime
+            .dispatch_set(
+                database,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        6,
+                        3,
+                        vec![
+                            OmValue::Text("Region".to_string()),
+                            OmValue::Text("Sales".to_string()),
+                            OmValue::Text("Units".to_string()),
+                            OmValue::Text("North".to_string()),
+                            OmValue::Number(100.0),
+                            OmValue::Number(5.0),
+                            OmValue::Text("South".to_string()),
+                            OmValue::Number(200.0),
+                            OmValue::Number(7.0),
+                            OmValue::Text("North".to_string()),
+                            OmValue::Number(150.0),
+                            OmValue::Number(9.0),
+                            OmValue::Text("East".to_string()),
+                            OmValue::Number(50.0),
+                            OmValue::Number(4.0),
+                            OmValue::Text("West".to_string()),
+                            OmValue::Text("skip".to_string()),
+                            OmValue::Number(2.0),
+                        ],
+                    )
+                    .expect("database values"),
+                ),
+                &[],
+            )
+            .expect("set database values");
+        runtime
+            .dispatch_set(
+                criteria,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        2,
+                        vec![
+                            OmValue::Text("Region".to_string()),
+                            OmValue::Text("Units".to_string()),
+                            OmValue::Text("North".to_string()),
+                            OmValue::Text(">5".to_string()),
+                            OmValue::Text("East".to_string()),
+                            OmValue::Empty,
+                        ],
+                    )
+                    .expect("database criteria values"),
+                ),
+                &[],
+            )
+            .expect("set database criteria values");
+        runtime
+            .dispatch_set(
+                single_south_criteria,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        1,
+                        vec![
+                            OmValue::Text("Region".to_string()),
+                            OmValue::Text("South".to_string()),
+                        ],
+                    )
+                    .expect("single south criteria"),
+                ),
+                &[],
+            )
+            .expect("set single south criteria");
+        runtime
+            .dispatch_set(
+                single_units_criteria,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        1,
+                        vec![
+                            OmValue::Text("Units".to_string()),
+                            OmValue::Text(">8".to_string()),
+                        ],
+                    )
+                    .expect("single units criteria"),
+                ),
+                &[],
+            )
+            .expect("set single units criteria");
+        runtime
+            .dispatch_set(
+                multi_match_criteria,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        1,
+                        vec![
+                            OmValue::Text("Region".to_string()),
+                            OmValue::Text("North".to_string()),
+                        ],
+                    )
+                    .expect("multi-match criteria"),
+                ),
+                &[],
+            )
+            .expect("set multi-match criteria");
+        runtime
+            .dispatch_set(
+                no_match_criteria,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        1,
+                        vec![
+                            OmValue::Text("Region".to_string()),
+                            OmValue::Text("Missing".to_string()),
+                        ],
+                    )
+                    .expect("no-match criteria"),
+                ),
+                &[],
+            )
+            .expect("set no-match criteria");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        16,
+                        1,
+                        vec![
+                            OmValue::Text(r#"=DAVERAGE(A1:C6,"Sales",E1:F3)"#.to_string()),
+                            OmValue::Text(r#"=DCOUNT(A1:C6,"Sales",E1:F3)"#.to_string()),
+                            OmValue::Text(r#"=DCOUNTA(A1:C6,"Region",E1:F3)"#.to_string()),
+                            OmValue::Text(r#"=DGET(A1:C6,"Sales",H1:H2)"#.to_string()),
+                            OmValue::Text(r#"=DGET(A1:C6,"Region",J1:J2)"#.to_string()),
+                            OmValue::Text(r#"=DMAX(A1:C6,"Sales",E1:F3)"#.to_string()),
+                            OmValue::Text(r#"=DMIN(A1:C6,"Sales",E1:F3)"#.to_string()),
+                            OmValue::Text(r#"=DPRODUCT(A1:C6,"Sales",E1:F3)"#.to_string()),
+                            OmValue::Text(r#"=DSTDEV(A1:C6,"Sales",E1:F3)"#.to_string()),
+                            OmValue::Text(r#"=DSTDEVP(A1:C6,"Sales",E1:F3)"#.to_string()),
+                            OmValue::Text(r#"=DSUM(A1:C6,"Sales",E1:F3)"#.to_string()),
+                            OmValue::Text(r#"=DVAR(A1:C6,"Sales",E1:F3)"#.to_string()),
+                            OmValue::Text(r#"=DVARP(A1:C6,"Sales",E1:F3)"#.to_string()),
+                            OmValue::Text("=DSUM(A1:C6,2,E1:F3)".to_string()),
+                            OmValue::Text(r#"=DGET(A1:C6,"Sales",L1:L2)"#.to_string()),
+                            OmValue::Text(r#"=DGET(A1:C6,"Sales",N1:N2)"#.to_string()),
+                        ],
+                    )
+                    .expect("database formulas"),
+                ),
+                &[],
+            )
+            .expect("set database formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("database values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected database value array");
+        };
+        assert_eq!(
+            &values.values[..8],
+            &[
+                OmValue::Number(100.0),
+                OmValue::Number(2.0),
+                OmValue::Number(2.0),
+                OmValue::Number(200.0),
+                OmValue::Text("North".to_string()),
+                OmValue::Number(150.0),
+                OmValue::Number(50.0),
+                OmValue::Number(7500.0),
+            ]
+        );
+        let expected_numbers = [5000.0_f64.sqrt(), 50.0, 200.0, 5000.0, 2500.0, 200.0];
+        for (offset, expected) in expected_numbers.into_iter().enumerate() {
+            let number = expect_number(values.values[offset + 8].clone());
+            assert!(
+                (number - expected).abs() < 1e-10,
+                "database result {} expected {expected}, got {number}",
+                offset + 9
+            );
+        }
+        assert_eq!(
+            &values.values[14..],
+            &[
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Value)
             ]
         );
     }
