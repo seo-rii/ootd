@@ -66,6 +66,14 @@ const XL_PASTE_SPECIAL_OPERATION_ADD: i32 = 2;
 const XL_PASTE_SPECIAL_OPERATION_SUBTRACT: i32 = 3;
 const XL_PASTE_SPECIAL_OPERATION_MULTIPLY: i32 = 4;
 const XL_PASTE_SPECIAL_OPERATION_DIVIDE: i32 = 5;
+const XL_FIND_LOOK_IN_FORMULAS: i32 = -4123;
+const XL_FIND_LOOK_IN_VALUES: i32 = -4163;
+const XL_LOOK_AT_WHOLE: i32 = 1;
+const XL_LOOK_AT_PART: i32 = 2;
+const XL_SEARCH_BY_ROWS: i32 = 1;
+const XL_SEARCH_BY_COLUMNS: i32 = 2;
+const XL_SEARCH_NEXT: i32 = 1;
+const XL_SEARCH_PREVIOUS: i32 = 2;
 const XL_DECIMAL_SEPARATOR: i32 = 3;
 const XL_THOUSANDS_SEPARATOR: i32 = 4;
 const XL_LIST_SEPARATOR: i32 = 5;
@@ -1434,6 +1442,303 @@ impl ExcelRuntime {
                             )
                             .0,
                         ))
+                    }
+                    "Find" => {
+                        if args.is_empty() || args.len() > 9 {
+                            return Err(OmError::invalid_argument(
+                                "Range.Find expects What and optional After, LookIn, LookAt, SearchOrder, SearchDirection, MatchCase, MatchByte, and SearchFormat arguments",
+                            ));
+                        }
+
+                        let what = match &args[0] {
+                            OmValue::Missing | OmValue::Empty | OmValue::Null => String::new(),
+                            OmValue::Text(text) => text.clone(),
+                            OmValue::Bool(value) => {
+                                if *value {
+                                    "TRUE".to_string()
+                                } else {
+                                    "FALSE".to_string()
+                                }
+                            }
+                            OmValue::Number(number) => {
+                                if number.is_finite()
+                                    && number.fract() == 0.0
+                                    && *number >= i64::MIN as f64
+                                    && *number <= i64::MAX as f64
+                                {
+                                    (*number as i64).to_string()
+                                } else {
+                                    number.to_string()
+                                }
+                            }
+                            OmValue::Error(error) => formula_cell_error_text(*error).to_string(),
+                            OmValue::Object(_) | OmValue::Array(_) => {
+                                return Err(OmError::type_mismatch(
+                                    "Range.Find What expects a scalar value",
+                                ));
+                            }
+                        };
+
+                        let coerce_find_enum = |value: Option<&OmValue>,
+                                                default: i32,
+                                                label: &str,
+                                                supported: &[i32]|
+                         -> OmResult<i32> {
+                            match value {
+                                None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => {
+                                    Ok(default)
+                                }
+                                Some(OmValue::Number(number)) => {
+                                    if !number.is_finite()
+                                        || number.fract() != 0.0
+                                        || *number < i32::MIN as f64
+                                        || *number > i32::MAX as f64
+                                    {
+                                        return Err(OmError::invalid_argument(format!(
+                                            "{label} expects an integral enum value"
+                                        )));
+                                    }
+                                    let value = *number as i32;
+                                    if supported.contains(&value) {
+                                        Ok(value)
+                                    } else {
+                                        Err(OmError::unsupported(format!(
+                                            "{label} {value} is not implemented"
+                                        )))
+                                    }
+                                }
+                                Some(_) => Err(OmError::type_mismatch(format!(
+                                    "{label} expects a numeric enum value when provided"
+                                ))),
+                            }
+                        };
+
+                        let after_cell = match args.get(1) {
+                            None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => {
+                                (rect.row_first, rect.col_first)
+                            }
+                            Some(OmValue::Object(handle)) => match self.runtime_object(*handle)? {
+                                RuntimeObjectKind::Range {
+                                    workbook: after_workbook,
+                                    sheet_id: after_sheet_id,
+                                    rect: after_rect,
+                                    ..
+                                } => {
+                                    if after_workbook != workbook || after_sheet_id != sheet_id {
+                                        return Err(OmError::invalid_argument(
+                                            "Range.Find After must belong to the searched worksheet",
+                                        ));
+                                    }
+                                    if after_rect.height() != 1 || after_rect.width() != 1 {
+                                        return Err(OmError::invalid_argument(
+                                            "Range.Find After must be a single cell",
+                                        ));
+                                    }
+                                    if !(rect.row_first..=rect.row_last)
+                                        .contains(&after_rect.row_first)
+                                        || !(rect.col_first..=rect.col_last)
+                                            .contains(&after_rect.col_first)
+                                    {
+                                        return Err(OmError::invalid_argument(
+                                            "Range.Find After must be inside the searched range",
+                                        ));
+                                    }
+                                    (after_rect.row_first, after_rect.col_first)
+                                }
+                                _ => {
+                                    return Err(OmError::type_mismatch(
+                                        "Range.Find After expects a Range object when provided",
+                                    ));
+                                }
+                            },
+                            Some(_) => {
+                                return Err(OmError::type_mismatch(
+                                    "Range.Find After expects a Range object when provided",
+                                ));
+                            }
+                        };
+
+                        let look_in = coerce_find_enum(
+                            args.get(2),
+                            XL_FIND_LOOK_IN_VALUES,
+                            "Range.Find LookIn",
+                            &[XL_FIND_LOOK_IN_FORMULAS, XL_FIND_LOOK_IN_VALUES],
+                        )?;
+                        let look_at = coerce_find_enum(
+                            args.get(3),
+                            XL_LOOK_AT_PART,
+                            "Range.Find LookAt",
+                            &[XL_LOOK_AT_WHOLE, XL_LOOK_AT_PART],
+                        )?;
+                        let search_order = coerce_find_enum(
+                            args.get(4),
+                            XL_SEARCH_BY_ROWS,
+                            "Range.Find SearchOrder",
+                            &[XL_SEARCH_BY_ROWS, XL_SEARCH_BY_COLUMNS],
+                        )?;
+                        let search_direction = coerce_find_enum(
+                            args.get(5),
+                            XL_SEARCH_NEXT,
+                            "Range.Find SearchDirection",
+                            &[XL_SEARCH_NEXT, XL_SEARCH_PREVIOUS],
+                        )?;
+                        let match_case = args
+                            .get(6)
+                            .map(|value| {
+                                coerce_optional_bool_arg(value, false, "Range.Find MatchCase")
+                            })
+                            .transpose()?
+                            .unwrap_or(false);
+                        let _match_byte = args
+                            .get(7)
+                            .map(|value| {
+                                coerce_optional_bool_arg(value, false, "Range.Find MatchByte")
+                            })
+                            .transpose()?
+                            .unwrap_or(false);
+                        let search_format = args
+                            .get(8)
+                            .map(|value| {
+                                coerce_optional_bool_arg(value, false, "Range.Find SearchFormat")
+                            })
+                            .transpose()?
+                            .unwrap_or(false);
+                        if search_format {
+                            return Err(OmError::unsupported(
+                                "Range.Find SearchFormat is not implemented",
+                            ));
+                        }
+
+                        let mut positions =
+                            Vec::with_capacity((rect.height() * rect.width()) as usize);
+                        match search_order {
+                            XL_SEARCH_BY_ROWS => {
+                                for row in rect.row_first..=rect.row_last {
+                                    for col in rect.col_first..=rect.col_last {
+                                        positions.push((row, col));
+                                    }
+                                }
+                            }
+                            XL_SEARCH_BY_COLUMNS => {
+                                for col in rect.col_first..=rect.col_last {
+                                    for row in rect.row_first..=rect.row_last {
+                                        positions.push((row, col));
+                                    }
+                                }
+                            }
+                            _ => unreachable!("unsupported search order was rejected"),
+                        }
+                        let after_index = positions
+                            .iter()
+                            .position(|position| *position == after_cell)
+                            .expect("validated after cell should be inside search positions");
+                        let needle = if match_case {
+                            what
+                        } else {
+                            what.to_lowercase()
+                        };
+
+                        let found_cell = {
+                            let state = &self.runtime_workbook(workbook)?.loaded.state;
+                            let worksheet = state.worksheet_data_for_sheet(sheet_id)?;
+                            let mut evaluator = FormulaEvaluator::new(state);
+                            let cell_value_text = |value: &CellValue| match value {
+                                CellValue::Blank => String::new(),
+                                CellValue::Bool(true) => "TRUE".to_string(),
+                                CellValue::Bool(false) => "FALSE".to_string(),
+                                CellValue::Number(number) => {
+                                    if number.is_finite()
+                                        && number.fract() == 0.0
+                                        && *number >= i64::MIN as f64
+                                        && *number <= i64::MAX as f64
+                                    {
+                                        (*number as i64).to_string()
+                                    } else {
+                                        number.to_string()
+                                    }
+                                }
+                                CellValue::Text(text) => text.clone(),
+                                CellValue::Error(error) => {
+                                    formula_cell_error_text(*error).to_string()
+                                }
+                            };
+
+                            let mut index = after_index;
+                            let mut found = None;
+                            for _ in 0..positions.len() {
+                                index = if search_direction == XL_SEARCH_NEXT {
+                                    (index + 1) % positions.len()
+                                } else if index == 0 {
+                                    positions.len() - 1
+                                } else {
+                                    index - 1
+                                };
+                                let (row, col) = positions[index];
+                                let candidate = worksheet
+                                    .cells
+                                    .get(&(row, col))
+                                    .map(|cell| match look_in {
+                                        XL_FIND_LOOK_IN_FORMULAS => {
+                                            if let Some(formula) = cell.formula.as_ref() {
+                                                let formula_text = if formula.is_r1c1 {
+                                                    convert_formula_r1c1_to_a1(
+                                                        &formula.text,
+                                                        row,
+                                                        col,
+                                                    )
+                                                } else {
+                                                    formula.text.clone()
+                                                };
+                                                format!("={formula_text}")
+                                            } else {
+                                                cell_value_text(&cell.value)
+                                            }
+                                        }
+                                        XL_FIND_LOOK_IN_VALUES => {
+                                            let value = if cell.formula.is_some() {
+                                                evaluator
+                                                    .evaluate_formula_cell(sheet_id, row, col)
+                                                    .unwrap_or_else(|| cell.value.clone())
+                                            } else {
+                                                cell.value.clone()
+                                            };
+                                            cell_value_text(&value)
+                                        }
+                                        _ => unreachable!("unsupported LookIn was rejected"),
+                                    })
+                                    .unwrap_or_default();
+                                let candidate = if match_case {
+                                    candidate
+                                } else {
+                                    candidate.to_lowercase()
+                                };
+                                let matched = if needle.is_empty() {
+                                    candidate.is_empty()
+                                } else if look_at == XL_LOOK_AT_WHOLE {
+                                    candidate == needle
+                                } else {
+                                    candidate.contains(&needle)
+                                };
+                                if matched {
+                                    found = Some((row, col));
+                                    break;
+                                }
+                            }
+                            found
+                        };
+
+                        Ok(found_cell
+                            .map(|(row, col)| {
+                                OmValue::Object(
+                                    self.register_range_handle(
+                                        workbook,
+                                        sheet_id,
+                                        Rect::single_cell(row, col),
+                                    )
+                                    .0,
+                                )
+                            })
+                            .unwrap_or(OmValue::Empty))
                     }
                     "Delete" => {
                         let shift = match args {
@@ -47145,6 +47450,257 @@ mod tests {
                     .expect("C3.Text")
             ),
             ""
+        );
+    }
+
+    #[test]
+    fn range_find_dispatch_searches_values_with_order_and_case_options() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B2".to_string())])
+                .expect("Range(A1:B2)"),
+        );
+        let a1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        runtime
+            .dispatch_set(
+                search_range,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        2,
+                        vec![
+                            OmValue::Text("Alpha".to_string()),
+                            OmValue::Text("beta".to_string()),
+                            OmValue::Text("Gamma".to_string()),
+                            OmValue::Text("alphabet".to_string()),
+                        ],
+                    )
+                    .expect("A1:B2 values"),
+                ),
+                &[],
+            )
+            .expect("A1:B2.Value2");
+
+        let found_after = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    search_range,
+                    "Find",
+                    &[OmValue::Text("alp".to_string()), OmValue::Object(a1)],
+                )
+                .expect("Range.Find after A1"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(found_after, "Address", &[])
+                    .expect("Range.Find after A1 Address")
+            ),
+            "$B$2"
+        );
+
+        let found_whole = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    search_range,
+                    "Find",
+                    &[
+                        OmValue::Text("alpha".to_string()),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(f64::from(super::XL_LOOK_AT_WHOLE)),
+                    ],
+                )
+                .expect("Range.Find xlWhole"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(found_whole, "Address", &[])
+                    .expect("Range.Find xlWhole Address")
+            ),
+            "$A$1"
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(
+                    search_range,
+                    "Find",
+                    &[
+                        OmValue::Text("gamma".to_string()),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Bool(true),
+                    ],
+                )
+                .expect("Range.Find MatchCase true"),
+            OmValue::Empty
+        ));
+
+        let found_case_insensitive = expect_object_handle(
+            runtime
+                .dispatch_invoke(search_range, "Find", &[OmValue::Text("gamma".to_string())])
+                .expect("Range.Find default case-insensitive"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(found_case_insensitive, "Address", &[])
+                    .expect("Range.Find case-insensitive Address")
+            ),
+            "$A$2"
+        );
+    }
+
+    #[test]
+    fn range_find_dispatch_searches_formula_text_and_validates_options() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formula_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1".to_string())])
+                .expect("Range(C1)"),
+        );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1:C2".to_string())])
+                .expect("Range(C1:C2)"),
+        );
+        let multi_after = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1:C2".to_string())])
+                .expect("Range(C1:C2) after"),
+        );
+        runtime
+            .dispatch_set(
+                formula_cell,
+                "Formula",
+                OmValue::Text(r#"=UPPER("needle")"#.to_string()),
+                &[],
+            )
+            .expect("C1.Formula");
+
+        let found_formula = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    search_range,
+                    "Find",
+                    &[
+                        OmValue::Text("UPPER".to_string()),
+                        OmValue::Missing,
+                        OmValue::Number(f64::from(super::XL_FIND_LOOK_IN_FORMULAS)),
+                    ],
+                )
+                .expect("Range.Find LookIn formulas"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(found_formula, "Address", &[])
+                    .expect("Range.Find formula Address")
+            ),
+            "$C$1"
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(
+                    search_range,
+                    "Find",
+                    &[
+                        OmValue::Text("UPPER".to_string()),
+                        OmValue::Missing,
+                        OmValue::Number(f64::from(super::XL_FIND_LOOK_IN_VALUES)),
+                    ],
+                )
+                .expect("Range.Find LookIn values"),
+            OmValue::Empty
+        ));
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    search_range,
+                    "Find",
+                    &[
+                        OmValue::Text("needle".to_string()),
+                        OmValue::Object(multi_after),
+                    ],
+                )
+                .expect_err("Range.Find should reject multi-cell After")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    search_range,
+                    "Find",
+                    &[
+                        OmValue::Text("needle".to_string()),
+                        OmValue::Missing,
+                        OmValue::Number(999.0),
+                    ],
+                )
+                .expect_err("Range.Find should reject unsupported LookIn")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    search_range,
+                    "Find",
+                    &[
+                        OmValue::Text("needle".to_string()),
+                        OmValue::Missing,
+                        OmValue::Number(f64::from(super::XL_FIND_LOOK_IN_FORMULAS)),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Bool(true),
+                    ],
+                )
+                .expect_err("Range.Find should reject SearchFormat")
+                .code,
+            OmErrorCode::Unsupported
         );
     }
 
