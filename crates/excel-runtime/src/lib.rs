@@ -11,6 +11,7 @@ use office_idl::{AccessMode, SupportState};
 use office_opc::{CompressionMethod, OpcPackage, OpcPart};
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
+use regex::{Regex, RegexBuilder};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -13527,6 +13528,24 @@ fn formula_encode_url(text: &str) -> String {
     output
 }
 
+fn formula_regex_case_insensitive(case_sensitivity: i64) -> Result<bool, FormulaEvalError> {
+    match case_sensitivity {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(FormulaEvalError::Value),
+    }
+}
+
+fn formula_regex_from_pattern(
+    pattern: &str,
+    case_insensitive: bool,
+) -> Result<Regex, FormulaEvalError> {
+    RegexBuilder::new(pattern)
+        .case_insensitive(case_insensitive)
+        .build()
+        .map_err(|_| FormulaEvalError::Value)
+}
+
 fn formula_selected_text_from_value_probe(
     value: FormulaValueProbe,
 ) -> Result<String, FormulaEvalError> {
@@ -13603,6 +13622,8 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("UPPER")
         || name.eq_ignore_ascii_case("LOWER")
         || name.eq_ignore_ascii_case("PROPER")
+        || name.eq_ignore_ascii_case("REGEXEXTRACT")
+        || name.eq_ignore_ascii_case("REGEXREPLACE")
         || name.eq_ignore_ascii_case("TRIM")
         || name.eq_ignore_ascii_case("TEXTJOIN")
         || name.eq_ignore_ascii_case("TEXTBEFORE")
@@ -18143,6 +18164,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("SEARCHB") {
             return self.parse_find_function(true, true);
         }
+        if name.eq_ignore_ascii_case("REGEXTEST") {
+            return self.parse_regex_test_function();
+        }
         if name.eq_ignore_ascii_case("EXACT") {
             return self.parse_exact_function();
         }
@@ -18788,6 +18812,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return formula_selected_text_from_value_probe(
                 self.parse_database_value_function(name)?,
             );
+        }
+        if name.eq_ignore_ascii_case("REGEXEXTRACT") {
+            return self.parse_regex_extract_function();
+        }
+        if name.eq_ignore_ascii_case("REGEXREPLACE") {
+            return self.parse_regex_replace_function();
         }
         if name.eq_ignore_ascii_case("ENCODEURL") {
             return self.parse_unary_text_function(|text| formula_encode_url(text.as_str()));
@@ -20009,6 +20039,152 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         } else {
             Ok(text[..start].to_string())
         }
+    }
+
+    fn parse_regex_test_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let text = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let pattern = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        let case_insensitive = if self.consume_char(')') {
+            false
+        } else {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let case_sensitivity = formula_integer_argument(self.parse_comparison()?)?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            formula_regex_case_insensitive(case_sensitivity)?
+        };
+        let regex = formula_regex_from_pattern(pattern.as_str(), case_insensitive)?;
+        Ok(if regex.is_match(text.as_str()) {
+            1.0
+        } else {
+            0.0
+        })
+    }
+
+    fn parse_regex_extract_function(&mut self) -> Result<String, FormulaEvalError> {
+        let text = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let pattern = self.parse_text_value_argument()?;
+        let mut return_mode = 0_i64;
+        let mut case_insensitive = false;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return_mode = formula_integer_argument(self.parse_comparison()?)?;
+            if !matches!(return_mode, 0 | 1 | 2) {
+                return Err(FormulaEvalError::Value);
+            }
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                let case_sensitivity = formula_integer_argument(self.parse_comparison()?)?;
+                case_insensitive = formula_regex_case_insensitive(case_sensitivity)?;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+            }
+        }
+
+        let regex = formula_regex_from_pattern(pattern.as_str(), case_insensitive)?;
+        let captures = regex.captures(text.as_str()).ok_or(FormulaEvalError::NA)?;
+        if return_mode == 2 {
+            return captures
+                .iter()
+                .skip(1)
+                .find_map(|capture| capture.map(|value| value.as_str().to_string()))
+                .ok_or(FormulaEvalError::NA);
+        }
+        captures
+            .get(0)
+            .map(|value| value.as_str().to_string())
+            .ok_or(FormulaEvalError::NA)
+    }
+
+    fn parse_regex_replace_function(&mut self) -> Result<String, FormulaEvalError> {
+        let text = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let pattern = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let replacement = self.parse_text_value_argument()?;
+        let mut occurrence = 0_i64;
+        let mut case_insensitive = false;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            occurrence = formula_integer_argument(self.parse_comparison()?)?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                let case_sensitivity = formula_integer_argument(self.parse_comparison()?)?;
+                case_insensitive = formula_regex_case_insensitive(case_sensitivity)?;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+            }
+        }
+
+        let regex = formula_regex_from_pattern(pattern.as_str(), case_insensitive)?;
+        if occurrence == 0 {
+            return Ok(regex
+                .replace_all(text.as_str(), replacement.as_str())
+                .into_owned());
+        }
+        let mut matches = Vec::new();
+        for captures in regex.captures_iter(text.as_str()) {
+            let Some(full_match) = captures.get(0) else {
+                continue;
+            };
+            let mut expanded = String::new();
+            captures.expand(replacement.as_str(), &mut expanded);
+            matches.push((full_match.start(), full_match.end(), expanded));
+        }
+        let selected = if occurrence > 0 {
+            usize::try_from(occurrence - 1)
+                .ok()
+                .and_then(|index| matches.get(index))
+        } else {
+            occurrence
+                .checked_abs()
+                .and_then(|value| usize::try_from(value).ok())
+                .and_then(|count| matches.len().checked_sub(count))
+                .and_then(|index| matches.get(index))
+        };
+        let Some((start, end, expanded)) = selected else {
+            return Ok(text);
+        };
+        let mut output = String::new();
+        output.push_str(&text[..*start]);
+        output.push_str(expanded.as_str());
+        output.push_str(&text[*end..]);
+        Ok(output)
     }
 
     fn parse_rept_text_function(&mut self) -> Result<String, FormulaEvalError> {
@@ -36207,6 +36383,125 @@ mod tests {
                 )
                 .expect("Application.Evaluate SUBSTITUTE"),
             OmValue::Text("abcXc".to_string())
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_regex_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A15".to_string())],
+                )
+                .expect("Range(A1:A15)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        15,
+                        1,
+                        vec![
+                            OmValue::Text(r#"=REGEXTEST("Order-42","[0-9]+")"#.to_string()),
+                            OmValue::Text(r#"=REGEXTEST("Order-42","^[a-z]+")"#.to_string()),
+                            OmValue::Text(r#"=REGEXTEST("Order-42","^[a-z]+",1)"#.to_string()),
+                            OmValue::Text(
+                                r#"=REGEXEXTRACT("Order-42-ABC","[0-9]+")"#.to_string(),
+                            ),
+                            OmValue::Text(
+                                r#"=REGEXEXTRACT("Order-42-ABC","([A-Za-z]+)-([0-9]+)",2)"#
+                                    .to_string(),
+                            ),
+                            OmValue::Text(
+                                r#"=REGEXEXTRACT("Order-42-ABC","[a-z]+",0,1)"#.to_string(),
+                            ),
+                            OmValue::Text(
+                                r##"=REGEXREPLACE("A12 B34","[0-9]+","#")"##.to_string(),
+                            ),
+                            OmValue::Text(
+                                r##"=REGEXREPLACE("A12 B34 C56","[0-9]+","#",2)"##.to_string(),
+                            ),
+                            OmValue::Text(
+                                r##"=REGEXREPLACE("A12 B34 C56","[0-9]+","#",-1)"##.to_string(),
+                            ),
+                            OmValue::Text(
+                                r#"=REGEXREPLACE("abc","[A-Z]+","x",0,1)"#.to_string(),
+                            ),
+                            OmValue::Text(
+                                r#"=REGEXREPLACE("2026-05-05","([0-9]{4})-([0-9]{2})-([0-9]{2})","$2/$3/$1")"#.to_string(),
+                            ),
+                            OmValue::Text(r#"=REGEXTEST("abc","[")"#.to_string()),
+                            OmValue::Text(r#"=REGEXEXTRACT("abc","[0-9]+")"#.to_string()),
+                            OmValue::Text(r#"=REGEXTEST("abc","abc",2)"#.to_string()),
+                            OmValue::Text(r#"=REGEXEXTRACT("abc","abc",3)"#.to_string()),
+                        ],
+                    )
+                    .expect("regex formulas"),
+                ),
+                &[],
+            )
+            .expect("set regex formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("regex values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected regex value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(1.0),
+                OmValue::Number(0.0),
+                OmValue::Number(1.0),
+                OmValue::Text("42".to_string()),
+                OmValue::Text("Order".to_string()),
+                OmValue::Text("Order".to_string()),
+                OmValue::Text("A# B#".to_string()),
+                OmValue::Text("A12 B# C56".to_string()),
+                OmValue::Text("A12 B34 C#".to_string()),
+                OmValue::Text("x".to_string()),
+                OmValue::Text("05/05/2026".to_string()),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
+            ]
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    runtime.root_application(),
+                    "Evaluate",
+                    &[OmValue::Text(
+                        r#"=REGEXEXTRACT("abc123","[0-9]+")"#.to_string()
+                    )],
+                )
+                .expect("Application.Evaluate REGEXEXTRACT"),
+            OmValue::Text("123".to_string())
         );
     }
 
