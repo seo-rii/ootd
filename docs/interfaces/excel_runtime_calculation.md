@@ -579,9 +579,12 @@ Information notes:
 - `CLEAN`
 - `CODE`
 - `DBCS`
+- `DETECTLANGUAGE`
 - `DOLLAR`
+- `FILTERXML`
 - `FIXED`
 - `HYPERLINK`
+- `IMAGE`
 - `LEFT`
 - `LEFTB`
 - `RIGHT`
@@ -602,6 +605,7 @@ Information notes:
 - `TEXTBEFORE`
 - `TEXTAFTER`
 - `TEXTSPLIT`
+- `TRANSLATE`
 - `REGEXEXTRACT`
 - `REGEXREPLACE`
 - `REGEXTEST`
@@ -619,6 +623,7 @@ Information notes:
 - `VALUE`
 - `VALUETOTEXT`
 - `NUMBERVALUE`
+- `WEBSERVICE`
 
 Text notes:
 
@@ -627,6 +632,8 @@ Text notes:
 - `SEARCH`, `XLOOKUP`, and `XMATCH` support Excel-style `*` and `?` wildcards with `~` escaping in their focused scalar paths.
 - `REGEXTEST`, `REGEXEXTRACT`, and `REGEXREPLACE` support scalar regex matching, extraction, and replacement using Rust regex syntax; array-spill return modes currently resolve to a scalar focused result.
 - `TEXTJOIN` supports scalar values and rectangular ranges, `TEXTBEFORE` / `TEXTAFTER` support scalar delimiters, instance numbers, case-sensitivity mode, match-end mode, and scalar `if_not_found` fallbacks, and `TEXTSPLIT` returns the first scalar split token.
+- `DETECTLANGUAGE` uses deterministic local script heuristics, and `TRANSLATE` uses a small local phrase table with identity fallback rather than a network translation service.
+- `FILTERXML` supports a focused scalar XML text extraction path for simple element and attribute XPath selectors. `IMAGE` returns alt text when provided, otherwise the source URL, because the scalar cell model does not store image values.
 - `VALUE` supports plain decimal numeric text and a trailing percent sign; `NUMBERVALUE` additionally supports configurable decimal and group separators. Currency symbols, date/time text, and locale-specific formatting beyond those focused paths are not implemented.
 - `FIXED` uses period decimal text and optional comma grouping; `DOLLAR` uses the invariant `$` currency symbol and Excel-style parentheses for negative values.
 - `TEXT` supports a focused invariant numeric-format subset with `0` / `#` placeholders, decimal places, comma grouping, `%`, `$`, quoted literals, escapes, and positive/negative/zero sections; date/time and locale-specific format codes still return `#VALUE!`.
@@ -641,10 +648,12 @@ Text notes:
 ### Web helpers
 
 - `ENCODEURL`
+- `WEBSERVICE`
 
 Web notes:
 
 - `ENCODEURL` percent-encodes UTF-8 bytes and leaves ASCII letters, digits, `-`, `_`, `.`, and `~` unescaped.
+- `WEBSERVICE` intentionally avoids runtime network I/O and supports deterministic `data:` URL payload decoding for formulas that feed local text or XML helpers.
 
 ## Current Boundaries
 

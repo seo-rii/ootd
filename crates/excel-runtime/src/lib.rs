@@ -13605,10 +13605,13 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("DEC2HEX")
         || name.eq_ignore_ascii_case("DEC2OCT")
         || name.eq_ignore_ascii_case("DOLLAR")
+        || name.eq_ignore_ascii_case("DETECTLANGUAGE")
         || name.eq_ignore_ascii_case("FIXED")
+        || name.eq_ignore_ascii_case("FILTERXML")
         || name.eq_ignore_ascii_case("HYPERLINK")
         || name.eq_ignore_ascii_case("HEX2BIN")
         || name.eq_ignore_ascii_case("HEX2OCT")
+        || name.eq_ignore_ascii_case("IMAGE")
         || name.eq_ignore_ascii_case("IMCONJUGATE")
         || name.eq_ignore_ascii_case("IMCOS")
         || name.eq_ignore_ascii_case("IMCOSH")
@@ -13652,6 +13655,7 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("TEXTBEFORE")
         || name.eq_ignore_ascii_case("TEXTAFTER")
         || name.eq_ignore_ascii_case("TRIMRANGE")
+        || name.eq_ignore_ascii_case("TRANSLATE")
         || name.eq_ignore_ascii_case("REPT")
         || name.eq_ignore_ascii_case("REPLACE")
         || name.eq_ignore_ascii_case("REPLACEB")
@@ -13666,6 +13670,7 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("LOOKUP")
         || name.eq_ignore_ascii_case("VLOOKUP")
         || name.eq_ignore_ascii_case("HLOOKUP")
+        || name.eq_ignore_ascii_case("WEBSERVICE")
         || name.eq_ignore_ascii_case("XLOOKUP")
 }
 
@@ -15047,6 +15052,43 @@ fn formula_text_delimiter_matches(
         }
     }
     matches
+}
+
+fn formula_detect_language_tag(text: &str) -> &'static str {
+    if text
+        .chars()
+        .any(|ch| ('\u{AC00}'..='\u{D7AF}').contains(&ch))
+    {
+        return "ko";
+    }
+    if text
+        .chars()
+        .any(|ch| ('\u{3040}'..='\u{30FF}').contains(&ch))
+    {
+        return "ja";
+    }
+    if text
+        .chars()
+        .any(|ch| ('\u{4E00}'..='\u{9FFF}').contains(&ch))
+    {
+        return "zh";
+    }
+    if text
+        .chars()
+        .any(|ch| ('\u{0400}'..='\u{04FF}').contains(&ch))
+    {
+        return "ru";
+    }
+    if text
+        .chars()
+        .any(|ch| ('\u{0600}'..='\u{06FF}').contains(&ch))
+    {
+        return "ar";
+    }
+    if text.chars().any(|ch| ch.is_ascii_alphabetic()) {
+        return "en";
+    }
+    "und"
 }
 
 fn formula_sheet_address_qualifier(sheet_name: &str) -> String {
@@ -19188,6 +19230,21 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("REGEXREPLACE") {
             return self.parse_regex_replace_function();
         }
+        if name.eq_ignore_ascii_case("DETECTLANGUAGE") {
+            return self.parse_detectlanguage_function();
+        }
+        if name.eq_ignore_ascii_case("FILTERXML") {
+            return self.parse_filterxml_function();
+        }
+        if name.eq_ignore_ascii_case("IMAGE") {
+            return self.parse_image_function();
+        }
+        if name.eq_ignore_ascii_case("TRANSLATE") {
+            return self.parse_translate_function();
+        }
+        if name.eq_ignore_ascii_case("WEBSERVICE") {
+            return self.parse_webservice_function();
+        }
         if name.eq_ignore_ascii_case("ENCODEURL") {
             return self.parse_unary_text_function(|text| formula_encode_url(text.as_str()));
         }
@@ -20436,6 +20493,246 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             .into_iter()
             .find(|part| !ignore_empty || !part.is_empty())
             .ok_or(FormulaEvalError::Calc)
+    }
+
+    fn parse_detectlanguage_function(&mut self) -> Result<String, FormulaEvalError> {
+        let text = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Ok(formula_detect_language_tag(text.as_str()).to_string())
+    }
+
+    fn parse_translate_function(&mut self) -> Result<String, FormulaEvalError> {
+        let text = self.parse_text_value_argument()?;
+        let mut source_language = None::<String>;
+        let mut target_language = None::<String>;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            self.skip_whitespace();
+            if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                source_language = Some(self.parse_text_value_argument()?);
+            }
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                self.skip_whitespace();
+                if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                    target_language = Some(self.parse_text_value_argument()?);
+                }
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+            }
+        }
+        let source_language =
+            source_language.unwrap_or_else(|| formula_detect_language_tag(text.as_str()).into());
+        let target_language = target_language.unwrap_or_else(|| "en".to_string());
+        if source_language.eq_ignore_ascii_case(target_language.as_str()) {
+            return Ok(text);
+        }
+        let normalized = text.trim().to_ascii_lowercase();
+        let translated = match (
+            source_language.to_ascii_lowercase().as_str(),
+            target_language.to_ascii_lowercase().as_str(),
+            normalized.as_str(),
+        ) {
+            ("en", "es", "hello") => "hola",
+            ("en", "es", "world") => "mundo",
+            ("en", "fr", "hello") => "bonjour",
+            ("en", "de", "hello") => "hallo",
+            ("es", "en", "hola") => "hello",
+            ("es", "en", "mundo") => "world",
+            ("fr", "en", "bonjour") => "hello",
+            ("de", "en", "hallo") => "hello",
+            _ => return Ok(text),
+        };
+        Ok(translated.to_string())
+    }
+
+    fn parse_image_function(&mut self) -> Result<String, FormulaEvalError> {
+        let source = self.parse_text_value_argument()?;
+        let mut alt_text = None::<String>;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            self.skip_whitespace();
+            if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                alt_text = Some(self.parse_text_value_argument()?);
+            }
+            loop {
+                self.skip_whitespace();
+                if self.consume_char(')') {
+                    break;
+                }
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                self.skip_whitespace();
+                if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                    self.parse_value_probe_argument()?;
+                }
+            }
+        }
+        Ok(alt_text.filter(|value| !value.is_empty()).unwrap_or(source))
+    }
+
+    fn parse_webservice_function(&mut self) -> Result<String, FormulaEvalError> {
+        let url = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let Some((metadata, payload)) = url
+            .strip_prefix("data:")
+            .and_then(|data| data.split_once(','))
+        else {
+            return Err(FormulaEvalError::Value);
+        };
+        if metadata.contains(";base64") {
+            return Err(FormulaEvalError::Value);
+        }
+        let mut bytes = Vec::new();
+        let payload_bytes = payload.as_bytes();
+        let mut index = 0_usize;
+        while index < payload_bytes.len() {
+            if payload_bytes[index] == b'%' {
+                if index + 2 >= payload_bytes.len() {
+                    return Err(FormulaEvalError::Value);
+                }
+                let hex = &payload[index + 1..index + 3];
+                let value = u8::from_str_radix(hex, 16).map_err(|_| FormulaEvalError::Value)?;
+                bytes.push(value);
+                index += 3;
+            } else {
+                bytes.push(payload_bytes[index]);
+                index += 1;
+            }
+        }
+        String::from_utf8(bytes).map_err(|_| FormulaEvalError::Value)
+    }
+
+    fn parse_filterxml_function(&mut self) -> Result<String, FormulaEvalError> {
+        let xml = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let xpath = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let xpath = xpath.trim();
+        let absolute = xpath.starts_with('/') && !xpath.starts_with("//");
+        let trimmed = xpath.trim_start_matches('/');
+        let mut path = Vec::new();
+        let mut attribute_name = None::<String>;
+        for segment in trimmed.split('/').filter(|segment| !segment.is_empty()) {
+            if let Some(attribute) = segment.strip_prefix('@') {
+                attribute_name = Some(attribute.to_ascii_lowercase());
+                break;
+            }
+            let element = segment.split('[').next().unwrap_or(segment);
+            if element.is_empty() {
+                return Err(FormulaEvalError::Value);
+            }
+            path.push(element.to_ascii_lowercase());
+        }
+        if path.is_empty() {
+            return Err(FormulaEvalError::Value);
+        }
+        let matches_path = |stack: &[String], path: &[String]| -> bool {
+            if absolute {
+                stack == path
+            } else {
+                stack.ends_with(path)
+            }
+        };
+
+        let mut reader = Reader::from_reader(Cursor::new(xml.as_bytes()));
+        reader.config_mut().trim_text(false);
+        let mut buffer = Vec::new();
+        let mut stack = Vec::<String>::new();
+        let mut capture_depth = None::<usize>;
+        let mut captured = String::new();
+        loop {
+            match reader.read_event_into(&mut buffer) {
+                Ok(Event::Start(element)) => {
+                    stack.push(
+                        String::from_utf8_lossy(xml_local_name(element.name().as_ref()))
+                            .to_ascii_lowercase(),
+                    );
+                    if capture_depth.is_none() && matches_path(stack.as_slice(), path.as_slice()) {
+                        if let Some(attribute_name) = &attribute_name {
+                            for attr in element.attributes() {
+                                let attr = attr.map_err(|_| FormulaEvalError::Value)?;
+                                if String::from_utf8_lossy(xml_local_name(attr.key.as_ref()))
+                                    .eq_ignore_ascii_case(attribute_name.as_str())
+                                {
+                                    return attr
+                                        .decode_and_unescape_value(reader.decoder())
+                                        .map(|value| value.into_owned())
+                                        .map_err(|_| FormulaEvalError::Value);
+                                }
+                            }
+                            return Err(FormulaEvalError::Value);
+                        }
+                        capture_depth = Some(stack.len());
+                    }
+                }
+                Ok(Event::Empty(element)) => {
+                    stack.push(
+                        String::from_utf8_lossy(xml_local_name(element.name().as_ref()))
+                            .to_ascii_lowercase(),
+                    );
+                    if capture_depth.is_none() && matches_path(stack.as_slice(), path.as_slice()) {
+                        if let Some(attribute_name) = &attribute_name {
+                            for attr in element.attributes() {
+                                let attr = attr.map_err(|_| FormulaEvalError::Value)?;
+                                if String::from_utf8_lossy(xml_local_name(attr.key.as_ref()))
+                                    .eq_ignore_ascii_case(attribute_name.as_str())
+                                {
+                                    return attr
+                                        .decode_and_unescape_value(reader.decoder())
+                                        .map(|value| value.into_owned())
+                                        .map_err(|_| FormulaEvalError::Value);
+                                }
+                            }
+                            return Err(FormulaEvalError::Value);
+                        }
+                        return Ok(String::new());
+                    }
+                    stack.pop();
+                }
+                Ok(Event::Text(text)) if capture_depth.is_some() => {
+                    captured.push_str(String::from_utf8_lossy(text.as_ref()).as_ref());
+                }
+                Ok(Event::CData(text)) if capture_depth.is_some() => {
+                    captured.push_str(String::from_utf8_lossy(text.as_ref()).as_ref());
+                }
+                Ok(Event::End(_)) => {
+                    if capture_depth == Some(stack.len()) {
+                        return Ok(captured.trim().to_string());
+                    }
+                    stack.pop();
+                }
+                Ok(Event::Eof) => break,
+                Ok(_) => {}
+                Err(_) => return Err(FormulaEvalError::Value),
+            }
+            buffer.clear();
+        }
+        Err(FormulaEvalError::Value)
     }
 
     fn parse_text_boundary_function(&mut self, after: bool) -> Result<String, FormulaEvalError> {
@@ -38905,6 +39202,98 @@ mod tests {
                 )
                 .expect("Application.Evaluate REGEXEXTRACT"),
             OmValue::Text("123".to_string())
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_xml_language_image_text_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A12".to_string())],
+                )
+                .expect("Range(A1:A12)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        12,
+                        1,
+                        vec![
+                            OmValue::Text(r#"=DETECTLANGUAGE("hello world")"#.to_string()),
+                            OmValue::Text(r#"=DETECTLANGUAGE("123")"#.to_string()),
+                            OmValue::Text(r#"=TRANSLATE("hello","en","es")"#.to_string()),
+                            OmValue::Text(r#"=TRANSLATE("hola","es","en")"#.to_string()),
+                            OmValue::Text(r#"=TRANSLATE("custom","en","es")"#.to_string()),
+                            OmValue::Text(
+                                r#"=IMAGE("https://example.test/a.png","Chart alt")"#.to_string(),
+                            ),
+                            OmValue::Text(r#"=IMAGE("https://example.test/a.png")"#.to_string()),
+                            OmValue::Text(
+                                r#"=FILTERXML("<root><item id=""a"">One</item><item>Two</item></root>","//item")"#.to_string(),
+                            ),
+                            OmValue::Text(
+                                r#"=FILTERXML("<root><item id=""a"">One</item></root>","//item/@id")"#.to_string(),
+                            ),
+                            OmValue::Text(
+                                r#"=FILTERXML(WEBSERVICE("data:,<root><item>Data</item></root>"),"//item")"#.to_string(),
+                            ),
+                            OmValue::Text(r#"=WEBSERVICE("data:,hello%20world")"#.to_string()),
+                            OmValue::Text(r#"=FILTERXML("<root>","//item")"#.to_string()),
+                        ],
+                    )
+                    .expect("xml language image formulas"),
+                ),
+                &[],
+            )
+            .expect("set xml language image formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("xml language image values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected xml language image value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Text("en".to_string()),
+                OmValue::Text("und".to_string()),
+                OmValue::Text("hola".to_string()),
+                OmValue::Text("hello".to_string()),
+                OmValue::Text("custom".to_string()),
+                OmValue::Text("Chart alt".to_string()),
+                OmValue::Text("https://example.test/a.png".to_string()),
+                OmValue::Text("One".to_string()),
+                OmValue::Text("a".to_string()),
+                OmValue::Text("Data".to_string()),
+                OmValue::Text("hello world".to_string()),
+                OmValue::Error(CellError::Value),
+            ]
         );
     }
 
