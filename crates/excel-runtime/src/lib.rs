@@ -1535,7 +1535,7 @@ impl ExcelRuntime {
                             workbook,
                             sheet_id,
                             rect,
-                            what: Self::coerce_range_find_what(&args[0])?,
+                            what: Self::coerce_range_scalar_text(&args[0], "Range.Find What")?,
                             look_in,
                             look_at,
                             search_order,
@@ -1625,6 +1625,195 @@ impl ExcelRuntime {
                                 )
                             })
                             .unwrap_or(OmValue::Empty))
+                    }
+                    "Replace" => {
+                        if args.len() < 2 || args.len() > 8 {
+                            return Err(OmError::invalid_argument(
+                                "Range.Replace expects What, Replacement, and optional LookAt, SearchOrder, MatchCase, MatchByte, SearchFormat, and ReplaceFormat arguments",
+                            ));
+                        }
+                        let what = Self::coerce_range_scalar_text(&args[0], "Range.Replace What")?;
+                        let replacement =
+                            Self::coerce_range_scalar_text(&args[1], "Range.Replace Replacement")?;
+                        let look_at = Self::coerce_range_find_enum(
+                            args.get(2),
+                            XL_LOOK_AT_PART,
+                            "Range.Replace LookAt",
+                            &[XL_LOOK_AT_WHOLE, XL_LOOK_AT_PART],
+                        )?;
+                        let _search_order = Self::coerce_range_find_enum(
+                            args.get(3),
+                            XL_SEARCH_BY_ROWS,
+                            "Range.Replace SearchOrder",
+                            &[XL_SEARCH_BY_ROWS, XL_SEARCH_BY_COLUMNS],
+                        )?;
+                        let match_case = args
+                            .get(4)
+                            .map(|value| {
+                                coerce_optional_bool_arg(value, false, "Range.Replace MatchCase")
+                            })
+                            .transpose()?
+                            .unwrap_or(false);
+                        let _match_byte = args
+                            .get(5)
+                            .map(|value| {
+                                coerce_optional_bool_arg(value, false, "Range.Replace MatchByte")
+                            })
+                            .transpose()?
+                            .unwrap_or(false);
+                        let search_format = args
+                            .get(6)
+                            .map(|value| {
+                                coerce_optional_bool_arg(value, false, "Range.Replace SearchFormat")
+                            })
+                            .transpose()?
+                            .unwrap_or(false);
+                        let replace_format = args
+                            .get(7)
+                            .map(|value| {
+                                coerce_optional_bool_arg(
+                                    value,
+                                    false,
+                                    "Range.Replace ReplaceFormat",
+                                )
+                            })
+                            .transpose()?
+                            .unwrap_or(false);
+                        if search_format || replace_format {
+                            return Err(OmError::unsupported(
+                                "Range.Replace SearchFormat and ReplaceFormat are not implemented",
+                            ));
+                        }
+
+                        let part_regex = if look_at == XL_LOOK_AT_PART && !what.is_empty() {
+                            Some(
+                                RegexBuilder::new(&regex::escape(&what))
+                                    .case_insensitive(!match_case)
+                                    .build()
+                                    .map_err(|error| {
+                                        OmError::invalid_argument(format!(
+                                            "Range.Replace pattern is invalid: {error}"
+                                        ))
+                                    })?,
+                            )
+                        } else {
+                            None
+                        };
+                        let replace_candidate = |candidate: &str| -> Option<String> {
+                            if what.is_empty() {
+                                return candidate.is_empty().then(|| replacement.clone());
+                            }
+                            if look_at == XL_LOOK_AT_WHOLE {
+                                let matched = if match_case {
+                                    candidate == what
+                                } else {
+                                    candidate.to_lowercase() == what.to_lowercase()
+                                };
+                                return matched.then(|| replacement.clone());
+                            }
+                            let regex = part_regex
+                                .as_ref()
+                                .expect("part regex should exist for non-empty partial replace");
+                            if !regex.is_match(candidate) {
+                                return None;
+                            }
+                            Some(
+                                regex
+                                    .replace_all(candidate, |_: &regex::Captures<'_>| {
+                                        replacement.as_str()
+                                    })
+                                    .into_owned(),
+                            )
+                        };
+
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let worksheet = runtime
+                            .loaded
+                            .state
+                            .worksheet_data_for_sheet_mut(sheet_id)?;
+                        let mut replaced_any = false;
+                        for row in rect.row_first..=rect.row_last {
+                            for col in rect.col_first..=rect.col_last {
+                                let key = (row, col);
+                                let mut remove_cell = false;
+                                match worksheet.cells.get_mut(&key) {
+                                    Some(cell) => {
+                                        let candidate = if let Some(formula) = cell.formula.as_ref()
+                                        {
+                                            format!("={}", formula.text)
+                                        } else {
+                                            find_cell_value_text(&cell.value)
+                                        };
+                                        let Some(next_text) = replace_candidate(&candidate) else {
+                                            continue;
+                                        };
+                                        if let Some(next_formula) = next_text.strip_prefix('=') {
+                                            if cell
+                                                .formula
+                                                .as_ref()
+                                                .is_some_and(|formula| formula.text == next_formula)
+                                            {
+                                                continue;
+                                            }
+                                            let is_r1c1 = cell
+                                                .formula
+                                                .as_ref()
+                                                .is_some_and(|formula| formula.is_r1c1);
+                                            cell.value = CellValue::Blank;
+                                            cell.formula = Some(FormulaSource {
+                                                text: next_formula.to_string(),
+                                                is_r1c1,
+                                            });
+                                        } else {
+                                            let next_value = if next_text.is_empty() {
+                                                CellValue::Blank
+                                            } else {
+                                                CellValue::Text(next_text)
+                                            };
+                                            if cell.value == next_value && cell.formula.is_none() {
+                                                continue;
+                                            }
+                                            cell.value = next_value;
+                                            cell.formula = None;
+                                            remove_cell = matches!(cell.value, CellValue::Blank)
+                                                && cell.style_id.is_none();
+                                        }
+                                        worksheet.dirty = true;
+                                        worksheet.dirty_cells.insert(key);
+                                        replaced_any = true;
+                                    }
+                                    None => {
+                                        let Some(next_text) = replace_candidate("") else {
+                                            continue;
+                                        };
+                                        if next_text.is_empty() {
+                                            continue;
+                                        }
+                                        worksheet.cells.insert(
+                                            key,
+                                            excel_model::CellData {
+                                                value: CellValue::Text(next_text),
+                                                formula: None,
+                                                style_id: None,
+                                            },
+                                        );
+                                        worksheet.dirty = true;
+                                        worksheet.dirty_cells.insert(key);
+                                        replaced_any = true;
+                                    }
+                                }
+                                if remove_cell {
+                                    worksheet.cells.remove(&key);
+                                }
+                            }
+                        }
+                        Ok(OmValue::Bool(replaced_any))
                     }
                     "Delete" => {
                         let shift = match args {
@@ -7291,16 +7480,16 @@ impl ExcelRuntime {
             .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown workbook"))
     }
 
-    fn coerce_range_find_what(value: &OmValue) -> OmResult<String> {
+    fn coerce_range_scalar_text(value: &OmValue, label: &str) -> OmResult<String> {
         match value {
             OmValue::Missing | OmValue::Empty | OmValue::Null => Ok(String::new()),
             OmValue::Text(text) => Ok(text.clone()),
             OmValue::Bool(value) => Ok(if *value { "TRUE" } else { "FALSE" }.to_string()),
             OmValue::Number(number) => Ok(format_find_number(*number)),
             OmValue::Error(error) => Ok(formula_cell_error_text(*error).to_string()),
-            OmValue::Object(_) | OmValue::Array(_) => Err(OmError::type_mismatch(
-                "Range.Find What expects a scalar value",
-            )),
+            OmValue::Object(_) | OmValue::Array(_) => Err(OmError::type_mismatch(format!(
+                "{label} expects a scalar value"
+            ))),
         }
     }
 
@@ -47835,6 +48024,236 @@ mod tests {
                 .expect_err("Range.Find should reject SearchFormat")
                 .code,
             OmErrorCode::Unsupported
+        );
+    }
+
+    #[test]
+    fn range_replace_dispatch_replaces_values_and_returns_bool() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let target = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B2".to_string())])
+                .expect("Range(A1:B2)"),
+        );
+        runtime
+            .dispatch_set(
+                target,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        2,
+                        vec![
+                            OmValue::Text("cat one".to_string()),
+                            OmValue::Text("dog".to_string()),
+                            OmValue::Text("cat two".to_string()),
+                            OmValue::Text("Cat three".to_string()),
+                        ],
+                    )
+                    .expect("A1:B2 values"),
+                ),
+                &[],
+            )
+            .expect("A1:B2.Value2");
+
+        assert!(expect_bool(
+            runtime
+                .dispatch_invoke(
+                    target,
+                    "Replace",
+                    &[
+                        OmValue::Text("cat".to_string()),
+                        OmValue::Text("fox".to_string()),
+                    ],
+                )
+                .expect("Range.Replace cat"),
+        ));
+        let a1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        let b1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Range(B1)"),
+        );
+        let a2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A2".to_string())])
+                .expect("Range(A2)"),
+        );
+        let b2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B2".to_string())])
+                .expect("Range(B2)"),
+        );
+        assert_eq!(
+            expect_text(runtime.dispatch_get(a1, "Value2", &[]).expect("A1.Value2")),
+            "fox one"
+        );
+        assert_eq!(
+            expect_text(runtime.dispatch_get(b1, "Value2", &[]).expect("B1.Value2")),
+            "dog"
+        );
+        assert_eq!(
+            expect_text(runtime.dispatch_get(a2, "Value2", &[]).expect("A2.Value2")),
+            "fox two"
+        );
+        assert_eq!(
+            expect_text(runtime.dispatch_get(b2, "Value2", &[]).expect("B2.Value2")),
+            "fox three"
+        );
+
+        assert!(!expect_bool(
+            runtime
+                .dispatch_invoke(
+                    target,
+                    "Replace",
+                    &[
+                        OmValue::Text("missing".to_string()),
+                        OmValue::Text("x".to_string()),
+                    ],
+                )
+                .expect("Range.Replace missing"),
+        ));
+        assert!(expect_bool(
+            runtime
+                .dispatch_invoke(
+                    target,
+                    "Replace",
+                    &[
+                        OmValue::Text("dog".to_string()),
+                        OmValue::Text("hound".to_string()),
+                        OmValue::Number(f64::from(super::XL_LOOK_AT_WHOLE)),
+                    ],
+                )
+                .expect("Range.Replace whole dog"),
+        ));
+        assert_eq!(
+            expect_text(runtime.dispatch_get(b1, "Value2", &[]).expect("B1.Value2")),
+            "hound"
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_invoke(
+                    target,
+                    "Replace",
+                    &[
+                        OmValue::Text("FOX".to_string()),
+                        OmValue::Text("wolf".to_string()),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Bool(true),
+                    ],
+                )
+                .expect("Range.Replace MatchCase true"),
+        ));
+    }
+
+    #[test]
+    fn range_replace_dispatch_updates_formula_text_and_validates_options() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formula_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1".to_string())])
+                .expect("Range(C1)"),
+        );
+        let formula_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1:C2".to_string())])
+                .expect("Range(C1:C2)"),
+        );
+        runtime
+            .dispatch_set(
+                formula_cell,
+                "Formula",
+                OmValue::Text("=SUM(A1:A2)".to_string()),
+                &[],
+            )
+            .expect("C1.Formula");
+
+        assert!(expect_bool(
+            runtime
+                .dispatch_invoke(
+                    formula_range,
+                    "Replace",
+                    &[
+                        OmValue::Text("SUM".to_string()),
+                        OmValue::Text("AVERAGE".to_string()),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Bool(true),
+                    ],
+                )
+                .expect("Range.Replace formula"),
+        ));
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(formula_cell, "Formula", &[])
+                    .expect("C1.Formula")
+            ),
+            "=AVERAGE(A1:A2)"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    formula_range,
+                    "Replace",
+                    &[
+                        OmValue::Text("AVERAGE".to_string()),
+                        OmValue::Text("SUM".to_string()),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Bool(true),
+                    ],
+                )
+                .expect_err("Range.Replace should reject SearchFormat")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    formula_range,
+                    "Replace",
+                    &[
+                        OmValue::Object(formula_cell),
+                        OmValue::Text("x".to_string())
+                    ],
+                )
+                .expect_err("Range.Replace should reject object What")
+                .code,
+            OmErrorCode::TypeMismatch
         );
     }
 

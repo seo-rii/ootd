@@ -76,8 +76,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 138);
-    assert_eq!(summary.stub_member_count, 138);
+    assert_eq!(summary.member_count, 139);
+    assert_eq!(summary.stub_member_count, 139);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1294,7 +1294,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(application.member_count, 40);
     assert_eq!(workbook.member_count, 20);
     assert_eq!(worksheet.member_count, 20);
-    assert_eq!(range.member_count, 47);
+    assert_eq!(range.member_count, 48);
     assert_eq!(
         application.default_coclasses,
         vec!["Application".to_string()]
@@ -2113,6 +2113,36 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             .and_then(|type_ref| type_ref.alias_of.as_deref()),
         Some("Excel.Range")
     );
+    let range_replace = range
+        .members
+        .iter()
+        .find(|member| member.name == "Replace")
+        .expect("Range.Replace");
+    assert_eq!(range_replace.access, AccessMode::Read);
+    assert_eq!(range_replace.params.len(), 8);
+    assert_eq!(range_replace.params[0].name, "What");
+    assert!(!range_replace.params[0].optional);
+    assert_eq!(range_replace.params[1].name, "Replacement");
+    assert!(!range_replace.params[1].optional);
+    assert_eq!(range_replace.params[2].name, "LookAt");
+    assert!(range_replace.params[2].optional);
+    assert_eq!(range_replace.params[3].name, "SearchOrder");
+    assert!(range_replace.params[3].optional);
+    assert_eq!(range_replace.params[4].name, "MatchCase");
+    assert!(range_replace.params[4].optional);
+    assert_eq!(range_replace.params[5].name, "MatchByte");
+    assert!(range_replace.params[5].optional);
+    assert_eq!(range_replace.params[6].name, "SearchFormat");
+    assert!(range_replace.params[6].optional);
+    assert_eq!(range_replace.params[7].name, "ReplaceFormat");
+    assert!(range_replace.params[7].optional);
+    assert_eq!(
+        range_replace
+            .return_type
+            .as_ref()
+            .and_then(|type_ref| type_ref.alias_of.as_deref()),
+        Some("VARIANT_BOOL")
+    );
     let range_delete = range
         .members
         .iter()
@@ -2269,8 +2299,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 138);
-    assert_eq!(coverage.support_counts.stub, 138);
+    assert_eq!(coverage.member_count, 139);
+    assert_eq!(coverage.support_counts.stub, 139);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -2398,8 +2428,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(range_coverage.member_count, 47);
-    assert_eq!(range_coverage.support_counts.stub, 47);
+    assert_eq!(range_coverage.member_count, 48);
+    assert_eq!(range_coverage.support_counts.stub, 48);
     assert_eq!(
         range_coverage.stub_members,
         vec![
@@ -2436,6 +2466,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Find".to_string(),
             "FindNext".to_string(),
             "FindPrevious".to_string(),
+            "Replace".to_string(),
             "Delete".to_string(),
             "Insert".to_string(),
             "Copy".to_string(),
