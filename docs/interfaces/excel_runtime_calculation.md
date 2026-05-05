@@ -436,6 +436,7 @@ Aggregate notes:
 - `VLOOKUP`
 - `HLOOKUP`
 - `XLOOKUP`
+- `GETPIVOTDATA`
 - `INDIRECT`
 - `OFFSET`
 - `TRIMRANGE`
@@ -451,9 +452,11 @@ Aggregate notes:
 - `DROP`
 - `EXPAND`
 - `FILTER`
+- `GROUPBY`
 - `HSTACK`
 - `MAKEARRAY`
 - `MAP`
+- `PIVOTBY`
 - `REDUCE`
 - `SORT`
 - `SORTBY`
@@ -479,9 +482,11 @@ Lookup notes:
 - `XMATCH` supports exact match, wildcard match, exact-or-next-smaller, exact-or-next-larger, and forward or reverse linear search over one-dimensional ranges.
 - `VLOOKUP` and `HLOOKUP` support exact and ascending approximate table lookup.
 - `XLOOKUP` supports scalar one-dimensional lookup and return arrays, `if_not_found`, exact match, wildcard match, exact-or-next-smaller, exact-or-next-larger, and forward or reverse linear search.
+- `GETPIVOTDATA` parses field/item pairs and returns the scalar value at the pivot-table anchor reference when no pivot cache metadata is available.
 - `INDIRECT`, `OFFSET`, and `TRIMRANGE` resolve references to the scalar upper-left value of the resulting range. `INDIRECT` supports A1 text and focused R1C1 text conversion; `TRIMRANGE` supports leading/trailing row and column trim modes.
 - `ROW()` and `COLUMN()` without arguments resolve against the formula cell position during recalculation.
-- Dynamic array projection helpers, including `BYCOL`, `BYROW`, `FILTER`, `MAKEARRAY`, `MAP`, `REDUCE`, `SCAN`, `SORT`, `SORTBY`, and `UNIQUE`, currently return the scalar top-left, first projected, or scalar accumulator value; full spill-range materialization is tracked separately.
+- Dynamic array projection helpers, including `BYCOL`, `BYROW`, `FILTER`, `GROUPBY`, `MAKEARRAY`, `MAP`, `PIVOTBY`, `REDUCE`, `SCAN`, `SORT`, `SORTBY`, and `UNIQUE`, currently return the scalar top-left, first projected, or scalar accumulator value; full spill-range materialization is tracked separately.
+- `GROUPBY` and `PIVOTBY` support first-group scalar aggregation over workbook ranges for `SUM`, `AVERAGE`, `COUNT`, `COUNTA`, `MAX`, `MIN`, and `PRODUCT`.
 - `AREAS` returns `1` for supported single-area references; `ADDRESS` supports A1/R1C1 text output with absolute/relative flags and optional sheet text.
 - `CELL` supports focused metadata types such as `address`, `row`, `col`, `contents`, `type`, `format`, `filename`, `width`, `prefix`, `color`, `parentheses`, and `protect` for the upper-left cell of a reference.
 - `SHEET()` returns the current worksheet's 1-based workbook position; `SHEETS()` returns the workbook worksheet count, and reference arguments are supported for single-sheet references.

@@ -13858,6 +13858,77 @@ enum FormulaLogicalFunction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormulaGroupByAggregation {
+    Sum,
+    Average,
+    Count,
+    CountA,
+    Max,
+    Min,
+    Product,
+}
+
+impl FormulaGroupByAggregation {
+    fn from_name(name: &str) -> Option<Self> {
+        if name.eq_ignore_ascii_case("SUM") {
+            Some(Self::Sum)
+        } else if name.eq_ignore_ascii_case("AVERAGE") {
+            Some(Self::Average)
+        } else if name.eq_ignore_ascii_case("COUNT") {
+            Some(Self::Count)
+        } else if name.eq_ignore_ascii_case("COUNTA") {
+            Some(Self::CountA)
+        } else if name.eq_ignore_ascii_case("MAX") {
+            Some(Self::Max)
+        } else if name.eq_ignore_ascii_case("MIN") {
+            Some(Self::Min)
+        } else if name.eq_ignore_ascii_case("PRODUCT") {
+            Some(Self::Product)
+        } else {
+            None
+        }
+    }
+
+    fn evaluate(self, values: &[FormulaValueProbe]) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let mut numbers = Vec::new();
+        let mut counta = 0_u64;
+        for value in values {
+            match value {
+                FormulaValueProbe::Blank => {}
+                FormulaValueProbe::Bool(_) | FormulaValueProbe::Text(_) => counta += 1,
+                FormulaValueProbe::Number(number) => {
+                    counta += 1;
+                    numbers.push(*number);
+                }
+                FormulaValueProbe::Error(error) => return Err(*error),
+                FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => {}
+            }
+        }
+        match self {
+            Self::Sum => Ok(FormulaValueProbe::Number(numbers.iter().sum())),
+            Self::Average => {
+                if numbers.is_empty() {
+                    Err(FormulaEvalError::Div0)
+                } else {
+                    Ok(FormulaValueProbe::Number(
+                        numbers.iter().sum::<f64>() / numbers.len() as f64,
+                    ))
+                }
+            }
+            Self::Count => Ok(FormulaValueProbe::Number(numbers.len() as f64)),
+            Self::CountA => Ok(FormulaValueProbe::Number(counta as f64)),
+            Self::Max => Ok(FormulaValueProbe::Number(
+                numbers.iter().copied().reduce(f64::max).unwrap_or(0.0),
+            )),
+            Self::Min => Ok(FormulaValueProbe::Number(
+                numbers.iter().copied().reduce(f64::min).unwrap_or(0.0),
+            )),
+            Self::Product => Ok(FormulaValueProbe::Number(numbers.iter().product())),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FormulaLookupMode {
     Exact,
     ApproxAscending,
@@ -14068,8 +14139,10 @@ fn formula_array_projection_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("DROP")
         || name.eq_ignore_ascii_case("EXPAND")
         || name.eq_ignore_ascii_case("FILTER")
+        || name.eq_ignore_ascii_case("GROUPBY")
         || name.eq_ignore_ascii_case("HSTACK")
         || name.eq_ignore_ascii_case("MAP")
+        || name.eq_ignore_ascii_case("PIVOTBY")
         || name.eq_ignore_ascii_case("SORT")
         || name.eq_ignore_ascii_case("SORTBY")
         || name.eq_ignore_ascii_case("TAKE")
@@ -14113,6 +14186,7 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("DETECTLANGUAGE")
         || name.eq_ignore_ascii_case("FIXED")
         || name.eq_ignore_ascii_case("FILTERXML")
+        || name.eq_ignore_ascii_case("GETPIVOTDATA")
         || name.eq_ignore_ascii_case("HYPERLINK")
         || name.eq_ignore_ascii_case("HEX2BIN")
         || name.eq_ignore_ascii_case("HEX2OCT")
@@ -19310,6 +19384,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("REDUCE") || name.eq_ignore_ascii_case("SCAN") {
             return formula_number_from_value_probe(self.parse_reduce_scan_value_function(name)?);
         }
+        if name.eq_ignore_ascii_case("GETPIVOTDATA") {
+            return formula_number_from_value_probe(self.parse_getpivotdata_value_function()?);
+        }
         if name.eq_ignore_ascii_case("INDIRECT")
             || name.eq_ignore_ascii_case("OFFSET")
             || name.eq_ignore_ascii_case("TRIMRANGE")
@@ -19966,6 +20043,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("REDUCE") || name.eq_ignore_ascii_case("SCAN") {
             return formula_selected_text_from_value_probe(
                 self.parse_reduce_scan_value_function(name)?,
+            );
+        }
+        if name.eq_ignore_ascii_case("GETPIVOTDATA") {
+            return formula_selected_text_from_value_probe(
+                self.parse_getpivotdata_value_function()?,
             );
         }
         if formula_array_projection_function_name(name) {
@@ -23297,6 +23379,217 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         Ok(accumulator)
     }
 
+    fn parse_getpivotdata_value_function(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let data_field = self.parse_text_value_argument()?;
+        if data_field.trim().is_empty() {
+            return Err(FormulaEvalError::Value);
+        }
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let (pivot_sheet_id, pivot_rect) = self.parse_reference_argument()?;
+        loop {
+            self.skip_whitespace();
+            if self.consume_char(')') {
+                let value = self.evaluator.cell_value_or_blank(
+                    pivot_sheet_id,
+                    pivot_rect.row_first,
+                    pivot_rect.col_first,
+                )?;
+                return Ok(formula_value_probe_from_cell_value(value));
+            }
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            self.parse_value_probe_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Value);
+            }
+            self.parse_value_probe_argument()?;
+        }
+    }
+
+    fn parse_groupby_aggregation_argument(
+        &mut self,
+    ) -> Result<FormulaGroupByAggregation, FormulaEvalError> {
+        self.skip_whitespace();
+        let checkpoint = self.index;
+        if let Some(name) = self.parse_identifier() {
+            self.skip_whitespace();
+            if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
+                return FormulaGroupByAggregation::from_name(name.as_str())
+                    .ok_or(FormulaEvalError::Value);
+            }
+        }
+        self.index = checkpoint;
+        match self.parse_value_probe_argument()? {
+            FormulaValueProbe::Text(name) => {
+                FormulaGroupByAggregation::from_name(name.as_str()).ok_or(FormulaEvalError::Value)
+            }
+            FormulaValueProbe::Error(error) => Err(error),
+            _ => Err(FormulaEvalError::Value),
+        }
+    }
+
+    fn consume_remaining_optional_value_arguments(&mut self) -> Result<(), FormulaEvalError> {
+        loop {
+            self.skip_whitespace();
+            if self.consume_char(')') {
+                return Ok(());
+            }
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            self.skip_whitespace();
+            if self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                continue;
+            }
+            let checkpoint = self.index;
+            if let Some((_, _, next_index)) = self.try_parse_reference()? {
+                self.index = next_index;
+            } else {
+                self.index = checkpoint;
+                self.parse_value_probe_argument()?;
+            }
+        }
+    }
+
+    fn rect_row_key_values(
+        &mut self,
+        sheet_id: SheetId,
+        rect: Rect,
+        row_offset: u32,
+    ) -> Result<Vec<FormulaValueProbe>, FormulaEvalError> {
+        let mut key = Vec::with_capacity(rect.width() as usize);
+        let row = rect.row_first + row_offset;
+        for col in rect.col_first..=rect.col_last {
+            let value = self.evaluator.cell_value_or_blank(sheet_id, row, col)?;
+            key.push(formula_value_probe_from_cell_value(value));
+        }
+        Ok(key)
+    }
+
+    fn rect_row_key_matches(
+        &mut self,
+        sheet_id: SheetId,
+        rect: Rect,
+        row_offset: u32,
+        target: &[FormulaValueProbe],
+    ) -> Result<bool, FormulaEvalError> {
+        let candidate = self.rect_row_key_values(sheet_id, rect, row_offset)?;
+        if candidate.len() != target.len() {
+            return Ok(false);
+        }
+        for (left, right) in candidate.iter().zip(target.iter()) {
+            if !formula_value_probe_exact_match(left, right)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn collect_first_group_values(
+        &mut self,
+        row_sheet_id: SheetId,
+        row_rect: Rect,
+        value_sheet_id: SheetId,
+        value_rect: Rect,
+        column_filter: Option<(SheetId, Rect, Vec<FormulaValueProbe>)>,
+    ) -> Result<Vec<FormulaValueProbe>, FormulaEvalError> {
+        if row_rect.height() != value_rect.height() {
+            return Err(FormulaEvalError::Value);
+        }
+        if let Some((_, column_rect, _)) = &column_filter {
+            if column_rect.height() != value_rect.height() {
+                return Err(FormulaEvalError::Value);
+            }
+        }
+        let first_row_key = self.rect_row_key_values(row_sheet_id, row_rect, 0)?;
+        let mut values = Vec::new();
+        for row_offset in 0..value_rect.height() {
+            if !self.rect_row_key_matches(row_sheet_id, row_rect, row_offset, &first_row_key)? {
+                continue;
+            }
+            if let Some((column_sheet_id, column_rect, column_key)) = &column_filter
+                && !self.rect_row_key_matches(
+                    *column_sheet_id,
+                    *column_rect,
+                    row_offset,
+                    column_key,
+                )?
+            {
+                continue;
+            }
+            let value = self.evaluator.cell_value_or_blank(
+                value_sheet_id,
+                value_rect.row_first + row_offset,
+                value_rect.col_first,
+            )?;
+            values.push(formula_value_probe_from_cell_value(value));
+        }
+        Ok(values)
+    }
+
+    fn parse_groupby_value_function(
+        &mut self,
+        row_sheet_id: SheetId,
+        row_rect: Rect,
+    ) -> Result<FormulaValueProbe, FormulaEvalError> {
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let (value_sheet_id, value_rect) = self.parse_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let aggregation = self.parse_groupby_aggregation_argument()?;
+        self.consume_remaining_optional_value_arguments()?;
+        let values = self.collect_first_group_values(
+            row_sheet_id,
+            row_rect,
+            value_sheet_id,
+            value_rect,
+            None,
+        )?;
+        aggregation.evaluate(values.as_slice())
+    }
+
+    fn parse_pivotby_value_function(
+        &mut self,
+        row_sheet_id: SheetId,
+        row_rect: Rect,
+    ) -> Result<FormulaValueProbe, FormulaEvalError> {
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let (column_sheet_id, column_rect) = self.parse_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let (value_sheet_id, value_rect) = self.parse_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let aggregation = self.parse_groupby_aggregation_argument()?;
+        self.consume_remaining_optional_value_arguments()?;
+        let first_column_key = self.rect_row_key_values(column_sheet_id, column_rect, 0)?;
+        let values = self.collect_first_group_values(
+            row_sheet_id,
+            row_rect,
+            value_sheet_id,
+            value_rect,
+            Some((column_sheet_id, column_rect, first_column_key)),
+        )?;
+        aggregation.evaluate(values.as_slice())
+    }
+
     fn parse_cell_value_function(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
         let info_type = self.parse_text_value_argument()?.to_ascii_lowercase();
         self.skip_whitespace();
@@ -24367,6 +24660,14 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 }
             }
         };
+
+        if name.eq_ignore_ascii_case("GROUPBY") {
+            return self.parse_groupby_value_function(sheet_id, rect);
+        }
+
+        if name.eq_ignore_ascii_case("PIVOTBY") {
+            return self.parse_pivotby_value_function(sheet_id, rect);
+        }
 
         if name.eq_ignore_ascii_case("BYROW") || name.eq_ignore_ascii_case("BYCOL") {
             self.skip_whitespace();
@@ -41259,6 +41560,120 @@ mod tests {
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
                 OmValue::Text("a12".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_group_pivot_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:E4".to_string())])
+                .expect("Range(A1:E4)"),
+        );
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        5,
+                        vec![
+                            OmValue::Text("East".to_string()),
+                            OmValue::Number(2.0),
+                            OmValue::Text("Q1".to_string()),
+                            OmValue::Bool(true),
+                            OmValue::Number(42.0),
+                            OmValue::Text("West".to_string()),
+                            OmValue::Number(5.0),
+                            OmValue::Text("Q1".to_string()),
+                            OmValue::Bool(false),
+                            OmValue::Text("ready".to_string()),
+                            OmValue::Text("East".to_string()),
+                            OmValue::Number(3.0),
+                            OmValue::Text("Q2".to_string()),
+                            OmValue::Bool(true),
+                            OmValue::Empty,
+                            OmValue::Text("East".to_string()),
+                            OmValue::Number(4.0),
+                            OmValue::Text("Q1".to_string()),
+                            OmValue::Bool(true),
+                            OmValue::Empty,
+                        ],
+                    )
+                    .expect("group pivot source"),
+                ),
+                &[],
+            )
+            .expect("set group pivot source");
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("G1:G8".to_string())])
+                .expect("Range(G1:G8)"),
+        );
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        8,
+                        1,
+                        vec![
+                            OmValue::Text("=GROUPBY(A1:A4,B1:B4,SUM)".to_string()),
+                            OmValue::Text("=GROUPBY(A1:A4,B1:B4,AVERAGE)".to_string()),
+                            OmValue::Text("=GROUPBY(A1:A4,B1:B4,COUNT)".to_string()),
+                            OmValue::Text("=GROUPBY(A1:A4,B1:B4,MAX)".to_string()),
+                            OmValue::Text("=PIVOTBY(A1:A4,C1:C4,B1:B4,SUM)".to_string()),
+                            OmValue::Text("=PIVOTBY(A1:A4,C1:C4,B1:B4,COUNT)".to_string()),
+                            OmValue::Text(
+                                r#"=GETPIVOTDATA("Sales",E1,"Region","East")"#.to_string(),
+                            ),
+                            OmValue::Text(r#"=GETPIVOTDATA("Status",E2)"#.to_string()),
+                        ],
+                    )
+                    .expect("group pivot formulas"),
+                ),
+                &[],
+            )
+            .expect("set group pivot formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("group pivot values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected group pivot value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(9.0),
+                OmValue::Number(3.0),
+                OmValue::Number(3.0),
+                OmValue::Number(4.0),
+                OmValue::Number(6.0),
+                OmValue::Number(2.0),
+                OmValue::Number(42.0),
+                OmValue::Text("ready".to_string()),
             ]
         );
     }
