@@ -13359,6 +13359,7 @@ fn formula_text_function_name(name: &str) -> bool {
     name.eq_ignore_ascii_case("ADDRESS")
         || name.eq_ignore_ascii_case("ARRAYTOTEXT")
         || name.eq_ignore_ascii_case("ASC")
+        || name.eq_ignore_ascii_case("BAHTTEXT")
         || name.eq_ignore_ascii_case("CONCAT")
         || name.eq_ignore_ascii_case("CONCATENATE")
         || name.eq_ignore_ascii_case("DBCS")
@@ -18587,6 +18588,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("BASE") {
             return self.parse_base_text_function();
         }
+        if name.eq_ignore_ascii_case("BAHTTEXT") {
+            return self.parse_bahttext_function();
+        }
         if name.eq_ignore_ascii_case("DEC2BIN") {
             return self.parse_decimal_engineering_text_function(2, 10, 10);
         }
@@ -19191,6 +19195,114 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         let mut output = output.chars().rev().collect::<String>();
         if output.len() < min_length {
             output = "0".repeat(min_length - output.len()) + output.as_str();
+        }
+        Ok(output)
+    }
+
+    fn parse_bahttext_function(&mut self) -> Result<String, FormulaEvalError> {
+        let number = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        if !number.is_finite() {
+            return Err(FormulaEvalError::Value);
+        }
+        let scaled = number.abs() * 100.0;
+        if !scaled.is_finite() || scaled > u128::MAX as f64 {
+            return Err(FormulaEvalError::Num);
+        }
+        let total_satang = round_half_away_from_zero(scaled) as u128;
+        let baht = total_satang / 100;
+        let satang = (total_satang % 100) as u32;
+
+        let convert_group = |group: u32| -> String {
+            let digit_text = [
+                "ศูนย์",
+                "หนึ่ง",
+                "สอง",
+                "สาม",
+                "สี่",
+                "ห้า",
+                "หก",
+                "เจ็ด",
+                "แปด",
+                "เก้า",
+            ];
+            let mut output = String::new();
+            let hundred_thousands = group / 100_000;
+            let ten_thousands = group / 10_000 % 10;
+            let thousands = group / 1_000 % 10;
+            let hundreds = group / 100 % 10;
+            let tens = group / 10 % 10;
+            let ones = group % 10;
+            for (digit, suffix) in [
+                (hundred_thousands, "แสน"),
+                (ten_thousands, "หมื่น"),
+                (thousands, "พัน"),
+                (hundreds, "ร้อย"),
+            ] {
+                if digit != 0 {
+                    output.push_str(digit_text[digit as usize]);
+                    output.push_str(suffix);
+                }
+            }
+            if tens != 0 {
+                if tens == 1 {
+                    output.push_str("สิบ");
+                } else if tens == 2 {
+                    output.push_str("ยี่สิบ");
+                } else {
+                    output.push_str(digit_text[tens as usize]);
+                    output.push_str("สิบ");
+                }
+            }
+            if ones != 0 {
+                if ones == 1 && group > 1 {
+                    output.push_str("เอ็ด");
+                } else {
+                    output.push_str(digit_text[ones as usize]);
+                }
+            }
+            if output.is_empty() {
+                output.push_str(digit_text[0]);
+            }
+            output
+        };
+
+        let convert_number = |mut value: u128| -> String {
+            if value == 0 {
+                return "ศูนย์".to_string();
+            }
+            let mut groups = Vec::new();
+            while value > 0 {
+                groups.push((value % 1_000_000) as u32);
+                value /= 1_000_000;
+            }
+            let mut output = String::new();
+            for index in (0..groups.len()).rev() {
+                let group = groups[index];
+                if group != 0 {
+                    output.push_str(convert_group(group).as_str());
+                }
+                if index > 0 {
+                    output.push_str("ล้าน");
+                }
+            }
+            output
+        };
+
+        let mut output = String::new();
+        if number < 0.0 && total_satang != 0 {
+            output.push_str("ลบ");
+        }
+        output.push_str(convert_number(baht).as_str());
+        output.push_str("บาท");
+        if satang == 0 {
+            output.push_str("ถ้วน");
+        } else {
+            output.push_str(convert_group(satang).as_str());
+            output.push_str("สตางค์");
         }
         Ok(output)
     }
@@ -31759,6 +31871,92 @@ mod tests {
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
             ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_bahttext_formula() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A9".to_string())])
+                .expect("Range(A1:A9)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        9,
+                        1,
+                        vec![
+                            OmValue::Text("=BAHTTEXT(1234)".to_string()),
+                            OmValue::Text("=BAHTTEXT(0)".to_string()),
+                            OmValue::Text("=BAHTTEXT(1)".to_string()),
+                            OmValue::Text("=BAHTTEXT(11)".to_string()),
+                            OmValue::Text("=BAHTTEXT(21)".to_string()),
+                            OmValue::Text("=BAHTTEXT(101)".to_string()),
+                            OmValue::Text("=BAHTTEXT(1234.56)".to_string()),
+                            OmValue::Text("=BAHTTEXT(-2.5)".to_string()),
+                            OmValue::Text(
+                                r#"=CONCAT(BAHTTEXT(1), " / ", BAHTTEXT(0.25))"#.to_string(),
+                            ),
+                        ],
+                    )
+                    .expect("BAHTTEXT formulas"),
+                ),
+                &[],
+            )
+            .expect("set BAHTTEXT formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("BAHTTEXT values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected BAHTTEXT value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Text("หนึ่งพันสองร้อยสามสิบสี่บาทถ้วน".to_string()),
+                OmValue::Text("ศูนย์บาทถ้วน".to_string()),
+                OmValue::Text("หนึ่งบาทถ้วน".to_string()),
+                OmValue::Text("สิบเอ็ดบาทถ้วน".to_string()),
+                OmValue::Text("ยี่สิบเอ็ดบาทถ้วน".to_string()),
+                OmValue::Text("หนึ่งร้อยเอ็ดบาทถ้วน".to_string()),
+                OmValue::Text("หนึ่งพันสองร้อยสามสิบสี่บาทห้าสิบหกสตางค์".to_string(),),
+                OmValue::Text("ลบสองบาทห้าสิบสตางค์".to_string()),
+                OmValue::Text("หนึ่งบาทถ้วน / ศูนย์บาทยี่สิบห้าสตางค์".to_string()),
+            ]
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    runtime.root_application(),
+                    "Evaluate",
+                    &[OmValue::Text("=BAHTTEXT(20.01)".to_string())],
+                )
+                .expect("Application.Evaluate BAHTTEXT"),
+            OmValue::Text("ยี่สิบบาทหนึ่งสตางค์".to_string())
         );
     }
 

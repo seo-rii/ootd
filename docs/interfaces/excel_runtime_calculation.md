@@ -502,6 +502,7 @@ Criteria notes:
 
 - `ARRAYTOTEXT`
 - `ASC`
+- `BAHTTEXT`
 - `CONCAT`
 - `CONCATENATE`
 - `BASE`
@@ -555,6 +556,7 @@ Text notes:
 - `VALUE` supports plain decimal numeric text and a trailing percent sign; `NUMBERVALUE` additionally supports configurable decimal and group separators. Currency symbols, date/time text, and locale-specific formatting beyond those focused paths are not implemented.
 - `FIXED` uses period decimal text and optional comma grouping; `DOLLAR` uses the invariant `$` currency symbol and Excel-style parentheses for negative values.
 - `TEXT` supports a focused invariant numeric-format subset with `0` / `#` placeholders, decimal places, comma grouping, `%`, `$`, quoted literals, escapes, and positive/negative/zero sections; date/time and locale-specific format codes still return `#VALUE!`.
+- `BAHTTEXT` rounds to satang precision and returns Thai Baht/Satang text with `บาทถ้วน` or `สตางค์` suffixes.
 - `HYPERLINK` returns the friendly name when supplied, otherwise the link text; it does not model worksheet hyperlink navigation metadata.
 - `PHONETIC` preserves scalar text and concatenates text cells from a reference because the current object model does not store phonetic guide metadata.
 - `VALUETOTEXT` and `ARRAYTOTEXT` support concise and strict formatting for scalar values and rectangular references; strict text values use Excel-style doubled quotes.
