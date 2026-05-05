@@ -171,6 +171,19 @@ struct RuntimeClipboard {
     rect: Rect,
 }
 
+#[derive(Debug, Clone)]
+struct RuntimeFindState {
+    workbook: WorkbookHandle,
+    sheet_id: SheetId,
+    rect: Rect,
+    what: String,
+    look_in: i32,
+    look_at: i32,
+    search_order: i32,
+    match_case: bool,
+    last_match: Option<(u32, u32)>,
+}
+
 #[derive(Debug, Clone, Copy)]
 enum RangeProjection {
     Cells,
@@ -224,6 +237,7 @@ pub struct ExcelRuntime {
     interactive: bool,
     cut_copy_mode: Option<i32>,
     clipboard: Option<RuntimeClipboard>,
+    find_state: Option<RuntimeFindState>,
     next_handle: u64,
     next_object_handle: u64,
     next_created_workbook_index: u64,
@@ -266,6 +280,7 @@ impl ExcelRuntime {
             interactive: true,
             cut_copy_mode: None,
             clipboard: None,
+            find_state: None,
             next_handle: 1,
             next_object_handle: FIRST_DYNAMIC_OBJECT_HANDLE_VALUE,
             next_created_workbook_index: 1,
@@ -497,6 +512,13 @@ impl ExcelRuntime {
         {
             self.clipboard = None;
             self.cut_copy_mode = None;
+        }
+        if self
+            .find_state
+            .as_ref()
+            .is_some_and(|state| state.workbook == workbook)
+        {
+            self.find_state = None;
         }
         Ok(())
     }
@@ -1450,133 +1472,33 @@ impl ExcelRuntime {
                             ));
                         }
 
-                        let what = match &args[0] {
-                            OmValue::Missing | OmValue::Empty | OmValue::Null => String::new(),
-                            OmValue::Text(text) => text.clone(),
-                            OmValue::Bool(value) => {
-                                if *value {
-                                    "TRUE".to_string()
-                                } else {
-                                    "FALSE".to_string()
-                                }
-                            }
-                            OmValue::Number(number) => {
-                                if number.is_finite()
-                                    && number.fract() == 0.0
-                                    && *number >= i64::MIN as f64
-                                    && *number <= i64::MAX as f64
-                                {
-                                    (*number as i64).to_string()
-                                } else {
-                                    number.to_string()
-                                }
-                            }
-                            OmValue::Error(error) => formula_cell_error_text(*error).to_string(),
-                            OmValue::Object(_) | OmValue::Array(_) => {
-                                return Err(OmError::type_mismatch(
-                                    "Range.Find What expects a scalar value",
-                                ));
-                            }
-                        };
-
-                        let coerce_find_enum = |value: Option<&OmValue>,
-                                                default: i32,
-                                                label: &str,
-                                                supported: &[i32]|
-                         -> OmResult<i32> {
-                            match value {
-                                None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => {
-                                    Ok(default)
-                                }
-                                Some(OmValue::Number(number)) => {
-                                    if !number.is_finite()
-                                        || number.fract() != 0.0
-                                        || *number < i32::MIN as f64
-                                        || *number > i32::MAX as f64
-                                    {
-                                        return Err(OmError::invalid_argument(format!(
-                                            "{label} expects an integral enum value"
-                                        )));
-                                    }
-                                    let value = *number as i32;
-                                    if supported.contains(&value) {
-                                        Ok(value)
-                                    } else {
-                                        Err(OmError::unsupported(format!(
-                                            "{label} {value} is not implemented"
-                                        )))
-                                    }
-                                }
-                                Some(_) => Err(OmError::type_mismatch(format!(
-                                    "{label} expects a numeric enum value when provided"
-                                ))),
-                            }
-                        };
-
-                        let after_cell = match args.get(1) {
-                            None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => {
-                                (rect.row_first, rect.col_first)
-                            }
-                            Some(OmValue::Object(handle)) => match self.runtime_object(*handle)? {
-                                RuntimeObjectKind::Range {
-                                    workbook: after_workbook,
-                                    sheet_id: after_sheet_id,
-                                    rect: after_rect,
-                                    ..
-                                } => {
-                                    if after_workbook != workbook || after_sheet_id != sheet_id {
-                                        return Err(OmError::invalid_argument(
-                                            "Range.Find After must belong to the searched worksheet",
-                                        ));
-                                    }
-                                    if after_rect.height() != 1 || after_rect.width() != 1 {
-                                        return Err(OmError::invalid_argument(
-                                            "Range.Find After must be a single cell",
-                                        ));
-                                    }
-                                    if !(rect.row_first..=rect.row_last)
-                                        .contains(&after_rect.row_first)
-                                        || !(rect.col_first..=rect.col_last)
-                                            .contains(&after_rect.col_first)
-                                    {
-                                        return Err(OmError::invalid_argument(
-                                            "Range.Find After must be inside the searched range",
-                                        ));
-                                    }
-                                    (after_rect.row_first, after_rect.col_first)
-                                }
-                                _ => {
-                                    return Err(OmError::type_mismatch(
-                                        "Range.Find After expects a Range object when provided",
-                                    ));
-                                }
-                            },
-                            Some(_) => {
-                                return Err(OmError::type_mismatch(
-                                    "Range.Find After expects a Range object when provided",
-                                ));
-                            }
-                        };
-
-                        let look_in = coerce_find_enum(
+                        let after_cell = self.coerce_range_find_after_cell(
+                            workbook,
+                            sheet_id,
+                            rect,
+                            args.get(1),
+                            (rect.row_first, rect.col_first),
+                            "Range.Find",
+                        )?;
+                        let look_in = Self::coerce_range_find_enum(
                             args.get(2),
                             XL_FIND_LOOK_IN_VALUES,
                             "Range.Find LookIn",
                             &[XL_FIND_LOOK_IN_FORMULAS, XL_FIND_LOOK_IN_VALUES],
                         )?;
-                        let look_at = coerce_find_enum(
+                        let look_at = Self::coerce_range_find_enum(
                             args.get(3),
                             XL_LOOK_AT_PART,
                             "Range.Find LookAt",
                             &[XL_LOOK_AT_WHOLE, XL_LOOK_AT_PART],
                         )?;
-                        let search_order = coerce_find_enum(
+                        let search_order = Self::coerce_range_find_enum(
                             args.get(4),
                             XL_SEARCH_BY_ROWS,
                             "Range.Find SearchOrder",
                             &[XL_SEARCH_BY_ROWS, XL_SEARCH_BY_COLUMNS],
                         )?;
-                        let search_direction = coerce_find_enum(
+                        let search_direction = Self::coerce_range_find_enum(
                             args.get(5),
                             XL_SEARCH_NEXT,
                             "Range.Find SearchDirection",
@@ -1609,124 +1531,88 @@ impl ExcelRuntime {
                             ));
                         }
 
-                        let mut positions =
-                            Vec::with_capacity((rect.height() * rect.width()) as usize);
-                        match search_order {
-                            XL_SEARCH_BY_ROWS => {
-                                for row in rect.row_first..=rect.row_last {
-                                    for col in rect.col_first..=rect.col_last {
-                                        positions.push((row, col));
-                                    }
-                                }
-                            }
-                            XL_SEARCH_BY_COLUMNS => {
-                                for col in rect.col_first..=rect.col_last {
-                                    for row in rect.row_first..=rect.row_last {
-                                        positions.push((row, col));
-                                    }
-                                }
-                            }
-                            _ => unreachable!("unsupported search order was rejected"),
+                        let mut find_state = RuntimeFindState {
+                            workbook,
+                            sheet_id,
+                            rect,
+                            what: Self::coerce_range_find_what(&args[0])?,
+                            look_in,
+                            look_at,
+                            search_order,
+                            match_case,
+                            last_match: None,
+                        };
+                        let found_cell = self.find_range_cell(
+                            workbook,
+                            sheet_id,
+                            rect,
+                            after_cell,
+                            &find_state,
+                            search_direction,
+                        )?;
+                        find_state.last_match = found_cell;
+                        self.find_state = Some(find_state);
+                        Ok(found_cell
+                            .map(|(row, col)| {
+                                OmValue::Object(
+                                    self.register_range_handle(
+                                        workbook,
+                                        sheet_id,
+                                        Rect::single_cell(row, col),
+                                    )
+                                    .0,
+                                )
+                            })
+                            .unwrap_or(OmValue::Empty))
+                    }
+                    "FindNext" | "FindPrevious" => {
+                        if args.len() > 1 {
+                            return Err(OmError::invalid_argument(format!(
+                                "Range.{member} accepts at most one After argument"
+                            )));
                         }
-                        let after_index = positions
-                            .iter()
-                            .position(|position| *position == after_cell)
-                            .expect("validated after cell should be inside search positions");
-                        let needle = if match_case {
-                            what
+                        let mut find_state = self.find_state.clone().ok_or_else(|| {
+                            OmError::invalid_state(format!(
+                                "Range.{member} requires a prior Range.Find call"
+                            ))
+                        })?;
+                        let same_rect = find_state.rect.row_first == rect.row_first
+                            && find_state.rect.row_last == rect.row_last
+                            && find_state.rect.col_first == rect.col_first
+                            && find_state.rect.col_last == rect.col_last;
+                        if find_state.workbook != workbook
+                            || find_state.sheet_id != sheet_id
+                            || !same_rect
+                        {
+                            return Err(OmError::invalid_state(format!(
+                                "Range.{member} requires the same range as the prior Range.Find call"
+                            )));
+                        }
+                        let after_cell = self.coerce_range_find_after_cell(
+                            workbook,
+                            sheet_id,
+                            rect,
+                            args.first(),
+                            find_state
+                                .last_match
+                                .unwrap_or((rect.row_first, rect.col_first)),
+                            &format!("Range.{member}"),
+                        )?;
+                        let search_direction = if member == "FindNext" {
+                            XL_SEARCH_NEXT
                         } else {
-                            what.to_lowercase()
+                            XL_SEARCH_PREVIOUS
                         };
-
-                        let found_cell = {
-                            let state = &self.runtime_workbook(workbook)?.loaded.state;
-                            let worksheet = state.worksheet_data_for_sheet(sheet_id)?;
-                            let mut evaluator = FormulaEvaluator::new(state);
-                            let cell_value_text = |value: &CellValue| match value {
-                                CellValue::Blank => String::new(),
-                                CellValue::Bool(true) => "TRUE".to_string(),
-                                CellValue::Bool(false) => "FALSE".to_string(),
-                                CellValue::Number(number) => {
-                                    if number.is_finite()
-                                        && number.fract() == 0.0
-                                        && *number >= i64::MIN as f64
-                                        && *number <= i64::MAX as f64
-                                    {
-                                        (*number as i64).to_string()
-                                    } else {
-                                        number.to_string()
-                                    }
-                                }
-                                CellValue::Text(text) => text.clone(),
-                                CellValue::Error(error) => {
-                                    formula_cell_error_text(*error).to_string()
-                                }
-                            };
-
-                            let mut index = after_index;
-                            let mut found = None;
-                            for _ in 0..positions.len() {
-                                index = if search_direction == XL_SEARCH_NEXT {
-                                    (index + 1) % positions.len()
-                                } else if index == 0 {
-                                    positions.len() - 1
-                                } else {
-                                    index - 1
-                                };
-                                let (row, col) = positions[index];
-                                let candidate = worksheet
-                                    .cells
-                                    .get(&(row, col))
-                                    .map(|cell| match look_in {
-                                        XL_FIND_LOOK_IN_FORMULAS => {
-                                            if let Some(formula) = cell.formula.as_ref() {
-                                                let formula_text = if formula.is_r1c1 {
-                                                    convert_formula_r1c1_to_a1(
-                                                        &formula.text,
-                                                        row,
-                                                        col,
-                                                    )
-                                                } else {
-                                                    formula.text.clone()
-                                                };
-                                                format!("={formula_text}")
-                                            } else {
-                                                cell_value_text(&cell.value)
-                                            }
-                                        }
-                                        XL_FIND_LOOK_IN_VALUES => {
-                                            let value = if cell.formula.is_some() {
-                                                evaluator
-                                                    .evaluate_formula_cell(sheet_id, row, col)
-                                                    .unwrap_or_else(|| cell.value.clone())
-                                            } else {
-                                                cell.value.clone()
-                                            };
-                                            cell_value_text(&value)
-                                        }
-                                        _ => unreachable!("unsupported LookIn was rejected"),
-                                    })
-                                    .unwrap_or_default();
-                                let candidate = if match_case {
-                                    candidate
-                                } else {
-                                    candidate.to_lowercase()
-                                };
-                                let matched = if needle.is_empty() {
-                                    candidate.is_empty()
-                                } else if look_at == XL_LOOK_AT_WHOLE {
-                                    candidate == needle
-                                } else {
-                                    candidate.contains(&needle)
-                                };
-                                if matched {
-                                    found = Some((row, col));
-                                    break;
-                                }
-                            }
-                            found
-                        };
-
+                        let found_cell = self.find_range_cell(
+                            workbook,
+                            sheet_id,
+                            rect,
+                            after_cell,
+                            &find_state,
+                            search_direction,
+                        )?;
+                        find_state.last_match = found_cell;
+                        self.find_state = Some(find_state);
                         Ok(found_cell
                             .map(|(row, col)| {
                                 OmValue::Object(
@@ -7405,6 +7291,197 @@ impl ExcelRuntime {
             .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown workbook"))
     }
 
+    fn coerce_range_find_what(value: &OmValue) -> OmResult<String> {
+        match value {
+            OmValue::Missing | OmValue::Empty | OmValue::Null => Ok(String::new()),
+            OmValue::Text(text) => Ok(text.clone()),
+            OmValue::Bool(value) => Ok(if *value { "TRUE" } else { "FALSE" }.to_string()),
+            OmValue::Number(number) => Ok(format_find_number(*number)),
+            OmValue::Error(error) => Ok(formula_cell_error_text(*error).to_string()),
+            OmValue::Object(_) | OmValue::Array(_) => Err(OmError::type_mismatch(
+                "Range.Find What expects a scalar value",
+            )),
+        }
+    }
+
+    fn coerce_range_find_enum(
+        value: Option<&OmValue>,
+        default: i32,
+        label: &str,
+        supported: &[i32],
+    ) -> OmResult<i32> {
+        match value {
+            None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => Ok(default),
+            Some(OmValue::Number(number)) => {
+                if !number.is_finite()
+                    || number.fract() != 0.0
+                    || *number < i32::MIN as f64
+                    || *number > i32::MAX as f64
+                {
+                    return Err(OmError::invalid_argument(format!(
+                        "{label} expects an integral enum value"
+                    )));
+                }
+                let value = *number as i32;
+                if supported.contains(&value) {
+                    Ok(value)
+                } else {
+                    Err(OmError::unsupported(format!(
+                        "{label} {value} is not implemented"
+                    )))
+                }
+            }
+            Some(_) => Err(OmError::type_mismatch(format!(
+                "{label} expects a numeric enum value when provided"
+            ))),
+        }
+    }
+
+    fn coerce_range_find_after_cell(
+        &self,
+        workbook: WorkbookHandle,
+        sheet_id: SheetId,
+        rect: Rect,
+        value: Option<&OmValue>,
+        default: (u32, u32),
+        context: &str,
+    ) -> OmResult<(u32, u32)> {
+        match value {
+            None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => Ok(default),
+            Some(OmValue::Object(handle)) => match self.runtime_object(*handle)? {
+                RuntimeObjectKind::Range {
+                    workbook: after_workbook,
+                    sheet_id: after_sheet_id,
+                    rect: after_rect,
+                    ..
+                } => {
+                    if after_workbook != workbook || after_sheet_id != sheet_id {
+                        return Err(OmError::invalid_argument(format!(
+                            "{context} After must belong to the searched worksheet"
+                        )));
+                    }
+                    if after_rect.height() != 1 || after_rect.width() != 1 {
+                        return Err(OmError::invalid_argument(format!(
+                            "{context} After must be a single cell"
+                        )));
+                    }
+                    if !(rect.row_first..=rect.row_last).contains(&after_rect.row_first)
+                        || !(rect.col_first..=rect.col_last).contains(&after_rect.col_first)
+                    {
+                        return Err(OmError::invalid_argument(format!(
+                            "{context} After must be inside the searched range"
+                        )));
+                    }
+                    Ok((after_rect.row_first, after_rect.col_first))
+                }
+                _ => Err(OmError::type_mismatch(format!(
+                    "{context} After expects a Range object when provided"
+                ))),
+            },
+            Some(_) => Err(OmError::type_mismatch(format!(
+                "{context} After expects a Range object when provided"
+            ))),
+        }
+    }
+
+    fn find_range_cell(
+        &self,
+        workbook: WorkbookHandle,
+        sheet_id: SheetId,
+        rect: Rect,
+        after_cell: (u32, u32),
+        criteria: &RuntimeFindState,
+        search_direction: i32,
+    ) -> OmResult<Option<(u32, u32)>> {
+        let mut positions = Vec::with_capacity((rect.height() * rect.width()) as usize);
+        match criteria.search_order {
+            XL_SEARCH_BY_ROWS => {
+                for row in rect.row_first..=rect.row_last {
+                    for col in rect.col_first..=rect.col_last {
+                        positions.push((row, col));
+                    }
+                }
+            }
+            XL_SEARCH_BY_COLUMNS => {
+                for col in rect.col_first..=rect.col_last {
+                    for row in rect.row_first..=rect.row_last {
+                        positions.push((row, col));
+                    }
+                }
+            }
+            _ => unreachable!("unsupported search order was rejected"),
+        }
+        let after_index = positions
+            .iter()
+            .position(|position| *position == after_cell)
+            .expect("validated after cell should be inside search positions");
+        let needle = if criteria.match_case {
+            criteria.what.clone()
+        } else {
+            criteria.what.to_lowercase()
+        };
+
+        let state = &self.runtime_workbook(workbook)?.loaded.state;
+        let worksheet = state.worksheet_data_for_sheet(sheet_id)?;
+        let mut evaluator = FormulaEvaluator::new(state);
+        let mut index = after_index;
+        for _ in 0..positions.len() {
+            index = if search_direction == XL_SEARCH_NEXT {
+                (index + 1) % positions.len()
+            } else if index == 0 {
+                positions.len() - 1
+            } else {
+                index - 1
+            };
+            let (row, col) = positions[index];
+            let candidate = worksheet
+                .cells
+                .get(&(row, col))
+                .map(|cell| match criteria.look_in {
+                    XL_FIND_LOOK_IN_FORMULAS => {
+                        if let Some(formula) = cell.formula.as_ref() {
+                            let formula_text = if formula.is_r1c1 {
+                                convert_formula_r1c1_to_a1(&formula.text, row, col)
+                            } else {
+                                formula.text.clone()
+                            };
+                            format!("={formula_text}")
+                        } else {
+                            find_cell_value_text(&cell.value)
+                        }
+                    }
+                    XL_FIND_LOOK_IN_VALUES => {
+                        let value = if cell.formula.is_some() {
+                            evaluator
+                                .evaluate_formula_cell(sheet_id, row, col)
+                                .unwrap_or_else(|| cell.value.clone())
+                        } else {
+                            cell.value.clone()
+                        };
+                        find_cell_value_text(&value)
+                    }
+                    _ => unreachable!("unsupported LookIn was rejected"),
+                })
+                .unwrap_or_default();
+            let candidate = if criteria.match_case {
+                candidate
+            } else {
+                candidate.to_lowercase()
+            };
+            let matched = if needle.is_empty() {
+                candidate.is_empty()
+            } else if criteria.look_at == XL_LOOK_AT_WHOLE {
+                candidate == needle
+            } else {
+                candidate.contains(&needle)
+            };
+            if matched {
+                return Ok(Some((row, col)));
+            }
+        }
+        Ok(None)
+    }
+
     fn set_selection(&mut self, workbook: WorkbookHandle, sheet_id: SheetId, rect: Rect) {
         self.active_workbook = Some(workbook);
         self.selection = Some(RuntimeSelection {
@@ -7699,6 +7776,29 @@ fn coerce_cut_copy_mode(value: OmValue) -> OmResult<Option<i32>> {
         _ => Err(OmError::type_mismatch(
             "Application.CutCopyMode expects false or an XlCutCopyMode numeric value",
         )),
+    }
+}
+
+fn format_find_number(number: f64) -> String {
+    if number.is_finite()
+        && number.fract() == 0.0
+        && number >= i64::MIN as f64
+        && number <= i64::MAX as f64
+    {
+        (number as i64).to_string()
+    } else {
+        number.to_string()
+    }
+}
+
+fn find_cell_value_text(value: &CellValue) -> String {
+    match value {
+        CellValue::Blank => String::new(),
+        CellValue::Bool(true) => "TRUE".to_string(),
+        CellValue::Bool(false) => "FALSE".to_string(),
+        CellValue::Number(number) => format_find_number(*number),
+        CellValue::Text(text) => text.clone(),
+        CellValue::Error(error) => formula_cell_error_text(*error).to_string(),
     }
 }
 
@@ -47517,6 +47617,32 @@ mod tests {
             ),
             "$B$2"
         );
+        let previous_match = expect_object_handle(
+            runtime
+                .dispatch_invoke(search_range, "FindPrevious", &[])
+                .expect("Range.FindPrevious"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(previous_match, "Address", &[])
+                    .expect("Range.FindPrevious Address")
+            ),
+            "$A$1"
+        );
+        let next_match = expect_object_handle(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect("Range.FindNext"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(next_match, "Address", &[])
+                    .expect("Range.FindNext Address")
+            ),
+            "$B$2"
+        );
 
         let found_whole = expect_object_handle(
             runtime
@@ -47614,6 +47740,14 @@ mod tests {
                 &[],
             )
             .expect("C1.Formula");
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should reject missing prior Find")
+                .code,
+            OmErrorCode::InvalidState
+        );
 
         let found_formula = expect_object_handle(
             runtime
