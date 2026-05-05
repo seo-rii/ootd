@@ -165,6 +165,7 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `FISHER`
 - `FISHERINV`
 - `FORECAST`
+- `FORECAST.LINEAR`
 - `GAMMA`
 - `GAMMA.DIST` / `GAMMADIST`
 - `GAMMA.INV` / `GAMMAINV`
@@ -208,7 +209,7 @@ Roman numeral notes:
 - `BETA.DIST`, `CHISQ.DIST`, `EXPON.DIST`, `F.DIST`, `GAMMA.DIST`, `LOGNORM.DIST`, `NORM.DIST`, `NORM.S.DIST`, `POISSON.DIST`, `T.DIST`, and `WEIBULL.DIST` cover scalar probability and cumulative distribution calculations, with legacy function aliases mapped to the same implementations where their argument shapes match.
 - `BINOM.DIST`, `BINOM.DIST.RANGE`, `BINOM.INV`, `HYPGEOM.DIST`, and `NEGBINOM.DIST` cover scalar discrete statistical distribution calculations, including compatibility aliases where Excel exposes them.
 - `KURT`, `SKEW`, `SKEW.P`, and `PROB` cover scalar statistical shape and probability calculations over numeric arguments and ranges.
-- `GAMMA`, `CONFIDENCE.NORM`, `CONFIDENCE.T`, `FORECAST`, and `STEYX` cover scalar gamma, confidence interval, and linear regression calculations.
+- `GAMMA`, `CONFIDENCE.NORM`, `CONFIDENCE.T`, `FORECAST` / `FORECAST.LINEAR`, and `STEYX` cover scalar gamma, confidence interval, and linear regression calculations.
 - `BETA.INV`, `CHISQ.INV`, `F.INV`, `GAMMA.INV`, `LOGNORM.INV`, `NORM.INV`, `NORM.S.INV`, and `T.INV` cover scalar inverse cumulative distribution calculations and include the legacy aliases currently listed above.
 - Continuous distribution helpers use iterative approximations for regularized beta/gamma and inverse CDF calculations, so they target practical worksheet compatibility rather than bit-for-bit Excel parity.
 - `GAUSS`, `PHI`, and `STANDARDIZE` cover scalar standard-normal helpers.
@@ -398,6 +399,7 @@ Aggregate notes:
 
 - `INDEX`
 - `MATCH`
+- `LOOKUP`
 - `XMATCH`
 - `VLOOKUP`
 - `HLOOKUP`
@@ -415,6 +417,7 @@ Aggregate notes:
 Lookup notes:
 
 - `MATCH` supports exact match, ascending approximate match, and descending approximate match over one-dimensional ranges.
+- `LOOKUP` supports the vector form with ascending approximate match, using the lookup vector as the result vector when the third argument is omitted.
 - `XMATCH` supports exact match, wildcard match, exact-or-next-smaller, exact-or-next-larger, and forward or reverse linear search over one-dimensional ranges.
 - `VLOOKUP` and `HLOOKUP` support exact and ascending approximate table lookup.
 - `XLOOKUP` supports scalar one-dimensional lookup and return arrays, `if_not_found`, exact match, wildcard match, exact-or-next-smaller, exact-or-next-larger, and forward or reverse linear search.
@@ -422,7 +425,7 @@ Lookup notes:
 - `AREAS` returns `1` for supported single-area references; `ADDRESS` supports A1/R1C1 text output with absolute/relative flags and optional sheet text.
 - `SHEET()` returns the current worksheet's 1-based workbook position; `SHEETS()` returns the workbook worksheet count, and reference arguments are supported for single-sheet references.
 - Lookup comparisons support numbers, booleans, and case-insensitive text.
-- `INDEX`, `VLOOKUP`, `HLOOKUP`, and `XLOOKUP` return scalar text results as `CellValue::Text`; numeric results still flow through the numeric evaluator.
+- `INDEX`, `LOOKUP`, `VLOOKUP`, `HLOOKUP`, and `XLOOKUP` return scalar text results as `CellValue::Text`; numeric results still flow through the numeric evaluator.
 - `CHOOSE` can return scalar text when the selected argument is text.
 
 ### Date and time serial helpers
@@ -506,6 +509,7 @@ Criteria notes:
 - `DBCS`
 - `DOLLAR`
 - `FIXED`
+- `HYPERLINK`
 - `LEFT`
 - `LEFTB`
 - `RIGHT`
@@ -513,7 +517,9 @@ Criteria notes:
 - `MID`
 - `MIDB`
 - `JIS`
+- `PHONETIC`
 - `T`
+- `TEXT`
 - `UNICHAR`
 - `UNICODE`
 - `UPPER`
@@ -546,6 +552,9 @@ Text notes:
 - `TEXTJOIN` supports scalar values and rectangular ranges, and `TEXTBEFORE` / `TEXTAFTER` support scalar delimiters, instance numbers, case-sensitivity mode, match-end mode, and scalar `if_not_found` fallbacks.
 - `VALUE` supports plain decimal numeric text and a trailing percent sign; `NUMBERVALUE` additionally supports configurable decimal and group separators. Currency symbols, date/time text, and locale-specific formatting beyond those focused paths are not implemented.
 - `FIXED` uses period decimal text and optional comma grouping; `DOLLAR` uses the invariant `$` currency symbol and Excel-style parentheses for negative values.
+- `TEXT` supports a focused invariant numeric-format subset with `0` / `#` placeholders, decimal places, comma grouping, `%`, `$`, quoted literals, escapes, and positive/negative/zero sections; date/time and locale-specific format codes still return `#VALUE!`.
+- `HYPERLINK` returns the friendly name when supplied, otherwise the link text; it does not model worksheet hyperlink navigation metadata.
+- `PHONETIC` preserves scalar text and concatenates text cells from a reference because the current object model does not store phonetic guide metadata.
 - `VALUETOTEXT` and `ARRAYTOTEXT` support concise and strict formatting for scalar values and rectangular references; strict text values use Excel-style doubled quotes.
 - `ASC`, `DBCS`, and `JIS` preserve text in the current non-DBCS focused path.
 - `REPT` returns `#VALUE!` for outputs beyond Excel's 32,767-character cell text limit.

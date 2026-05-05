@@ -13380,6 +13380,7 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("DEC2OCT")
         || name.eq_ignore_ascii_case("DOLLAR")
         || name.eq_ignore_ascii_case("FIXED")
+        || name.eq_ignore_ascii_case("HYPERLINK")
         || name.eq_ignore_ascii_case("HEX2BIN")
         || name.eq_ignore_ascii_case("HEX2OCT")
         || name.eq_ignore_ascii_case("IMCONJUGATE")
@@ -13406,8 +13407,10 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("JIS")
         || name.eq_ignore_ascii_case("OCT2BIN")
         || name.eq_ignore_ascii_case("OCT2HEX")
+        || name.eq_ignore_ascii_case("PHONETIC")
         || name.eq_ignore_ascii_case("ROMAN")
         || name.eq_ignore_ascii_case("T")
+        || name.eq_ignore_ascii_case("TEXT")
         || name.eq_ignore_ascii_case("UNICHAR")
         || name.eq_ignore_ascii_case("UPPER")
         || name.eq_ignore_ascii_case("LOWER")
@@ -13427,6 +13430,7 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("SWITCH")
         || name.eq_ignore_ascii_case("CHOOSE")
         || name.eq_ignore_ascii_case("INDEX")
+        || name.eq_ignore_ascii_case("LOOKUP")
         || name.eq_ignore_ascii_case("VLOOKUP")
         || name.eq_ignore_ascii_case("HLOOKUP")
         || name.eq_ignore_ascii_case("XLOOKUP")
@@ -17990,6 +17994,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("XMATCH") {
             return self.parse_xmatch_function();
         }
+        if name.eq_ignore_ascii_case("LOOKUP") {
+            return self.parse_lookup_function();
+        }
         if name.eq_ignore_ascii_case("VLOOKUP") {
             return self.parse_vlookup_function();
         }
@@ -18140,7 +18147,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
             return Ok(total);
         }
-        if name.eq_ignore_ascii_case("FORECAST") {
+        if name.eq_ignore_ascii_case("FORECAST") || name.eq_ignore_ascii_case("FORECAST.LINEAR") {
             let x = self.parse_comparison()?;
             if !x.is_finite() {
                 return Err(FormulaEvalError::Value);
@@ -18863,6 +18870,15 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("FIXED") {
             return self.parse_fixed_text_function();
         }
+        if name.eq_ignore_ascii_case("TEXT") {
+            return self.parse_text_format_function();
+        }
+        if name.eq_ignore_ascii_case("HYPERLINK") {
+            return self.parse_hyperlink_text_function();
+        }
+        if name.eq_ignore_ascii_case("PHONETIC") {
+            return self.parse_phonetic_text_function();
+        }
         if name.eq_ignore_ascii_case("CHAR") {
             return self.parse_character_text_function(false);
         }
@@ -18945,6 +18961,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         if name.eq_ignore_ascii_case("INDEX") {
             return formula_selected_text_from_value_probe(self.parse_index_value_function()?);
+        }
+        if name.eq_ignore_ascii_case("LOOKUP") {
+            return formula_selected_text_from_value_probe(self.parse_lookup_value_function()?);
         }
         if name.eq_ignore_ascii_case("VLOOKUP") {
             return formula_selected_text_from_value_probe(
@@ -19298,6 +19317,186 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
         }
         formula_fixed_number_text(number, decimals, use_commas)
+    }
+
+    fn parse_text_format_function(&mut self) -> Result<String, FormulaEvalError> {
+        let number = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let format = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+
+        if !number.is_finite() {
+            return Err(FormulaEvalError::Value);
+        }
+        let sections = format.split(';').collect::<Vec<_>>();
+        if sections.is_empty() || sections.len() > 4 {
+            return Err(FormulaEvalError::Value);
+        }
+        let format = if number < 0.0 && sections.len() > 1 {
+            sections[1]
+        } else if number == 0.0 && sections.len() > 2 {
+            sections[2]
+        } else {
+            sections[0]
+        }
+        .trim();
+        if format.is_empty() {
+            return Err(FormulaEvalError::Value);
+        }
+
+        let mut in_quote = false;
+        let mut escaped = false;
+        for ch in format.chars() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' && !in_quote {
+                escaped = true;
+                continue;
+            }
+            if ch == '"' {
+                in_quote = !in_quote;
+                continue;
+            }
+            if !in_quote && (ch == '@' || ch.is_ascii_alphabetic()) {
+                return Err(FormulaEvalError::Value);
+            }
+        }
+        if in_quote || escaped {
+            return Err(FormulaEvalError::Value);
+        }
+
+        let first_placeholder = format
+            .find(|ch| matches!(ch, '0' | '#'))
+            .ok_or(FormulaEvalError::Value)?;
+        let last_placeholder = format
+            .rfind(|ch| matches!(ch, '0' | '#'))
+            .ok_or(FormulaEvalError::Value)?;
+        let core = &format[first_placeholder..=last_placeholder];
+        if core.matches('.').count() > 1 {
+            return Err(FormulaEvalError::Value);
+        }
+        let decimals = core
+            .split_once('.')
+            .map(|(_, fraction)| {
+                fraction
+                    .chars()
+                    .filter(|ch| matches!(*ch, '0' | '#'))
+                    .count() as i64
+            })
+            .unwrap_or(0);
+        let integer_part = core
+            .split_once('.')
+            .map(|(integer, _)| integer)
+            .unwrap_or(core);
+        let use_commas = integer_part.contains(',');
+        let percent_count = format.chars().filter(|ch| *ch == '%').count();
+        if percent_count > 1 {
+            return Err(FormulaEvalError::Value);
+        }
+        let mut value = number;
+        if percent_count == 1 {
+            value *= 100.0;
+        }
+        if number < 0.0 && sections.len() > 1 {
+            value = value.abs();
+        }
+
+        let format_literal = |literal: &str| -> Result<String, FormulaEvalError> {
+            let mut output = String::new();
+            let mut chars = literal.chars();
+            let mut in_quote = false;
+            while let Some(ch) = chars.next() {
+                match ch {
+                    '"' => in_quote = !in_quote,
+                    '\\' => {
+                        let escaped = chars.next().ok_or(FormulaEvalError::Value)?;
+                        output.push(escaped);
+                    }
+                    '_' | '*' if !in_quote => {
+                        chars.next().ok_or(FormulaEvalError::Value)?;
+                    }
+                    _ => output.push(ch),
+                }
+            }
+            if in_quote {
+                Err(FormulaEvalError::Value)
+            } else {
+                Ok(output)
+            }
+        };
+        let formatted = formula_fixed_number_text(value, decimals, use_commas)?;
+        let prefix = format_literal(&format[..first_placeholder])?;
+        let suffix = format_literal(&format[last_placeholder + 1..])?;
+        if let Some(positive) = formatted.strip_prefix('-') {
+            Ok(format!("-{prefix}{positive}{suffix}"))
+        } else {
+            Ok(format!("{prefix}{formatted}{suffix}"))
+        }
+    }
+
+    fn parse_hyperlink_text_function(&mut self) -> Result<String, FormulaEvalError> {
+        let link_location = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if self.consume_char(')') {
+            return Ok(link_location);
+        }
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let friendly_name = self.parse_value_probe_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        formula_text_from_value_probe(friendly_name)
+    }
+
+    fn parse_phonetic_text_function(&mut self) -> Result<String, FormulaEvalError> {
+        self.skip_whitespace();
+        let checkpoint = self.index;
+        if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
+            self.index = next_index;
+            self.skip_whitespace();
+            if self.consume_char(')') {
+                let mut output = String::new();
+                for row in rect.row_first..=rect.row_last {
+                    for col in rect.col_first..=rect.col_last {
+                        match self
+                            .evaluator
+                            .cell_value_or_blank(target_sheet_id, row, col)?
+                        {
+                            CellValue::Text(value) => output.push_str(value.as_str()),
+                            CellValue::Error(error) => {
+                                return Err(formula_eval_error_from_cell_error(error));
+                            }
+                            CellValue::Blank | CellValue::Bool(_) | CellValue::Number(_) => {}
+                        }
+                    }
+                }
+                return Ok(output);
+            }
+        }
+        self.index = checkpoint;
+        let value = self.parse_value_probe_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        match value {
+            FormulaValueProbe::Text(value) => Ok(value),
+            FormulaValueProbe::Error(error) => Err(error),
+            FormulaValueProbe::Blank
+            | FormulaValueProbe::Bool(_)
+            | FormulaValueProbe::Number(_) => Ok(String::new()),
+        }
     }
 
     fn parse_optional_engineering_places(&mut self) -> Result<Option<usize>, FormulaEvalError> {
@@ -21108,6 +21307,69 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
 
     fn parse_hlookup_function(&mut self) -> Result<f64, FormulaEvalError> {
         self.parse_table_lookup_function(true)
+    }
+
+    fn parse_lookup_function(&mut self) -> Result<f64, FormulaEvalError> {
+        formula_number_from_value_probe(self.parse_lookup_value_function()?)
+    }
+
+    fn parse_lookup_value_function(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let lookup_value = self.parse_lookup_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let (lookup_sheet_id, lookup_rect, lookup_orientation) =
+            self.parse_lookup_vector_reference_argument()?;
+        let lookup_len = match lookup_orientation {
+            FormulaLookupOrientation::FirstColumn => lookup_rect.height(),
+            FormulaLookupOrientation::FirstRow => lookup_rect.width(),
+        };
+
+        self.skip_whitespace();
+        let (return_sheet_id, return_rect, return_orientation) = if self.consume_char(')') {
+            (lookup_sheet_id, lookup_rect, lookup_orientation)
+        } else {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let (return_sheet_id, return_rect, return_orientation) =
+                self.parse_lookup_vector_reference_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            (return_sheet_id, return_rect, return_orientation)
+        };
+        let return_len = match return_orientation {
+            FormulaLookupOrientation::FirstColumn => return_rect.height(),
+            FormulaLookupOrientation::FirstRow => return_rect.width(),
+        };
+        if lookup_len != return_len {
+            return Err(FormulaEvalError::Value);
+        }
+
+        let lookup_values = self.evaluator.lookup_values_in_rect(
+            lookup_sheet_id,
+            lookup_rect,
+            lookup_orientation,
+        )?;
+        let match_index = lookup_match_index_in_values(
+            &lookup_value,
+            lookup_values.as_slice(),
+            FormulaLookupMode::ApproxAscending,
+        )?;
+        let (row, col) = match return_orientation {
+            FormulaLookupOrientation::FirstColumn => (
+                return_rect.row_first + match_index as u32,
+                return_rect.col_first,
+            ),
+            FormulaLookupOrientation::FirstRow => (
+                return_rect.row_first,
+                return_rect.col_first + match_index as u32,
+            ),
+        };
+        self.evaluator.lookup_result_at(return_sheet_id, row, col)
     }
 
     fn parse_table_lookup_function(&mut self, horizontal: bool) -> Result<f64, FormulaEvalError> {
@@ -34559,6 +34821,185 @@ mod tests {
                 )
                 .expect("Application.Evaluate text SWITCH"),
             OmValue::Text("eval".to_string())
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_scalar_lookup_text_helper_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let vertical_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:C4".to_string())])
+                .expect("Range(A1:C4)"),
+        );
+        let horizontal_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E1:H2".to_string())])
+                .expect("Range(E1:H2)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("K1:K16".to_string())],
+                )
+                .expect("Range(K1:K16)"),
+        );
+
+        runtime
+            .dispatch_set(
+                vertical_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        3,
+                        vec![
+                            OmValue::Number(10.0),
+                            OmValue::Number(100.0),
+                            OmValue::Text("low".to_string()),
+                            OmValue::Number(20.0),
+                            OmValue::Number(200.0),
+                            OmValue::Text("mid".to_string()),
+                            OmValue::Number(30.0),
+                            OmValue::Number(300.0),
+                            OmValue::Text("high".to_string()),
+                            OmValue::Number(40.0),
+                            OmValue::Number(400.0),
+                            OmValue::Text("top".to_string()),
+                        ],
+                    )
+                    .expect("scalar lookup source values"),
+                ),
+                &[],
+            )
+            .expect("set scalar lookup source values");
+        runtime
+            .dispatch_set(
+                horizontal_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        4,
+                        vec![
+                            OmValue::Text("a".to_string()),
+                            OmValue::Text("b".to_string()),
+                            OmValue::Text("c".to_string()),
+                            OmValue::Text("d".to_string()),
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(4.0),
+                        ],
+                    )
+                    .expect("horizontal lookup source values"),
+                ),
+                &[],
+            )
+            .expect("set horizontal lookup source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        16,
+                        1,
+                        vec![
+                            OmValue::Text("=LOOKUP(25,A1:A4,B1:B4)".to_string()),
+                            OmValue::Text("=LOOKUP(25,A1:A4,C1:C4)".to_string()),
+                            OmValue::Text(r#"=LOOKUP("c",E1:H1,E2:H2)"#.to_string()),
+                            OmValue::Text("=LOOKUP(30,A1:A4)".to_string()),
+                            OmValue::Text("=LOOKUP(5,A1:A4,B1:B4)".to_string()),
+                            OmValue::Text("=LOOKUP(25,A1:B2,C1:C4)".to_string()),
+                            OmValue::Text("=FORECAST.LINEAR(50,B1:B4,A1:A4)".to_string()),
+                            OmValue::Text(r##"=TEXT(1234.567,"#,##0.00")"##.to_string()),
+                            OmValue::Text(r#"=TEXT(0.256,"0.0%")"#.to_string()),
+                            OmValue::Text(r#"=TEXT(-12.3,"$0.00")"#.to_string()),
+                            OmValue::Text(r#"=TEXT(1,"yyyy")"#.to_string()),
+                            OmValue::Text(
+                                r#"=HYPERLINK("https://example.com","Example")"#.to_string(),
+                            ),
+                            OmValue::Text(r#"=HYPERLINK("https://example.com")"#.to_string()),
+                            OmValue::Text("=PHONETIC(C1:C4)".to_string()),
+                            OmValue::Text("=PHONETIC(B1)".to_string()),
+                            OmValue::Text(
+                                r#"=CONCAT(HYPERLINK("https://example.com","Go"), "-", TEXT(12.3,"0.0"))"#
+                                    .to_string(),
+                            ),
+                        ],
+                    )
+                    .expect("scalar lookup text helper formulas"),
+                ),
+                &[],
+            )
+            .expect("set scalar lookup text helper formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("scalar lookup text helper values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected scalar lookup text helper value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(200.0),
+                OmValue::Text("mid".to_string()),
+                OmValue::Number(3.0),
+                OmValue::Number(30.0),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::Value),
+                OmValue::Number(500.0),
+                OmValue::Text("1,234.57".to_string()),
+                OmValue::Text("25.6%".to_string()),
+                OmValue::Text("-$12.30".to_string()),
+                OmValue::Error(CellError::Value),
+                OmValue::Text("Example".to_string()),
+                OmValue::Text("https://example.com".to_string()),
+                OmValue::Text("lowmidhightop".to_string()),
+                OmValue::Text(String::new()),
+                OmValue::Text("Go-12.3".to_string()),
+            ]
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    runtime.root_application(),
+                    "Evaluate",
+                    &[OmValue::Text("=LOOKUP(35,A1:A4,C1:C4)".to_string())],
+                )
+                .expect("Application.Evaluate LOOKUP"),
+            OmValue::Text("high".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    runtime.root_application(),
+                    "Evaluate",
+                    &[OmValue::Text(r#"=TEXT(99.9,"0")"#.to_string())],
+                )
+                .expect("Application.Evaluate TEXT"),
+            OmValue::Text("100".to_string())
         );
     }
 
