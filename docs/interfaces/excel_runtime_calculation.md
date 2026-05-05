@@ -178,6 +178,7 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `GAUSS`
 - `HYPGEOM.DIST` / `HYPGEOMDIST`
 - `KURT`
+- `MDETERM`
 - `LOGNORM.DIST` / `LOGNORMDIST`
 - `LOGNORM.INV` / `LOGINV`
 - `NEGBINOM.DIST` / `NEGBINOMDIST`
@@ -188,6 +189,7 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `PHI`
 - `POISSON.DIST` / `POISSON`
 - `PROB`
+- `PERCENTOF`
 - `SKEW`
 - `SKEW.P`
 - `STANDARDIZE`
@@ -215,7 +217,7 @@ Roman numeral notes:
 - `CHISQ.TEST` / `CHITEST` compare same-shaped observed and expected ranges and return the right-tailed chi-square probability.
 - `F.TEST` / `FTEST`, `T.TEST` / `TTEST`, and `Z.TEST` / `ZTEST` cover variance, mean, and z-test probability calculations over numeric arguments and ranges.
 - `BINOM.DIST`, `BINOM.DIST.RANGE`, `BINOM.INV`, `HYPGEOM.DIST`, and `NEGBINOM.DIST` cover scalar discrete statistical distribution calculations, including compatibility aliases where Excel exposes them.
-- `KURT`, `SKEW`, `SKEW.P`, and `PROB` cover scalar statistical shape and probability calculations over numeric arguments and ranges.
+- `KURT`, `SKEW`, `SKEW.P`, `PROB`, `PERCENTOF`, `MODE.MULT`, and `MDETERM` cover focused scalar statistical and matrix calculations over numeric arguments and ranges.
 - `GAMMA`, `CONFIDENCE.NORM`, `CONFIDENCE.T`, `FORECAST` / `FORECAST.LINEAR`, and `STEYX` cover scalar gamma, confidence interval, and linear regression calculations.
 - `BETA.INV`, `CHISQ.INV`, `F.INV`, `GAMMA.INV`, `LOGNORM.INV`, `NORM.INV`, `NORM.S.INV`, and `T.INV` cover scalar inverse cumulative distribution calculations and include the legacy aliases currently listed above.
 - Continuous distribution helpers use iterative approximations for regularized beta/gamma and inverse CDF calculations, so they target practical worksheet compatibility rather than bit-for-bit Excel parity.
@@ -346,6 +348,7 @@ Logical notes:
 - `GEOMEAN`
 - `HARMEAN`
 - `MODE`
+- `MODE.MULT`
 - `MODE.SNGL`
 - `TRIMMEAN`
 - `AVEDEV`

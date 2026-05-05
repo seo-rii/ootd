@@ -14774,6 +14774,48 @@ fn formula_euroconvert_value(
     }
 }
 
+fn formula_matrix_determinant(mut matrix: Vec<Vec<f64>>) -> Result<f64, FormulaEvalError> {
+    let size = matrix.len();
+    if size == 0 || matrix.iter().any(|row| row.len() != size) {
+        return Err(FormulaEvalError::Value);
+    }
+    if matrix.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(FormulaEvalError::Value);
+    }
+
+    let mut determinant = 1.0_f64;
+    for pivot_index in 0..size {
+        let mut pivot_row = pivot_index;
+        let mut pivot_abs = matrix[pivot_index][pivot_index].abs();
+        for (row_index, row) in matrix.iter().enumerate().skip(pivot_index + 1) {
+            let candidate_abs = row[pivot_index].abs();
+            if candidate_abs > pivot_abs {
+                pivot_abs = candidate_abs;
+                pivot_row = row_index;
+            }
+        }
+        if pivot_abs <= 1e-12 {
+            return Ok(0.0);
+        }
+        if pivot_row != pivot_index {
+            matrix.swap(pivot_index, pivot_row);
+            determinant = -determinant;
+        }
+        let pivot = matrix[pivot_index][pivot_index];
+        determinant *= pivot;
+        if !determinant.is_finite() {
+            return Err(FormulaEvalError::Num);
+        }
+        for row_index in pivot_index + 1..size {
+            let factor = matrix[row_index][pivot_index] / pivot;
+            for col_index in pivot_index + 1..size {
+                matrix[row_index][col_index] -= factor * matrix[pivot_index][col_index];
+            }
+        }
+    }
+    formula_checked_numeric_result(determinant)
+}
+
 fn formula_numbervalue(
     text: &str,
     decimal_separator: &str,
@@ -16039,6 +16081,7 @@ enum FormulaAggregateFunction {
     HarMean,
     Kurt,
     Lcm,
+    ModeMult,
     ModeSngl,
     Skew,
     SkewP,
@@ -16077,6 +16120,8 @@ impl FormulaAggregateFunction {
             Some(Self::Kurt)
         } else if name.eq_ignore_ascii_case("LCM") {
             Some(Self::Lcm)
+        } else if name.eq_ignore_ascii_case("MODE.MULT") {
+            Some(Self::ModeMult)
         } else if name.eq_ignore_ascii_case("MODE") || name.eq_ignore_ascii_case("MODE.SNGL") {
             Some(Self::ModeSngl)
         } else if name.eq_ignore_ascii_case("SKEW") {
@@ -16261,7 +16306,7 @@ impl FormulaAggregateFunction {
                 }
                 Ok(result as f64)
             }
-            FormulaAggregateFunction::ModeSngl => {
+            FormulaAggregateFunction::ModeMult | FormulaAggregateFunction::ModeSngl => {
                 let mut mode = None;
                 let mut mode_count = 1_usize;
                 for value in values {
@@ -17422,6 +17467,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         if name.eq_ignore_ascii_case("EUROCONVERT") {
             return self.parse_euroconvert_function();
+        }
+        if name.eq_ignore_ascii_case("MDETERM") {
+            return self.parse_mdeterm_function();
         }
         if name.eq_ignore_ascii_case("IMABS")
             || name.eq_ignore_ascii_case("IMAGINARY")
@@ -18720,6 +18768,23 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 })
                 .sum::<f64>();
             return Ok(total);
+        }
+        if name.eq_ignore_ascii_case("PERCENTOF") {
+            let subset = self.parse_aggregate_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let all_values = self.parse_aggregate_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let denominator = all_values.iter().sum::<f64>();
+            if denominator == 0.0 {
+                return Err(FormulaEvalError::Div0);
+            }
+            return formula_checked_numeric_result(subset.iter().sum::<f64>() / denominator);
         }
         if name.eq_ignore_ascii_case("PERCENTILE")
             || name.eq_ignore_ascii_case("PERCENTILE.INC")
@@ -23887,6 +23952,26 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         )
     }
 
+    fn parse_mdeterm_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let (sheet_id, rect) = self.parse_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        if rect.width() != rect.height() || rect.width() == 0 {
+            return Err(FormulaEvalError::Value);
+        }
+        let mut matrix = Vec::with_capacity(rect.height() as usize);
+        for row in rect.row_first..=rect.row_last {
+            let mut values = Vec::with_capacity(rect.width() as usize);
+            for col in rect.col_first..=rect.col_last {
+                values.push(self.evaluator.numeric_cell_value(sheet_id, row, col)?);
+            }
+            matrix.push(values);
+        }
+        formula_matrix_determinant(matrix)
+    }
+
     fn parse_convert_unit_argument(&mut self) -> Result<String, FormulaEvalError> {
         match self.parse_value_probe_argument()? {
             FormulaValueProbe::Text(value) => Ok(value),
@@ -28200,9 +28285,9 @@ mod tests {
                 .dispatch_invoke(
                     active_sheet,
                     "Range",
-                    &[OmValue::Text("E1:E11".to_string())],
+                    &[OmValue::Text("E1:E12".to_string())],
                 )
-                .expect("Range(E1:E11)"),
+                .expect("Range(E1:E12)"),
         );
 
         runtime
@@ -28305,13 +28390,14 @@ mod tests {
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        11,
+                        12,
                         1,
                         vec![
                             OmValue::Text("=GEOMEAN(B1:B8)".to_string()),
                             OmValue::Text("=HARMEAN(B1:B8)".to_string()),
                             OmValue::Text("=MODE(C1:C7)".to_string()),
                             OmValue::Text("=MODE.SNGL(C1:C7)".to_string()),
+                            OmValue::Text("=MODE.MULT(C1:C7)".to_string()),
                             OmValue::Text("=TRIMMEAN(A1:A12, 0.2)".to_string()),
                             OmValue::Text("=TRIMMEAN(A1:A12, 0.1)".to_string()),
                             OmValue::Text("=GEOMEAN(0, 4)".to_string()),
@@ -28360,6 +28446,7 @@ mod tests {
                         + 1.0 / 4.0
                         + 1.0 / 3.0),
                 ),
+                OmValue::Number(6.0),
                 OmValue::Number(6.0),
                 OmValue::Number(6.0),
                 OmValue::Number(34.0 / 9.0),
@@ -32787,6 +32874,165 @@ mod tests {
             &[
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_scalar_matrix_and_percent_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let matrix = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:C2".to_string())])
+                .expect("Range(B1:C2)"),
+        );
+        let percent_values = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1:D4".to_string())])
+                .expect("Range(D1:D4)"),
+        );
+        let zero_values = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E1:E2".to_string())])
+                .expect("Range(E1:E2)"),
+        );
+        let text_matrix = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("G1:H2".to_string())])
+                .expect("Range(G1:H2)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("J1:J6".to_string())])
+                .expect("Range(J1:J6)"),
+        );
+
+        runtime
+            .dispatch_set(
+                matrix,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        2,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(4.0),
+                        ],
+                    )
+                    .expect("matrix values"),
+                ),
+                &[],
+            )
+            .expect("set matrix values");
+        runtime
+            .dispatch_set(
+                percent_values,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        1,
+                        vec![
+                            OmValue::Number(10.0),
+                            OmValue::Number(20.0),
+                            OmValue::Number(30.0),
+                            OmValue::Number(40.0),
+                        ],
+                    )
+                    .expect("percent values"),
+                ),
+                &[],
+            )
+            .expect("set percent values");
+        runtime
+            .dispatch_set(
+                zero_values,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(2, 1, vec![OmValue::Number(0.0), OmValue::Number(0.0)])
+                        .expect("zero values"),
+                ),
+                &[],
+            )
+            .expect("set zero values");
+        runtime
+            .dispatch_set(
+                text_matrix,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        2,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Text("bad".to_string()),
+                            OmValue::Number(3.0),
+                            OmValue::Number(4.0),
+                        ],
+                    )
+                    .expect("text matrix values"),
+                ),
+                &[],
+            )
+            .expect("set text matrix values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        6,
+                        1,
+                        vec![
+                            OmValue::Text("=MDETERM(B1:C2)".to_string()),
+                            OmValue::Text("=PERCENTOF(D1:D2,D1:D4)".to_string()),
+                            OmValue::Text("=PERCENTOF(5,D1:D4)".to_string()),
+                            OmValue::Text("=PERCENTOF(D1:D2,E1:E2)".to_string()),
+                            OmValue::Text("=MDETERM(B1:C3)".to_string()),
+                            OmValue::Text("=MDETERM(G1:H2)".to_string()),
+                        ],
+                    )
+                    .expect("scalar matrix formulas"),
+                ),
+                &[],
+            )
+            .expect("set scalar matrix formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("scalar matrix values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected scalar matrix value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(-2.0),
+                OmValue::Number(0.3),
+                OmValue::Number(0.05),
+                OmValue::Error(CellError::Div0),
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
             ]
