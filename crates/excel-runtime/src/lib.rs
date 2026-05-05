@@ -13558,8 +13558,24 @@ fn formula_selected_text_from_value_probe(
     }
 }
 
+fn formula_array_projection_function_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("CHOOSECOLS")
+        || name.eq_ignore_ascii_case("CHOOSEROWS")
+        || name.eq_ignore_ascii_case("DROP")
+        || name.eq_ignore_ascii_case("EXPAND")
+        || name.eq_ignore_ascii_case("HSTACK")
+        || name.eq_ignore_ascii_case("TAKE")
+        || name.eq_ignore_ascii_case("TOCOL")
+        || name.eq_ignore_ascii_case("TOROW")
+        || name.eq_ignore_ascii_case("TRANSPOSE")
+        || name.eq_ignore_ascii_case("VSTACK")
+        || name.eq_ignore_ascii_case("WRAPCOLS")
+        || name.eq_ignore_ascii_case("WRAPROWS")
+}
+
 fn formula_text_function_name(name: &str) -> bool {
-    name.eq_ignore_ascii_case("ADDRESS")
+    formula_array_projection_function_name(name)
+        || name.eq_ignore_ascii_case("ADDRESS")
         || name.eq_ignore_ascii_case("ARRAYTOTEXT")
         || name.eq_ignore_ascii_case("ASC")
         || name.eq_ignore_ascii_case("BAHTTEXT")
@@ -18464,6 +18480,17 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("XLOOKUP") {
             return formula_number_from_value_probe(self.parse_xlookup_value_function()?);
         }
+        if formula_array_projection_function_name(name) {
+            return formula_number_from_value_probe(
+                self.parse_array_projection_value_function(name)?,
+            );
+        }
+        if name.eq_ignore_ascii_case("SEQUENCE") {
+            return self.parse_sequence_function();
+        }
+        if name.eq_ignore_ascii_case("RANDARRAY") {
+            return self.parse_randarray_function();
+        }
         if name.eq_ignore_ascii_case("CHISQ.TEST") || name.eq_ignore_ascii_case("CHITEST") {
             return self.parse_chisq_test_function();
         }
@@ -19071,6 +19098,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("DGET") {
             return formula_selected_text_from_value_probe(
                 self.parse_database_value_function(name)?,
+            );
+        }
+        if formula_array_projection_function_name(name) {
+            return formula_selected_text_from_value_probe(
+                self.parse_array_projection_value_function(name)?,
             );
         }
         if name.eq_ignore_ascii_case("REGEXEXTRACT") {
@@ -22678,6 +22710,379 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         let z = (mean - x) / denominator;
         formula_standard_normal_cdf(z)
             .and_then(|cdf| formula_checked_numeric_result((1.0 - cdf).clamp(0.0, 1.0)))
+    }
+
+    fn parse_array_projection_value_function(
+        &mut self,
+        name: &str,
+    ) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let (sheet_id, rect) = self.parse_reference_argument()?;
+        let mut row = rect.row_first;
+        let mut col = rect.col_first;
+
+        macro_rules! finish_with_cell {
+            () => {{
+                let value = self.evaluator.cell_value_or_blank(sheet_id, row, col)?;
+                return Ok(formula_value_probe_from_cell_value(value));
+            }};
+        }
+        macro_rules! parse_dimension_count {
+            () => {{
+                let value = formula_integer_argument(self.parse_comparison()?)?;
+                if value < 1 {
+                    return Err(FormulaEvalError::Value);
+                }
+                value
+            }};
+        }
+        macro_rules! parse_selected_offset {
+            ($index:expr, $size:expr) => {{
+                let index = $index;
+                let size = i64::from($size);
+                if index == 0 || index.abs() > size {
+                    return Err(FormulaEvalError::Value);
+                }
+                if index > 0 {
+                    u32::try_from(index - 1).map_err(|_| FormulaEvalError::Value)?
+                } else {
+                    u32::try_from(size + index).map_err(|_| FormulaEvalError::Value)?
+                }
+            }};
+        }
+        let consume_remaining_arguments = |parser: &mut Self| -> Result<(), FormulaEvalError> {
+            loop {
+                parser.skip_whitespace();
+                if parser.consume_char(')') {
+                    return Ok(());
+                }
+                if !parser.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                parser.skip_whitespace();
+                let checkpoint = parser.index;
+                if let Some((_, _, next_index)) = parser.try_parse_reference()? {
+                    parser.index = next_index;
+                } else {
+                    parser.index = checkpoint;
+                    parser.parse_value_probe_argument()?;
+                }
+            }
+        };
+
+        if name.eq_ignore_ascii_case("TAKE") {
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let rows = formula_integer_argument(self.parse_comparison()?)?;
+            if rows == 0 || rows.unsigned_abs() > u64::from(rect.height()) {
+                return Err(FormulaEvalError::Calc);
+            }
+            if rows < 0 {
+                row = rect.row_last
+                    - u32::try_from(rows.unsigned_abs()).map_err(|_| FormulaEvalError::Calc)?
+                    + 1;
+            }
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                let columns = formula_integer_argument(self.parse_comparison()?)?;
+                if columns == 0 || columns.unsigned_abs() > u64::from(rect.width()) {
+                    return Err(FormulaEvalError::Calc);
+                }
+                if columns < 0 {
+                    col = rect.col_last
+                        - u32::try_from(columns.unsigned_abs())
+                            .map_err(|_| FormulaEvalError::Calc)?
+                        + 1;
+                }
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+            }
+            finish_with_cell!();
+        }
+
+        if name.eq_ignore_ascii_case("DROP") {
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let rows = formula_integer_argument(self.parse_comparison()?)?;
+            if rows.unsigned_abs() >= u64::from(rect.height()) {
+                return Err(FormulaEvalError::Calc);
+            }
+            if rows > 0 {
+                row = rect.row_first + u32::try_from(rows).map_err(|_| FormulaEvalError::Calc)?;
+            }
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                let columns = formula_integer_argument(self.parse_comparison()?)?;
+                if columns.unsigned_abs() >= u64::from(rect.width()) {
+                    return Err(FormulaEvalError::Calc);
+                }
+                if columns > 0 {
+                    col = rect.col_first
+                        + u32::try_from(columns).map_err(|_| FormulaEvalError::Calc)?;
+                }
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+            }
+            finish_with_cell!();
+        }
+
+        if name.eq_ignore_ascii_case("CHOOSECOLS") || name.eq_ignore_ascii_case("CHOOSEROWS") {
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let selected = formula_integer_argument(self.parse_comparison()?)?;
+            if name.eq_ignore_ascii_case("CHOOSECOLS") {
+                col = rect.col_first + parse_selected_offset!(selected, rect.width());
+            } else {
+                row = rect.row_first + parse_selected_offset!(selected, rect.height());
+            }
+            consume_remaining_arguments(self)?;
+            finish_with_cell!();
+        }
+
+        if name.eq_ignore_ascii_case("EXPAND") {
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let rows = parse_dimension_count!();
+            if rows < i64::from(rect.height()) {
+                return Err(FormulaEvalError::Value);
+            }
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                self.skip_whitespace();
+                if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                    let columns = parse_dimension_count!();
+                    if columns < i64::from(rect.width()) {
+                        return Err(FormulaEvalError::Value);
+                    }
+                }
+                consume_remaining_arguments(self)?;
+            }
+            finish_with_cell!();
+        }
+
+        if name.eq_ignore_ascii_case("HSTACK") || name.eq_ignore_ascii_case("VSTACK") {
+            consume_remaining_arguments(self)?;
+            finish_with_cell!();
+        }
+
+        if name.eq_ignore_ascii_case("TRANSPOSE") {
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            finish_with_cell!();
+        }
+
+        if name.eq_ignore_ascii_case("WRAPCOLS") || name.eq_ignore_ascii_case("WRAPROWS") {
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            parse_dimension_count!();
+            consume_remaining_arguments(self)?;
+            finish_with_cell!();
+        }
+
+        if name.eq_ignore_ascii_case("TOCOL") || name.eq_ignore_ascii_case("TOROW") {
+            let mut ignore = 0_i64;
+            let mut scan_by_column = false;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                self.skip_whitespace();
+                if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                    ignore = formula_integer_argument(self.parse_comparison()?)?;
+                    if !(0..=3).contains(&ignore) {
+                        return Err(FormulaEvalError::Value);
+                    }
+                }
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    scan_by_column = self.parse_comparison()? != 0.0;
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                }
+            }
+            let include_value = |value: &CellValue| -> bool {
+                let ignore_blank = matches!(ignore, 1 | 3);
+                let ignore_error = matches!(ignore, 2 | 3);
+                !(ignore_blank && matches!(value, CellValue::Blank))
+                    && !(ignore_error && matches!(value, CellValue::Error(_)))
+            };
+            if scan_by_column {
+                for candidate_col in rect.col_first..=rect.col_last {
+                    for candidate_row in rect.row_first..=rect.row_last {
+                        let value = self.evaluator.cell_value_or_blank(
+                            sheet_id,
+                            candidate_row,
+                            candidate_col,
+                        )?;
+                        if include_value(&value) {
+                            return Ok(formula_value_probe_from_cell_value(value));
+                        }
+                    }
+                }
+            } else {
+                for candidate_row in rect.row_first..=rect.row_last {
+                    for candidate_col in rect.col_first..=rect.col_last {
+                        let value = self.evaluator.cell_value_or_blank(
+                            sheet_id,
+                            candidate_row,
+                            candidate_col,
+                        )?;
+                        if include_value(&value) {
+                            return Ok(formula_value_probe_from_cell_value(value));
+                        }
+                    }
+                }
+            }
+            return Err(FormulaEvalError::Calc);
+        }
+
+        Err(FormulaEvalError::Unsupported)
+    }
+
+    fn parse_sequence_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let rows = formula_integer_argument(self.parse_comparison()?)?;
+        if rows < 1 {
+            return Err(FormulaEvalError::Value);
+        }
+        let mut columns = 1_i64;
+        let mut start = 1.0_f64;
+        let mut step = 1.0_f64;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            self.skip_whitespace();
+            if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                columns = formula_integer_argument(self.parse_comparison()?)?;
+                if columns < 1 {
+                    return Err(FormulaEvalError::Value);
+                }
+            }
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                self.skip_whitespace();
+                if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                    start = self.parse_comparison()?;
+                }
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    step = self.parse_comparison()?;
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                }
+            }
+        }
+        if !start.is_finite() || !step.is_finite() {
+            return Err(FormulaEvalError::Value);
+        }
+        let _ = columns;
+        Ok(start)
+    }
+
+    fn parse_randarray_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let mut rows = 1_i64;
+        let mut columns = 1_i64;
+        let mut min = 0.0_f64;
+        let mut max = 1.0_f64;
+        let mut whole_number = false;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            rows = formula_integer_argument(self.parse_comparison()?)?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                self.skip_whitespace();
+                if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                    columns = formula_integer_argument(self.parse_comparison()?)?;
+                }
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    self.skip_whitespace();
+                    if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                        min = self.parse_comparison()?;
+                    }
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        if !self.consume_char(',') {
+                            return Err(FormulaEvalError::Unsupported);
+                        }
+                        self.skip_whitespace();
+                        if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                            max = self.parse_comparison()?;
+                        }
+                        self.skip_whitespace();
+                        if !self.consume_char(')') {
+                            if !self.consume_char(',') {
+                                return Err(FormulaEvalError::Unsupported);
+                            }
+                            whole_number = self.parse_comparison()? != 0.0;
+                            self.skip_whitespace();
+                            if !self.consume_char(')') {
+                                return Err(FormulaEvalError::Unsupported);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if rows < 1 || columns < 1 {
+            return Err(FormulaEvalError::Value);
+        }
+        if !min.is_finite() || !max.is_finite() {
+            return Err(FormulaEvalError::Value);
+        }
+        if min > max {
+            return Err(FormulaEvalError::Value);
+        }
+        if whole_number {
+            formula_rand_between(min, max)
+        } else {
+            formula_checked_numeric_result(min + (max - min) * formula_rand())
+        }
     }
 
     fn parse_chisq_test_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -33376,6 +33781,137 @@ mod tests {
                 OmValue::Error(CellError::Div0),
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_array_projection_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:C3".to_string())])
+                .expect("Range(A1:C3)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("E1:E18".to_string())],
+                )
+                .expect("Range(E1:E18)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        3,
+                        vec![
+                            OmValue::Text("a".to_string()),
+                            OmValue::Text("b".to_string()),
+                            OmValue::Text("c".to_string()),
+                            OmValue::Text("d".to_string()),
+                            OmValue::Text("e".to_string()),
+                            OmValue::Text("f".to_string()),
+                            OmValue::Text("g".to_string()),
+                            OmValue::Text("h".to_string()),
+                            OmValue::Text("i".to_string()),
+                        ],
+                    )
+                    .expect("array projection source values"),
+                ),
+                &[],
+            )
+            .expect("set array projection source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        18,
+                        1,
+                        vec![
+                            OmValue::Text("=TAKE(A1:C3,-1,-1)".to_string()),
+                            OmValue::Text("=DROP(A1:C3,1,1)".to_string()),
+                            OmValue::Text("=CHOOSECOLS(A1:C3,-1)".to_string()),
+                            OmValue::Text("=CHOOSEROWS(A1:C3,2)".to_string()),
+                            OmValue::Text("=HSTACK(A1:C3,A1:C3)".to_string()),
+                            OmValue::Text("=VSTACK(A1:C3,A1:C3)".to_string()),
+                            OmValue::Text("=TRANSPOSE(A1:C3)".to_string()),
+                            OmValue::Text("=TOCOL(A1:C3)".to_string()),
+                            OmValue::Text("=TOROW(A1:C3,,TRUE)".to_string()),
+                            OmValue::Text("=WRAPROWS(A1:C3,2)".to_string()),
+                            OmValue::Text("=WRAPCOLS(A1:C3,2)".to_string()),
+                            OmValue::Text("=EXPAND(A1:C3,4,4)".to_string()),
+                            OmValue::Text("=SEQUENCE(3,2,10,5)".to_string()),
+                            OmValue::Text("=RANDARRAY(1,1,5,5,TRUE)".to_string()),
+                            OmValue::Text("=TAKE(A1:C3,4)".to_string()),
+                            OmValue::Text("=CHOOSECOLS(A1:C3,0)".to_string()),
+                            OmValue::Text("=EXPAND(A1:C3,2,3)".to_string()),
+                            OmValue::Text("=TOCOL(D1:D2,1)".to_string()),
+                        ],
+                    )
+                    .expect("array projection formulas"),
+                ),
+                &[],
+            )
+            .expect("set array projection formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("array projection values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected array projection value array");
+        };
+        assert_eq!(
+            &values.values[..12],
+            &[
+                OmValue::Text("i".to_string()),
+                OmValue::Text("e".to_string()),
+                OmValue::Text("c".to_string()),
+                OmValue::Text("d".to_string()),
+                OmValue::Text("a".to_string()),
+                OmValue::Text("a".to_string()),
+                OmValue::Text("a".to_string()),
+                OmValue::Text("a".to_string()),
+                OmValue::Text("a".to_string()),
+                OmValue::Text("a".to_string()),
+                OmValue::Text("a".to_string()),
+                OmValue::Text("a".to_string()),
+            ]
+        );
+        assert_eq!(values.values[12], OmValue::Number(10.0));
+        assert_eq!(values.values[13], OmValue::Number(5.0));
+        assert_eq!(
+            &values.values[14..],
+            &[
+                OmValue::Error(CellError::Calc),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Calc),
             ]
         );
     }

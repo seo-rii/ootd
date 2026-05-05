@@ -87,7 +87,9 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `DEGREES`
 - `RADIANS`
 - `RAND`
+- `RANDARRAY`
 - `RANDBETWEEN`
+- `SEQUENCE`
 - `ISEVEN`
 - `ISODD`
 - `GCD`
@@ -426,6 +428,18 @@ Aggregate notes:
 - `ROWS`
 - `COLUMNS`
 - `AREAS`
+- `CHOOSECOLS`
+- `CHOOSEROWS`
+- `DROP`
+- `EXPAND`
+- `HSTACK`
+- `TAKE`
+- `TOCOL`
+- `TOROW`
+- `TRANSPOSE`
+- `VSTACK`
+- `WRAPCOLS`
+- `WRAPROWS`
 - `ADDRESS`
 - `CELL`
 - `SHEET`
@@ -440,6 +454,7 @@ Lookup notes:
 - `VLOOKUP` and `HLOOKUP` support exact and ascending approximate table lookup.
 - `XLOOKUP` supports scalar one-dimensional lookup and return arrays, `if_not_found`, exact match, wildcard match, exact-or-next-smaller, exact-or-next-larger, and forward or reverse linear search.
 - `ROW()` and `COLUMN()` without arguments resolve against the formula cell position during recalculation.
+- Dynamic array projection helpers currently return the scalar top-left or first projected value; full spill-range materialization is tracked separately.
 - `AREAS` returns `1` for supported single-area references; `ADDRESS` supports A1/R1C1 text output with absolute/relative flags and optional sheet text.
 - `CELL` supports focused metadata types such as `address`, `row`, `col`, `contents`, `type`, `format`, `filename`, `width`, `prefix`, `color`, `parentheses`, and `protect` for the upper-left cell of a reference.
 - `SHEET()` returns the current worksheet's 1-based workbook position; `SHEETS()` returns the workbook worksheet count, and reference arguments are supported for single-sheet references.
