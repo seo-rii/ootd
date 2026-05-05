@@ -18018,6 +18018,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("XLOOKUP") {
             return formula_number_from_value_probe(self.parse_xlookup_value_function()?);
         }
+        if name.eq_ignore_ascii_case("CHISQ.TEST") || name.eq_ignore_ascii_case("CHITEST") {
+            return self.parse_chisq_test_function();
+        }
         if name.eq_ignore_ascii_case("SUMIF") {
             return self.parse_sumif_function();
         }
@@ -21721,6 +21724,159 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             ),
         };
         self.evaluator.lookup_result_at(return_sheet_id, row, col)
+    }
+
+    fn parse_chisq_test_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let (observed_sheet_id, observed_rect) = self.parse_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let (expected_sheet_id, expected_rect) = self.parse_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        if observed_rect.width() != expected_rect.width()
+            || observed_rect.height() != expected_rect.height()
+        {
+            return Err(FormulaEvalError::NA);
+        }
+        let degrees = if observed_rect.height() == 1 {
+            observed_rect.width().saturating_sub(1)
+        } else if observed_rect.width() == 1 {
+            observed_rect.height().saturating_sub(1)
+        } else {
+            (observed_rect.height() - 1) * (observed_rect.width() - 1)
+        };
+        if degrees == 0 {
+            return Err(FormulaEvalError::Div0);
+        }
+
+        let mut statistic = 0.0_f64;
+        for row_offset in 0..observed_rect.height() {
+            for col_offset in 0..observed_rect.width() {
+                let observed = self.evaluator.numeric_cell_value(
+                    observed_sheet_id,
+                    observed_rect.row_first + row_offset,
+                    observed_rect.col_first + col_offset,
+                )?;
+                let expected = self.evaluator.numeric_cell_value(
+                    expected_sheet_id,
+                    expected_rect.row_first + row_offset,
+                    expected_rect.col_first + col_offset,
+                )?;
+                if !observed.is_finite() || !expected.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                if observed < 0.0 || expected <= 0.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                statistic += (observed - expected).powi(2) / expected;
+            }
+        }
+        if !statistic.is_finite() {
+            return Err(FormulaEvalError::Num);
+        }
+
+        let checked_numeric_result = |value: f64| -> Result<f64, FormulaEvalError> {
+            if value.is_finite() {
+                Ok(value)
+            } else {
+                Err(FormulaEvalError::Num)
+            }
+        };
+        let gamma_ln_value = |value: f64| {
+            const COEFFICIENTS: [f64; 9] = [
+                0.9999999999998099,
+                676.5203681218851,
+                -1259.1392167224028,
+                771.3234287776531,
+                -176.6150291621406,
+                12.507343278686905,
+                -0.13857109526572012,
+                0.000009984369578019572,
+                0.00000015056327351493116,
+            ];
+            let lanczos = |input: f64| {
+                let z = input - 1.0;
+                let mut x = COEFFICIENTS[0];
+                for (index, coefficient) in COEFFICIENTS.iter().enumerate().skip(1) {
+                    x += coefficient / (z + index as f64);
+                }
+                let t = z + 7.5;
+                0.5 * (2.0 * std::f64::consts::PI).ln() + (z + 0.5) * t.ln() - t + x.ln()
+            };
+            if value < 0.5 {
+                std::f64::consts::PI.ln()
+                    - (std::f64::consts::PI * value).sin().ln()
+                    - lanczos(1.0 - value)
+            } else {
+                lanczos(value)
+            }
+        };
+        let regularized_gamma_p = |shape: f64, x: f64| -> Result<f64, FormulaEvalError> {
+            if !shape.is_finite() || !x.is_finite() {
+                return Err(FormulaEvalError::Value);
+            }
+            if shape <= 0.0 || x < 0.0 {
+                return Err(FormulaEvalError::Num);
+            }
+            if x == 0.0 {
+                return Ok(0.0);
+            }
+            const EPSILON: f64 = 1e-14;
+            const FLOOR: f64 = 1e-300;
+            const MAX_ITERATIONS: usize = 200;
+            let gamma_ln = gamma_ln_value(shape);
+            if x < shape + 1.0 {
+                let mut term = 1.0 / shape;
+                let mut sum = term;
+                let mut ap = shape;
+                for _ in 0..MAX_ITERATIONS {
+                    ap += 1.0;
+                    term *= x / ap;
+                    sum += term;
+                    if term.abs() <= sum.abs() * EPSILON {
+                        return checked_numeric_result(
+                            (sum * (-x + shape * x.ln() - gamma_ln).exp()).clamp(0.0, 1.0),
+                        );
+                    }
+                }
+                return checked_numeric_result(
+                    (sum * (-x + shape * x.ln() - gamma_ln).exp()).clamp(0.0, 1.0),
+                );
+            }
+
+            let mut b = x + 1.0 - shape;
+            let mut c = 1.0 / FLOOR;
+            let mut d = 1.0 / b.max(FLOOR);
+            let mut h = d;
+            for i in 1..=MAX_ITERATIONS {
+                let i = i as f64;
+                let an = -i * (i - shape);
+                b += 2.0;
+                d = an * d + b;
+                if d.abs() < FLOOR {
+                    d = FLOOR;
+                }
+                c = b + an / c;
+                if c.abs() < FLOOR {
+                    c = FLOOR;
+                }
+                d = 1.0 / d;
+                let delta = d * c;
+                h *= delta;
+                if (delta - 1.0).abs() <= EPSILON {
+                    let q = (-x + shape * x.ln() - gamma_ln).exp() * h;
+                    return checked_numeric_result((1.0 - q).clamp(0.0, 1.0));
+                }
+            }
+            let q = (-x + shape * x.ln() - gamma_ln).exp() * h;
+            checked_numeric_result((1.0 - q).clamp(0.0, 1.0))
+        };
+        regularized_gamma_p(degrees as f64 / 2.0, statistic / 2.0)
+            .map(|value| (1.0 - value).clamp(0.0, 1.0))
     }
 
     fn parse_sumif_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -29914,6 +30070,115 @@ mod tests {
                 OmValue::Error(CellError::Num),
             ]
         );
+    }
+
+    #[test]
+    fn application_calculate_updates_chisq_test_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Range(A1:B3)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1:D5".to_string())])
+                .expect("Range(D1:D5)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        2,
+                        vec![
+                            OmValue::Number(10.0),
+                            OmValue::Number(20.0),
+                            OmValue::Number(20.0),
+                            OmValue::Number(20.0),
+                            OmValue::Number(30.0),
+                            OmValue::Number(20.0),
+                        ],
+                    )
+                    .expect("CHISQ.TEST source values"),
+                ),
+                &[],
+            )
+            .expect("set CHISQ.TEST source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        5,
+                        1,
+                        vec![
+                            OmValue::Text("=CHISQ.TEST(A1:A3,B1:B3)".to_string()),
+                            OmValue::Text("=CHITEST(A1:A3,B1:B3)".to_string()),
+                            OmValue::Text("=CHISQ.TEST(A1:A1,B1:B1)".to_string()),
+                            OmValue::Text("=CHISQ.TEST(A1:A3,B1:B2)".to_string()),
+                            OmValue::Text("=CHISQ.TEST(A1:A3,F1:F3)".to_string()),
+                        ],
+                    )
+                    .expect("CHISQ.TEST formulas"),
+                ),
+                &[],
+            )
+            .expect("set CHISQ.TEST formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("CHISQ.TEST values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected CHISQ.TEST value array");
+        };
+        for index in 0..2 {
+            let number = expect_number(values.values[index].clone());
+            let expected = (-5.0_f64).exp();
+            assert!(
+                (number - expected).abs() < 1e-12,
+                "CHISQ.TEST result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            &values.values[2..],
+            &[
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::Num),
+            ]
+        );
+        let evaluated = runtime
+            .dispatch_invoke(
+                runtime.root_application(),
+                "Evaluate",
+                &[OmValue::Text("=CHISQ.TEST(A1:A3,B1:B3)".to_string())],
+            )
+            .expect("Application.Evaluate CHISQ.TEST");
+        let number = expect_number(evaluated);
+        assert!((number - (-5.0_f64).exp()).abs() < 1e-12);
     }
 
     #[test]

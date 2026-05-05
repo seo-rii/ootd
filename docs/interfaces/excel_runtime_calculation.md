@@ -157,6 +157,7 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `CHISQ.DIST.RT`
 - `CHISQ.INV`
 - `CHISQ.INV.RT`
+- `CHISQ.TEST` / `CHITEST`
 - `CONFIDENCE.T`
 - `F.DIST`
 - `F.DIST.RT` / `FDIST`
@@ -207,6 +208,7 @@ Roman numeral notes:
 - `ERF`, `ERF.PRECISE`, `ERFC`, and `ERFC.PRECISE` cover scalar error-function calculations. `ERF` also supports the legacy lower/upper integration form.
 - `GAMMALN` and `GAMMALN.PRECISE` return the natural logarithm of the gamma function for positive scalar inputs.
 - `BETA.DIST`, `CHISQ.DIST`, `EXPON.DIST`, `F.DIST`, `GAMMA.DIST`, `LOGNORM.DIST`, `NORM.DIST`, `NORM.S.DIST`, `POISSON.DIST`, `T.DIST`, and `WEIBULL.DIST` cover scalar probability and cumulative distribution calculations, with legacy function aliases mapped to the same implementations where their argument shapes match.
+- `CHISQ.TEST` / `CHITEST` compare same-shaped observed and expected ranges and return the right-tailed chi-square probability.
 - `BINOM.DIST`, `BINOM.DIST.RANGE`, `BINOM.INV`, `HYPGEOM.DIST`, and `NEGBINOM.DIST` cover scalar discrete statistical distribution calculations, including compatibility aliases where Excel exposes them.
 - `KURT`, `SKEW`, `SKEW.P`, and `PROB` cover scalar statistical shape and probability calculations over numeric arguments and ranges.
 - `GAMMA`, `CONFIDENCE.NORM`, `CONFIDENCE.T`, `FORECAST` / `FORECAST.LINEAR`, and `STEYX` cover scalar gamma, confidence interval, and linear regression calculations.
