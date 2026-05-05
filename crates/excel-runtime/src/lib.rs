@@ -13563,11 +13563,15 @@ fn formula_array_projection_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("CHOOSEROWS")
         || name.eq_ignore_ascii_case("DROP")
         || name.eq_ignore_ascii_case("EXPAND")
+        || name.eq_ignore_ascii_case("FILTER")
         || name.eq_ignore_ascii_case("HSTACK")
+        || name.eq_ignore_ascii_case("SORT")
+        || name.eq_ignore_ascii_case("SORTBY")
         || name.eq_ignore_ascii_case("TAKE")
         || name.eq_ignore_ascii_case("TOCOL")
         || name.eq_ignore_ascii_case("TOROW")
         || name.eq_ignore_ascii_case("TRANSPOSE")
+        || name.eq_ignore_ascii_case("UNIQUE")
         || name.eq_ignore_ascii_case("VSTACK")
         || name.eq_ignore_ascii_case("WRAPCOLS")
         || name.eq_ignore_ascii_case("WRAPROWS")
@@ -13614,6 +13618,7 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("IMDIV")
         || name.eq_ignore_ascii_case("IMEXP")
         || name.eq_ignore_ascii_case("INFO")
+        || name.eq_ignore_ascii_case("INDIRECT")
         || name.eq_ignore_ascii_case("IMLN")
         || name.eq_ignore_ascii_case("IMLOG10")
         || name.eq_ignore_ascii_case("IMLOG2")
@@ -13630,10 +13635,12 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("JIS")
         || name.eq_ignore_ascii_case("OCT2BIN")
         || name.eq_ignore_ascii_case("OCT2HEX")
+        || name.eq_ignore_ascii_case("OFFSET")
         || name.eq_ignore_ascii_case("PHONETIC")
         || name.eq_ignore_ascii_case("ROMAN")
         || name.eq_ignore_ascii_case("T")
         || name.eq_ignore_ascii_case("TEXT")
+        || name.eq_ignore_ascii_case("TEXTSPLIT")
         || name.eq_ignore_ascii_case("UNICHAR")
         || name.eq_ignore_ascii_case("UPPER")
         || name.eq_ignore_ascii_case("LOWER")
@@ -13644,6 +13651,7 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("TEXTJOIN")
         || name.eq_ignore_ascii_case("TEXTBEFORE")
         || name.eq_ignore_ascii_case("TEXTAFTER")
+        || name.eq_ignore_ascii_case("TRIMRANGE")
         || name.eq_ignore_ascii_case("REPT")
         || name.eq_ignore_ascii_case("REPLACE")
         || name.eq_ignore_ascii_case("REPLACEB")
@@ -18529,6 +18537,14 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("XLOOKUP") {
             return formula_number_from_value_probe(self.parse_xlookup_value_function()?);
         }
+        if name.eq_ignore_ascii_case("INDIRECT")
+            || name.eq_ignore_ascii_case("OFFSET")
+            || name.eq_ignore_ascii_case("TRIMRANGE")
+        {
+            return formula_number_from_value_probe(
+                self.parse_reference_projection_value_function(name)?,
+            );
+        }
         if formula_array_projection_function_name(name) {
             return formula_number_from_value_probe(
                 self.parse_array_projection_value_function(name)?,
@@ -19205,6 +19221,14 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("INFO") {
             return formula_selected_text_from_value_probe(self.parse_info_value_function()?);
         }
+        if name.eq_ignore_ascii_case("INDIRECT")
+            || name.eq_ignore_ascii_case("OFFSET")
+            || name.eq_ignore_ascii_case("TRIMRANGE")
+        {
+            return formula_selected_text_from_value_probe(
+                self.parse_reference_projection_value_function(name)?,
+            );
+        }
         if name.eq_ignore_ascii_case("DEC2BIN") {
             return self.parse_decimal_engineering_text_function(2, 10, 10);
         }
@@ -19543,6 +19567,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         if name.eq_ignore_ascii_case("TEXTJOIN") {
             return self.parse_textjoin_function();
+        }
+        if name.eq_ignore_ascii_case("TEXTSPLIT") {
+            return self.parse_textsplit_function();
         }
         if name.eq_ignore_ascii_case("TEXTBEFORE") {
             return self.parse_text_boundary_function(false);
@@ -20307,6 +20334,108 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 return Err(FormulaEvalError::Unsupported);
             }
         }
+    }
+
+    fn parse_textsplit_function(&mut self) -> Result<String, FormulaEvalError> {
+        let text = self.parse_text_value_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        self.skip_whitespace();
+        let col_delimiter = if self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+            None
+        } else {
+            Some(self.parse_text_value_argument()?)
+        };
+        let mut row_delimiter = None;
+        let mut ignore_empty = false;
+        let mut match_mode = 0_i64;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            self.skip_whitespace();
+            if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                row_delimiter = Some(self.parse_text_value_argument()?);
+            }
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                self.skip_whitespace();
+                if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                    ignore_empty = self.parse_comparison()? != 0.0;
+                }
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    self.skip_whitespace();
+                    if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                        match_mode = formula_integer_argument(self.parse_comparison()?)?;
+                        if !matches!(match_mode, 0 | 1) {
+                            return Err(FormulaEvalError::Value);
+                        }
+                    }
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        if !self.consume_char(',') {
+                            return Err(FormulaEvalError::Unsupported);
+                        }
+                        self.skip_whitespace();
+                        if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                            self.parse_value_probe_argument()?;
+                        }
+                        self.skip_whitespace();
+                        if !self.consume_char(')') {
+                            return Err(FormulaEvalError::Unsupported);
+                        }
+                    }
+                }
+            }
+        }
+        let mut delimiters = Vec::new();
+        if let Some(delimiter) = row_delimiter {
+            delimiters.push(delimiter);
+        }
+        if let Some(delimiter) = col_delimiter {
+            delimiters.push(delimiter);
+        }
+        if delimiters.is_empty() || delimiters.iter().any(|delimiter| delimiter.is_empty()) {
+            return Err(FormulaEvalError::Value);
+        }
+
+        let case_insensitive = match_mode == 1;
+        let mut parts = vec![text];
+        for delimiter in delimiters {
+            let mut next_parts = Vec::new();
+            for part in parts {
+                let matches = formula_text_delimiter_matches(
+                    part.as_str(),
+                    delimiter.as_str(),
+                    case_insensitive,
+                );
+                if matches.is_empty() {
+                    next_parts.push(part);
+                    continue;
+                }
+                let mut start = 0_usize;
+                for (match_start, match_end) in matches {
+                    next_parts.push(part[start..match_start].to_string());
+                    start = match_end;
+                }
+                next_parts.push(part[start..].to_string());
+            }
+            parts = next_parts;
+        }
+        parts
+            .into_iter()
+            .find(|part| !ignore_empty || !part.is_empty())
+            .ok_or(FormulaEvalError::Calc)
     }
 
     fn parse_text_boundary_function(&mut self, after: bool) -> Result<String, FormulaEvalError> {
@@ -22587,6 +22716,226 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         self.evaluator.lookup_result_at(return_sheet_id, row, col)
     }
 
+    fn parse_reference_projection_value_function(
+        &mut self,
+        name: &str,
+    ) -> Result<FormulaValueProbe, FormulaEvalError> {
+        if name.eq_ignore_ascii_case("INDIRECT") {
+            let mut reference_text = self.parse_text_value_argument()?;
+            let mut a1_style = true;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                a1_style = self.parse_comparison()? != 0.0;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+            }
+            if !a1_style {
+                let (base_row, base_col) = self.current_position.unwrap_or((1, 1));
+                reference_text =
+                    convert_formula_r1c1_to_a1(reference_text.as_str(), base_row, base_col);
+            }
+            let mut reference_parser = FormulaParser::new(
+                reference_text.as_str(),
+                &mut *self.evaluator,
+                self.sheet_id,
+                self.current_position,
+            );
+            reference_parser.skip_whitespace();
+            let Some((target_sheet_id, rect, next_index)) =
+                reference_parser.try_parse_reference()?
+            else {
+                return Err(FormulaEvalError::Ref);
+            };
+            reference_parser.index = next_index;
+            reference_parser.skip_whitespace();
+            if reference_parser.index != reference_parser.input.len() {
+                return Err(FormulaEvalError::Ref);
+            }
+            let value = reference_parser.evaluator.cell_value_or_blank(
+                target_sheet_id,
+                rect.row_first,
+                rect.col_first,
+            )?;
+            return Ok(formula_value_probe_from_cell_value(value));
+        }
+
+        if name.eq_ignore_ascii_case("OFFSET") {
+            let (sheet_id, rect) = self.parse_reference_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let row_offset = formula_integer_argument(self.parse_comparison()?)?;
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let col_offset = formula_integer_argument(self.parse_comparison()?)?;
+            let mut height = i64::from(rect.height());
+            let mut width = i64::from(rect.width());
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                height = formula_integer_argument(self.parse_comparison()?)?;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    width = formula_integer_argument(self.parse_comparison()?)?;
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                }
+            }
+            if height < 1 || width < 1 {
+                return Err(FormulaEvalError::Ref);
+            }
+            let row = i64::from(rect.row_first) + row_offset;
+            let col = i64::from(rect.col_first) + col_offset;
+            if row < 1
+                || col < 1
+                || row + height - 1 > i64::from(EXCEL_MAX_ROW_INDEX)
+                || col + width - 1 > i64::from(EXCEL_MAX_COLUMN_INDEX)
+            {
+                return Err(FormulaEvalError::Ref);
+            }
+            let value = self
+                .evaluator
+                .cell_value_or_blank(sheet_id, row as u32, col as u32)?;
+            return Ok(formula_value_probe_from_cell_value(value));
+        }
+
+        if name.eq_ignore_ascii_case("TRIMRANGE") {
+            let (sheet_id, rect) = self.parse_reference_argument()?;
+            let mut trim_rows = 3_i64;
+            let mut trim_cols = 3_i64;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                trim_rows = formula_integer_argument(self.parse_comparison()?)?;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    trim_cols = formula_integer_argument(self.parse_comparison()?)?;
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                }
+            }
+            if !(0..=3).contains(&trim_rows) || !(0..=3).contains(&trim_cols) {
+                return Err(FormulaEvalError::Value);
+            }
+
+            let mut row_first = rect.row_first;
+            let mut row_last = rect.row_last;
+            if matches!(trim_rows, 1 | 3) {
+                while row_first <= row_last {
+                    let mut has_value = false;
+                    for col in rect.col_first..=rect.col_last {
+                        if !matches!(
+                            self.evaluator
+                                .cell_value_or_blank(sheet_id, row_first, col)?,
+                            CellValue::Blank
+                        ) {
+                            has_value = true;
+                            break;
+                        }
+                    }
+                    if has_value {
+                        break;
+                    }
+                    row_first += 1;
+                }
+            }
+            if matches!(trim_rows, 2 | 3) {
+                while row_first <= row_last {
+                    let mut has_value = false;
+                    for col in rect.col_first..=rect.col_last {
+                        if !matches!(
+                            self.evaluator
+                                .cell_value_or_blank(sheet_id, row_last, col)?,
+                            CellValue::Blank
+                        ) {
+                            has_value = true;
+                            break;
+                        }
+                    }
+                    if has_value {
+                        break;
+                    }
+                    row_last = row_last.saturating_sub(1);
+                }
+            }
+            if row_first > row_last {
+                return Err(FormulaEvalError::Calc);
+            }
+
+            let mut col_first = rect.col_first;
+            let mut col_last = rect.col_last;
+            if matches!(trim_cols, 1 | 3) {
+                while col_first <= col_last {
+                    let mut has_value = false;
+                    for row in row_first..=row_last {
+                        if !matches!(
+                            self.evaluator
+                                .cell_value_or_blank(sheet_id, row, col_first)?,
+                            CellValue::Blank
+                        ) {
+                            has_value = true;
+                            break;
+                        }
+                    }
+                    if has_value {
+                        break;
+                    }
+                    col_first += 1;
+                }
+            }
+            if matches!(trim_cols, 2 | 3) {
+                while col_first <= col_last {
+                    let mut has_value = false;
+                    for row in row_first..=row_last {
+                        if !matches!(
+                            self.evaluator
+                                .cell_value_or_blank(sheet_id, row, col_last)?,
+                            CellValue::Blank
+                        ) {
+                            has_value = true;
+                            break;
+                        }
+                    }
+                    if has_value {
+                        break;
+                    }
+                    col_last = col_last.saturating_sub(1);
+                }
+            }
+            if col_first > col_last {
+                return Err(FormulaEvalError::Calc);
+            }
+            let value = self
+                .evaluator
+                .cell_value_or_blank(sheet_id, row_first, col_first)?;
+            return Ok(formula_value_probe_from_cell_value(value));
+        }
+
+        Err(FormulaEvalError::Unsupported)
+    }
+
     fn parse_f_test_function(&mut self) -> Result<f64, FormulaEvalError> {
         let first_values = self.parse_aggregate_argument()?;
         self.skip_whitespace();
@@ -22829,6 +23178,378 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 }
             }
         };
+
+        if name.eq_ignore_ascii_case("FILTER") {
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let (include_sheet_id, include_rect) = self.parse_reference_argument()?;
+            let mut if_empty = None;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                if_empty = Some(self.parse_value_probe_argument()?);
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+            }
+            let include_value = |value: CellValue| -> Result<bool, FormulaEvalError> {
+                match value {
+                    CellValue::Blank => Ok(false),
+                    CellValue::Bool(value) => Ok(value),
+                    CellValue::Number(value) => Ok(value != 0.0),
+                    CellValue::Text(_) => Err(FormulaEvalError::Value),
+                    CellValue::Error(error) => Err(formula_eval_error_from_cell_error(error)),
+                }
+            };
+
+            if include_rect.height() == rect.height() && include_rect.width() == 1 {
+                for row_offset in 0..rect.height() {
+                    let include = self.evaluator.cell_value_or_blank(
+                        include_sheet_id,
+                        include_rect.row_first + row_offset,
+                        include_rect.col_first,
+                    )?;
+                    if include_value(include)? {
+                        row = rect.row_first + row_offset;
+                        finish_with_cell!();
+                    }
+                }
+            } else if include_rect.width() == rect.width() && include_rect.height() == 1 {
+                for col_offset in 0..rect.width() {
+                    let include = self.evaluator.cell_value_or_blank(
+                        include_sheet_id,
+                        include_rect.row_first,
+                        include_rect.col_first + col_offset,
+                    )?;
+                    if include_value(include)? {
+                        col = rect.col_first + col_offset;
+                        finish_with_cell!();
+                    }
+                }
+            } else if include_rect.height() == rect.height() && include_rect.width() == rect.width()
+            {
+                for row_offset in 0..rect.height() {
+                    for col_offset in 0..rect.width() {
+                        let include = self.evaluator.cell_value_or_blank(
+                            include_sheet_id,
+                            include_rect.row_first + row_offset,
+                            include_rect.col_first + col_offset,
+                        )?;
+                        if include_value(include)? {
+                            row = rect.row_first + row_offset;
+                            col = rect.col_first + col_offset;
+                            finish_with_cell!();
+                        }
+                    }
+                }
+            } else {
+                return Err(FormulaEvalError::Value);
+            }
+            return if_empty.ok_or(FormulaEvalError::Calc);
+        }
+
+        if name.eq_ignore_ascii_case("SORT") || name.eq_ignore_ascii_case("SORTBY") {
+            let mut sort_index = 1_i64;
+            let mut sort_order = 1_i64;
+            let mut by_col = false;
+            let mut by_sheet_id = sheet_id;
+            let mut by_rect = rect;
+
+            if name.eq_ignore_ascii_case("SORT") {
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    self.skip_whitespace();
+                    if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                        sort_index = formula_integer_argument(self.parse_comparison()?)?;
+                    }
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        if !self.consume_char(',') {
+                            return Err(FormulaEvalError::Unsupported);
+                        }
+                        self.skip_whitespace();
+                        if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                            sort_order = formula_integer_argument(self.parse_comparison()?)?;
+                        }
+                        self.skip_whitespace();
+                        if !self.consume_char(')') {
+                            if !self.consume_char(',') {
+                                return Err(FormulaEvalError::Unsupported);
+                            }
+                            self.skip_whitespace();
+                            if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                                by_col = self.parse_comparison()? != 0.0;
+                            }
+                            self.skip_whitespace();
+                            if !self.consume_char(')') {
+                                return Err(FormulaEvalError::Unsupported);
+                            }
+                        }
+                    }
+                }
+            } else {
+                self.skip_whitespace();
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                let by_reference = self.parse_reference_argument()?;
+                by_sheet_id = by_reference.0;
+                by_rect = by_reference.1;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    self.skip_whitespace();
+                    if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                        sort_order = formula_integer_argument(self.parse_comparison()?)?;
+                    }
+                    loop {
+                        self.skip_whitespace();
+                        if self.consume_char(')') {
+                            break;
+                        }
+                        if !self.consume_char(',') {
+                            return Err(FormulaEvalError::Unsupported);
+                        }
+                        self.skip_whitespace();
+                        let checkpoint = self.index;
+                        if let Some((_, _, next_index)) = self.try_parse_reference()? {
+                            self.index = next_index;
+                        } else {
+                            self.index = checkpoint;
+                            self.parse_value_probe_argument()?;
+                        }
+                    }
+                }
+            }
+
+            if sort_index < 1 || !matches!(sort_order, -1 | 1) {
+                return Err(FormulaEvalError::Value);
+            }
+            let descending = sort_order == -1;
+            let compare_values = |left: &FormulaValueProbe,
+                                  right: &FormulaValueProbe|
+             -> Result<Ordering, FormulaEvalError> {
+                if let FormulaValueProbe::Error(error) = left {
+                    return Err(*error);
+                }
+                if let FormulaValueProbe::Error(error) = right {
+                    return Err(*error);
+                }
+                if let Some(ordering) = formula_value_probe_ordering(left, right)? {
+                    return Ok(ordering);
+                }
+                let rank = |value: &FormulaValueProbe| match value {
+                    FormulaValueProbe::Blank => 0,
+                    FormulaValueProbe::Number(_) => 1,
+                    FormulaValueProbe::Text(_) => 2,
+                    FormulaValueProbe::Bool(_) => 3,
+                    FormulaValueProbe::Error(_) => 4,
+                };
+                Ok(rank(left).cmp(&rank(right)))
+            };
+            let sort_indexes = |indexes: &mut Vec<usize>,
+                                keys: &[FormulaValueProbe]|
+             -> Result<(), FormulaEvalError> {
+                for index in 1..indexes.len() {
+                    let current = indexes[index];
+                    let mut position = index;
+                    while position > 0 {
+                        let ordering =
+                            compare_values(&keys[indexes[position - 1]], &keys[current])?;
+                        let should_shift = if descending {
+                            ordering == Ordering::Less
+                        } else {
+                            ordering == Ordering::Greater
+                        };
+                        if !should_shift {
+                            break;
+                        }
+                        indexes[position] = indexes[position - 1];
+                        position -= 1;
+                    }
+                    indexes[position] = current;
+                }
+                Ok(())
+            };
+
+            if name.eq_ignore_ascii_case("SORT") {
+                if by_col {
+                    if sort_index > i64::from(rect.height()) {
+                        return Err(FormulaEvalError::Value);
+                    }
+                    let key_row = rect.row_first + sort_index as u32 - 1;
+                    let mut keys = Vec::new();
+                    for candidate_col in rect.col_first..=rect.col_last {
+                        let value =
+                            self.evaluator
+                                .cell_value_or_blank(sheet_id, key_row, candidate_col)?;
+                        keys.push(formula_value_probe_from_cell_value(value));
+                    }
+                    let mut indexes = (0..keys.len()).collect::<Vec<_>>();
+                    sort_indexes(&mut indexes, keys.as_slice())?;
+                    col = rect.col_first
+                        + u32::try_from(indexes[0]).map_err(|_| FormulaEvalError::Value)?;
+                } else {
+                    if sort_index > i64::from(rect.width()) {
+                        return Err(FormulaEvalError::Value);
+                    }
+                    let key_col = rect.col_first + sort_index as u32 - 1;
+                    let mut keys = Vec::new();
+                    for candidate_row in rect.row_first..=rect.row_last {
+                        let value =
+                            self.evaluator
+                                .cell_value_or_blank(sheet_id, candidate_row, key_col)?;
+                        keys.push(formula_value_probe_from_cell_value(value));
+                    }
+                    let mut indexes = (0..keys.len()).collect::<Vec<_>>();
+                    sort_indexes(&mut indexes, keys.as_slice())?;
+                    row = rect.row_first
+                        + u32::try_from(indexes[0]).map_err(|_| FormulaEvalError::Value)?;
+                }
+            } else if by_rect.height() == rect.height() && by_rect.width() == 1 {
+                let mut keys = Vec::new();
+                for candidate_row in by_rect.row_first..=by_rect.row_last {
+                    let value = self.evaluator.cell_value_or_blank(
+                        by_sheet_id,
+                        candidate_row,
+                        by_rect.col_first,
+                    )?;
+                    keys.push(formula_value_probe_from_cell_value(value));
+                }
+                let mut indexes = (0..keys.len()).collect::<Vec<_>>();
+                sort_indexes(&mut indexes, keys.as_slice())?;
+                row = rect.row_first
+                    + u32::try_from(indexes[0]).map_err(|_| FormulaEvalError::Value)?;
+            } else if by_rect.width() == rect.width() && by_rect.height() == 1 {
+                let mut keys = Vec::new();
+                for candidate_col in by_rect.col_first..=by_rect.col_last {
+                    let value = self.evaluator.cell_value_or_blank(
+                        by_sheet_id,
+                        by_rect.row_first,
+                        candidate_col,
+                    )?;
+                    keys.push(formula_value_probe_from_cell_value(value));
+                }
+                let mut indexes = (0..keys.len()).collect::<Vec<_>>();
+                sort_indexes(&mut indexes, keys.as_slice())?;
+                col = rect.col_first
+                    + u32::try_from(indexes[0]).map_err(|_| FormulaEvalError::Value)?;
+            } else {
+                return Err(FormulaEvalError::Value);
+            }
+            finish_with_cell!();
+        }
+
+        if name.eq_ignore_ascii_case("UNIQUE") {
+            let mut by_col = false;
+            let mut exactly_once = false;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                self.skip_whitespace();
+                if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                    by_col = self.parse_comparison()? != 0.0;
+                }
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    self.skip_whitespace();
+                    if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                        exactly_once = self.parse_comparison()? != 0.0;
+                    }
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                }
+            }
+            if !exactly_once {
+                finish_with_cell!();
+            }
+
+            if by_col {
+                for candidate_col in rect.col_first..=rect.col_last {
+                    let mut count = 0_u32;
+                    for compare_col in rect.col_first..=rect.col_last {
+                        let mut same = true;
+                        for candidate_row in rect.row_first..=rect.row_last {
+                            let left = self.evaluator.cell_value_or_blank(
+                                sheet_id,
+                                candidate_row,
+                                candidate_col,
+                            )?;
+                            let right = self.evaluator.cell_value_or_blank(
+                                sheet_id,
+                                candidate_row,
+                                compare_col,
+                            )?;
+                            if !formula_value_probe_exact_match(
+                                &formula_value_probe_from_cell_value(left),
+                                &formula_value_probe_from_cell_value(right),
+                            )? {
+                                same = false;
+                                break;
+                            }
+                        }
+                        if same {
+                            count += 1;
+                        }
+                    }
+                    if count == 1 {
+                        col = candidate_col;
+                        finish_with_cell!();
+                    }
+                }
+            } else {
+                for candidate_row in rect.row_first..=rect.row_last {
+                    let mut count = 0_u32;
+                    for compare_row in rect.row_first..=rect.row_last {
+                        let mut same = true;
+                        for candidate_col in rect.col_first..=rect.col_last {
+                            let left = self.evaluator.cell_value_or_blank(
+                                sheet_id,
+                                candidate_row,
+                                candidate_col,
+                            )?;
+                            let right = self.evaluator.cell_value_or_blank(
+                                sheet_id,
+                                compare_row,
+                                candidate_col,
+                            )?;
+                            if !formula_value_probe_exact_match(
+                                &formula_value_probe_from_cell_value(left),
+                                &formula_value_probe_from_cell_value(right),
+                            )? {
+                                same = false;
+                                break;
+                            }
+                        }
+                        if same {
+                            count += 1;
+                        }
+                    }
+                    if count == 1 {
+                        row = candidate_row;
+                        finish_with_cell!();
+                    }
+                }
+            }
+            return Err(FormulaEvalError::Calc);
+        }
 
         if name.eq_ignore_ascii_case("TAKE") {
             self.skip_whitespace();
@@ -34057,6 +34778,171 @@ mod tests {
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Calc),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_reference_array_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let table = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:D4".to_string())])
+                .expect("Range(A1:D4)"),
+        );
+        let trim_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E1:G5".to_string())])
+                .expect("Range(E1:G5)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("J1:J16".to_string())],
+                )
+                .expect("Range(J1:J16)"),
+        );
+
+        runtime
+            .dispatch_set(
+                table,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        4,
+                        vec![
+                            OmValue::Text("alpha".to_string()),
+                            OmValue::Number(30.0),
+                            OmValue::Bool(false),
+                            OmValue::Number(0.0),
+                            OmValue::Text("alpha".to_string()),
+                            OmValue::Number(10.0),
+                            OmValue::Bool(true),
+                            OmValue::Number(0.0),
+                            OmValue::Text("bravo".to_string()),
+                            OmValue::Number(20.0),
+                            OmValue::Bool(false),
+                            OmValue::Number(0.0),
+                            OmValue::Text("charlie".to_string()),
+                            OmValue::Number(40.0),
+                            OmValue::Bool(true),
+                            OmValue::Number(0.0),
+                        ],
+                    )
+                    .expect("reference array table"),
+                ),
+                &[],
+            )
+            .expect("set reference array table");
+        runtime
+            .dispatch_set(
+                trim_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        5,
+                        3,
+                        vec![
+                            OmValue::Empty,
+                            OmValue::Empty,
+                            OmValue::Empty,
+                            OmValue::Empty,
+                            OmValue::Empty,
+                            OmValue::Empty,
+                            OmValue::Text("trimmed".to_string()),
+                            OmValue::Empty,
+                            OmValue::Empty,
+                            OmValue::Empty,
+                            OmValue::Empty,
+                            OmValue::Empty,
+                            OmValue::Empty,
+                            OmValue::Empty,
+                            OmValue::Empty,
+                        ],
+                    )
+                    .expect("trim source values"),
+                ),
+                &[],
+            )
+            .expect("set trim source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        16,
+                        1,
+                        vec![
+                            OmValue::Text("=FILTER(A1:B4,C1:C4)".to_string()),
+                            OmValue::Text("=FILTER(B1:B4,C1:C4)".to_string()),
+                            OmValue::Text(r#"=FILTER(A1:A4,D1:D4,"empty")"#.to_string()),
+                            OmValue::Text("=SORT(A1:B4,2,1)".to_string()),
+                            OmValue::Text("=SORT(A1:B4,2,-1)".to_string()),
+                            OmValue::Text("=SORTBY(A1:A4,B1:B4,-1)".to_string()),
+                            OmValue::Text("=UNIQUE(A1:A4)".to_string()),
+                            OmValue::Text("=UNIQUE(A1:A4,,TRUE)".to_string()),
+                            OmValue::Text(r#"=INDIRECT("A3")"#.to_string()),
+                            OmValue::Text(r#"=INDIRECT("R4C1",FALSE)"#.to_string()),
+                            OmValue::Text("=OFFSET(A1,2,1)".to_string()),
+                            OmValue::Text("=TRIMRANGE(E1:G5)".to_string()),
+                            OmValue::Text(r#"=TEXTSPLIT("red,green|blue", ",", "|")"#.to_string()),
+                            OmValue::Text(r#"=TEXTSPLIT(",red,green", ",",, TRUE)"#.to_string()),
+                            OmValue::Text("=FILTER(A1:A4,D1:D4)".to_string()),
+                            OmValue::Text("=SORT(A1:B4,0,1)".to_string()),
+                        ],
+                    )
+                    .expect("reference array formulas"),
+                ),
+                &[],
+            )
+            .expect("set reference array formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("reference array values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected reference array value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Text("alpha".to_string()),
+                OmValue::Number(10.0),
+                OmValue::Text("empty".to_string()),
+                OmValue::Text("alpha".to_string()),
+                OmValue::Text("charlie".to_string()),
+                OmValue::Text("charlie".to_string()),
+                OmValue::Text("alpha".to_string()),
+                OmValue::Text("bravo".to_string()),
+                OmValue::Text("bravo".to_string()),
+                OmValue::Text("charlie".to_string()),
+                OmValue::Number(20.0),
+                OmValue::Text("trimmed".to_string()),
+                OmValue::Text("red".to_string()),
+                OmValue::Text("red".to_string()),
+                OmValue::Error(CellError::Calc),
+                OmValue::Error(CellError::Value),
             ]
         );
     }
