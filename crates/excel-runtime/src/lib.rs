@@ -14816,6 +14816,70 @@ fn formula_matrix_determinant(mut matrix: Vec<Vec<f64>>) -> Result<f64, FormulaE
     formula_checked_numeric_result(determinant)
 }
 
+fn formula_regression_default_x(count: usize) -> Vec<f64> {
+    (1..=count).map(|value| value as f64).collect()
+}
+
+fn formula_regression_slope_intercept(
+    known_y: &[f64],
+    known_x: &[f64],
+    constant: bool,
+    exponential: bool,
+) -> Result<(f64, f64), FormulaEvalError> {
+    if known_y.len() != known_x.len() || known_y.is_empty() {
+        return Err(FormulaEvalError::NA);
+    }
+    if known_y
+        .iter()
+        .chain(known_x.iter())
+        .any(|value| !value.is_finite())
+    {
+        return Err(FormulaEvalError::Value);
+    }
+    let y_values = if exponential {
+        let mut transformed = Vec::with_capacity(known_y.len());
+        for value in known_y {
+            if *value <= 0.0 {
+                return Err(FormulaEvalError::Num);
+            }
+            transformed.push(value.ln());
+        }
+        transformed
+    } else {
+        known_y.to_vec()
+    };
+
+    if constant {
+        let count = y_values.len() as f64;
+        let mean_y = y_values.iter().sum::<f64>() / count;
+        let mean_x = known_x.iter().sum::<f64>() / count;
+        let mut sum_xy_deviation = 0.0_f64;
+        let mut sum_x_deviation_square = 0.0_f64;
+        for (y_value, x_value) in y_values.iter().zip(known_x.iter()) {
+            let y_deviation = y_value - mean_y;
+            let x_deviation = x_value - mean_x;
+            sum_xy_deviation += y_deviation * x_deviation;
+            sum_x_deviation_square += x_deviation * x_deviation;
+        }
+        if sum_x_deviation_square == 0.0 {
+            return Err(FormulaEvalError::Div0);
+        }
+        let slope = sum_xy_deviation / sum_x_deviation_square;
+        formula_checked_numeric_result(mean_y - slope * mean_x).map(|intercept| (slope, intercept))
+    } else {
+        let mut sum_xy = 0.0_f64;
+        let mut sum_x_square = 0.0_f64;
+        for (y_value, x_value) in y_values.iter().zip(known_x.iter()) {
+            sum_xy += y_value * x_value;
+            sum_x_square += x_value * x_value;
+        }
+        if sum_x_square == 0.0 {
+            return Err(FormulaEvalError::Div0);
+        }
+        formula_checked_numeric_result(sum_xy / sum_x_square).map(|slope| (slope, 0.0))
+    }
+}
+
 fn formula_numbervalue(
     text: &str,
     decimal_separator: &str,
@@ -18608,6 +18672,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
             return Ok(mean_y + sum_xy_deviation / sum_x_deviation_square * (x - mean_x));
         }
+        if name.eq_ignore_ascii_case("LINEST") || name.eq_ignore_ascii_case("LOGEST") {
+            return self.parse_regression_coefficient_function(name.eq_ignore_ascii_case("LOGEST"));
+        }
+        if name.eq_ignore_ascii_case("TREND") || name.eq_ignore_ascii_case("GROWTH") {
+            return self.parse_regression_prediction_function(name.eq_ignore_ascii_case("GROWTH"));
+        }
         if name.eq_ignore_ascii_case("CORREL")
             || name.eq_ignore_ascii_case("PEARSON")
             || name.eq_ignore_ascii_case("COVAR")
@@ -20375,6 +20445,124 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         output.push_str(expanded.as_str());
         output.push_str(&text[*end..]);
         Ok(output)
+    }
+
+    fn parse_regression_coefficient_function(
+        &mut self,
+        exponential: bool,
+    ) -> Result<f64, FormulaEvalError> {
+        let known_y = self.parse_aggregate_argument()?;
+        let mut known_x = formula_regression_default_x(known_y.len());
+        let mut constant = true;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            self.skip_whitespace();
+            if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                known_x = self.parse_aggregate_argument()?;
+            }
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                self.skip_whitespace();
+                if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                    constant = self.parse_comparison()? != 0.0;
+                }
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        self.parse_comparison()?;
+                        self.skip_whitespace();
+                        if !self.consume_char(')') {
+                            return Err(FormulaEvalError::Unsupported);
+                        }
+                    }
+                }
+            }
+        }
+
+        let (slope, _) = formula_regression_slope_intercept(
+            known_y.as_slice(),
+            known_x.as_slice(),
+            constant,
+            exponential,
+        )?;
+        if exponential {
+            formula_checked_numeric_result(slope.exp())
+        } else {
+            formula_checked_numeric_result(slope)
+        }
+    }
+
+    fn parse_regression_prediction_function(
+        &mut self,
+        exponential: bool,
+    ) -> Result<f64, FormulaEvalError> {
+        let known_y = self.parse_aggregate_argument()?;
+        let mut known_x = formula_regression_default_x(known_y.len());
+        let mut new_x = None;
+        let mut constant = true;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            self.skip_whitespace();
+            if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                known_x = self.parse_aggregate_argument()?;
+            }
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                self.skip_whitespace();
+                if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                    new_x = self.parse_aggregate_argument()?.first().copied();
+                }
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        constant = self.parse_comparison()? != 0.0;
+                        self.skip_whitespace();
+                        if !self.consume_char(')') {
+                            return Err(FormulaEvalError::Unsupported);
+                        }
+                    }
+                }
+            }
+        }
+
+        let new_x = new_x
+            .or_else(|| known_x.first().copied())
+            .ok_or(FormulaEvalError::NA)?;
+        if !new_x.is_finite() {
+            return Err(FormulaEvalError::Value);
+        }
+        let (slope, intercept) = formula_regression_slope_intercept(
+            known_y.as_slice(),
+            known_x.as_slice(),
+            constant,
+            exponential,
+        )?;
+        let prediction = intercept + slope * new_x;
+        if exponential {
+            formula_checked_numeric_result(prediction.exp())
+        } else {
+            formula_checked_numeric_result(prediction)
+        }
     }
 
     fn parse_rept_text_function(&mut self) -> Result<String, FormulaEvalError> {
@@ -28087,14 +28275,44 @@ mod tests {
                 .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1:D5".to_string())])
                 .expect("Range(D1:D5)"),
         );
+        let linear_y = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("F1:F5".to_string())])
+                .expect("Range(F1:F5)"),
+        );
+        let linear_x = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("G1:G5".to_string())])
+                .expect("Range(G1:G5)"),
+        );
+        let new_x = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("H1".to_string())])
+                .expect("Range(H1)"),
+        );
+        let exponential_y = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("I1:I4".to_string())])
+                .expect("Range(I1:I4)"),
+        );
+        let exponential_x = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("J1:J4".to_string())])
+                .expect("Range(J1:J4)"),
+        );
+        let invalid_exponential_y = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("K1:K4".to_string())])
+                .expect("Range(K1:K4)"),
+        );
         let formulas = expect_object_handle(
             runtime
                 .dispatch_invoke(
                     active_sheet,
                     "Range",
-                    &[OmValue::Text("E1:E18".to_string())],
+                    &[OmValue::Text("E1:E27".to_string())],
                 )
-                .expect("Range(E1:E18)"),
+                .expect("Range(E1:E27)"),
         );
 
         runtime
@@ -28162,11 +28380,116 @@ mod tests {
             .expect("set constant x values");
         runtime
             .dispatch_set(
+                linear_y,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        5,
+                        1,
+                        vec![
+                            OmValue::Number(2.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(6.0),
+                            OmValue::Number(8.0),
+                            OmValue::Number(10.0),
+                        ],
+                    )
+                    .expect("linear y values"),
+                ),
+                &[],
+            )
+            .expect("set linear y values");
+        runtime
+            .dispatch_set(
+                linear_x,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        5,
+                        1,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(5.0),
+                        ],
+                    )
+                    .expect("linear x values"),
+                ),
+                &[],
+            )
+            .expect("set linear x values");
+        runtime
+            .dispatch_set(new_x, "Value2", OmValue::Number(6.0), &[])
+            .expect("set new x value");
+        runtime
+            .dispatch_set(
+                exponential_y,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        1,
+                        vec![
+                            OmValue::Number(2.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(8.0),
+                            OmValue::Number(16.0),
+                        ],
+                    )
+                    .expect("exponential y values"),
+                ),
+                &[],
+            )
+            .expect("set exponential y values");
+        runtime
+            .dispatch_set(
+                exponential_x,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        1,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(4.0),
+                        ],
+                    )
+                    .expect("exponential x values"),
+                ),
+                &[],
+            )
+            .expect("set exponential x values");
+        runtime
+            .dispatch_set(
+                invalid_exponential_y,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        1,
+                        vec![
+                            OmValue::Number(2.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(-8.0),
+                            OmValue::Number(16.0),
+                        ],
+                    )
+                    .expect("invalid exponential y values"),
+                ),
+                &[],
+            )
+            .expect("set invalid exponential y values");
+        runtime
+            .dispatch_set(
                 formulas,
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        18,
+                        27,
                         1,
                         vec![
                             OmValue::Text("=GAMMA(2.5)".to_string()),
@@ -28175,6 +28498,12 @@ mod tests {
                             OmValue::Text("=CONFIDENCE(0.05,2.5,50.9)".to_string()),
                             OmValue::Text("=FORECAST(30,A1:A5,B1:B5)".to_string()),
                             OmValue::Text("=STEYX(A1:A5,B1:B5)".to_string()),
+                            OmValue::Text("=LINEST(F1:F5,G1:G5)".to_string()),
+                            OmValue::Text("=LINEST(F1:F5,G1:G5,FALSE)".to_string()),
+                            OmValue::Text("=TREND(F1:F5,G1:G5,H1)".to_string()),
+                            OmValue::Text("=LOGEST(I1:I4,J1:J4)".to_string()),
+                            OmValue::Text("=GROWTH(I1:I4,J1:J4,H1)".to_string()),
+                            OmValue::Text("=GROWTH(I1:I4,J1:J4,H1,FALSE)".to_string()),
                             OmValue::Text("=GAMMA(0)".to_string()),
                             OmValue::Text("=GAMMA(-2)".to_string()),
                             OmValue::Text("=GAMMA(1,2)".to_string()),
@@ -28187,6 +28516,9 @@ mod tests {
                             OmValue::Text("=STEYX(A1:A5,B1:B4)".to_string()),
                             OmValue::Text("=STEYX(A1:A2,B1:B2)".to_string()),
                             OmValue::Text("=STEYX(A1:A5,D1:D5)".to_string()),
+                            OmValue::Text("=LINEST(F1:F5,G1:G4)".to_string()),
+                            OmValue::Text("=TREND(F1:F5,D1:D5,H1)".to_string()),
+                            OmValue::Text("=LOGEST(K1:K4,J1:J4)".to_string()),
                         ],
                     )
                     .expect("scalar statistical regression formulas"),
@@ -28212,6 +28544,12 @@ mod tests {
             0.6929519121748389,
             10.607253086419753,
             3.1019624082011394,
+            2.0,
+            2.0,
+            12.0,
+            2.0,
+            64.0,
+            64.0,
         ];
         for (index, expected) in expected_numbers.into_iter().enumerate() {
             let number = expect_number(values.values[index].clone());
@@ -28222,7 +28560,7 @@ mod tests {
             );
         }
         assert_eq!(
-            &values.values[6..],
+            &values.values[12..],
             &[
                 OmValue::Error(CellError::Num),
                 OmValue::Error(CellError::Num),
@@ -28236,6 +28574,9 @@ mod tests {
                 OmValue::Error(CellError::NA),
                 OmValue::Error(CellError::Div0),
                 OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Num),
             ]
         );
     }
