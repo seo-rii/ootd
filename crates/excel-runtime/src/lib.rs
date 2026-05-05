@@ -13373,6 +13373,7 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("BASE")
         || name.eq_ignore_ascii_case("BIN2HEX")
         || name.eq_ignore_ascii_case("BIN2OCT")
+        || name.eq_ignore_ascii_case("CELL")
         || name.eq_ignore_ascii_case("CHAR")
         || name.eq_ignore_ascii_case("CLEAN")
         || name.eq_ignore_ascii_case("COMPLEX")
@@ -13392,6 +13393,7 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("IMCSCH")
         || name.eq_ignore_ascii_case("IMDIV")
         || name.eq_ignore_ascii_case("IMEXP")
+        || name.eq_ignore_ascii_case("INFO")
         || name.eq_ignore_ascii_case("IMLN")
         || name.eq_ignore_ascii_case("IMLOG10")
         || name.eq_ignore_ascii_case("IMLOG2")
@@ -17974,6 +17976,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("NA") {
             return self.parse_na_function();
         }
+        if name.eq_ignore_ascii_case("CELL") {
+            return formula_number_from_value_probe(self.parse_cell_value_function()?);
+        }
+        if name.eq_ignore_ascii_case("INFO") {
+            return formula_number_from_value_probe(self.parse_info_value_function()?);
+        }
         if name.eq_ignore_ascii_case("ROW") {
             return self.parse_row_function();
         }
@@ -18590,6 +18598,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         if name.eq_ignore_ascii_case("BAHTTEXT") {
             return self.parse_bahttext_function();
+        }
+        if name.eq_ignore_ascii_case("CELL") {
+            return formula_selected_text_from_value_probe(self.parse_cell_value_function()?);
+        }
+        if name.eq_ignore_ascii_case("INFO") {
+            return formula_selected_text_from_value_probe(self.parse_info_value_function()?);
         }
         if name.eq_ignore_ascii_case("DEC2BIN") {
             return self.parse_decimal_engineering_text_function(2, 10, 10);
@@ -21099,6 +21113,87 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 return Err(FormulaEvalError::Unsupported);
             }
             argument_index += 1;
+        }
+    }
+
+    fn parse_cell_value_function(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let info_type = self.parse_text_value_argument()?.to_ascii_lowercase();
+        self.skip_whitespace();
+        let (target_sheet_id, row, col) = if self.consume_char(')') {
+            let Some((row, col)) = self.current_position else {
+                return Err(FormulaEvalError::Value);
+            };
+            (self.sheet_id, row, col)
+        } else {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let (target_sheet_id, rect) = self.parse_reference_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            (target_sheet_id, rect.row_first, rect.col_first)
+        };
+
+        match info_type.as_str() {
+            "address" => Ok(FormulaValueProbe::Text(format_cell_address(
+                row, col, true, true,
+            ))),
+            "col" => Ok(FormulaValueProbe::Number(col as f64)),
+            "row" => Ok(FormulaValueProbe::Number(row as f64)),
+            "contents" => {
+                let value = self
+                    .evaluator
+                    .cell_value_or_blank(target_sheet_id, row, col)?;
+                Ok(formula_value_probe_from_cell_value(value))
+            }
+            "filename" => Ok(FormulaValueProbe::Text(String::new())),
+            "format" => Ok(FormulaValueProbe::Text("G".to_string())),
+            "color" | "parentheses" | "protect" => Ok(FormulaValueProbe::Number(0.0)),
+            "prefix" => Ok(FormulaValueProbe::Text(String::new())),
+            "type" => {
+                let value = self
+                    .evaluator
+                    .cell_value_or_blank(target_sheet_id, row, col)?;
+                Ok(FormulaValueProbe::Text(
+                    match value {
+                        CellValue::Blank => "b",
+                        CellValue::Text(_) => "l",
+                        CellValue::Bool(_) | CellValue::Number(_) | CellValue::Error(_) => "v",
+                    }
+                    .to_string(),
+                ))
+            }
+            "width" => Ok(FormulaValueProbe::Number(8.0)),
+            _ => Err(FormulaEvalError::Value),
+        }
+    }
+
+    fn parse_info_value_function(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let info_type = self.parse_text_value_argument()?.to_ascii_lowercase();
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        match info_type.as_str() {
+            "directory" => Ok(FormulaValueProbe::Text(String::new())),
+            "numfile" => Ok(FormulaValueProbe::Number(
+                self.evaluator.state.worksheets.len() as f64,
+            )),
+            "origin" => Ok(FormulaValueProbe::Text("$A:$A".to_string())),
+            "osversion" => Ok(FormulaValueProbe::Text(std::env::consts::OS.to_string())),
+            "recalc" => Ok(FormulaValueProbe::Text("Automatic".to_string())),
+            "release" => Ok(FormulaValueProbe::Text(APPLICATION_VERSION.to_string())),
+            "system" => Ok(FormulaValueProbe::Text(
+                if cfg!(target_os = "macos") {
+                    "mac"
+                } else {
+                    "pcdos"
+                }
+                .to_string(),
+            )),
+            _ => Err(FormulaEvalError::Value),
         }
     }
 
@@ -35964,6 +36059,141 @@ mod tests {
                 OmValue::Number(30.0),
                 OmValue::Error(CellError::Value),
             ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_cell_and_info_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B2".to_string())])
+                .expect("Range(A1:B2)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("D1:D14".to_string())],
+                )
+                .expect("Range(D1:D14)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        2,
+                        vec![
+                            OmValue::Text("alpha".to_string()),
+                            OmValue::Number(42.0),
+                            OmValue::Bool(true),
+                            OmValue::Empty,
+                        ],
+                    )
+                    .expect("CELL source values"),
+                ),
+                &[],
+            )
+            .expect("set CELL source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        14,
+                        1,
+                        vec![
+                            OmValue::Text(r#"=CELL("address",B1)"#.to_string()),
+                            OmValue::Text(r#"=CELL("row",B1)"#.to_string()),
+                            OmValue::Text(r#"=CELL("col",B1)"#.to_string()),
+                            OmValue::Text(r#"=CELL("contents",A1)"#.to_string()),
+                            OmValue::Text(r#"=CELL("contents",B1)"#.to_string()),
+                            OmValue::Text(r#"=CELL("type",A1)"#.to_string()),
+                            OmValue::Text(r#"=CELL("type",B2)"#.to_string()),
+                            OmValue::Text(r#"=CELL("format",B1)"#.to_string()),
+                            OmValue::Text(r#"=CELL("filename",B1)"#.to_string()),
+                            OmValue::Text(r#"=INFO("release")"#.to_string()),
+                            OmValue::Text(r#"=INFO("recalc")"#.to_string()),
+                            OmValue::Text(r#"=INFO("numfile")"#.to_string()),
+                            OmValue::Text(
+                                r#"=CONCAT(INFO("release"), "-", CELL("address",A1))"#.to_string(),
+                            ),
+                            OmValue::Text(r#"=CELL("unknown",A1)"#.to_string()),
+                        ],
+                    )
+                    .expect("CELL and INFO formulas"),
+                ),
+                &[],
+            )
+            .expect("set CELL and INFO formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("CELL and INFO values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected CELL and INFO value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Text("$B$1".to_string()),
+                OmValue::Number(1.0),
+                OmValue::Number(2.0),
+                OmValue::Text("alpha".to_string()),
+                OmValue::Number(42.0),
+                OmValue::Text("l".to_string()),
+                OmValue::Text("b".to_string()),
+                OmValue::Text("G".to_string()),
+                OmValue::Text(String::new()),
+                OmValue::Text(APPLICATION_VERSION.to_string()),
+                OmValue::Text("Automatic".to_string()),
+                OmValue::Number(1.0),
+                OmValue::Text(format!("{APPLICATION_VERSION}-$A$1")),
+                OmValue::Error(CellError::Value),
+            ]
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    runtime.root_application(),
+                    "Evaluate",
+                    &[OmValue::Text(r#"=CELL("row",B1)"#.to_string())],
+                )
+                .expect("Application.Evaluate CELL row"),
+            OmValue::Number(1.0)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    runtime.root_application(),
+                    "Evaluate",
+                    &[OmValue::Text(r#"=INFO("release")"#.to_string())],
+                )
+                .expect("Application.Evaluate INFO release"),
+            OmValue::Text(APPLICATION_VERSION.to_string())
         );
     }
 

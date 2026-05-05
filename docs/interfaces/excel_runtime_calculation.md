@@ -412,6 +412,7 @@ Aggregate notes:
 - `COLUMNS`
 - `AREAS`
 - `ADDRESS`
+- `CELL`
 - `SHEET`
 - `SHEETS`
 - `CHOOSE`
@@ -425,6 +426,7 @@ Lookup notes:
 - `XLOOKUP` supports scalar one-dimensional lookup and return arrays, `if_not_found`, exact match, wildcard match, exact-or-next-smaller, exact-or-next-larger, and forward or reverse linear search.
 - `ROW()` and `COLUMN()` without arguments resolve against the formula cell position during recalculation.
 - `AREAS` returns `1` for supported single-area references; `ADDRESS` supports A1/R1C1 text output with absolute/relative flags and optional sheet text.
+- `CELL` supports focused metadata types such as `address`, `row`, `col`, `contents`, `type`, `format`, `filename`, `width`, `prefix`, `color`, `parentheses`, and `protect` for the upper-left cell of a reference.
 - `SHEET()` returns the current worksheet's 1-based workbook position; `SHEETS()` returns the workbook worksheet count, and reference arguments are supported for single-sheet references.
 - Lookup comparisons support numbers, booleans, and case-insensitive text.
 - `INDEX`, `LOOKUP`, `VLOOKUP`, `HLOOKUP`, and `XLOOKUP` return scalar text results as `CellValue::Text`; numeric results still flow through the numeric evaluator.
@@ -481,6 +483,7 @@ Criteria notes:
 ### Error and information helpers
 
 - `NA`
+- `INFO`
 - `N`
 - `TYPE`
 - `ERROR.TYPE`
@@ -497,6 +500,10 @@ Criteria notes:
 - `ISFORMULA`
 - `ISTEXT`
 - `FORMULATEXT`
+
+Information notes:
+
+- `INFO` supports focused workbook/runtime metadata types including `directory`, `numfile`, `origin`, `osversion`, `recalc`, `release`, and `system`.
 
 ### Text helpers
 
