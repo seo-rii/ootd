@@ -13843,6 +13843,11 @@ enum FormulaValueProbe {
     Number(f64),
     Text(String),
     Error(FormulaEvalError),
+    Omitted,
+    Lambda {
+        parameters: Vec<String>,
+        body: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13899,6 +13904,9 @@ fn formula_number_from_value_probe(value: FormulaValueProbe) -> Result<f64, Form
         FormulaValueProbe::Number(value) => Ok(value),
         FormulaValueProbe::Text(_) => Err(FormulaEvalError::Value),
         FormulaValueProbe::Error(error) => Err(error),
+        FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => {
+            Err(FormulaEvalError::Value)
+        }
     }
 }
 
@@ -13909,6 +13917,9 @@ fn formula_text_from_value_probe(value: FormulaValueProbe) -> Result<String, For
         FormulaValueProbe::Number(value) => formula_text_from_number(value),
         FormulaValueProbe::Text(value) => Ok(value),
         FormulaValueProbe::Error(error) => Err(error),
+        FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => {
+            Err(FormulaEvalError::Value)
+        }
     }
 }
 
@@ -13958,6 +13969,9 @@ fn formula_value_to_text(
         FormulaValueProbe::Text(value) if strict => Ok(formula_strict_text_literal(value.as_str())),
         FormulaValueProbe::Text(value) => Ok(value),
         FormulaValueProbe::Error(error) => Ok(formula_eval_error_text(error).to_string()),
+        FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => {
+            Err(FormulaEvalError::Value)
+        }
     }
 }
 
@@ -14038,19 +14052,24 @@ fn formula_selected_text_from_value_probe(
     match value {
         FormulaValueProbe::Text(value) => Ok(value),
         FormulaValueProbe::Error(error) => Err(error),
-        FormulaValueProbe::Blank | FormulaValueProbe::Bool(_) | FormulaValueProbe::Number(_) => {
-            Err(FormulaEvalError::Unsupported)
-        }
+        FormulaValueProbe::Blank
+        | FormulaValueProbe::Bool(_)
+        | FormulaValueProbe::Number(_)
+        | FormulaValueProbe::Omitted
+        | FormulaValueProbe::Lambda { .. } => Err(FormulaEvalError::Unsupported),
     }
 }
 
 fn formula_array_projection_function_name(name: &str) -> bool {
-    name.eq_ignore_ascii_case("CHOOSECOLS")
+    name.eq_ignore_ascii_case("BYCOL")
+        || name.eq_ignore_ascii_case("BYROW")
+        || name.eq_ignore_ascii_case("CHOOSECOLS")
         || name.eq_ignore_ascii_case("CHOOSEROWS")
         || name.eq_ignore_ascii_case("DROP")
         || name.eq_ignore_ascii_case("EXPAND")
         || name.eq_ignore_ascii_case("FILTER")
         || name.eq_ignore_ascii_case("HSTACK")
+        || name.eq_ignore_ascii_case("MAP")
         || name.eq_ignore_ascii_case("SORT")
         || name.eq_ignore_ascii_case("SORTBY")
         || name.eq_ignore_ascii_case("TAKE")
@@ -14109,7 +14128,9 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("INFO")
         || name.eq_ignore_ascii_case("INDIRECT")
         || name.eq_ignore_ascii_case("IMLN")
+        || name.eq_ignore_ascii_case("LAMBDA")
         || name.eq_ignore_ascii_case("LET")
+        || name.eq_ignore_ascii_case("MAKEARRAY")
         || name.eq_ignore_ascii_case("IMLOG10")
         || name.eq_ignore_ascii_case("IMLOG2")
         || name.eq_ignore_ascii_case("IMPOWER")
@@ -14127,7 +14148,9 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("OCT2HEX")
         || name.eq_ignore_ascii_case("OFFSET")
         || name.eq_ignore_ascii_case("PHONETIC")
+        || name.eq_ignore_ascii_case("REDUCE")
         || name.eq_ignore_ascii_case("ROMAN")
+        || name.eq_ignore_ascii_case("SCAN")
         || name.eq_ignore_ascii_case("T")
         || name.eq_ignore_ascii_case("TEXT")
         || name.eq_ignore_ascii_case("TEXTSPLIT")
@@ -17784,6 +17807,185 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
     }
 
+    fn parse_value_probe_formula(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let value = self.parse_value_probe_argument()?;
+        self.skip_whitespace();
+        if self.index == self.input.len() {
+            Ok(value)
+        } else {
+            Err(FormulaEvalError::Unsupported)
+        }
+    }
+
+    fn parse_bound_lambda_call_value(
+        &mut self,
+        name: &str,
+    ) -> Result<Option<FormulaValueProbe>, FormulaEvalError> {
+        let Some(lambda @ FormulaValueProbe::Lambda { .. }) = self.binding_value(name) else {
+            return Ok(None);
+        };
+        self.parse_lambda_call_arguments(lambda).map(Some)
+    }
+
+    fn parse_lambda_argument(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
+        match self.parse_value_probe_argument()? {
+            lambda @ FormulaValueProbe::Lambda { .. } => Ok(lambda),
+            FormulaValueProbe::Error(error) => Err(error),
+            _ => Err(FormulaEvalError::Value),
+        }
+    }
+
+    fn try_parse_lambda_argument(&mut self) -> Result<Option<FormulaValueProbe>, FormulaEvalError> {
+        let checkpoint = self.index;
+        match self.parse_lambda_argument() {
+            Ok(lambda) => Ok(Some(lambda)),
+            Err(FormulaEvalError::Unsupported) | Err(FormulaEvalError::Value) => {
+                self.index = checkpoint;
+                Ok(None)
+            }
+            Err(error) => {
+                self.index = checkpoint;
+                Err(error)
+            }
+        }
+    }
+
+    fn parse_lambda_value_function(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let mut parameters = Vec::new();
+        loop {
+            self.skip_whitespace();
+            let checkpoint = self.index;
+            if let Some(name) = self.parse_identifier() {
+                self.skip_whitespace();
+                if self.consume_char(',') {
+                    parameters.push(name);
+                    continue;
+                }
+            }
+            self.index = checkpoint;
+            let body = self.capture_formula_source_until_closing_paren()?;
+            if body.trim().is_empty() {
+                return Err(FormulaEvalError::Value);
+            }
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            return Ok(FormulaValueProbe::Lambda {
+                parameters,
+                body: body.trim().to_string(),
+            });
+        }
+    }
+
+    fn capture_formula_source_until_closing_paren(&mut self) -> Result<&'a str, FormulaEvalError> {
+        let start = self.index;
+        let mut cursor = self.index;
+        let mut depth = 0_u32;
+        while cursor < self.input.len() {
+            let ch = self.input[cursor..]
+                .chars()
+                .next()
+                .ok_or(FormulaEvalError::Unsupported)?;
+            if ch == '"' {
+                cursor += ch.len_utf8();
+                while cursor < self.input.len() {
+                    let quoted = self.input[cursor..]
+                        .chars()
+                        .next()
+                        .ok_or(FormulaEvalError::Unsupported)?;
+                    cursor += quoted.len_utf8();
+                    if quoted == '"' {
+                        if self.input[cursor..].starts_with('"') {
+                            cursor += 1;
+                            continue;
+                        }
+                        break;
+                    }
+                }
+                continue;
+            }
+            if ch == '(' {
+                depth += 1;
+                cursor += ch.len_utf8();
+                continue;
+            }
+            if ch == ')' {
+                if depth == 0 {
+                    let body = &self.input[start..cursor];
+                    self.index = cursor;
+                    return Ok(body);
+                }
+                depth -= 1;
+                cursor += ch.len_utf8();
+                continue;
+            }
+            cursor += ch.len_utf8();
+        }
+        Err(FormulaEvalError::Unsupported)
+    }
+
+    fn parse_lambda_call_arguments(
+        &mut self,
+        lambda: FormulaValueProbe,
+    ) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let mut arguments = Vec::new();
+        let mut after_separator = false;
+        loop {
+            self.skip_whitespace();
+            if self.consume_char(')') {
+                if after_separator {
+                    arguments.push(FormulaValueProbe::Omitted);
+                }
+                return self.evaluate_lambda_value(lambda, arguments);
+            }
+            if self.consume_char(',') {
+                arguments.push(FormulaValueProbe::Omitted);
+                after_separator = true;
+                continue;
+            }
+            arguments.push(self.parse_value_probe_argument()?);
+            self.skip_whitespace();
+            if self.consume_char(',') {
+                after_separator = true;
+                continue;
+            }
+            if self.consume_char(')') {
+                return self.evaluate_lambda_value(lambda, arguments);
+            }
+            return Err(FormulaEvalError::Unsupported);
+        }
+    }
+
+    fn evaluate_lambda_value(
+        &mut self,
+        lambda: FormulaValueProbe,
+        arguments: Vec<FormulaValueProbe>,
+    ) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let FormulaValueProbe::Lambda { parameters, body } = lambda else {
+            return Err(FormulaEvalError::Value);
+        };
+        if arguments.len() > parameters.len() {
+            return Err(FormulaEvalError::Value);
+        }
+        let mut bindings = self.bindings.clone();
+        for (index, name) in parameters.into_iter().enumerate() {
+            let value = arguments
+                .get(index)
+                .cloned()
+                .unwrap_or(FormulaValueProbe::Omitted);
+            bindings.push((name, value));
+        }
+
+        let mut parser = FormulaParser::new(
+            body.as_str(),
+            &mut *self.evaluator,
+            self.sheet_id,
+            self.current_position,
+        );
+        parser.bindings = bindings;
+        parser.parse_value_probe_formula()
+    }
+
     fn parse_comparison(&mut self) -> Result<f64, FormulaEvalError> {
         let mut value = self.parse_expression()?;
         loop {
@@ -17855,6 +18057,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if let Some(identifier) = self.parse_identifier() {
             self.skip_whitespace();
             if self.consume_char('(') {
+                if let Some(value) = self.parse_bound_lambda_call_value(identifier.as_str())? {
+                    return formula_number_from_value_probe(value);
+                }
                 return self.parse_function(identifier.as_str());
             }
         }
@@ -17873,6 +18078,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if let Some(identifier) = self.parse_identifier() {
             self.skip_whitespace();
             if self.consume_char('(') {
+                if let Some(value) = self.parse_bound_lambda_call_value(identifier.as_str())? {
+                    return formula_number_from_value_probe(value);
+                }
                 return self.parse_function(identifier.as_str());
             }
             if identifier.eq_ignore_ascii_case("TRUE") {
@@ -18136,6 +18344,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 FormulaValueProbe::Bool(value) => Ok(if value { 1.0 } else { 0.0 }),
                 FormulaValueProbe::Number(value) => Ok(value),
                 FormulaValueProbe::Error(error) => Err(error),
+                FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => {
+                    Err(FormulaEvalError::Value)
+                }
             };
         }
         if name.eq_ignore_ascii_case("DECIMAL") {
@@ -19082,6 +19293,23 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("LET") {
             return formula_number_from_value_probe(self.parse_let_value_function()?);
         }
+        if name.eq_ignore_ascii_case("LAMBDA") {
+            let lambda = self.parse_lambda_value_function()?;
+            self.skip_whitespace();
+            if !self.consume_char('(') {
+                return Err(FormulaEvalError::Calc);
+            }
+            return formula_number_from_value_probe(self.parse_lambda_call_arguments(lambda)?);
+        }
+        if name.eq_ignore_ascii_case("ISOMITTED") {
+            return self.parse_isomitted_function();
+        }
+        if name.eq_ignore_ascii_case("MAKEARRAY") {
+            return formula_number_from_value_probe(self.parse_makearray_value_function()?);
+        }
+        if name.eq_ignore_ascii_case("REDUCE") || name.eq_ignore_ascii_case("SCAN") {
+            return formula_number_from_value_probe(self.parse_reduce_scan_value_function(name)?);
+        }
         if name.eq_ignore_ascii_case("INDIRECT")
             || name.eq_ignore_ascii_case("OFFSET")
             || name.eq_ignore_ascii_case("TRIMRANGE")
@@ -19722,6 +19950,24 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 self.parse_database_value_function(name)?,
             );
         }
+        if name.eq_ignore_ascii_case("LAMBDA") {
+            let lambda = self.parse_lambda_value_function()?;
+            self.skip_whitespace();
+            if !self.consume_char('(') {
+                return Err(FormulaEvalError::Calc);
+            }
+            return formula_selected_text_from_value_probe(
+                self.parse_lambda_call_arguments(lambda)?,
+            );
+        }
+        if name.eq_ignore_ascii_case("MAKEARRAY") {
+            return formula_selected_text_from_value_probe(self.parse_makearray_value_function()?);
+        }
+        if name.eq_ignore_ascii_case("REDUCE") || name.eq_ignore_ascii_case("SCAN") {
+            return formula_selected_text_from_value_probe(
+                self.parse_reduce_scan_value_function(name)?,
+            );
+        }
         if formula_array_projection_function_name(name) {
             return formula_selected_text_from_value_probe(
                 self.parse_array_projection_value_function(name)?,
@@ -20108,7 +20354,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 FormulaValueProbe::Error(error) => Err(error),
                 FormulaValueProbe::Blank
                 | FormulaValueProbe::Bool(_)
-                | FormulaValueProbe::Number(_) => Ok(String::new()),
+                | FormulaValueProbe::Number(_)
+                | FormulaValueProbe::Omitted
+                | FormulaValueProbe::Lambda { .. } => Ok(String::new()),
             };
         }
         if name.eq_ignore_ascii_case("UPPER") {
@@ -20567,7 +20815,10 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                     value as usize
                 }
                 FormulaValueProbe::Error(error) => return Err(error),
-                FormulaValueProbe::Blank | FormulaValueProbe::Text(_) => {
+                FormulaValueProbe::Blank
+                | FormulaValueProbe::Text(_)
+                | FormulaValueProbe::Omitted
+                | FormulaValueProbe::Lambda { .. } => {
                     return Err(FormulaEvalError::Value);
                 }
             };
@@ -20814,7 +21065,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             FormulaValueProbe::Error(error) => Err(error),
             FormulaValueProbe::Blank
             | FormulaValueProbe::Bool(_)
-            | FormulaValueProbe::Number(_) => Ok(String::new()),
+            | FormulaValueProbe::Number(_)
+            | FormulaValueProbe::Omitted
+            | FormulaValueProbe::Lambda { .. } => Ok(String::new()),
         }
     }
 
@@ -22958,6 +23211,92 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
     }
 
+    fn parse_isomitted_function(&mut self) -> Result<f64, FormulaEvalError> {
+        self.skip_whitespace();
+        let Some(name) = self.parse_identifier() else {
+            return Err(FormulaEvalError::Value);
+        };
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Ok(
+            if matches!(
+                self.binding_value(name.as_str()),
+                Some(FormulaValueProbe::Omitted)
+            ) {
+                1.0
+            } else {
+                0.0
+            },
+        )
+    }
+
+    fn parse_makearray_value_function(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let rows = formula_integer_argument(self.parse_comparison()?)?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let columns = formula_integer_argument(self.parse_comparison()?)?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let lambda = self.parse_lambda_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        if rows < 1 || columns < 1 {
+            return Err(FormulaEvalError::Value);
+        }
+        self.evaluate_lambda_value(
+            lambda,
+            vec![
+                FormulaValueProbe::Number(1.0),
+                FormulaValueProbe::Number(1.0),
+            ],
+        )
+    }
+
+    fn parse_reduce_scan_value_function(
+        &mut self,
+        name: &str,
+    ) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let mut accumulator = self.parse_value_probe_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let (array_sheet_id, array_rect) = self.parse_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let lambda = self.parse_lambda_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+
+        for row in array_rect.row_first..=array_rect.row_last {
+            for col in array_rect.col_first..=array_rect.col_last {
+                let value = self
+                    .evaluator
+                    .cell_value_or_blank(array_sheet_id, row, col)?;
+                accumulator = self.evaluate_lambda_value(
+                    lambda.clone(),
+                    vec![accumulator, formula_value_probe_from_cell_value(value)],
+                )?;
+                if name.eq_ignore_ascii_case("SCAN") {
+                    return Ok(accumulator);
+                }
+            }
+        }
+        Ok(accumulator)
+    }
+
     fn parse_cell_value_function(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
         let info_type = self.parse_text_value_argument()?.to_ascii_lowercase();
         self.skip_whitespace();
@@ -23135,6 +23474,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             FormulaValueProbe::Text(_) => 2.0,
             FormulaValueProbe::Bool(_) => 4.0,
             FormulaValueProbe::Error(_) => 16.0,
+            FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => 64.0,
         })
     }
 
@@ -24028,6 +24368,54 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
         };
 
+        if name.eq_ignore_ascii_case("BYROW") || name.eq_ignore_ascii_case("BYCOL") {
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let lambda = self.parse_lambda_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let value = self.evaluator.cell_value_or_blank(sheet_id, row, col)?;
+            return self
+                .evaluate_lambda_value(lambda, vec![formula_value_probe_from_cell_value(value)]);
+        }
+
+        if name.eq_ignore_ascii_case("MAP") {
+            let mut references = vec![(sheet_id, rect)];
+            loop {
+                self.skip_whitespace();
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                self.skip_whitespace();
+                if let Some(lambda) = self.try_parse_lambda_argument()? {
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    let mut arguments = Vec::with_capacity(references.len());
+                    for (target_sheet_id, target_rect) in references {
+                        if target_rect.width() != rect.width()
+                            || target_rect.height() != rect.height()
+                        {
+                            return Err(FormulaEvalError::Value);
+                        }
+                        let value = self.evaluator.cell_value_or_blank(
+                            target_sheet_id,
+                            target_rect.row_first,
+                            target_rect.col_first,
+                        )?;
+                        arguments.push(formula_value_probe_from_cell_value(value));
+                    }
+                    return self.evaluate_lambda_value(lambda, arguments);
+                }
+                references.push(self.parse_reference_argument()?);
+            }
+        }
+
         if name.eq_ignore_ascii_case("FILTER") {
             self.skip_whitespace();
             if !self.consume_char(',') {
@@ -24203,6 +24591,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                     FormulaValueProbe::Text(_) => 2,
                     FormulaValueProbe::Bool(_) => 3,
                     FormulaValueProbe::Error(_) => 4,
+                    FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => 5,
                 };
                 Ok(rank(left).cmp(&rank(right)))
             };
@@ -24927,7 +25316,10 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                         found.ok_or(FormulaEvalError::Value)?
                     }
                     FormulaValueProbe::Error(error) => return Err(error),
-                    FormulaValueProbe::Blank | FormulaValueProbe::Bool(_) => {
+                    FormulaValueProbe::Blank
+                    | FormulaValueProbe::Bool(_)
+                    | FormulaValueProbe::Omitted
+                    | FormulaValueProbe::Lambda { .. } => {
                         return Err(FormulaEvalError::Value);
                     }
                 }
@@ -25347,7 +25739,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                     FormulaValueProbe::Error(error) => return Err(error),
                     FormulaValueProbe::Blank
                     | FormulaValueProbe::Bool(_)
-                    | FormulaValueProbe::Text(_) => {}
+                    | FormulaValueProbe::Text(_)
+                    | FormulaValueProbe::Omitted
+                    | FormulaValueProbe::Lambda { .. } => {}
                 }
             }};
         }
@@ -25440,6 +25834,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                             FormulaValueProbe::Bool(_)
                             | FormulaValueProbe::Number(_)
                             | FormulaValueProbe::Text(_) => counta += 1,
+                            FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => {}
                         }
                     }
                 } else {
@@ -25452,6 +25847,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                         FormulaValueProbe::Bool(_)
                         | FormulaValueProbe::Number(_)
                         | FormulaValueProbe::Text(_) => counta += 1,
+                        FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => {}
                     }
                 }
             }};
@@ -25744,6 +26140,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                     }
                     FormulaValueProbe::Text(_) => return Err(FormulaEvalError::Value),
                     FormulaValueProbe::Error(error) => return Err(error),
+                    FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => {
+                        return Err(FormulaEvalError::Value);
+                    }
                 }
             };
         }
@@ -25906,6 +26305,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             FormulaValueProbe::Bool(value) => Ok(vec![if value { 1.0 } else { 0.0 }]),
             FormulaValueProbe::Number(value) => Ok(vec![value]),
             FormulaValueProbe::Error(error) => Err(error),
+            FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => {
+                Err(FormulaEvalError::Value)
+            }
         }
     }
 
@@ -26270,7 +26672,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             FormulaValueProbe::Error(error) => Err(error),
             FormulaValueProbe::Blank
             | FormulaValueProbe::Bool(_)
-            | FormulaValueProbe::Number(_) => Err(FormulaEvalError::Value),
+            | FormulaValueProbe::Number(_)
+            | FormulaValueProbe::Omitted
+            | FormulaValueProbe::Lambda { .. } => Err(FormulaEvalError::Value),
         }
     }
 
@@ -26296,7 +26700,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if let Some(identifier) = self.parse_identifier() {
             self.skip_whitespace();
             if self.consume_char('(') {
-                if formula_text_function_name(identifier.as_str()) {
+                if let Some(value) = self.parse_bound_lambda_call_value(identifier.as_str())? {
+                    return formula_text_from_value_probe(value);
+                }
+                if identifier.eq_ignore_ascii_case("LAMBDA")
+                    || formula_text_function_name(identifier.as_str())
+                {
                     match self.parse_text_function(identifier.as_str()) {
                         Ok(text) => return Ok(text),
                         Err(FormulaEvalError::Unsupported) => self.index = checkpoint,
@@ -26370,6 +26779,17 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if let Some(identifier) = self.parse_identifier() {
             self.skip_whitespace();
             if self.consume_char('(') {
+                if let Some(value) = self.parse_bound_lambda_call_value(identifier.as_str())? {
+                    return Ok(value);
+                }
+                if identifier.eq_ignore_ascii_case("LAMBDA") {
+                    let lambda = self.parse_lambda_value_function()?;
+                    self.skip_whitespace();
+                    if self.consume_char('(') {
+                        return self.parse_lambda_call_arguments(lambda);
+                    }
+                    return Ok(lambda);
+                }
                 if formula_text_function_name(identifier.as_str()) {
                     match self.parse_text_function(identifier.as_str()) {
                         Ok(text) => return Ok(FormulaValueProbe::Text(text)),
@@ -40715,6 +41135,130 @@ mod tests {
                 OmValue::Text("yes".to_string()),
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Div0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_lambda_array_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:C3".to_string())])
+                .expect("Range(A1:C3)"),
+        );
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        3,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(10.0),
+                            OmValue::Number(100.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(20.0),
+                            OmValue::Number(200.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(30.0),
+                            OmValue::Number(300.0),
+                        ],
+                    )
+                    .expect("lambda helper source"),
+                ),
+                &[],
+            )
+            .expect("set source");
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("D1:D14".to_string())],
+                )
+                .expect("Range(D1:D14)"),
+        );
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        14,
+                        1,
+                        vec![
+                            OmValue::Text("=LAMBDA(x,x+1)(4)".to_string()),
+                            OmValue::Text("=LET(f,LAMBDA(x,x*2),f(5))".to_string()),
+                            OmValue::Text(r#"=LET(f,LAMBDA(x,CONCAT(x,"!")),f("go"))"#.to_string()),
+                            OmValue::Text("=MAP(A1:A3,B1:B3,LAMBDA(a,b,a+b))".to_string()),
+                            OmValue::Text("=BYROW(A1:B3,LAMBDA(row,row+1))".to_string()),
+                            OmValue::Text("=BYCOL(A1:B3,LAMBDA(col,col+1))".to_string()),
+                            OmValue::Text("=MAKEARRAY(3,2,LAMBDA(r,c,r+c))".to_string()),
+                            OmValue::Text(
+                                "=REDUCE(0,A1:A3,LAMBDA(acc,value,acc+value))".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=SCAN(10,A1:A3,LAMBDA(acc,value,acc+value))".to_string(),
+                            ),
+                            OmValue::Text("=LAMBDA(x,y,ISOMITTED(y))(5)".to_string()),
+                            OmValue::Text("=LAMBDA(x,ISOMITTED(x))()".to_string()),
+                            OmValue::Text("=MAKEARRAY(0,1,LAMBDA(r,c,r))".to_string()),
+                            OmValue::Text("=MAP(A1:A3,B1:C3,LAMBDA(a,b,a))".to_string()),
+                            OmValue::Text(
+                                r#"=REDUCE("a",A1:A2,LAMBDA(acc,value,CONCAT(acc,value)))"#
+                                    .to_string(),
+                            ),
+                        ],
+                    )
+                    .expect("lambda helper formulas"),
+                ),
+                &[],
+            )
+            .expect("set formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("lambda helper values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected lambda helper value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(5.0),
+                OmValue::Number(10.0),
+                OmValue::Text("go!".to_string()),
+                OmValue::Number(11.0),
+                OmValue::Number(2.0),
+                OmValue::Number(2.0),
+                OmValue::Number(2.0),
+                OmValue::Number(6.0),
+                OmValue::Number(11.0),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
+                OmValue::Text("a12".to_string()),
             ]
         );
     }

@@ -334,6 +334,8 @@ Financial notes:
 - `XOR`
 - `IF`
 - `IFS`
+- `ISOMITTED`
+- `LAMBDA`
 - `LET`
 - `SWITCH`
 
@@ -341,7 +343,8 @@ Logical notes:
 
 - `AND`, `OR`, and `XOR` support scalar arguments and rectangular range arguments.
 - Text and blank cells inside logical range arguments are ignored; a logical range with no numeric or boolean values returns `#VALUE!`.
-- `IF`, `IFS`, `LET`, and `SWITCH` can return scalar text when the selected branch, binding, or result is text. `LET` supports scalar local name bindings for the final calculation expression.
+- `IF`, `IFS`, `LAMBDA`, `LET`, and `SWITCH` can return scalar text when the selected branch, binding, call, or result is text. `LET` supports scalar local name bindings for the final calculation expression.
+- `LAMBDA` supports scalar parameter binding, nested calls, omitted trailing arguments, and `ISOMITTED` checks. It does not yet model workbook-defined named lambdas.
 
 ### Aggregate and count helpers
 
@@ -441,14 +444,20 @@ Aggregate notes:
 - `ROWS`
 - `COLUMNS`
 - `AREAS`
+- `BYCOL`
+- `BYROW`
 - `CHOOSECOLS`
 - `CHOOSEROWS`
 - `DROP`
 - `EXPAND`
 - `FILTER`
 - `HSTACK`
+- `MAKEARRAY`
+- `MAP`
+- `REDUCE`
 - `SORT`
 - `SORTBY`
+- `SCAN`
 - `TAKE`
 - `TOCOL`
 - `TOROW`
@@ -472,7 +481,7 @@ Lookup notes:
 - `XLOOKUP` supports scalar one-dimensional lookup and return arrays, `if_not_found`, exact match, wildcard match, exact-or-next-smaller, exact-or-next-larger, and forward or reverse linear search.
 - `INDIRECT`, `OFFSET`, and `TRIMRANGE` resolve references to the scalar upper-left value of the resulting range. `INDIRECT` supports A1 text and focused R1C1 text conversion; `TRIMRANGE` supports leading/trailing row and column trim modes.
 - `ROW()` and `COLUMN()` without arguments resolve against the formula cell position during recalculation.
-- Dynamic array projection helpers, including `FILTER`, `SORT`, `SORTBY`, and `UNIQUE`, currently return the scalar top-left or first projected value; full spill-range materialization is tracked separately.
+- Dynamic array projection helpers, including `BYCOL`, `BYROW`, `FILTER`, `MAKEARRAY`, `MAP`, `REDUCE`, `SCAN`, `SORT`, `SORTBY`, and `UNIQUE`, currently return the scalar top-left, first projected, or scalar accumulator value; full spill-range materialization is tracked separately.
 - `AREAS` returns `1` for supported single-area references; `ADDRESS` supports A1/R1C1 text output with absolute/relative flags and optional sheet text.
 - `CELL` supports focused metadata types such as `address`, `row`, `col`, `contents`, `type`, `format`, `filename`, `width`, `prefix`, `color`, `parentheses`, and `protect` for the upper-left cell of a reference.
 - `SHEET()` returns the current worksheet's 1-based workbook position; `SHEETS()` returns the workbook worksheet count, and reference arguments are supported for single-sheet references.
