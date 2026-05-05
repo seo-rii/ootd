@@ -14832,6 +14832,55 @@ fn formula_matrix_determinant(mut matrix: Vec<Vec<f64>>) -> Result<f64, FormulaE
     formula_checked_numeric_result(determinant)
 }
 
+fn formula_matrix_inverse_top_left(mut matrix: Vec<Vec<f64>>) -> Result<f64, FormulaEvalError> {
+    let size = matrix.len();
+    if size == 0 || matrix.iter().any(|row| row.len() != size) {
+        return Err(FormulaEvalError::Value);
+    }
+    if matrix.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(FormulaEvalError::Value);
+    }
+    let mut inverse = vec![vec![0.0_f64; size]; size];
+    for (index, row) in inverse.iter_mut().enumerate() {
+        row[index] = 1.0;
+    }
+
+    for pivot_index in 0..size {
+        let mut pivot_row = pivot_index;
+        let mut pivot_abs = matrix[pivot_index][pivot_index].abs();
+        for (row_index, row) in matrix.iter().enumerate().skip(pivot_index + 1) {
+            let candidate_abs = row[pivot_index].abs();
+            if candidate_abs > pivot_abs {
+                pivot_abs = candidate_abs;
+                pivot_row = row_index;
+            }
+        }
+        if pivot_abs <= 1e-12 {
+            return Err(FormulaEvalError::Num);
+        }
+        if pivot_row != pivot_index {
+            matrix.swap(pivot_index, pivot_row);
+            inverse.swap(pivot_index, pivot_row);
+        }
+        let pivot = matrix[pivot_index][pivot_index];
+        for col_index in 0..size {
+            matrix[pivot_index][col_index] /= pivot;
+            inverse[pivot_index][col_index] /= pivot;
+        }
+        for row_index in 0..size {
+            if row_index == pivot_index {
+                continue;
+            }
+            let factor = matrix[row_index][pivot_index];
+            for col_index in 0..size {
+                matrix[row_index][col_index] -= factor * matrix[pivot_index][col_index];
+                inverse[row_index][col_index] -= factor * inverse[pivot_index][col_index];
+            }
+        }
+    }
+    formula_checked_numeric_result(inverse[0][0])
+}
+
 fn formula_regression_default_x(count: usize) -> Vec<f64> {
     (1..=count).map(|value| value as f64).collect()
 }
@@ -18484,6 +18533,18 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return formula_number_from_value_probe(
                 self.parse_array_projection_value_function(name)?,
             );
+        }
+        if name.eq_ignore_ascii_case("FREQUENCY") {
+            return self.parse_frequency_function();
+        }
+        if name.eq_ignore_ascii_case("MMULT") {
+            return self.parse_mmult_function();
+        }
+        if name.eq_ignore_ascii_case("MINVERSE") {
+            return self.parse_minverse_function();
+        }
+        if name.eq_ignore_ascii_case("MUNIT") {
+            return self.parse_munit_function();
         }
         if name.eq_ignore_ascii_case("SEQUENCE") {
             return self.parse_sequence_function();
@@ -24546,14 +24607,82 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
     }
 
     fn parse_mdeterm_function(&mut self) -> Result<f64, FormulaEvalError> {
-        let (sheet_id, rect) = self.parse_reference_argument()?;
+        let matrix = self.parse_numeric_matrix_reference_argument()?;
         self.skip_whitespace();
         if !self.consume_char(')') {
             return Err(FormulaEvalError::Unsupported);
         }
-        if rect.width() != rect.height() || rect.width() == 0 {
+        formula_matrix_determinant(matrix)
+    }
+
+    fn parse_minverse_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let matrix = self.parse_numeric_matrix_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        formula_matrix_inverse_top_left(matrix)
+    }
+
+    fn parse_mmult_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let left = self.parse_numeric_matrix_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let right = self.parse_numeric_matrix_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let left_width = left.first().map(|row| row.len()).unwrap_or(0);
+        if left_width == 0
+            || right.is_empty()
+            || right.iter().any(|row| row.is_empty())
+            || left_width != right.len()
+        {
             return Err(FormulaEvalError::Value);
         }
+        let mut total = 0.0_f64;
+        for index in 0..left_width {
+            total += left[0][index] * right[index][0];
+        }
+        formula_checked_numeric_result(total)
+    }
+
+    fn parse_munit_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let dimension = formula_integer_argument(self.parse_comparison()?)?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        if dimension < 1 {
+            return Err(FormulaEvalError::Value);
+        }
+        Ok(1.0)
+    }
+
+    fn parse_frequency_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let data = self.parse_aggregate_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let bins = self.parse_aggregate_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let Some(first_bin) = bins.first() else {
+            return Ok(data.len() as f64);
+        };
+        Ok(data.iter().filter(|value| **value <= *first_bin).count() as f64)
+    }
+
+    fn parse_numeric_matrix_reference_argument(
+        &mut self,
+    ) -> Result<Vec<Vec<f64>>, FormulaEvalError> {
+        let (sheet_id, rect) = self.parse_reference_argument()?;
         let mut matrix = Vec::with_capacity(rect.height() as usize);
         for row in rect.row_first..=rect.row_last {
             let mut values = Vec::with_capacity(rect.width() as usize);
@@ -24562,7 +24691,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
             matrix.push(values);
         }
-        formula_matrix_determinant(matrix)
+        Ok(matrix)
     }
 
     fn parse_convert_unit_argument(&mut self) -> Result<String, FormulaEvalError> {
@@ -33664,8 +33793,12 @@ mod tests {
         );
         let formulas = expect_object_handle(
             runtime
-                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("J1:J6".to_string())])
-                .expect("Range(J1:J6)"),
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("J1:J11".to_string())],
+                )
+                .expect("Range(J1:J11)"),
         );
 
         runtime
@@ -33745,15 +33878,20 @@ mod tests {
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        6,
+                        11,
                         1,
                         vec![
                             OmValue::Text("=MDETERM(B1:C2)".to_string()),
+                            OmValue::Text("=MINVERSE(B1:C2)".to_string()),
+                            OmValue::Text("=MMULT(B1:C2,B1:C2)".to_string()),
+                            OmValue::Text("=MUNIT(3)".to_string()),
+                            OmValue::Text("=FREQUENCY(D1:D4,25)".to_string()),
                             OmValue::Text("=PERCENTOF(D1:D2,D1:D4)".to_string()),
                             OmValue::Text("=PERCENTOF(5,D1:D4)".to_string()),
                             OmValue::Text("=PERCENTOF(D1:D2,E1:E2)".to_string()),
                             OmValue::Text("=MDETERM(B1:C3)".to_string()),
                             OmValue::Text("=MDETERM(G1:H2)".to_string()),
+                            OmValue::Text("=MINVERSE(E1:E2)".to_string()),
                         ],
                     )
                     .expect("scalar matrix formulas"),
@@ -33772,13 +33910,20 @@ mod tests {
         let OmValue::Array(values) = values else {
             panic!("expected scalar matrix value array");
         };
+        let expected_numbers = [-2.0, -2.0, 7.0, 1.0, 2.0, 0.3, 0.05];
+        for (index, expected) in expected_numbers.into_iter().enumerate() {
+            let number = expect_number(values.values[index].clone());
+            assert!(
+                (number - expected).abs() < 1e-10,
+                "scalar matrix result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
         assert_eq!(
-            values.values,
-            vec![
-                OmValue::Number(-2.0),
-                OmValue::Number(0.3),
-                OmValue::Number(0.05),
+            &values.values[7..],
+            &[
                 OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
             ]
