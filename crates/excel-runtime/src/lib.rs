@@ -14109,6 +14109,7 @@ fn formula_text_function_name(name: &str) -> bool {
         || name.eq_ignore_ascii_case("INFO")
         || name.eq_ignore_ascii_case("INDIRECT")
         || name.eq_ignore_ascii_case("IMLN")
+        || name.eq_ignore_ascii_case("LET")
         || name.eq_ignore_ascii_case("IMLOG10")
         || name.eq_ignore_ascii_case("IMLOG2")
         || name.eq_ignore_ascii_case("IMPOWER")
@@ -17716,6 +17717,7 @@ struct FormulaParser<'a, 'b, 'state> {
     evaluator: &'b mut FormulaEvaluator<'state>,
     sheet_id: SheetId,
     current_position: Option<(u32, u32)>,
+    bindings: Vec<(String, FormulaValueProbe)>,
 }
 
 impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
@@ -17731,7 +17733,16 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             evaluator,
             sheet_id,
             current_position,
+            bindings: Vec::new(),
         }
+    }
+
+    fn binding_value(&self, name: &str) -> Option<FormulaValueProbe> {
+        self.bindings
+            .iter()
+            .rev()
+            .find(|(binding_name, _)| binding_name.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.clone())
     }
 
     fn parse_text_formula(&mut self) -> Result<String, FormulaEvalError> {
@@ -17869,6 +17880,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
             if identifier.eq_ignore_ascii_case("FALSE") {
                 return Ok(0.0);
+            }
+            if let Some(value) = self.binding_value(identifier.as_str()) {
+                return formula_number_from_value_probe(value);
             }
             return Err(FormulaEvalError::Name);
         }
@@ -19065,6 +19079,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("XLOOKUP") {
             return formula_number_from_value_probe(self.parse_xlookup_value_function()?);
         }
+        if name.eq_ignore_ascii_case("LET") {
+            return formula_number_from_value_probe(self.parse_let_value_function()?);
+        }
         if name.eq_ignore_ascii_case("INDIRECT")
             || name.eq_ignore_ascii_case("OFFSET")
             || name.eq_ignore_ascii_case("TRIMRANGE")
@@ -20168,6 +20185,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         if name.eq_ignore_ascii_case("XLOOKUP") {
             return formula_selected_text_from_value_probe(self.parse_xlookup_value_function()?);
+        }
+        if name.eq_ignore_ascii_case("LET") {
+            return formula_selected_text_from_value_probe(self.parse_let_value_function()?);
         }
         Err(FormulaEvalError::Unsupported)
     }
@@ -22889,6 +22909,52 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 return Err(FormulaEvalError::Unsupported);
             }
             argument_index += 1;
+        }
+    }
+
+    fn parse_let_value_function(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let base_binding_len = self.bindings.len();
+        loop {
+            self.skip_whitespace();
+            let Some(name) = self.parse_identifier() else {
+                self.bindings.truncate(base_binding_len);
+                return Err(FormulaEvalError::Value);
+            };
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                self.bindings.truncate(base_binding_len);
+                return Err(FormulaEvalError::Value);
+            }
+            let value = self.parse_value_probe_argument()?;
+            self.bindings.push((name, value));
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                self.bindings.truncate(base_binding_len);
+                return Err(FormulaEvalError::Unsupported);
+            }
+
+            self.skip_whitespace();
+            let checkpoint = self.index;
+            let next_is_binding = if self.parse_identifier().is_some() {
+                self.skip_whitespace();
+                self.consume_char(',')
+            } else {
+                false
+            };
+            self.index = checkpoint;
+            if next_is_binding {
+                continue;
+            }
+
+            let result = self.parse_value_probe_argument();
+            self.skip_whitespace();
+            let result = match result {
+                Ok(value) if self.consume_char(')') => Ok(value),
+                Ok(_) => Err(FormulaEvalError::Unsupported),
+                Err(error) => Err(error),
+            };
+            self.bindings.truncate(base_binding_len);
+            return result;
         }
     }
 
@@ -26246,6 +26312,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 if identifier.eq_ignore_ascii_case("FALSE") {
                     return Ok("FALSE".to_string());
                 }
+                if let Some(value) = self.binding_value(identifier.as_str())
+                    && self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')'))
+                {
+                    return formula_text_from_value_probe(value);
+                }
                 self.index = checkpoint;
             }
         }
@@ -26314,6 +26385,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 }
                 if identifier.eq_ignore_ascii_case("FALSE") {
                     return Ok(FormulaValueProbe::Bool(false));
+                }
+                if let Some(value) = self.binding_value(identifier.as_str())
+                    && self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')'))
+                {
+                    return Ok(value);
                 }
                 self.index = checkpoint;
             }
@@ -40569,6 +40645,77 @@ mod tests {
                 )
                 .expect("Application.Evaluate text SWITCH"),
             OmValue::Text("eval".to_string())
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_let_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A6".to_string())])
+                .expect("Range(A1:A6)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        6,
+                        1,
+                        vec![
+                            OmValue::Text("=LET(x,2,x+3)".to_string()),
+                            OmValue::Text("=LET(x,2,y,3,x*y)".to_string()),
+                            OmValue::Text(
+                                r#"=LET(label,"Total",amount,7,CONCAT(label,":",amount))"#
+                                    .to_string(),
+                            ),
+                            OmValue::Text(r#"=LET(flag,TRUE,IF(flag,"yes","no"))"#.to_string()),
+                            OmValue::Text(r#"=LET(label,"x",VALUE(label))"#.to_string()),
+                            OmValue::Text("=LET(x,1,1/0)".to_string()),
+                        ],
+                    )
+                    .expect("LET formulas"),
+                ),
+                &[],
+            )
+            .expect("set LET formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("LET values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected LET value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(5.0),
+                OmValue::Number(6.0),
+                OmValue::Text("Total:7".to_string()),
+                OmValue::Text("yes".to_string()),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Div0),
+            ]
         );
     }
 

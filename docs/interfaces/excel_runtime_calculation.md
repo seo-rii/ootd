@@ -334,13 +334,14 @@ Financial notes:
 - `XOR`
 - `IF`
 - `IFS`
+- `LET`
 - `SWITCH`
 
 Logical notes:
 
 - `AND`, `OR`, and `XOR` support scalar arguments and rectangular range arguments.
 - Text and blank cells inside logical range arguments are ignored; a logical range with no numeric or boolean values returns `#VALUE!`.
-- `IF`, `IFS`, and `SWITCH` can return scalar text when the selected branch or result is text.
+- `IF`, `IFS`, `LET`, and `SWITCH` can return scalar text when the selected branch, binding, or result is text. `LET` supports scalar local name bindings for the final calculation expression.
 
 ### Aggregate and count helpers
 
