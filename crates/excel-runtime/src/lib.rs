@@ -74,6 +74,15 @@ const XL_SEARCH_BY_ROWS: i32 = 1;
 const XL_SEARCH_BY_COLUMNS: i32 = 2;
 const XL_SEARCH_NEXT: i32 = 1;
 const XL_SEARCH_PREVIOUS: i32 = 2;
+const XL_SORT_ASCENDING: i32 = 1;
+const XL_SORT_DESCENDING: i32 = 2;
+const XL_SORT_COLUMNS: i32 = 1;
+const XL_SORT_ROWS: i32 = 2;
+const XL_YES: i32 = 1;
+const XL_NO: i32 = 2;
+const XL_GUESS: i32 = 0;
+const XL_PINYIN: i32 = 1;
+const XL_SORT_NORMAL: i32 = 0;
 const XL_DECIMAL_SEPARATOR: i32 = 3;
 const XL_THOUSANDS_SEPARATOR: i32 = 4;
 const XL_LIST_SEPARATOR: i32 = 5;
@@ -1814,6 +1823,324 @@ impl ExcelRuntime {
                             }
                         }
                         Ok(OmValue::Bool(replaced_any))
+                    }
+                    "Sort" => {
+                        if args.len() > 15 {
+                            return Err(OmError::invalid_argument(
+                                "Range.Sort accepts at most Key1, Order1, Key2, Type, Order2, Key3, Order3, Header, OrderCustom, MatchCase, Orientation, SortMethod, DataOption1, DataOption2, and DataOption3 arguments",
+                            ));
+                        }
+                        for (index, label) in [
+                            (2usize, "Range.Sort Key2"),
+                            (3usize, "Range.Sort Type"),
+                            (4usize, "Range.Sort Order2"),
+                            (5usize, "Range.Sort Key3"),
+                            (6usize, "Range.Sort Order3"),
+                            (8usize, "Range.Sort OrderCustom"),
+                        ] {
+                            if args
+                                .get(index)
+                                .is_some_and(|value| !om_value_is_omitted(value))
+                            {
+                                return Err(OmError::unsupported(format!(
+                                    "{label} is not implemented"
+                                )));
+                            }
+                        }
+                        let order = Self::coerce_range_find_enum(
+                            args.get(1),
+                            XL_SORT_ASCENDING,
+                            "Range.Sort Order1",
+                            &[XL_SORT_ASCENDING, XL_SORT_DESCENDING],
+                        )?;
+                        let header = Self::coerce_range_find_enum(
+                            args.get(7),
+                            XL_NO,
+                            "Range.Sort Header",
+                            &[XL_YES, XL_NO, XL_GUESS],
+                        )?;
+                        let match_case = args
+                            .get(9)
+                            .map(|value| {
+                                coerce_optional_bool_arg(value, false, "Range.Sort MatchCase")
+                            })
+                            .transpose()?
+                            .unwrap_or(false);
+                        let orientation = Self::coerce_range_find_enum(
+                            args.get(10),
+                            XL_SORT_ROWS,
+                            "Range.Sort Orientation",
+                            &[XL_SORT_COLUMNS, XL_SORT_ROWS],
+                        )?;
+                        let _sort_method = Self::coerce_range_find_enum(
+                            args.get(11),
+                            XL_PINYIN,
+                            "Range.Sort SortMethod",
+                            &[XL_PINYIN],
+                        )?;
+                        for (index, label) in [
+                            (12usize, "Range.Sort DataOption1"),
+                            (13usize, "Range.Sort DataOption2"),
+                            (14usize, "Range.Sort DataOption3"),
+                        ] {
+                            let _ = Self::coerce_range_find_enum(
+                                args.get(index),
+                                XL_SORT_NORMAL,
+                                label,
+                                &[XL_SORT_NORMAL],
+                            )?;
+                        }
+
+                        let key_rect = match args.first() {
+                            None => None,
+                            Some(value) if om_value_is_omitted(value) => None,
+                            Some(OmValue::Object(handle)) => {
+                                let RuntimeObjectKind::Range {
+                                    workbook: key_workbook,
+                                    sheet_id: key_sheet_id,
+                                    rect: key_rect,
+                                    ..
+                                } = self.runtime_object(*handle)?
+                                else {
+                                    return Err(OmError::type_mismatch(
+                                        "Range.Sort Key1 expects a Range object or A1 reference",
+                                    ));
+                                };
+                                if key_workbook != workbook || key_sheet_id != sheet_id {
+                                    return Err(OmError::invalid_argument(
+                                        "Range.Sort Key1 must belong to the sorted worksheet",
+                                    ));
+                                }
+                                Some(key_rect)
+                            }
+                            Some(OmValue::Text(reference)) => {
+                                Some(parse_rect_a1(reference).map_err(|_| {
+                                    OmError::invalid_argument(
+                                        "Range.Sort Key1 text must be an A1 range reference",
+                                    )
+                                })?)
+                            }
+                            Some(_) => {
+                                return Err(OmError::type_mismatch(
+                                    "Range.Sort Key1 expects a Range object or A1 reference",
+                                ));
+                            }
+                        };
+
+                        let source_cells = {
+                            let runtime = self.runtime_workbook(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            runtime
+                                .loaded
+                                .state
+                                .worksheet_data_for_sheet(sheet_id)?
+                                .cells
+                                .clone()
+                        };
+                        let compare_cells = |left: Option<&excel_model::CellData>,
+                                             right: Option<&excel_model::CellData>|
+                         -> Ordering {
+                            let left_value =
+                                left.map(|cell| &cell.value).unwrap_or(&CellValue::Blank);
+                            let right_value =
+                                right.map(|cell| &cell.value).unwrap_or(&CellValue::Blank);
+                            let left_blank = matches!(left_value, CellValue::Blank);
+                            let right_blank = matches!(right_value, CellValue::Blank);
+                            if left_blank && right_blank {
+                                return Ordering::Equal;
+                            }
+                            if left_blank {
+                                return Ordering::Greater;
+                            }
+                            if right_blank {
+                                return Ordering::Less;
+                            }
+                            let value_rank = |value: &CellValue| -> i32 {
+                                match value {
+                                    CellValue::Number(_) => 0,
+                                    CellValue::Text(_) => 1,
+                                    CellValue::Bool(_) => 2,
+                                    CellValue::Error(_) => 3,
+                                    CellValue::Blank => 4,
+                                }
+                            };
+                            let error_rank = |error: CellError| -> i32 {
+                                match error {
+                                    CellError::Null => 0,
+                                    CellError::Div0 => 1,
+                                    CellError::Value => 2,
+                                    CellError::Ref => 3,
+                                    CellError::Name => 4,
+                                    CellError::Num => 5,
+                                    CellError::NA => 6,
+                                    CellError::GettingData => 7,
+                                    CellError::Spill => 8,
+                                    CellError::Calc => 9,
+                                    CellError::Field => 10,
+                                    CellError::Blocked => 11,
+                                    CellError::Unknown => 12,
+                                }
+                            };
+                            let mut ordering = match (left_value, right_value) {
+                                (CellValue::Number(left), CellValue::Number(right)) => {
+                                    left.partial_cmp(right).unwrap_or(Ordering::Equal)
+                                }
+                                (CellValue::Text(left), CellValue::Text(right)) => {
+                                    if match_case {
+                                        left.cmp(right)
+                                    } else {
+                                        left.to_lowercase().cmp(&right.to_lowercase())
+                                    }
+                                }
+                                (CellValue::Bool(left), CellValue::Bool(right)) => left.cmp(right),
+                                (CellValue::Error(left), CellValue::Error(right)) => {
+                                    error_rank(*left).cmp(&error_rank(*right))
+                                }
+                                _ => value_rank(left_value).cmp(&value_rank(right_value)),
+                            };
+                            if order == XL_SORT_DESCENDING {
+                                ordering = ordering.reverse();
+                            }
+                            ordering
+                        };
+
+                        let mut changed = false;
+                        if orientation == XL_SORT_ROWS {
+                            let row_first = if header == XL_YES {
+                                rect.row_first.saturating_add(1)
+                            } else {
+                                rect.row_first
+                            };
+                            if row_first >= rect.row_last {
+                                return Ok(OmValue::Empty);
+                            }
+                            let key_col = match key_rect {
+                                Some(key_rect) => {
+                                    if key_rect.width() != 1 {
+                                        return Err(OmError::invalid_argument(
+                                            "Range.Sort Key1 must be a single column for row sorting",
+                                        ));
+                                    }
+                                    if key_rect.col_first < rect.col_first
+                                        || key_rect.col_first > rect.col_last
+                                        || key_rect.row_last < rect.row_first
+                                        || key_rect.row_first > rect.row_last
+                                    {
+                                        return Err(OmError::invalid_argument(
+                                            "Range.Sort Key1 must intersect the sorted range",
+                                        ));
+                                    }
+                                    key_rect.col_first
+                                }
+                                None => rect.col_first,
+                            };
+                            let mut sorted_rows = (row_first..=rect.row_last).collect::<Vec<_>>();
+                            sorted_rows.sort_by(|left, right| {
+                                let ordering = compare_cells(
+                                    source_cells.get(&(*left, key_col)),
+                                    source_cells.get(&(*right, key_col)),
+                                );
+                                if ordering == Ordering::Equal {
+                                    left.cmp(right)
+                                } else {
+                                    ordering
+                                }
+                            });
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            let worksheet = runtime
+                                .loaded
+                                .state
+                                .worksheet_data_for_sheet_mut(sheet_id)?;
+                            for (offset, source_row) in sorted_rows.iter().enumerate() {
+                                let destination_row = row_first + offset as u32;
+                                for col in rect.col_first..=rect.col_last {
+                                    let destination_key = (destination_row, col);
+                                    let next_cell = source_cells.get(&(*source_row, col)).cloned();
+                                    if worksheet.cells.get(&destination_key) != next_cell.as_ref() {
+                                        if let Some(cell) = next_cell {
+                                            worksheet.cells.insert(destination_key, cell);
+                                        } else {
+                                            worksheet.cells.remove(&destination_key);
+                                        }
+                                        worksheet.dirty = true;
+                                        worksheet.dirty_cells.insert(destination_key);
+                                        changed = true;
+                                    }
+                                }
+                            }
+                        } else {
+                            let col_first = if header == XL_YES {
+                                rect.col_first.saturating_add(1)
+                            } else {
+                                rect.col_first
+                            };
+                            if col_first >= rect.col_last {
+                                return Ok(OmValue::Empty);
+                            }
+                            let key_row = match key_rect {
+                                Some(key_rect) => {
+                                    if key_rect.height() != 1 {
+                                        return Err(OmError::invalid_argument(
+                                            "Range.Sort Key1 must be a single row for column sorting",
+                                        ));
+                                    }
+                                    if key_rect.row_first < rect.row_first
+                                        || key_rect.row_first > rect.row_last
+                                        || key_rect.col_last < rect.col_first
+                                        || key_rect.col_first > rect.col_last
+                                    {
+                                        return Err(OmError::invalid_argument(
+                                            "Range.Sort Key1 must intersect the sorted range",
+                                        ));
+                                    }
+                                    key_rect.row_first
+                                }
+                                None => rect.row_first,
+                            };
+                            let mut sorted_cols = (col_first..=rect.col_last).collect::<Vec<_>>();
+                            sorted_cols.sort_by(|left, right| {
+                                let ordering = compare_cells(
+                                    source_cells.get(&(key_row, *left)),
+                                    source_cells.get(&(key_row, *right)),
+                                );
+                                if ordering == Ordering::Equal {
+                                    left.cmp(right)
+                                } else {
+                                    ordering
+                                }
+                            });
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            let worksheet = runtime
+                                .loaded
+                                .state
+                                .worksheet_data_for_sheet_mut(sheet_id)?;
+                            for (offset, source_col) in sorted_cols.iter().enumerate() {
+                                let destination_col = col_first + offset as u32;
+                                for row in rect.row_first..=rect.row_last {
+                                    let destination_key = (row, destination_col);
+                                    let next_cell = source_cells.get(&(row, *source_col)).cloned();
+                                    if worksheet.cells.get(&destination_key) != next_cell.as_ref() {
+                                        if let Some(cell) = next_cell {
+                                            worksheet.cells.insert(destination_key, cell);
+                                        } else {
+                                            worksheet.cells.remove(&destination_key);
+                                        }
+                                        worksheet.dirty = true;
+                                        worksheet.dirty_cells.insert(destination_key);
+                                        changed = true;
+                                    }
+                                }
+                            }
+                        }
+                        if changed {
+                            self.find_state = None;
+                        }
+                        Ok(OmValue::Empty)
                     }
                     "Delete" => {
                         let shift = match args {
@@ -48254,6 +48581,320 @@ mod tests {
                 .expect_err("Range.Replace should reject object What")
                 .code,
             OmErrorCode::TypeMismatch
+        );
+    }
+
+    #[test]
+    fn range_sort_dispatch_sorts_rows_by_key_and_header() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let table = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:C4".to_string())])
+                .expect("Range(A1:C4)"),
+        );
+        let name_key = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A2".to_string())])
+                .expect("Range(A2)"),
+        );
+        let score_key = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B2".to_string())])
+                .expect("Range(B2)"),
+        );
+        runtime
+            .dispatch_set(
+                table,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        3,
+                        vec![
+                            OmValue::Text("Name".to_string()),
+                            OmValue::Text("Score".to_string()),
+                            OmValue::Text("Dept".to_string()),
+                            OmValue::Text("Bob".to_string()),
+                            OmValue::Number(1.0),
+                            OmValue::Text("Sales".to_string()),
+                            OmValue::Text("Alice".to_string()),
+                            OmValue::Number(3.0),
+                            OmValue::Text("Eng".to_string()),
+                            OmValue::Text("Charlie".to_string()),
+                            OmValue::Number(2.0),
+                            OmValue::Text("Ops".to_string()),
+                        ],
+                    )
+                    .expect("table values"),
+                ),
+                &[],
+            )
+            .expect("A1:C4.Value2");
+        runtime
+            .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
+            .expect("clear dirty state");
+
+        runtime
+            .dispatch_invoke(
+                table,
+                "Sort",
+                &[
+                    OmValue::Object(name_key),
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Number(f64::from(super::XL_YES)),
+                ],
+            )
+            .expect("Range.Sort by name");
+        for (address, expected) in [
+            ("A1", "Name"),
+            ("A2", "Alice"),
+            ("A3", "Bob"),
+            ("A4", "Charlie"),
+        ] {
+            let cell = expect_object_handle(
+                runtime
+                    .dispatch_invoke(active_sheet, "Range", &[OmValue::Text(address.to_string())])
+                    .expect("Range(cell)"),
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(cell, "Value2", &[])
+                        .expect("cell Value2")
+                ),
+                expected
+            );
+        }
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after Range.Sort")
+        ));
+
+        runtime
+            .dispatch_invoke(
+                table,
+                "Sort",
+                &[
+                    OmValue::Object(score_key),
+                    OmValue::Number(f64::from(super::XL_SORT_DESCENDING)),
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Number(f64::from(super::XL_YES)),
+                ],
+            )
+            .expect("Range.Sort by score descending");
+        for (address, expected) in [("A2", "Alice"), ("A3", "Charlie"), ("A4", "Bob")] {
+            let cell = expect_object_handle(
+                runtime
+                    .dispatch_invoke(active_sheet, "Range", &[OmValue::Text(address.to_string())])
+                    .expect("Range(cell)"),
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(cell, "Value2", &[])
+                        .expect("cell Value2")
+                ),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn range_sort_dispatch_sorts_columns_and_validates_options() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let table = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:C2".to_string())])
+                .expect("Range(A1:C2)"),
+        );
+        let key = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        runtime
+            .dispatch_set(
+                table,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        3,
+                        vec![
+                            OmValue::Number(3.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Text("third".to_string()),
+                            OmValue::Text("first".to_string()),
+                            OmValue::Text("second".to_string()),
+                        ],
+                    )
+                    .expect("column table values"),
+                ),
+                &[],
+            )
+            .expect("A1:C2.Value2");
+
+        runtime
+            .dispatch_invoke(
+                table,
+                "Sort",
+                &[
+                    OmValue::Object(key),
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Number(f64::from(super::XL_SORT_COLUMNS)),
+                ],
+            )
+            .expect("Range.Sort columns");
+        for (address, expected) in [("A2", "first"), ("B2", "second"), ("C2", "third")] {
+            let cell = expect_object_handle(
+                runtime
+                    .dispatch_invoke(active_sheet, "Range", &[OmValue::Text(address.to_string())])
+                    .expect("Range(cell)"),
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(cell, "Value2", &[])
+                        .expect("cell Value2")
+                ),
+                expected
+            );
+        }
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    table,
+                    "Sort",
+                    &[OmValue::Object(key), OmValue::Missing, OmValue::Object(key),],
+                )
+                .expect_err("Range.Sort should reject Key2")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    table,
+                    "Sort",
+                    &[
+                        OmValue::Object(key),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(999.0),
+                    ],
+                )
+                .expect_err("Range.Sort should reject unsupported Orientation")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    table,
+                    "Sort",
+                    &[
+                        OmValue::Object(key),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                    ],
+                )
+                .expect_err("Range.Sort should reject DataOption1")
+                .code,
+            OmErrorCode::Unsupported
+        );
+
+        let mut read_only_runtime = ExcelRuntime::new();
+        read_only_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook");
+        let read_only_sheet = expect_object_handle(
+            read_only_runtime
+                .dispatch_get(read_only_runtime.root_application(), "ActiveSheet", &[])
+                .expect("read-only ActiveSheet"),
+        );
+        let read_only_range = expect_object_handle(
+            read_only_runtime
+                .dispatch_invoke(
+                    read_only_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:B2".to_string())],
+                )
+                .expect("read-only Range(A1:B2)"),
+        );
+        assert_eq!(
+            read_only_runtime
+                .dispatch_invoke(read_only_range, "Sort", &[])
+                .expect_err("Range.Sort should reject read-only workbooks")
+                .code,
+            OmErrorCode::InvalidState
         );
     }
 

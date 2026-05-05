@@ -4094,6 +4094,169 @@
           }
         },
         {
+          "name": "Sort",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "variant",
+            "name": "Variant",
+            "aliasOf": "VARIANT"
+          },
+          "params": [
+            {
+              "name": "Key1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Order1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "XlSortOrder"
+              },
+              "optional": true
+            },
+            {
+              "name": "Key2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Type",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Order2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "XlSortOrder"
+              },
+              "optional": true
+            },
+            {
+              "name": "Key3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Order3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "XlSortOrder"
+              },
+              "optional": true
+            },
+            {
+              "name": "Header",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "XlYesNoGuess"
+              },
+              "optional": true
+            },
+            {
+              "name": "OrderCustom",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "MatchCase",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT_BOOL"
+              },
+              "optional": true
+            },
+            {
+              "name": "Orientation",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "XlSortOrientation"
+              },
+              "optional": true
+            },
+            {
+              "name": "SortMethod",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "XlSortMethod"
+              },
+              "optional": true
+            },
+            {
+              "name": "DataOption1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "XlSortDataOption"
+              },
+              "optional": true
+            },
+            {
+              "name": "DataOption2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "XlSortDataOption"
+              },
+              "optional": true
+            },
+            {
+              "name": "DataOption3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "XlSortDataOption"
+              },
+              "optional": true
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Sort"
+                }
+              ],
+              "typeInfo": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          }
+        },
+        {
           "name": "Delete",
           "memberKind": "method",
           "params": [
