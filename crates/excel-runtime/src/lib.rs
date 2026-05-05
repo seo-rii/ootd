@@ -31,7 +31,13 @@ const XL_SHEET_VISIBLE: i32 = -1;
 const XL_SHEET_HIDDEN: i32 = 0;
 const XL_SHEET_VERY_HIDDEN: i32 = 2;
 const XL_SHEET_TYPE_WORKSHEET: i32 = -4167;
+const XL_SHEET_TYPE_CHART: i32 = -4109;
+const XL_SHEET_TYPE_EXCEL4_MACRO_SHEET: i32 = 3;
+const XL_SHEET_TYPE_EXCEL4_INTL_MACRO_SHEET: i32 = 4;
 const XL_WBA_TEMPLATE_WORKSHEET: i32 = -4167;
+const XL_WBA_TEMPLATE_CHART: i32 = -4109;
+const XL_WBA_TEMPLATE_EXCEL4_MACRO_SHEET: i32 = 3;
+const XL_WBA_TEMPLATE_EXCEL4_INTL_MACRO_SHEET: i32 = 4;
 const XL_OPEN_XML_WORKBOOK: i32 = 51;
 const XL_OPEN_XML_WORKBOOK_MACRO_ENABLED: i32 = 52;
 const XL_OPEN_XML_TEMPLATE_MACRO_ENABLED: i32 = 53;
@@ -74,6 +80,54 @@ const WORKBOOK_XLTX_CONTENT_TYPE: &str =
 const WORKBOOK_XLTM_CONTENT_TYPE: &str = "application/vnd.ms-excel.template.macroEnabled.main+xml";
 const WORKSHEET_PART_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeSheetTemplate {
+    Worksheet,
+    Chart,
+    Excel4MacroSheet,
+    Excel4IntlMacroSheet,
+}
+
+impl RuntimeSheetTemplate {
+    fn from_xl_wba_template(value: f64) -> Option<Self> {
+        if value == f64::from(XL_WBA_TEMPLATE_WORKSHEET) {
+            Some(Self::Worksheet)
+        } else if value == f64::from(XL_WBA_TEMPLATE_CHART) {
+            Some(Self::Chart)
+        } else if value == f64::from(XL_WBA_TEMPLATE_EXCEL4_MACRO_SHEET) {
+            Some(Self::Excel4MacroSheet)
+        } else if value == f64::from(XL_WBA_TEMPLATE_EXCEL4_INTL_MACRO_SHEET) {
+            Some(Self::Excel4IntlMacroSheet)
+        } else {
+            None
+        }
+    }
+
+    fn from_xl_sheet_type(value: f64) -> Option<Self> {
+        if value == f64::from(XL_SHEET_TYPE_WORKSHEET) {
+            Some(Self::Worksheet)
+        } else if value == f64::from(XL_SHEET_TYPE_CHART) {
+            Some(Self::Chart)
+        } else if value == f64::from(XL_SHEET_TYPE_EXCEL4_MACRO_SHEET) {
+            Some(Self::Excel4MacroSheet)
+        } else if value == f64::from(XL_SHEET_TYPE_EXCEL4_INTL_MACRO_SHEET) {
+            Some(Self::Excel4IntlMacroSheet)
+        } else {
+            None
+        }
+    }
+
+    fn worksheet_name_prefix(self) -> &'static str {
+        match self {
+            Self::Worksheet => "Sheet",
+            Self::Chart => "Chart",
+            Self::Excel4MacroSheet => "Macro",
+            Self::Excel4IntlMacroSheet => "IntlMacro",
+        }
+    }
+}
+
 const COMMENTS_PART_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml";
 const VML_DRAWING_CONTENT_TYPE: &str = "application/vnd.openxmlformats-officedocument.vmlDrawing";
@@ -240,6 +294,25 @@ impl ExcelRuntime {
             profile: ExcelProfile::Excel365,
             read_only: false,
         })
+    }
+
+    fn create_workbook_from_template_kind(
+        &mut self,
+        template: RuntimeSheetTemplate,
+    ) -> OmResult<WorkbookHandle> {
+        let workbook = self.create_workbook()?;
+        if template != RuntimeSheetTemplate::Worksheet {
+            let runtime = self.runtime_workbook_mut(workbook)?;
+            let sheet_name = unique_worksheet_name_with_prefix(
+                &runtime.loaded.state.worksheets,
+                template.worksheet_name_prefix(),
+            );
+            let worksheet = runtime.loaded.state.worksheets.first_mut().ok_or_else(|| {
+                OmError::new(OmErrorCode::InvalidState, "workbook has no worksheets")
+            })?;
+            worksheet.name = sheet_name;
+        }
+        Ok(workbook)
     }
 
     fn create_detached_workbook(&mut self, spec: OpenWorkbookSpec) -> OmResult<WorkbookHandle> {
@@ -4946,15 +5019,14 @@ impl ExcelRuntime {
                     None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => {
                         self.create_workbook()?
                     }
-                    Some(OmValue::Number(template))
-                        if *template == f64::from(XL_WBA_TEMPLATE_WORKSHEET) =>
-                    {
-                        self.create_workbook()?
-                    }
-                    Some(OmValue::Number(_)) => {
-                        return Err(OmError::unsupported(
-                            "Workbooks.Add currently only supports Template := xlWBATWorksheet for numeric XlWBATemplate values",
-                        ));
+                    Some(OmValue::Number(template)) => {
+                        let template = RuntimeSheetTemplate::from_xl_wba_template(*template)
+                            .ok_or_else(|| {
+                                OmError::unsupported(
+                                    "Workbooks.Add supports numeric XlWBATemplate values xlWBATWorksheet, xlWBATChart, xlWBATExcel4MacroSheet, and xlWBATExcel4IntlMacroSheet",
+                                )
+                            })?;
+                        self.create_workbook_from_template_kind(template)?
                     }
                     Some(OmValue::Text(path)) => {
                         let workbook_name = self.allocate_created_workbook_name();
@@ -5317,19 +5389,20 @@ impl ExcelRuntime {
                 }
             },
         };
-        let template_path = match args.get(3) {
-            None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => None,
-            Some(OmValue::Number(sheet_type))
-                if *sheet_type == f64::from(XL_SHEET_TYPE_WORKSHEET) =>
-            {
-                None
+        let (template_path, sheet_template) = match args.get(3) {
+            None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => {
+                (None, RuntimeSheetTemplate::Worksheet)
             }
-            Some(OmValue::Number(_)) => {
-                return Err(OmError::unsupported(
-                    "Worksheets.Add currently only supports Type := xlWorksheet for numeric XlSheetType values",
-                ));
+            Some(OmValue::Number(sheet_type)) => {
+                let sheet_template = RuntimeSheetTemplate::from_xl_sheet_type(*sheet_type)
+                    .ok_or_else(|| {
+                        OmError::unsupported(
+                            "Worksheets.Add supports numeric XlSheetType values xlWorksheet, xlChart, xlExcel4MacroSheet, and xlExcel4IntlMacroSheet",
+                        )
+                    })?;
+                (None, sheet_template)
             }
-            Some(OmValue::Text(path)) => Some(path.as_str()),
+            Some(OmValue::Text(path)) => (Some(path.as_str()), RuntimeSheetTemplate::Worksheet),
             Some(_) => {
                 return Err(OmError::type_mismatch(
                     "Worksheets.Add Type expects an XlSheetType numeric value or template path when provided",
@@ -5459,15 +5532,10 @@ impl ExcelRuntime {
                     .map(|part| part.compression)
                     .unwrap_or(CompressionMethod::Stored);
 
-                let worksheet_name_index = (1..)
-                    .find(|index| {
-                        let candidate = format!("Sheet{index}");
-                        !runtime.loaded.state.worksheets.iter().any(|worksheet| {
-                            worksheet.name.eq_ignore_ascii_case(candidate.as_str())
-                        })
-                    })
-                    .expect("worksheet name index");
-                let worksheet_name = format!("Sheet{worksheet_name_index}");
+                let worksheet_name = unique_worksheet_name_with_prefix(
+                    &runtime.loaded.state.worksheets,
+                    sheet_template.worksheet_name_prefix(),
+                );
                 let sheet_id = SheetId(
                     runtime
                         .loaded
@@ -7528,6 +7596,18 @@ fn next_available_sequential_part_uri(
         }
         index += 1;
     }
+}
+
+fn unique_worksheet_name_with_prefix(worksheets: &[WorksheetModel], prefix: &str) -> String {
+    (1..)
+        .find_map(|index| {
+            let candidate = format!("{prefix}{index}");
+            (!worksheets
+                .iter()
+                .any(|worksheet| worksheet.name.eq_ignore_ascii_case(candidate.as_str())))
+            .then_some(candidate)
+        })
+        .expect("worksheet name index")
 }
 
 fn relative_relationship_target(worksheet_part_uri: &str, target_part_uri: &str) -> String {
@@ -47968,6 +48048,69 @@ mod tests {
     }
 
     #[test]
+    fn workbooks_add_supports_numeric_chart_and_macro_templates_as_sheet_shells() {
+        let mut runtime = ExcelRuntime::new();
+        let application = runtime.root_application();
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Workbooks", &[])
+                .expect("Application.Workbooks"),
+        );
+
+        for (template, expected_sheet_name, expected_workbook_name) in [
+            (super::XL_WBA_TEMPLATE_CHART, "Chart1", "Book1"),
+            (super::XL_WBA_TEMPLATE_EXCEL4_MACRO_SHEET, "Macro1", "Book2"),
+            (
+                super::XL_WBA_TEMPLATE_EXCEL4_INTL_MACRO_SHEET,
+                "IntlMacro1",
+                "Book3",
+            ),
+        ] {
+            let workbook = expect_object_handle(
+                runtime
+                    .dispatch_invoke(workbooks, "Add", &[OmValue::Number(f64::from(template))])
+                    .expect("Workbooks.Add numeric template"),
+            );
+            let active_sheet = expect_object_handle(
+                runtime
+                    .dispatch_get(application, "ActiveSheet", &[])
+                    .expect("ActiveSheet after numeric template"),
+            );
+
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(workbook, "Name", &[])
+                        .expect("Workbook.Name")
+                ),
+                expected_workbook_name
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(active_sheet, "Name", &[])
+                        .expect("ActiveSheet.Name")
+                ),
+                expected_sheet_name
+            );
+            assert!(expect_bool(
+                runtime
+                    .dispatch_get(workbook, "Saved", &[])
+                    .expect("Workbook.Saved")
+            ));
+        }
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbooks, "Count", &[])
+                    .expect("Workbooks.Count")
+            ),
+            3.0
+        );
+    }
+
+    #[test]
     fn workbooks_add_supports_template_file_clones_with_detached_book_identity() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -48183,10 +48326,10 @@ mod tests {
         );
 
         let unsupported_template = runtime
-            .dispatch_invoke(workbooks, "Add", &[OmValue::Number(-4109.0)])
-            .expect_err("Workbooks.Add should reject non-worksheet templates");
+            .dispatch_invoke(workbooks, "Add", &[OmValue::Number(999.0)])
+            .expect_err("Workbooks.Add should reject unknown templates");
         assert_eq!(unsupported_template.code, OmErrorCode::Unsupported);
-        assert!(unsupported_template.message.contains("xlWBATWorksheet"));
+        assert!(unsupported_template.message.contains("XlWBATemplate"));
 
         let template_file_error = runtime
             .dispatch_invoke(
@@ -54808,6 +54951,144 @@ mod tests {
     }
 
     #[test]
+    fn worksheets_add_supports_numeric_chart_and_macro_types_as_sheet_shells() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+
+        let chart_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheets,
+                    "Add",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                        OmValue::Missing,
+                        OmValue::Number(f64::from(super::XL_SHEET_TYPE_CHART)),
+                    ],
+                )
+                .expect("Worksheets.Add Type:=xlChart"),
+        );
+        let macro_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheets,
+                    "Add",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Number(2.0),
+                        OmValue::Missing,
+                        OmValue::Number(f64::from(super::XL_SHEET_TYPE_EXCEL4_MACRO_SHEET)),
+                    ],
+                )
+                .expect("Worksheets.Add Type:=xlExcel4MacroSheet"),
+        );
+        let intl_macro_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheets,
+                    "Add",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Number(3.0),
+                        OmValue::Missing,
+                        OmValue::Number(f64::from(super::XL_SHEET_TYPE_EXCEL4_INTL_MACRO_SHEET)),
+                    ],
+                )
+                .expect("Worksheets.Add Type:=xlExcel4IntlMacroSheet"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(chart_sheet, "Name", &[])
+                    .expect("chart shell name")
+            ),
+            "Chart1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(macro_sheet, "Name", &[])
+                    .expect("macro shell name")
+            ),
+            "Macro1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(intl_macro_sheet, "Name", &[])
+                    .expect("intl macro shell name")
+            ),
+            "IntlMacro1"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(worksheets, "Count", &[])
+                    .expect("Worksheets.Count after typed shell adds")
+            ),
+            4.0
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after typed shell adds"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("active sheet name after typed shell adds")
+            ),
+            "IntlMacro1"
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen saved workbook");
+
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .map(|worksheet| worksheet.name.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                "Sheet1".to_string(),
+                "Chart1".to_string(),
+                "Macro1".to_string(),
+                "IntlMacro1".to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn worksheet_visible_dispatch_roundtrips_and_rejects_invalid_values() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -55610,12 +55891,12 @@ mod tests {
                     OmValue::Missing,
                     OmValue::Missing,
                     OmValue::Missing,
-                    OmValue::Number(-4109.0),
+                    OmValue::Number(999.0),
                 ],
             )
-            .expect_err("Worksheets.Add should reject non-worksheet sheet types");
+            .expect_err("Worksheets.Add should reject unknown sheet types");
         assert_eq!(unsupported_type_error.code, OmErrorCode::Unsupported);
-        assert!(unsupported_type_error.message.contains("xlWorksheet"));
+        assert!(unsupported_type_error.message.contains("XlSheetType"));
 
         let template_type_error = runtime
             .dispatch_invoke(
