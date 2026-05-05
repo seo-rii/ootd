@@ -16976,6 +16976,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("SERIESSUM") {
             return self.parse_series_sum_function();
         }
+        if name.eq_ignore_ascii_case("AGGREGATE") {
+            return self.parse_aggregate_function();
+        }
         if name.eq_ignore_ascii_case("SUBTOTAL") {
             return self.parse_subtotal_function();
         }
@@ -21702,6 +21705,301 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         Ok(total)
     }
 
+    fn parse_aggregate_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let function_num = formula_integer_argument(self.parse_comparison()?)?;
+        if !(1..=19).contains(&function_num) {
+            return Err(FormulaEvalError::Value);
+        }
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let options = formula_integer_argument(self.parse_comparison()?)?;
+        if !(0..=7).contains(&options) {
+            return Err(FormulaEvalError::Value);
+        }
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+
+        let ignore_nested = matches!(options, 0..=3);
+        let ignore_errors = matches!(options, 2 | 3 | 6 | 7);
+        let percentile_value =
+            |mut values: Vec<f64>, k: f64, exclusive: bool| -> Result<f64, FormulaEvalError> {
+                if values.is_empty() || !k.is_finite() {
+                    return Err(FormulaEvalError::Num);
+                }
+                values.sort_by(|left, right| left.total_cmp(right));
+                if exclusive {
+                    if k <= 0.0 || k >= 1.0 {
+                        return Err(FormulaEvalError::Num);
+                    }
+                    let rank = k * (values.len() as f64 + 1.0);
+                    if rank < 1.0 || rank > values.len() as f64 {
+                        return Err(FormulaEvalError::Num);
+                    }
+                    let lower_rank = rank.floor();
+                    let upper_rank = rank.ceil();
+                    if lower_rank == upper_rank {
+                        return Ok(values[lower_rank as usize - 1]);
+                    }
+                    let lower_index = lower_rank as usize - 1;
+                    let upper_index = upper_rank as usize - 1;
+                    let fraction = rank - lower_rank;
+                    return Ok(values[lower_index]
+                        + (values[upper_index] - values[lower_index]) * fraction);
+                }
+                if !(0.0..=1.0).contains(&k) {
+                    return Err(FormulaEvalError::Num);
+                }
+                let rank = k * (values.len() as f64 - 1.0);
+                let lower_index = rank.floor() as usize;
+                let upper_index = rank.ceil() as usize;
+                if lower_index == upper_index {
+                    return Ok(values[lower_index]);
+                }
+                let fraction = rank - lower_index as f64;
+                Ok(values[lower_index] + (values[upper_index] - values[lower_index]) * fraction)
+            };
+        let mut values = Vec::new();
+        let mut counta = 0_u64;
+
+        macro_rules! is_nested_aggregate_cell {
+            ($sheet_id:expr, $row:expr, $col:expr) => {{
+                self.evaluator
+                    .state
+                    .worksheet_data
+                    .get(&$sheet_id)
+                    .and_then(|worksheet| worksheet.cells.get(&($row, $col)))
+                    .and_then(|cell| cell.formula.as_ref())
+                    .is_some_and(|formula| {
+                        formula_source_has_top_level_function(formula, "SUBTOTAL")
+                            || formula_source_has_top_level_function(formula, "AGGREGATE")
+                    })
+            }};
+        }
+
+        macro_rules! record_numeric_value {
+            ($value:expr) => {{
+                match $value {
+                    FormulaValueProbe::Number(number) => values.push(number),
+                    FormulaValueProbe::Error(error) if ignore_errors => {
+                        let _ = error;
+                    }
+                    FormulaValueProbe::Error(error) => return Err(error),
+                    FormulaValueProbe::Blank
+                    | FormulaValueProbe::Bool(_)
+                    | FormulaValueProbe::Text(_) => {}
+                }
+            }};
+        }
+
+        macro_rules! collect_numeric_argument {
+            () => {{
+                let checkpoint = self.index;
+                if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
+                    self.index = next_index;
+                    self.skip_whitespace();
+                    if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
+                        for row in rect.row_first..=rect.row_last {
+                            for col in rect.col_first..=rect.col_last {
+                                if ignore_nested
+                                    && is_nested_aggregate_cell!(target_sheet_id, row, col)
+                                {
+                                    continue;
+                                }
+                                let value = self.evaluator.cell_value_or_blank(
+                                    target_sheet_id,
+                                    row,
+                                    col,
+                                )?;
+                                record_numeric_value!(formula_value_probe_from_cell_value(value));
+                            }
+                        }
+                    } else {
+                        self.index = checkpoint;
+                        match self.parse_catchable_argument()? {
+                            Ok(value) => values.push(value),
+                            Err(error) if ignore_errors => {
+                                let _ = error;
+                            }
+                            Err(error) => return Err(error),
+                        }
+                    }
+                } else {
+                    match self.parse_catchable_argument()? {
+                        Ok(value) => values.push(value),
+                        Err(error) if ignore_errors => {
+                            let _ = error;
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+            }};
+        }
+
+        macro_rules! collect_counta_argument {
+            () => {{
+                let checkpoint = self.index;
+                if let Some((target_sheet_id, rect, next_index)) = self.try_parse_reference()? {
+                    self.index = next_index;
+                    self.skip_whitespace();
+                    if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
+                        for row in rect.row_first..=rect.row_last {
+                            for col in rect.col_first..=rect.col_last {
+                                if ignore_nested
+                                    && is_nested_aggregate_cell!(target_sheet_id, row, col)
+                                {
+                                    continue;
+                                }
+                                let value = self.evaluator.cell_value_or_blank(
+                                    target_sheet_id,
+                                    row,
+                                    col,
+                                )?;
+                                match value {
+                                    CellValue::Error(error) if ignore_errors => {
+                                        let _ = error;
+                                    }
+                                    CellValue::Error(error) => {
+                                        return Err(formula_eval_error_from_cell_error(error));
+                                    }
+                                    CellValue::Blank => {}
+                                    CellValue::Bool(_)
+                                    | CellValue::Number(_)
+                                    | CellValue::Text(_) => counta += 1,
+                                }
+                            }
+                        }
+                    } else {
+                        self.index = checkpoint;
+                        match self.parse_value_probe_argument()? {
+                            FormulaValueProbe::Error(error) if ignore_errors => {
+                                let _ = error;
+                            }
+                            FormulaValueProbe::Error(error) => return Err(error),
+                            FormulaValueProbe::Blank => {}
+                            FormulaValueProbe::Bool(_)
+                            | FormulaValueProbe::Number(_)
+                            | FormulaValueProbe::Text(_) => counta += 1,
+                        }
+                    }
+                } else {
+                    match self.parse_value_probe_argument()? {
+                        FormulaValueProbe::Error(error) if ignore_errors => {
+                            let _ = error;
+                        }
+                        FormulaValueProbe::Error(error) => return Err(error),
+                        FormulaValueProbe::Blank => {}
+                        FormulaValueProbe::Bool(_)
+                        | FormulaValueProbe::Number(_)
+                        | FormulaValueProbe::Text(_) => counta += 1,
+                    }
+                }
+            }};
+        }
+
+        let finish_numeric = |values: &[f64]| -> Result<f64, FormulaEvalError> {
+            let aggregate_function = match function_num {
+                1 => Some(FormulaAggregateFunction::Average),
+                2 => Some(FormulaAggregateFunction::Count),
+                4 => Some(FormulaAggregateFunction::Max),
+                5 => Some(FormulaAggregateFunction::Min),
+                6 => Some(FormulaAggregateFunction::Product),
+                7 => Some(FormulaAggregateFunction::StDevS),
+                8 => Some(FormulaAggregateFunction::StDevP),
+                9 => Some(FormulaAggregateFunction::Sum),
+                10 => Some(FormulaAggregateFunction::VarS),
+                11 => Some(FormulaAggregateFunction::VarP),
+                12 => Some(FormulaAggregateFunction::Median),
+                13 => Some(FormulaAggregateFunction::ModeSngl),
+                _ => None,
+            };
+            aggregate_function
+                .ok_or(FormulaEvalError::Value)?
+                .evaluate(values)
+        };
+
+        if (14..=19).contains(&function_num) {
+            collect_numeric_argument!();
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let k = self.parse_comparison()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            if function_num == 14 || function_num == 15 {
+                let k = formula_integer_argument(k)?;
+                if values.is_empty() || k < 1 || k > values.len() as i64 {
+                    return Err(FormulaEvalError::Num);
+                }
+                values.sort_by(|left, right| left.total_cmp(right));
+                let index = if function_num == 14 {
+                    values.len() - k as usize
+                } else {
+                    k as usize - 1
+                };
+                return Ok(values[index]);
+            }
+            if function_num == 17 || function_num == 19 {
+                if !k.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                if k < i64::MIN as f64 || k > i64::MAX as f64 {
+                    return Err(FormulaEvalError::Num);
+                }
+                let quart = k.trunc() as i64;
+                let exclusive = function_num == 19;
+                if exclusive {
+                    if !(1..=3).contains(&quart) {
+                        return Err(FormulaEvalError::Num);
+                    }
+                } else if !(0..=4).contains(&quart) {
+                    return Err(FormulaEvalError::Num);
+                }
+                return percentile_value(values, quart as f64 / 4.0, exclusive);
+            }
+            return percentile_value(values, k, function_num == 18);
+        }
+
+        let mut saw_argument = false;
+        loop {
+            self.skip_whitespace();
+            if self.consume_char(')') {
+                if !saw_argument {
+                    return Err(FormulaEvalError::Value);
+                }
+                return if function_num == 3 {
+                    Ok(counta as f64)
+                } else {
+                    finish_numeric(values.as_slice())
+                };
+            }
+            saw_argument = true;
+            if function_num == 3 {
+                collect_counta_argument!();
+            } else {
+                collect_numeric_argument!();
+            }
+            self.skip_whitespace();
+            if self.consume_char(',') {
+                continue;
+            }
+            if self.consume_char(')') {
+                return if function_num == 3 {
+                    Ok(counta as f64)
+                } else {
+                    finish_numeric(values.as_slice())
+                };
+            }
+            return Err(FormulaEvalError::Unsupported);
+        }
+    }
+
     fn parse_subtotal_function(&mut self) -> Result<f64, FormulaEvalError> {
         let function_num = formula_integer_argument(self.parse_comparison()?)?;
         let function_num = match function_num {
@@ -24946,6 +25244,141 @@ mod tests {
                 OmValue::Number(5.0),
                 OmValue::Number(3.0),
             ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_aggregate_function_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A5".to_string())])
+                .expect("Range(A1:A5)"),
+        );
+        let nested_subtotal = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A6".to_string())])
+                .expect("Range(A6)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("B1:B13".to_string())],
+                )
+                .expect("Range(B1:B13)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        5,
+                        1,
+                        vec![
+                            OmValue::Number(2.0),
+                            OmValue::Number(8.0),
+                            OmValue::Number(5.0),
+                            OmValue::Text("counted".to_string()),
+                            OmValue::Error(CellError::Div0),
+                        ],
+                    )
+                    .expect("AGGREGATE source values"),
+                ),
+                &[],
+            )
+            .expect("set AGGREGATE source values");
+        runtime
+            .dispatch_set(
+                nested_subtotal,
+                "Formula",
+                OmValue::Text("=SUBTOTAL(9,A1:A2)".to_string()),
+                &[],
+            )
+            .expect("set nested SUBTOTAL formula");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        13,
+                        1,
+                        vec![
+                            OmValue::Text("=AGGREGATE(9,6,A1:A6)".to_string()),
+                            OmValue::Text("=AGGREGATE(9,2,A1:A6)".to_string()),
+                            OmValue::Text("=AGGREGATE(1,6,A1:A5)".to_string()),
+                            OmValue::Text("=AGGREGATE(2,6,A1:A5)".to_string()),
+                            OmValue::Text("=AGGREGATE(3,6,A1:A5)".to_string()),
+                            OmValue::Text("=AGGREGATE(14,6,A1:A5,2)".to_string()),
+                            OmValue::Text("=AGGREGATE(15,6,A1:A5,2)".to_string()),
+                            OmValue::Text("=AGGREGATE(16,6,A1:A5,0.5)".to_string()),
+                            OmValue::Text("=AGGREGATE(17,6,A1:A5,3)".to_string()),
+                            OmValue::Text("=AGGREGATE(18,6,A1:A5,0.5)".to_string()),
+                            OmValue::Text("=AGGREGATE(19,6,A1:A5,2)".to_string()),
+                            OmValue::Text("=AGGREGATE(9,4,A1:A5)".to_string()),
+                            OmValue::Text("=AGGREGATE(20,6,A1:A5)".to_string()),
+                        ],
+                    )
+                    .expect("AGGREGATE formulas"),
+                ),
+                &[],
+            )
+            .expect("set AGGREGATE formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("AGGREGATE values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected AGGREGATE value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(25.0),
+                OmValue::Number(15.0),
+                OmValue::Number(5.0),
+                OmValue::Number(3.0),
+                OmValue::Number(4.0),
+                OmValue::Number(5.0),
+                OmValue::Number(5.0),
+                OmValue::Number(5.0),
+                OmValue::Number(6.5),
+                OmValue::Number(5.0),
+                OmValue::Number(5.0),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Value),
+            ]
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    runtime.root_application(),
+                    "Evaluate",
+                    &[OmValue::Text("=AGGREGATE(4,6,A1:A5)".to_string())],
+                )
+                .expect("Application.Evaluate AGGREGATE"),
+            OmValue::Number(8.0)
         );
     }
 

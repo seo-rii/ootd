@@ -323,6 +323,7 @@ Logical notes:
 - `PRODUCT`
 - `SUMSQ`
 - `SUMPRODUCT`
+- `AGGREGATE`
 - `SUBTOTAL`
 - `SUMXMY2`
 - `SUMX2MY2`
@@ -382,6 +383,7 @@ Logical notes:
 Aggregate notes:
 
 - `SUMPRODUCT` supports scalar and rectangular range arguments with matching shapes; non-numeric range entries are treated as zero and error cells are propagated.
+- `AGGREGATE` supports function numbers `1` through `19`; options that ignore nested `SUBTOTAL` / `AGGREGATE` formulas and error values are honored, while hidden-row options are treated as visible because row visibility/filter state is not modeled yet.
 - `SUBTOTAL` supports function numbers `1` through `11` and `101` through `111`, skips nested top-level `SUBTOTAL` formulas in range arguments, and currently treats hidden or filtered rows the same as visible rows because row visibility/filter state is not modeled yet.
 
 ### Criteria aggregate helpers
