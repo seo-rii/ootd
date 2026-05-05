@@ -163,6 +163,7 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `F.DIST.RT` / `FDIST`
 - `F.INV`
 - `F.INV.RT` / `FINV`
+- `F.TEST` / `FTEST`
 - `FISHER`
 - `FISHERINV`
 - `FORECAST`
@@ -195,9 +196,11 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `T.DIST.RT`
 - `T.INV`
 - `T.INV.2T`
+- `T.TEST` / `TTEST`
 - `TDIST`
 - `TINV`
 - `WEIBULL.DIST` / `WEIBULL`
+- `Z.TEST` / `ZTEST`
 
 Roman numeral notes:
 
@@ -209,6 +212,7 @@ Roman numeral notes:
 - `GAMMALN` and `GAMMALN.PRECISE` return the natural logarithm of the gamma function for positive scalar inputs.
 - `BETA.DIST`, `CHISQ.DIST`, `EXPON.DIST`, `F.DIST`, `GAMMA.DIST`, `LOGNORM.DIST`, `NORM.DIST`, `NORM.S.DIST`, `POISSON.DIST`, `T.DIST`, and `WEIBULL.DIST` cover scalar probability and cumulative distribution calculations, with legacy function aliases mapped to the same implementations where their argument shapes match.
 - `CHISQ.TEST` / `CHITEST` compare same-shaped observed and expected ranges and return the right-tailed chi-square probability.
+- `F.TEST` / `FTEST`, `T.TEST` / `TTEST`, and `Z.TEST` / `ZTEST` cover variance, mean, and z-test probability calculations over numeric arguments and ranges.
 - `BINOM.DIST`, `BINOM.DIST.RANGE`, `BINOM.INV`, `HYPGEOM.DIST`, and `NEGBINOM.DIST` cover scalar discrete statistical distribution calculations, including compatibility aliases where Excel exposes them.
 - `KURT`, `SKEW`, `SKEW.P`, and `PROB` cover scalar statistical shape and probability calculations over numeric arguments and ranges.
 - `GAMMA`, `CONFIDENCE.NORM`, `CONFIDENCE.T`, `FORECAST` / `FORECAST.LINEAR`, and `STEYX` cover scalar gamma, confidence interval, and linear regression calculations.

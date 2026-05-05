@@ -13049,6 +13049,190 @@ fn formula_round_factor(digits: f64) -> Result<f64, FormulaEvalError> {
     Ok(factor)
 }
 
+fn formula_checked_numeric_result(value: f64) -> Result<f64, FormulaEvalError> {
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(FormulaEvalError::Num)
+    }
+}
+
+fn formula_erf_approx(value: f64) -> f64 {
+    let sign = if value.is_sign_negative() { -1.0 } else { 1.0 };
+    let x = value.abs();
+    let t = 1.0 / (1.0 + 0.5 * x);
+    let tau = t
+        * (-x * x - 1.26551223
+            + t * (1.00002368
+                + t * (0.37409196
+                    + t * (0.09678418
+                        + t * (-0.18628806
+                            + t * (0.27886807
+                                + t * (-1.13520398
+                                    + t * (1.48851587 + t * (-0.82215223 + t * 0.17087277)))))))))
+            .exp();
+    sign * (1.0 - tau)
+}
+
+fn formula_standard_normal_cdf(z: f64) -> Result<f64, FormulaEvalError> {
+    if !z.is_finite() {
+        return Err(FormulaEvalError::Value);
+    }
+    formula_checked_numeric_result(0.5 * (1.0 + formula_erf_approx(z / std::f64::consts::SQRT_2)))
+}
+
+fn formula_gamma_ln_value(value: f64) -> f64 {
+    const COEFFICIENTS: [f64; 9] = [
+        0.9999999999998099,
+        676.5203681218851,
+        -1259.1392167224028,
+        771.3234287776531,
+        -176.6150291621406,
+        12.507343278686905,
+        -0.13857109526572012,
+        0.000009984369578019572,
+        0.00000015056327351493116,
+    ];
+    let lanczos = |input: f64| {
+        let z = input - 1.0;
+        let mut x = COEFFICIENTS[0];
+        for (index, coefficient) in COEFFICIENTS.iter().enumerate().skip(1) {
+            x += coefficient / (z + index as f64);
+        }
+        let t = z + 7.5;
+        0.5 * (2.0 * std::f64::consts::PI).ln() + (z + 0.5) * t.ln() - t + x.ln()
+    };
+    if value < 0.5 {
+        std::f64::consts::PI.ln() - (std::f64::consts::PI * value).sin().ln() - lanczos(1.0 - value)
+    } else {
+        lanczos(value)
+    }
+}
+
+fn formula_beta_fraction(alpha: f64, beta: f64, x: f64) -> Result<f64, FormulaEvalError> {
+    const EPSILON: f64 = 1e-14;
+    const FLOOR: f64 = 1e-300;
+    const MAX_ITERATIONS: usize = 200;
+    let qab = alpha + beta;
+    let qap = alpha + 1.0;
+    let qam = alpha - 1.0;
+    let mut c = 1.0;
+    let mut d = 1.0 - qab * x / qap;
+    if d.abs() < FLOOR {
+        d = FLOOR;
+    }
+    d = 1.0 / d;
+    let mut h = d;
+    for m in 1..=MAX_ITERATIONS {
+        let m_f = m as f64;
+        let m2 = 2.0 * m_f;
+        let mut aa = m_f * (beta - m_f) * x / ((qam + m2) * (alpha + m2));
+        d = 1.0 + aa * d;
+        if d.abs() < FLOOR {
+            d = FLOOR;
+        }
+        c = 1.0 + aa / c;
+        if c.abs() < FLOOR {
+            c = FLOOR;
+        }
+        d = 1.0 / d;
+        h *= d * c;
+        aa = -(alpha + m_f) * (qab + m_f) * x / ((alpha + m2) * (qap + m2));
+        d = 1.0 + aa * d;
+        if d.abs() < FLOOR {
+            d = FLOOR;
+        }
+        c = 1.0 + aa / c;
+        if c.abs() < FLOOR {
+            c = FLOOR;
+        }
+        d = 1.0 / d;
+        let delta = d * c;
+        h *= delta;
+        if (delta - 1.0).abs() <= EPSILON {
+            return formula_checked_numeric_result(h);
+        }
+    }
+    formula_checked_numeric_result(h)
+}
+
+fn formula_regularized_beta(x: f64, alpha: f64, beta: f64) -> Result<f64, FormulaEvalError> {
+    if ![x, alpha, beta].iter().all(|value| value.is_finite()) {
+        return Err(FormulaEvalError::Value);
+    }
+    if alpha <= 0.0 || beta <= 0.0 || !(0.0..=1.0).contains(&x) {
+        return Err(FormulaEvalError::Num);
+    }
+    if x == 0.0 || x == 1.0 {
+        return Ok(x);
+    }
+    let log_beta = formula_gamma_ln_value(alpha) + formula_gamma_ln_value(beta)
+        - formula_gamma_ln_value(alpha + beta);
+    let front = (alpha * x.ln() + beta * (-x).ln_1p() - log_beta).exp();
+    if x < (alpha + 1.0) / (alpha + beta + 2.0) {
+        formula_checked_numeric_result(
+            (front * formula_beta_fraction(alpha, beta, x)? / alpha).clamp(0.0, 1.0),
+        )
+    } else {
+        formula_checked_numeric_result(
+            (1.0 - front * formula_beta_fraction(beta, alpha, 1.0 - x)? / beta).clamp(0.0, 1.0),
+        )
+    }
+}
+
+fn formula_student_t_cdf(x: f64, degrees: f64) -> Result<f64, FormulaEvalError> {
+    if !x.is_finite() || !degrees.is_finite() {
+        return Err(FormulaEvalError::Value);
+    }
+    if degrees < 1.0 {
+        return Err(FormulaEvalError::Num);
+    }
+    let degrees = degrees.trunc();
+    let beta_x = degrees / (degrees + x * x);
+    let tail = 0.5 * formula_regularized_beta(beta_x, degrees / 2.0, 0.5)?;
+    Ok(if x >= 0.0 { 1.0 - tail } else { tail })
+}
+
+fn formula_student_t_right_tail_from_abs(t: f64, degrees: f64) -> Result<f64, FormulaEvalError> {
+    formula_student_t_cdf(t.abs(), degrees).map(|value| (1.0 - value).clamp(0.0, 1.0))
+}
+
+fn formula_f_right_tail(x: f64, degrees1: f64, degrees2: f64) -> Result<f64, FormulaEvalError> {
+    if ![x, degrees1, degrees2]
+        .iter()
+        .all(|value| value.is_finite())
+    {
+        return Err(FormulaEvalError::Value);
+    }
+    if x < 0.0 || degrees1 < 1.0 || degrees2 < 1.0 {
+        return Err(FormulaEvalError::Num);
+    }
+    let degrees1 = degrees1.trunc();
+    let degrees2 = degrees2.trunc();
+    let transformed = degrees1 * x / (degrees1 * x + degrees2);
+    formula_regularized_beta(transformed, degrees1 / 2.0, degrees2 / 2.0)
+        .map(|value| (1.0 - value).clamp(0.0, 1.0))
+}
+
+fn formula_sample_mean_and_variance(values: &[f64]) -> Result<(f64, f64), FormulaEvalError> {
+    if values.len() < 2 {
+        return Err(FormulaEvalError::Div0);
+    }
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(FormulaEvalError::Value);
+    }
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let deviation_sum = values
+        .iter()
+        .map(|value| {
+            let deviation = value - mean;
+            deviation * deviation
+        })
+        .sum::<f64>();
+    formula_checked_numeric_result(deviation_sum / (values.len() - 1) as f64)
+        .map(|variance| (mean, variance))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FormulaComparisonOperator {
     Equal,
@@ -18022,6 +18206,15 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("CHISQ.TEST") || name.eq_ignore_ascii_case("CHITEST") {
             return self.parse_chisq_test_function();
         }
+        if name.eq_ignore_ascii_case("F.TEST") || name.eq_ignore_ascii_case("FTEST") {
+            return self.parse_f_test_function();
+        }
+        if name.eq_ignore_ascii_case("T.TEST") || name.eq_ignore_ascii_case("TTEST") {
+            return self.parse_t_test_function();
+        }
+        if name.eq_ignore_ascii_case("Z.TEST") || name.eq_ignore_ascii_case("ZTEST") {
+            return self.parse_z_test_function();
+        }
         if name.eq_ignore_ascii_case("DAVERAGE")
             || name.eq_ignore_ascii_case("DCOUNT")
             || name.eq_ignore_ascii_case("DCOUNTA")
@@ -21745,6 +21938,192 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             ),
         };
         self.evaluator.lookup_result_at(return_sheet_id, row, col)
+    }
+
+    fn parse_f_test_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let first_values = self.parse_aggregate_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let second_values = self.parse_aggregate_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+
+        let (_, first_variance) = formula_sample_mean_and_variance(first_values.as_slice())?;
+        let (_, second_variance) = formula_sample_mean_and_variance(second_values.as_slice())?;
+        if first_variance <= 0.0 || second_variance <= 0.0 {
+            return Err(FormulaEvalError::Div0);
+        }
+        let (ratio, degrees1, degrees2) = if first_variance >= second_variance {
+            (
+                first_variance / second_variance,
+                first_values.len() as f64 - 1.0,
+                second_values.len() as f64 - 1.0,
+            )
+        } else {
+            (
+                second_variance / first_variance,
+                second_values.len() as f64 - 1.0,
+                first_values.len() as f64 - 1.0,
+            )
+        };
+        formula_f_right_tail(ratio, degrees1, degrees2)
+            .and_then(|tail| formula_checked_numeric_result((2.0 * tail).min(1.0)))
+    }
+
+    fn parse_t_test_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let first_values = self.parse_aggregate_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let second_values = self.parse_aggregate_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let tails = formula_integer_argument(self.parse_comparison()?)?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let test_type = formula_integer_argument(self.parse_comparison()?)?;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        if !matches!(tails, 1 | 2) || !matches!(test_type, 1 | 2 | 3) {
+            return Err(FormulaEvalError::Num);
+        }
+
+        let (t_statistic, degrees) = match test_type {
+            1 => {
+                if first_values.len() != second_values.len() {
+                    return Err(FormulaEvalError::NA);
+                }
+                let differences = first_values
+                    .iter()
+                    .zip(second_values.iter())
+                    .map(|(first, second)| first - second)
+                    .collect::<Vec<_>>();
+                let (mean, variance) = formula_sample_mean_and_variance(differences.as_slice())?;
+                if variance <= 0.0 {
+                    return Err(FormulaEvalError::Div0);
+                }
+                (
+                    mean.abs() / (variance / differences.len() as f64).sqrt(),
+                    differences.len() as f64 - 1.0,
+                )
+            }
+            2 => {
+                let (first_mean, first_variance) =
+                    formula_sample_mean_and_variance(first_values.as_slice())?;
+                let (second_mean, second_variance) =
+                    formula_sample_mean_and_variance(second_values.as_slice())?;
+                let degrees = first_values.len() as f64 + second_values.len() as f64 - 2.0;
+                let pooled_variance = ((first_values.len() - 1) as f64 * first_variance
+                    + (second_values.len() - 1) as f64 * second_variance)
+                    / degrees;
+                if pooled_variance <= 0.0 {
+                    return Err(FormulaEvalError::Div0);
+                }
+                (
+                    (first_mean - second_mean).abs()
+                        / (pooled_variance
+                            * (1.0 / first_values.len() as f64 + 1.0 / second_values.len() as f64))
+                            .sqrt(),
+                    degrees,
+                )
+            }
+            3 => {
+                let (first_mean, first_variance) =
+                    formula_sample_mean_and_variance(first_values.as_slice())?;
+                let (second_mean, second_variance) =
+                    formula_sample_mean_and_variance(second_values.as_slice())?;
+                let first_component = first_variance / first_values.len() as f64;
+                let second_component = second_variance / second_values.len() as f64;
+                let denominator = (first_component + second_component).sqrt();
+                let degrees_denominator = first_component * first_component
+                    / (first_values.len() as f64 - 1.0)
+                    + second_component * second_component / (second_values.len() as f64 - 1.0);
+                if denominator == 0.0 || degrees_denominator == 0.0 {
+                    return Err(FormulaEvalError::Div0);
+                }
+                (
+                    (first_mean - second_mean).abs() / denominator,
+                    (first_component + second_component) * (first_component + second_component)
+                        / degrees_denominator,
+                )
+            }
+            _ => return Err(FormulaEvalError::Num),
+        };
+        if !t_statistic.is_finite() || !degrees.is_finite() {
+            return Err(FormulaEvalError::Num);
+        }
+        let tail = formula_student_t_right_tail_from_abs(t_statistic, degrees)?;
+        formula_checked_numeric_result(if tails == 1 {
+            tail
+        } else {
+            (2.0 * tail).min(1.0)
+        })
+    }
+
+    fn parse_z_test_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let values = self.parse_aggregate_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let x = self.parse_comparison()?;
+        if !x.is_finite() {
+            return Err(FormulaEvalError::Value);
+        }
+        self.skip_whitespace();
+        let sigma = if self.consume_char(')') {
+            None
+        } else {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let sigma = self.parse_comparison()?;
+            if !sigma.is_finite() {
+                return Err(FormulaEvalError::Value);
+            }
+            if sigma <= 0.0 {
+                return Err(FormulaEvalError::Num);
+            }
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            Some(sigma)
+        };
+        if values.is_empty() {
+            return Err(FormulaEvalError::NA);
+        }
+        if values.iter().any(|value| !value.is_finite()) {
+            return Err(FormulaEvalError::Value);
+        }
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        let sigma = if let Some(sigma) = sigma {
+            sigma
+        } else {
+            let (_, variance) = formula_sample_mean_and_variance(values.as_slice())?;
+            if variance <= 0.0 {
+                return Err(FormulaEvalError::Div0);
+            }
+            variance.sqrt()
+        };
+        let denominator = sigma / (values.len() as f64).sqrt();
+        if denominator == 0.0 {
+            return Err(FormulaEvalError::Div0);
+        }
+        let z = (mean - x) / denominator;
+        formula_standard_normal_cdf(z)
+            .and_then(|cdf| formula_checked_numeric_result((1.0 - cdf).clamp(0.0, 1.0)))
     }
 
     fn parse_chisq_test_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -30662,6 +31041,227 @@ mod tests {
             .expect("Application.Evaluate CHISQ.TEST");
         let number = expect_number(evaluated);
         assert!((number - (-5.0_f64).exp()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn application_calculate_updates_statistical_test_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let paired_values = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Range(A1:B3)"),
+        );
+        let variance_values = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1:E2".to_string())])
+                .expect("Range(D1:E2)"),
+        );
+        let equal_values = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("G1:H3".to_string())])
+                .expect("Range(G1:H3)"),
+        );
+        let z_values = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("J1:K3".to_string())])
+                .expect("Range(J1:K3)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("M1:M17".to_string())],
+                )
+                .expect("Range(M1:M17)"),
+        );
+
+        runtime
+            .dispatch_set(
+                paired_values,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        2,
+                        vec![
+                            OmValue::Number(2.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(6.0),
+                            OmValue::Number(3.0),
+                        ],
+                    )
+                    .expect("paired statistical test values"),
+                ),
+                &[],
+            )
+            .expect("set paired values");
+        runtime
+            .dispatch_set(
+                variance_values,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        2,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(5.0),
+                            OmValue::Number(3.0),
+                        ],
+                    )
+                    .expect("variance statistical test values"),
+                ),
+                &[],
+            )
+            .expect("set variance values");
+        runtime
+            .dispatch_set(
+                equal_values,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        2,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(3.0),
+                        ],
+                    )
+                    .expect("equal statistical test values"),
+                ),
+                &[],
+            )
+            .expect("set equal values");
+        runtime
+            .dispatch_set(
+                z_values,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        2,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(5.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(5.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(5.0),
+                        ],
+                    )
+                    .expect("z statistical test values"),
+                ),
+                &[],
+            )
+            .expect("set z values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        17,
+                        1,
+                        vec![
+                            OmValue::Text("=F.TEST(D1:D2,E1:E2)".to_string()),
+                            OmValue::Text("=FTEST(D1:D2,E1:E2)".to_string()),
+                            OmValue::Text("=F.TEST(G1:G3,H1:H3)".to_string()),
+                            OmValue::Text("=T.TEST(A1:A3,B1:B3,2,1)".to_string()),
+                            OmValue::Text("=TTEST(A1:A3,B1:B3,1,1)".to_string()),
+                            OmValue::Text("=T.TEST(G1:G3,H1:H3,1,2)".to_string()),
+                            OmValue::Text("=T.TEST(G1:G3,H1:H3,2,3)".to_string()),
+                            OmValue::Text("=Z.TEST(J1:J3,2)".to_string()),
+                            OmValue::Text("=ZTEST(J1:J3,2,1)".to_string()),
+                            OmValue::Text("=F.TEST(D1:D1,E1:E2)".to_string()),
+                            OmValue::Text("=F.TEST(K1:K3,J1:J3)".to_string()),
+                            OmValue::Text("=T.TEST(A1:A2,B1:B3,2,1)".to_string()),
+                            OmValue::Text("=T.TEST(A1:A3,B1:B3,3,1)".to_string()),
+                            OmValue::Text("=T.TEST(A1:A3,B1:B3,2,4)".to_string()),
+                            OmValue::Text("=Z.TEST(K1:K3,5)".to_string()),
+                            OmValue::Text("=Z.TEST(J1:J3,2,0)".to_string()),
+                            OmValue::Text("=Z.TEST(N1:N2,2)".to_string()),
+                        ],
+                    )
+                    .expect("statistical test formulas"),
+                ),
+                &[],
+            )
+            .expect("set statistical test formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("statistical test values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected statistical test value array");
+        };
+        let expected_f_test = 2.0 * (1.0 - 2.0 / std::f64::consts::PI * 2.0_f64.atan());
+        let expected_t_test_two_tail = 1.0 - (6.0_f64 / 7.0).sqrt();
+        let expected_numbers = [
+            expected_f_test,
+            expected_f_test,
+            1.0,
+            expected_t_test_two_tail,
+            expected_t_test_two_tail / 2.0,
+            0.5,
+            1.0,
+            0.5,
+            0.5,
+        ];
+        for (index, expected) in expected_numbers.into_iter().enumerate() {
+            let number = expect_number(values.values[index].clone());
+            assert!(
+                (number - expected).abs() < 1e-7,
+                "statistical test result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            &values.values[9..],
+            &[
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::NA),
+            ]
+        );
+        let evaluated = runtime
+            .dispatch_invoke(
+                runtime.root_application(),
+                "Evaluate",
+                &[OmValue::Text("=Z.TEST(J1:J3,2)".to_string())],
+            )
+            .expect("Application.Evaluate Z.TEST");
+        let number = expect_number(evaluated);
+        assert!((number - 0.5).abs() < 1e-7);
     }
 
     #[test]
