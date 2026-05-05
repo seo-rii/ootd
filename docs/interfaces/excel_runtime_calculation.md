@@ -113,6 +113,7 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `BIN2HEX`
 - `BIN2OCT`
 - `CONVERT`
+- `EUROCONVERT`
 - `DEC2BIN`
 - `DEC2HEX`
 - `DEC2OCT`
@@ -222,6 +223,7 @@ Roman numeral notes:
 - Complex engineering helpers parse Excel-style text values with lowercase `i` or `j` suffixes; text-returning `IM*` helpers preserve the suffix when the result includes an imaginary component.
 - `BESSELI`, `BESSELJ`, `BESSELK`, and `BESSELY` support non-negative integer orders, truncating fractional order arguments to match Excel's scalar argument handling.
 - `CONVERT` supports Excel's documented measurement groups, case-sensitive unit aliases, metric prefixes, binary prefixes for information units, and affine temperature conversions.
+- `EUROCONVERT` supports the documented legacy euro member currency codes, fixed EU rates, currency-specific rounding, full-precision mode, and triangulation precision for member-currency-to-member-currency conversion.
 
 ### Financial helpers
 

@@ -14652,6 +14652,128 @@ fn formula_convert_value(
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct FormulaEuroCurrency {
+    rate: f64,
+    calculation_precision: i32,
+}
+
+fn formula_euro_currency(code: &str) -> Option<FormulaEuroCurrency> {
+    let currency = match code {
+        "ATS" => FormulaEuroCurrency {
+            rate: 13.7603,
+            calculation_precision: 2,
+        },
+        "BEF" | "LUF" => FormulaEuroCurrency {
+            rate: 40.3399,
+            calculation_precision: 0,
+        },
+        "DEM" => FormulaEuroCurrency {
+            rate: 1.95583,
+            calculation_precision: 2,
+        },
+        "ESP" => FormulaEuroCurrency {
+            rate: 166.386,
+            calculation_precision: 0,
+        },
+        "EUR" => FormulaEuroCurrency {
+            rate: 1.0,
+            calculation_precision: 2,
+        },
+        "FIM" => FormulaEuroCurrency {
+            rate: 5.94573,
+            calculation_precision: 2,
+        },
+        "FRF" => FormulaEuroCurrency {
+            rate: 6.55957,
+            calculation_precision: 2,
+        },
+        "GRD" => FormulaEuroCurrency {
+            rate: 340.75,
+            calculation_precision: 0,
+        },
+        "IEP" => FormulaEuroCurrency {
+            rate: 0.787564,
+            calculation_precision: 2,
+        },
+        "ITL" => FormulaEuroCurrency {
+            rate: 1936.27,
+            calculation_precision: 0,
+        },
+        "NLG" => FormulaEuroCurrency {
+            rate: 2.20371,
+            calculation_precision: 2,
+        },
+        "PTE" => FormulaEuroCurrency {
+            rate: 200.482,
+            calculation_precision: 0,
+        },
+        "SIT" => FormulaEuroCurrency {
+            rate: 239.64,
+            calculation_precision: 2,
+        },
+        _ => return None,
+    };
+    Some(currency)
+}
+
+fn formula_round_to_decimal_places(value: f64, places: i32) -> Result<f64, FormulaEvalError> {
+    let factor = 10_f64.powi(places);
+    if !factor.is_finite() || factor == 0.0 {
+        return Err(FormulaEvalError::Num);
+    }
+    formula_checked_numeric_result(round_half_away_from_zero(value * factor) / factor)
+}
+
+fn formula_round_to_significant_digits(value: f64, digits: i64) -> Result<f64, FormulaEvalError> {
+    if digits < 1 || digits > i64::from(i32::MAX) {
+        return Err(FormulaEvalError::Value);
+    }
+    if value == 0.0 {
+        return Ok(0.0);
+    }
+    let magnitude = value.abs().log10().floor();
+    if !magnitude.is_finite() || magnitude < i32::MIN as f64 || magnitude > i32::MAX as f64 {
+        return Err(FormulaEvalError::Num);
+    }
+    let places = i32::try_from(digits - 1).map_err(|_| FormulaEvalError::Value)? - magnitude as i32;
+    formula_round_to_decimal_places(value, places)
+}
+
+fn formula_euroconvert_value(
+    value: f64,
+    source_code: &str,
+    target_code: &str,
+    full_precision: bool,
+    triangulation_precision: Option<i64>,
+) -> Result<f64, FormulaEvalError> {
+    if !value.is_finite() {
+        return Err(FormulaEvalError::Value);
+    }
+    let source_code = source_code.to_ascii_uppercase();
+    let target_code = target_code.to_ascii_uppercase();
+    if source_code == target_code {
+        return Ok(value);
+    }
+    let source = formula_euro_currency(source_code.as_str()).ok_or(FormulaEvalError::Value)?;
+    let target = formula_euro_currency(target_code.as_str()).ok_or(FormulaEvalError::Value)?;
+    let mut euros = value / source.rate;
+    if let Some(precision) = triangulation_precision {
+        if precision < 3 {
+            return Err(FormulaEvalError::Value);
+        }
+        if source_code != "EUR" {
+            euros = formula_round_to_significant_digits(euros, precision)?;
+        }
+    }
+    let result = euros * target.rate;
+    if full_precision {
+        formula_checked_numeric_result(result)
+    } else {
+        formula_round_to_decimal_places(result, target.calculation_precision)
+    }
+}
+
 fn formula_numbervalue(
     text: &str,
     decimal_separator: &str,
@@ -17297,6 +17419,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         if name.eq_ignore_ascii_case("CONVERT") {
             return self.parse_convert_function();
+        }
+        if name.eq_ignore_ascii_case("EUROCONVERT") {
+            return self.parse_euroconvert_function();
         }
         if name.eq_ignore_ascii_case("IMABS")
             || name.eq_ignore_ascii_case("IMAGINARY")
@@ -23719,6 +23844,47 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return Err(FormulaEvalError::Unsupported);
         }
         formula_convert_value(value, from_unit.as_str(), to_unit.as_str())
+    }
+
+    fn parse_euroconvert_function(&mut self) -> Result<f64, FormulaEvalError> {
+        let value = self.parse_comparison()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let source = self.parse_convert_unit_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let target = self.parse_convert_unit_argument()?;
+        let mut full_precision = false;
+        let mut triangulation_precision = None;
+        self.skip_whitespace();
+        if !self.consume_char(')') {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            full_precision = self.parse_comparison()? != 0.0;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                triangulation_precision = Some(formula_integer_argument(self.parse_comparison()?)?);
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+            }
+        }
+        formula_euroconvert_value(
+            value,
+            source.as_str(),
+            target.as_str(),
+            full_precision,
+            triangulation_precision,
+        )
     }
 
     fn parse_convert_unit_argument(&mut self) -> Result<String, FormulaEvalError> {
@@ -32539,6 +32705,89 @@ mod tests {
                 OmValue::Error(CellError::NA),
                 OmValue::Error(CellError::NA),
                 OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_euroconvert_formula() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A10".to_string())],
+                )
+                .expect("Range(A1:A10)"),
+        );
+
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        10,
+                        1,
+                        vec![
+                            OmValue::Text(r#"=EUROCONVERT(1.2,"DEM","EUR")"#.to_string()),
+                            OmValue::Text(r#"=EUROCONVERT(1,"FRF","EUR",TRUE,3)"#.to_string()),
+                            OmValue::Text(r#"=EUROCONVERT(1,"FRF","EUR",FALSE,3)"#.to_string()),
+                            OmValue::Text(r#"=EUROCONVERT(1,"FRF","DEM",TRUE,3)"#.to_string()),
+                            OmValue::Text(r#"=EUROCONVERT(1,"FRF","DEM",FALSE,3)"#.to_string()),
+                            OmValue::Text(r#"=EUROCONVERT(12.34,"EUR","EUR")"#.to_string()),
+                            OmValue::Text(r#"=EUROCONVERT(1,"BAD","EUR")"#.to_string()),
+                            OmValue::Text(r#"=EUROCONVERT(1,"FRF","EUR",TRUE,2)"#.to_string()),
+                            OmValue::Text(r#"=EUROCONVERT(1,1,"EUR")"#.to_string()),
+                            OmValue::Text(r#"=EUROCONVERT(1,"FRF","DEM",TRUE,3.9)"#.to_string()),
+                        ],
+                    )
+                    .expect("EUROCONVERT formulas"),
+                ),
+                &[],
+            )
+            .expect("set EUROCONVERT formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("EUROCONVERT values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected EUROCONVERT value array");
+        };
+        let expected_numbers = [0.61, 0.152, 0.15, 0.29728616, 0.30, 12.34];
+        for (index, expected) in expected_numbers.into_iter().enumerate() {
+            let number = expect_number(values.values[index].clone());
+            assert!(
+                (number - expected).abs() < 1e-10,
+                "EUROCONVERT result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            &values.values[6..],
+            &[
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
             ]
         );
