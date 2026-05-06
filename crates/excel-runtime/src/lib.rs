@@ -247,6 +247,7 @@ pub struct ExcelRuntime {
     cut_copy_mode: Option<i32>,
     clipboard: Option<RuntimeClipboard>,
     find_state: Option<RuntimeFindState>,
+    last_goto_selection: Option<RuntimeSelection>,
     next_handle: u64,
     next_object_handle: u64,
     next_created_workbook_index: u64,
@@ -290,6 +291,7 @@ impl ExcelRuntime {
             cut_copy_mode: None,
             clipboard: None,
             find_state: None,
+            last_goto_selection: None,
             next_handle: 1,
             next_object_handle: FIRST_DYNAMIC_OBJECT_HANDLE_VALUE,
             next_created_workbook_index: 1,
@@ -528,6 +530,12 @@ impl ExcelRuntime {
             .is_some_and(|state| state.workbook == workbook)
         {
             self.find_state = None;
+        }
+        if self
+            .last_goto_selection
+            .is_some_and(|selection| selection.workbook == workbook)
+        {
+            self.last_goto_selection = None;
         }
         Ok(())
     }
@@ -5513,11 +5521,16 @@ impl ExcelRuntime {
                 }
 
                 let (workbook, sheet_id, rect) = match args.first() {
-                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => {
-                        return Err(OmError::unsupported(
-                            "Application.Goto without a reference is not implemented",
-                        ));
-                    }
+                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => self
+                        .last_goto_selection
+                        .map(|selection| {
+                            (selection.workbook, selection.sheet_id, selection.rect)
+                        })
+                        .ok_or_else(|| {
+                            OmError::invalid_state(
+                                "Application.Goto without a reference requires a prior Application.Goto selection",
+                            )
+                        })?,
                     Some(OmValue::Text(reference)) => {
                         self.resolve_application_reference_text(reference)?
                     }
@@ -5542,6 +5555,11 @@ impl ExcelRuntime {
                 };
 
                 self.set_selection(workbook, sheet_id, rect);
+                self.last_goto_selection = Some(RuntimeSelection {
+                    workbook,
+                    sheet_id,
+                    rect,
+                });
                 Ok(OmValue::Empty)
             }
             "Range" => match args {
@@ -55574,12 +55592,24 @@ mod tests {
             ),
             "$D$5"
         );
-        assert_eq!(
+        assert!(matches!(
             runtime
                 .dispatch_invoke(application, "Goto", &[])
-                .expect_err("Application.Goto without reference should be rejected")
-                .code,
-            OmErrorCode::Unsupported
+                .expect("Application.Goto without reference repeats last goto"),
+            OmValue::Empty
+        ));
+        let repeated_selection = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after repeated Application.Goto"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(repeated_selection, "Address", &[])
+                    .expect("Selection after repeated Application.Goto address")
+            ),
+            "$D$5"
         );
         assert_eq!(
             runtime
@@ -55605,6 +55635,13 @@ mod tests {
 
         let mut empty_runtime = ExcelRuntime::new();
         let empty_application = empty_runtime.root_application();
+        assert_eq!(
+            empty_runtime
+                .dispatch_invoke(empty_application, "Goto", &[])
+                .expect_err("Application.Goto without prior goto should fail")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             empty_runtime
                 .dispatch_invoke(
@@ -55851,6 +55888,33 @@ mod tests {
         );
 
         assert!(runtime.workbook_model(workbook).is_err());
+    }
+
+    #[test]
+    fn application_goto_without_reference_is_cleared_when_workbook_closes() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+
+        runtime
+            .dispatch_invoke(application, "Goto", &[OmValue::Text("C7".to_string())])
+            .expect("Application.Goto(C7)");
+        runtime.close_workbook(workbook).expect("close workbook");
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(application, "Goto", &[])
+                .expect_err("Application.Goto without reference should fail after close")
+                .code,
+            OmErrorCode::InvalidState
+        );
     }
 
     #[test]
