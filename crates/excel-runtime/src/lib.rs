@@ -2053,14 +2053,54 @@ impl ExcelRuntime {
                             }
                             ordering
                         };
+                        let cell_contains_text = |row: u32, col: u32| -> bool {
+                            source_cells.get(&(row, col)).is_some_and(|cell| {
+                                matches!(&cell.value, CellValue::Text(text) if !text.trim().is_empty())
+                            })
+                        };
+                        let cell_contains_non_text_data = |row: u32, col: u32| -> bool {
+                            source_cells.get(&(row, col)).is_some_and(|cell| {
+                                matches!(
+                                    cell.value,
+                                    CellValue::Number(_) | CellValue::Bool(_) | CellValue::Error(_)
+                                )
+                            })
+                        };
+                        let guess_row_header = || -> bool {
+                            if rect.row_first >= rect.row_last {
+                                return false;
+                            }
+                            let header_has_text = (rect.col_first..=rect.col_last)
+                                .any(|col| cell_contains_text(rect.row_first, col));
+                            let body_has_non_text_data =
+                                (rect.row_first + 1..=rect.row_last).any(|row| {
+                                    (rect.col_first..=rect.col_last)
+                                        .any(|col| cell_contains_non_text_data(row, col))
+                                });
+                            header_has_text && body_has_non_text_data
+                        };
+                        let guess_column_header = || -> bool {
+                            if rect.col_first >= rect.col_last {
+                                return false;
+                            }
+                            let header_has_text = (rect.row_first..=rect.row_last)
+                                .any(|row| cell_contains_text(row, rect.col_first));
+                            let body_has_non_text_data =
+                                (rect.col_first + 1..=rect.col_last).any(|col| {
+                                    (rect.row_first..=rect.row_last)
+                                        .any(|row| cell_contains_non_text_data(row, col))
+                                });
+                            header_has_text && body_has_non_text_data
+                        };
 
                         let mut changed = false;
                         if orientation == XL_SORT_ROWS {
-                            let row_first = if header == XL_YES {
-                                rect.row_first.saturating_add(1)
-                            } else {
-                                rect.row_first
-                            };
+                            let row_first =
+                                if header == XL_YES || (header == XL_GUESS && guess_row_header()) {
+                                    rect.row_first.saturating_add(1)
+                                } else {
+                                    rect.row_first
+                                };
                             if row_first >= rect.row_last {
                                 return Ok(OmValue::Empty);
                             }
@@ -2126,7 +2166,9 @@ impl ExcelRuntime {
                                 }
                             }
                         } else {
-                            let col_first = if header == XL_YES {
+                            let col_first = if header == XL_YES
+                                || (header == XL_GUESS && guess_column_header())
+                            {
                                 rect.col_first.saturating_add(1)
                             } else {
                                 rect.col_first
@@ -48882,6 +48924,165 @@ mod tests {
             ("C4", "Charlie"),
             ("C5", "Dan"),
         ] {
+            let cell = expect_object_handle(
+                runtime
+                    .dispatch_invoke(active_sheet, "Range", &[OmValue::Text(address.to_string())])
+                    .expect("Range(cell)"),
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(cell, "Value2", &[])
+                        .expect("cell Value2")
+                ),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn range_sort_dispatch_guesses_row_and_column_headers() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let row_table = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:C4".to_string())])
+                .expect("Range(A1:C4)"),
+        );
+        let row_score_key = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B2".to_string())])
+                .expect("Range(B2)"),
+        );
+        runtime
+            .dispatch_set(
+                row_table,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        3,
+                        vec![
+                            OmValue::Text("Name".to_string()),
+                            OmValue::Text("Score".to_string()),
+                            OmValue::Text("Dept".to_string()),
+                            OmValue::Text("Bob".to_string()),
+                            OmValue::Number(1.0),
+                            OmValue::Text("Sales".to_string()),
+                            OmValue::Text("Alice".to_string()),
+                            OmValue::Number(3.0),
+                            OmValue::Text("Eng".to_string()),
+                            OmValue::Text("Charlie".to_string()),
+                            OmValue::Number(2.0),
+                            OmValue::Text("Ops".to_string()),
+                        ],
+                    )
+                    .expect("row sort values"),
+                ),
+                &[],
+            )
+            .expect("A1:C4.Value2");
+        runtime
+            .dispatch_invoke(
+                row_table,
+                "Sort",
+                &[
+                    OmValue::Object(row_score_key),
+                    OmValue::Number(f64::from(super::XL_SORT_ASCENDING)),
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Number(f64::from(super::XL_GUESS)),
+                ],
+            )
+            .expect("Range.Sort rows Header:=xlGuess");
+        for (address, expected) in [
+            ("A1", "Name"),
+            ("A2", "Bob"),
+            ("A3", "Charlie"),
+            ("A4", "Alice"),
+        ] {
+            let cell = expect_object_handle(
+                runtime
+                    .dispatch_invoke(active_sheet, "Range", &[OmValue::Text(address.to_string())])
+                    .expect("Range(cell)"),
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(cell, "Value2", &[])
+                        .expect("cell Value2")
+                ),
+                expected
+            );
+        }
+
+        let column_table = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E1:G2".to_string())])
+                .expect("Range(E1:G2)"),
+        );
+        let column_value_key = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E2".to_string())])
+                .expect("Range(E2)"),
+        );
+        runtime
+            .dispatch_set(
+                column_table,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        3,
+                        vec![
+                            OmValue::Text("Metric".to_string()),
+                            OmValue::Text("West".to_string()),
+                            OmValue::Text("East".to_string()),
+                            OmValue::Text("Value".to_string()),
+                            OmValue::Number(2.0),
+                            OmValue::Number(1.0),
+                        ],
+                    )
+                    .expect("column sort values"),
+                ),
+                &[],
+            )
+            .expect("E1:G2.Value2");
+        runtime
+            .dispatch_invoke(
+                column_table,
+                "Sort",
+                &[
+                    OmValue::Object(column_value_key),
+                    OmValue::Number(f64::from(super::XL_SORT_ASCENDING)),
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Number(f64::from(super::XL_GUESS)),
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Number(f64::from(super::XL_SORT_COLUMNS)),
+                ],
+            )
+            .expect("Range.Sort columns Header:=xlGuess");
+        for (address, expected) in [("E1", "Metric"), ("F1", "East"), ("G1", "West")] {
             let cell = expect_object_handle(
                 runtime
                     .dispatch_invoke(active_sheet, "Range", &[OmValue::Text(address.to_string())])
