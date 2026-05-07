@@ -83,6 +83,7 @@ const XL_NO: i32 = 2;
 const XL_GUESS: i32 = 0;
 const XL_PINYIN: i32 = 1;
 const XL_SORT_NORMAL: i32 = 0;
+const XL_SORT_TEXT_AS_NUMBERS: i32 = 1;
 const XL_DECIMAL_SEPARATOR: i32 = 3;
 const XL_THOUSANDS_SEPARATOR: i32 = 4;
 const XL_LIST_SEPARATOR: i32 = 5;
@@ -1882,18 +1883,6 @@ impl ExcelRuntime {
                             "Range.Sort SortMethod",
                             &[XL_PINYIN],
                         )?;
-                        for (index, label) in [
-                            (12usize, "Range.Sort DataOption1"),
-                            (13usize, "Range.Sort DataOption2"),
-                            (14usize, "Range.Sort DataOption3"),
-                        ] {
-                            let _ = Self::coerce_range_find_enum(
-                                args.get(index),
-                                XL_SORT_NORMAL,
-                                label,
-                                &[XL_SORT_NORMAL],
-                            )?;
-                        }
 
                         let parse_key_rect = |value: Option<&OmValue>,
                                               label: &str|
@@ -1934,6 +1923,12 @@ impl ExcelRuntime {
                         };
                         let key1_rect = parse_key_rect(args.first(), "Key1")?;
                         let key2_rect = parse_key_rect(args.get(2), "Key2")?;
+                        let data_option1 = Self::coerce_range_find_enum(
+                            args.get(12),
+                            XL_SORT_NORMAL,
+                            "Range.Sort DataOption1",
+                            &[XL_SORT_NORMAL, XL_SORT_TEXT_AS_NUMBERS],
+                        )?;
                         let order2 = if key2_rect.is_some() {
                             Self::coerce_range_find_enum(
                                 args.get(4),
@@ -1948,6 +1943,24 @@ impl ExcelRuntime {
                                 ));
                             }
                             XL_SORT_ASCENDING
+                        };
+                        let data_option2 = if key2_rect.is_some() {
+                            Self::coerce_range_find_enum(
+                                args.get(13),
+                                XL_SORT_NORMAL,
+                                "Range.Sort DataOption2",
+                                &[XL_SORT_NORMAL, XL_SORT_TEXT_AS_NUMBERS],
+                            )?
+                        } else {
+                            if args
+                                .get(13)
+                                .is_some_and(|value| !om_value_is_omitted(value))
+                            {
+                                return Err(OmError::invalid_argument(
+                                    "Range.Sort DataOption2 requires Key2",
+                                ));
+                            }
+                            XL_SORT_NORMAL
                         };
                         let key3_rect = parse_key_rect(args.get(5), "Key3")?;
                         let order3 = if key3_rect.is_some() {
@@ -1965,10 +1978,28 @@ impl ExcelRuntime {
                             }
                             XL_SORT_ASCENDING
                         };
+                        let data_option3 = if key3_rect.is_some() {
+                            Self::coerce_range_find_enum(
+                                args.get(14),
+                                XL_SORT_NORMAL,
+                                "Range.Sort DataOption3",
+                                &[XL_SORT_NORMAL, XL_SORT_TEXT_AS_NUMBERS],
+                            )?
+                        } else {
+                            if args
+                                .get(14)
+                                .is_some_and(|value| !om_value_is_omitted(value))
+                            {
+                                return Err(OmError::invalid_argument(
+                                    "Range.Sort DataOption3 requires Key3",
+                                ));
+                            }
+                            XL_SORT_NORMAL
+                        };
                         let key_rects = [
-                            (key1_rect, order1, "Key1"),
-                            (key2_rect, order2, "Key2"),
-                            (key3_rect, order3, "Key3"),
+                            (key1_rect, order1, data_option1, "Key1"),
+                            (key2_rect, order2, data_option2, "Key2"),
+                            (key3_rect, order3, data_option3, "Key3"),
                         ];
 
                         let source_cells = {
@@ -1988,7 +2019,8 @@ impl ExcelRuntime {
                         };
                         let compare_cells = |left: Option<&excel_model::CellData>,
                                              right: Option<&excel_model::CellData>,
-                                             order: i32|
+                                             order: i32,
+                                             data_option: i32|
                          -> Ordering {
                             let left_value =
                                 left.map(|cell| &cell.value).unwrap_or(&CellValue::Blank);
@@ -2031,6 +2063,35 @@ impl ExcelRuntime {
                                     CellError::Unknown => 12,
                                 }
                             };
+                            let numeric_sort_value = |value: &CellValue| -> Option<f64> {
+                                match value {
+                                    CellValue::Number(number) => Some(*number),
+                                    CellValue::Text(text)
+                                        if data_option == XL_SORT_TEXT_AS_NUMBERS =>
+                                    {
+                                        text.trim().parse::<f64>().ok()
+                                    }
+                                    _ => None,
+                                }
+                            };
+                            if data_option == XL_SORT_TEXT_AS_NUMBERS {
+                                match (
+                                    numeric_sort_value(left_value),
+                                    numeric_sort_value(right_value),
+                                ) {
+                                    (Some(left), Some(right)) => {
+                                        let mut ordering =
+                                            left.partial_cmp(&right).unwrap_or(Ordering::Equal);
+                                        if order == XL_SORT_DESCENDING {
+                                            ordering = ordering.reverse();
+                                        }
+                                        return ordering;
+                                    }
+                                    (Some(_), None) => return Ordering::Less,
+                                    (None, Some(_)) => return Ordering::Greater,
+                                    (None, None) => {}
+                                }
+                            }
                             let mut ordering = match (left_value, right_value) {
                                 (CellValue::Number(left), CellValue::Number(right)) => {
                                     left.partial_cmp(right).unwrap_or(Ordering::Equal)
@@ -2046,7 +2107,16 @@ impl ExcelRuntime {
                                 (CellValue::Error(left), CellValue::Error(right)) => {
                                     error_rank(*left).cmp(&error_rank(*right))
                                 }
-                                _ => value_rank(left_value).cmp(&value_rank(right_value)),
+                                _ => {
+                                    let adjusted_rank = |value: &CellValue| -> i32 {
+                                        if numeric_sort_value(value).is_some() {
+                                            0
+                                        } else {
+                                            value_rank(value)
+                                        }
+                                    };
+                                    adjusted_rank(left_value).cmp(&adjusted_rank(right_value))
+                                }
                             };
                             if order == XL_SORT_DESCENDING {
                                 ordering = ordering.reverse();
@@ -2105,7 +2175,7 @@ impl ExcelRuntime {
                                 return Ok(OmValue::Empty);
                             }
                             let mut key_columns = Vec::new();
-                            for (key_rect, order, label) in key_rects {
+                            for (key_rect, order, data_option, label) in key_rects {
                                 let key_col = match key_rect {
                                     Some(key_rect) => {
                                         if key_rect.width() != 1 {
@@ -2127,15 +2197,16 @@ impl ExcelRuntime {
                                     None if label == "Key1" => rect.col_first,
                                     None => continue,
                                 };
-                                key_columns.push((key_col, order));
+                                key_columns.push((key_col, order, data_option));
                             }
                             let mut sorted_rows = (row_first..=rect.row_last).collect::<Vec<_>>();
                             sorted_rows.sort_by(|left, right| {
-                                for (key_col, order) in &key_columns {
+                                for (key_col, order, data_option) in &key_columns {
                                     let ordering = compare_cells(
                                         source_cells.get(&(*left, *key_col)),
                                         source_cells.get(&(*right, *key_col)),
                                         *order,
+                                        *data_option,
                                     );
                                     if ordering != Ordering::Equal {
                                         return ordering;
@@ -2177,7 +2248,7 @@ impl ExcelRuntime {
                                 return Ok(OmValue::Empty);
                             }
                             let mut key_rows = Vec::new();
-                            for (key_rect, order, label) in key_rects {
+                            for (key_rect, order, data_option, label) in key_rects {
                                 let key_row = match key_rect {
                                     Some(key_rect) => {
                                         if key_rect.height() != 1 {
@@ -2199,15 +2270,16 @@ impl ExcelRuntime {
                                     None if label == "Key1" => rect.row_first,
                                     None => continue,
                                 };
-                                key_rows.push((key_row, order));
+                                key_rows.push((key_row, order, data_option));
                             }
                             let mut sorted_cols = (col_first..=rect.col_last).collect::<Vec<_>>();
                             sorted_cols.sort_by(|left, right| {
-                                for (key_row, order) in &key_rows {
+                                for (key_row, order, data_option) in &key_rows {
                                     let ordering = compare_cells(
                                         source_cells.get(&(*key_row, *left)),
                                         source_cells.get(&(*key_row, *right)),
                                         *order,
+                                        *data_option,
                                     );
                                     if ordering != Ordering::Equal {
                                         return ordering;
@@ -49100,6 +49172,103 @@ mod tests {
     }
 
     #[test]
+    fn range_sort_dispatch_treats_text_keys_as_numbers() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let table = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:C3".to_string())])
+                .expect("Range(A1:C3)"),
+        );
+        let group_key = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        let numeric_text_key = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Range(B1)"),
+        );
+        runtime
+            .dispatch_set(
+                table,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        3,
+                        vec![
+                            OmValue::Text("Group".to_string()),
+                            OmValue::Text("10".to_string()),
+                            OmValue::Text("ten".to_string()),
+                            OmValue::Text("Group".to_string()),
+                            OmValue::Text("2".to_string()),
+                            OmValue::Text("two".to_string()),
+                            OmValue::Text("Group".to_string()),
+                            OmValue::Text("1".to_string()),
+                            OmValue::Text("one".to_string()),
+                        ],
+                    )
+                    .expect("text-number values"),
+                ),
+                &[],
+            )
+            .expect("A1:C3.Value2");
+
+        runtime
+            .dispatch_invoke(
+                table,
+                "Sort",
+                &[
+                    OmValue::Object(group_key),
+                    OmValue::Number(f64::from(super::XL_SORT_ASCENDING)),
+                    OmValue::Object(numeric_text_key),
+                    OmValue::Missing,
+                    OmValue::Number(f64::from(super::XL_SORT_ASCENDING)),
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Number(f64::from(super::XL_SORT_TEXT_AS_NUMBERS)),
+                ],
+            )
+            .expect("Range.Sort DataOption2:=xlSortTextAsNumbers");
+
+        for (address, expected) in [("C1", "one"), ("C2", "two"), ("C3", "ten")] {
+            let cell = expect_object_handle(
+                runtime
+                    .dispatch_invoke(active_sheet, "Range", &[OmValue::Text(address.to_string())])
+                    .expect("Range(cell)"),
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(cell, "Value2", &[])
+                        .expect("cell Value2")
+                ),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn range_sort_dispatch_sorts_columns_and_validates_options() {
         let mut runtime = ExcelRuntime::new();
         runtime
@@ -49241,12 +49410,38 @@ mod tests {
                         OmValue::Missing,
                         OmValue::Missing,
                         OmValue::Missing,
-                        OmValue::Number(1.0),
+                        OmValue::Number(999.0),
                     ],
                 )
-                .expect_err("Range.Sort should reject DataOption1")
+                .expect_err("Range.Sort should reject unsupported DataOption1")
                 .code,
             OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    table,
+                    "Sort",
+                    &[
+                        OmValue::Object(key),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(f64::from(super::XL_SORT_TEXT_AS_NUMBERS)),
+                    ],
+                )
+                .expect_err("Range.Sort should reject DataOption2 without Key2")
+                .code,
+            OmErrorCode::InvalidArgument
         );
 
         let mut read_only_runtime = ExcelRuntime::new();
