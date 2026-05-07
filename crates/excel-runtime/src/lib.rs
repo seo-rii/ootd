@@ -56,11 +56,17 @@ const XL_SHIFT_UP: i32 = -4162;
 const XL_COPY: i32 = 1;
 const XL_CUT: i32 = 2;
 const XL_PASTE_ALL: i32 = -4104;
+const XL_PASTE_COMMENTS: i32 = -4144;
 const XL_PASTE_FORMATS: i32 = -4122;
 const XL_PASTE_FORMULAS: i32 = -4123;
+const XL_PASTE_VALIDATION: i32 = 6;
+const XL_PASTE_ALL_EXCEPT_BORDERS: i32 = 7;
+const XL_PASTE_COLUMN_WIDTHS: i32 = 8;
 const XL_PASTE_FORMULAS_AND_NUMBER_FORMATS: i32 = 11;
 const XL_PASTE_VALUES: i32 = -4163;
 const XL_PASTE_VALUES_AND_NUMBER_FORMATS: i32 = 12;
+const XL_PASTE_ALL_USING_SOURCE_THEME: i32 = 13;
+const XL_PASTE_ALL_MERGING_CONDITIONAL_FORMATS: i32 = 14;
 const XL_PASTE_SPECIAL_OPERATION_NONE: i32 = -4142;
 const XL_PASTE_SPECIAL_OPERATION_ADD: i32 = 2;
 const XL_PASTE_SPECIAL_OPERATION_SUBTRACT: i32 = 3;
@@ -76,6 +82,8 @@ const XL_SEARCH_NEXT: i32 = 1;
 const XL_SEARCH_PREVIOUS: i32 = 2;
 const XL_SORT_ASCENDING: i32 = 1;
 const XL_SORT_DESCENDING: i32 = 2;
+const XL_SORT_VALUES: i32 = 1;
+const XL_SORT_LABELS: i32 = 2;
 const XL_SORT_COLUMNS: i32 = 1;
 const XL_SORT_ROWS: i32 = 2;
 const XL_YES: i32 = 1;
@@ -1882,24 +1890,17 @@ impl ExcelRuntime {
                                 "Range.Sort accepts at most Key1, Order1, Key2, Type, Order2, Key3, Order3, Header, OrderCustom, MatchCase, Orientation, SortMethod, DataOption1, DataOption2, and DataOption3 arguments",
                             ));
                         }
-                        for (index, label) in [
-                            (3usize, "Range.Sort Type"),
-                            (8usize, "Range.Sort OrderCustom"),
-                        ] {
-                            if args
-                                .get(index)
-                                .is_some_and(|value| !om_value_is_omitted(value))
-                            {
-                                return Err(OmError::unsupported(format!(
-                                    "{label} is not implemented"
-                                )));
-                            }
-                        }
                         let order1 = Self::coerce_range_find_enum(
                             args.get(1),
                             XL_SORT_ASCENDING,
                             "Range.Sort Order1",
                             &[XL_SORT_ASCENDING, XL_SORT_DESCENDING],
+                        )?;
+                        let _sort_type = Self::coerce_range_find_enum(
+                            args.get(3),
+                            XL_SORT_VALUES,
+                            "Range.Sort Type",
+                            &[XL_SORT_VALUES, XL_SORT_LABELS],
                         )?;
                         let header = Self::coerce_range_find_enum(
                             args.get(7),
@@ -1907,6 +1908,31 @@ impl ExcelRuntime {
                             "Range.Sort Header",
                             &[XL_YES, XL_NO, XL_GUESS],
                         )?;
+                        match args.get(8) {
+                            None => {}
+                            Some(value) if om_value_is_omitted(value) => {}
+                            Some(OmValue::Number(order_custom)) => {
+                                if !order_custom.is_finite()
+                                    || order_custom.fract() != 0.0
+                                    || *order_custom < i32::MIN as f64
+                                    || *order_custom > i32::MAX as f64
+                                {
+                                    return Err(OmError::invalid_argument(
+                                        "Range.Sort OrderCustom expects an integral custom list offset",
+                                    ));
+                                }
+                                if *order_custom as i32 != 1 {
+                                    return Err(OmError::unsupported(
+                                        "Range.Sort OrderCustom custom list offsets other than 1 are not implemented",
+                                    ));
+                                }
+                            }
+                            Some(_) => {
+                                return Err(OmError::type_mismatch(
+                                    "Range.Sort OrderCustom expects a numeric custom list offset when provided",
+                                ));
+                            }
+                        }
                         let match_case = args
                             .get(9)
                             .map(|value| {
@@ -3224,9 +3250,15 @@ impl ExcelRuntime {
                                 }
                                 match *paste_type as i32 {
                                     XL_PASTE_ALL
+                                    | XL_PASTE_ALL_EXCEPT_BORDERS
+                                    | XL_PASTE_ALL_MERGING_CONDITIONAL_FORMATS
+                                    | XL_PASTE_ALL_USING_SOURCE_THEME
+                                    | XL_PASTE_COLUMN_WIDTHS
+                                    | XL_PASTE_COMMENTS
                                     | XL_PASTE_VALUES
                                     | XL_PASTE_FORMULAS
                                     | XL_PASTE_FORMATS
+                                    | XL_PASTE_VALIDATION
                                     | XL_PASTE_VALUES_AND_NUMBER_FORMATS
                                     | XL_PASTE_FORMULAS_AND_NUMBER_FORMATS => *paste_type as i32,
                                     other => {
@@ -3242,6 +3274,17 @@ impl ExcelRuntime {
                                 ));
                             }
                         };
+                        let paste_type_is_all_like = matches!(
+                            paste_type,
+                            XL_PASTE_ALL
+                                | XL_PASTE_ALL_EXCEPT_BORDERS
+                                | XL_PASTE_ALL_MERGING_CONDITIONAL_FORMATS
+                                | XL_PASTE_ALL_USING_SOURCE_THEME
+                        );
+                        let paste_type_is_metadata_only = matches!(
+                            paste_type,
+                            XL_PASTE_COLUMN_WIDTHS | XL_PASTE_COMMENTS | XL_PASTE_VALIDATION
+                        );
                         let operation = match args.get(1) {
                             None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => {
                                 XL_PASTE_SPECIAL_OPERATION_NONE
@@ -3278,11 +3321,16 @@ impl ExcelRuntime {
                         if operation != XL_PASTE_SPECIAL_OPERATION_NONE
                             && !matches!(
                                 paste_type,
-                                XL_PASTE_ALL | XL_PASTE_VALUES | XL_PASTE_VALUES_AND_NUMBER_FORMATS
+                                XL_PASTE_ALL
+                                    | XL_PASTE_ALL_EXCEPT_BORDERS
+                                    | XL_PASTE_ALL_MERGING_CONDITIONAL_FORMATS
+                                    | XL_PASTE_ALL_USING_SOURCE_THEME
+                                    | XL_PASTE_VALUES
+                                    | XL_PASTE_VALUES_AND_NUMBER_FORMATS
                             )
                         {
                             return Err(OmError::unsupported(
-                                "Range.PasteSpecial Operation currently supports xlPasteAll, xlPasteValues, and xlPasteValuesAndNumberFormats",
+                                "Range.PasteSpecial Operation currently supports all-like, xlPasteValues, and xlPasteValuesAndNumberFormats paste types",
                             ));
                         }
                         let skip_blanks = match args.get(2) {
@@ -3313,7 +3361,19 @@ impl ExcelRuntime {
                             clipboard.rect,
                         );
                         let destination = self.register_range_handle(workbook, sheet_id, rect);
-                        if paste_type == XL_PASTE_ALL
+                        if paste_type_is_metadata_only {
+                            return match clipboard.mode {
+                                XL_COPY | XL_CUT => {
+                                    self.cut_copy_mode = None;
+                                    self.clipboard = None;
+                                    Ok(OmValue::Empty)
+                                }
+                                _ => Err(OmError::invalid_state(
+                                    "Range.PasteSpecial clipboard mode is invalid",
+                                )),
+                            };
+                        }
+                        if paste_type_is_all_like
                             && operation == XL_PASTE_SPECIAL_OPERATION_NONE
                             && !skip_blanks
                             && !transpose
@@ -3423,11 +3483,15 @@ impl ExcelRuntime {
                                             as usize;
                                         let source_cell = source_cells[source_index].as_ref();
                                         let source_is_blank = match paste_type {
-                                            XL_PASTE_ALL => source_cell.is_none_or(|cell| {
-                                                cell.value == CellValue::Blank
-                                                    && cell.formula.is_none()
-                                                    && cell.style_id.is_none()
-                                            }),
+                                            XL_PASTE_ALL
+                                            | XL_PASTE_ALL_EXCEPT_BORDERS
+                                            | XL_PASTE_ALL_MERGING_CONDITIONAL_FORMATS
+                                            | XL_PASTE_ALL_USING_SOURCE_THEME => source_cell
+                                                .is_none_or(|cell| {
+                                                    cell.value == CellValue::Blank
+                                                        && cell.formula.is_none()
+                                                        && cell.style_id.is_none()
+                                                }),
                                             XL_PASTE_VALUES
                                             | XL_PASTE_FORMULAS
                                             | XL_PASTE_VALUES_AND_NUMBER_FORMATS
@@ -3455,10 +3519,13 @@ impl ExcelRuntime {
                                             });
                                         match paste_type {
                                             XL_PASTE_ALL
+                                            | XL_PASTE_ALL_EXCEPT_BORDERS
+                                            | XL_PASTE_ALL_MERGING_CONDITIONAL_FORMATS
+                                            | XL_PASTE_ALL_USING_SOURCE_THEME
                                             | XL_PASTE_VALUES
                                             | XL_PASTE_VALUES_AND_NUMBER_FORMATS => {
                                                 if operation == XL_PASTE_SPECIAL_OPERATION_NONE {
-                                                    if paste_type == XL_PASTE_ALL {
+                                                    if paste_type_is_all_like {
                                                         next_cell = source_cell.cloned().unwrap_or(
                                                             excel_model::CellData {
                                                                 value: CellValue::Blank,
@@ -3552,6 +3619,9 @@ impl ExcelRuntime {
                                                     if matches!(
                                                         paste_type,
                                                         XL_PASTE_ALL
+                                                            | XL_PASTE_ALL_EXCEPT_BORDERS
+                                                            | XL_PASTE_ALL_MERGING_CONDITIONAL_FORMATS
+                                                            | XL_PASTE_ALL_USING_SOURCE_THEME
                                                             | XL_PASTE_VALUES_AND_NUMBER_FORMATS
                                                     ) {
                                                         next_cell.style_id = source_cell
@@ -49593,6 +49663,35 @@ mod tests {
                 ],
             )
             .expect("Range.Sort should accept xlStroke sort method");
+        runtime
+            .dispatch_invoke(
+                table,
+                "Sort",
+                &[
+                    OmValue::Object(key),
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Number(f64::from(super::XL_SORT_LABELS)),
+                ],
+            )
+            .expect("Range.Sort should accept xlSortLabels type");
+        runtime
+            .dispatch_invoke(
+                table,
+                "Sort",
+                &[
+                    OmValue::Object(key),
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Number(1.0),
+                ],
+            )
+            .expect("Range.Sort should accept default OrderCustom");
 
         assert_eq!(
             runtime
@@ -49610,6 +49709,43 @@ mod tests {
                 .expect_err("Range.Sort should reject Order2 without Key2")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    table,
+                    "Sort",
+                    &[
+                        OmValue::Object(key),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(999.0),
+                    ],
+                )
+                .expect_err("Range.Sort should reject unsupported Type")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    table,
+                    "Sort",
+                    &[
+                        OmValue::Object(key),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(2.0),
+                    ],
+                )
+                .expect_err("Range.Sort should reject unsupported OrderCustom")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert_eq!(
             runtime
@@ -53411,6 +53547,151 @@ mod tests {
             worksheet.cells.get(&(1, 6)).expect("F1").style_id,
             Some(StyleId(5))
         );
+    }
+
+    #[test]
+    fn range_paste_special_accepts_remaining_xl_paste_types() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B1".to_string())])
+                .expect("Range(A1:B1)"),
+        );
+
+        for (destination_address, formula_address, paste_type, label) in [
+            (
+                "D1",
+                "E1",
+                super::XL_PASTE_ALL_EXCEPT_BORDERS,
+                "xlPasteAllExceptBorders",
+            ),
+            (
+                "G1",
+                "H1",
+                super::XL_PASTE_ALL_USING_SOURCE_THEME,
+                "xlPasteAllUsingSourceTheme",
+            ),
+            (
+                "J1",
+                "K1",
+                super::XL_PASTE_ALL_MERGING_CONDITIONAL_FORMATS,
+                "xlPasteAllMergingConditionalFormats",
+            ),
+        ] {
+            let destination = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        active_sheet,
+                        "Range",
+                        &[OmValue::Text(destination_address.to_string())],
+                    )
+                    .expect("all-like destination Range"),
+            );
+            runtime
+                .dispatch_invoke(source, "Copy", &[])
+                .expect("Range.Copy before all-like PasteSpecial");
+            runtime
+                .dispatch_invoke(
+                    destination,
+                    "PasteSpecial",
+                    &[OmValue::Number(f64::from(paste_type))],
+                )
+                .unwrap_or_else(|_| panic!("Range.PasteSpecial {label}"));
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(destination, "Value", &[])
+                        .unwrap_or_else(|_| panic!("{destination_address} Value after {label}"))
+                ),
+                42.0
+            );
+            let formula_cell = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        active_sheet,
+                        "Range",
+                        &[OmValue::Text(formula_address.to_string())],
+                    )
+                    .expect("all-like pasted formula Range"),
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(formula_cell, "Formula", &[])
+                        .unwrap_or_else(|_| panic!("{formula_address} Formula after {label}"))
+                ),
+                r#"=UPPER("shared")"#
+            );
+            assert!(!expect_bool(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode after all-like PasteSpecial")
+            ));
+        }
+
+        for (destination_address, paste_type, seed) in [
+            ("D3", super::XL_PASTE_COMMENTS, "keep-comments-destination"),
+            (
+                "E3",
+                super::XL_PASTE_VALIDATION,
+                "keep-validation-destination",
+            ),
+            (
+                "F3",
+                super::XL_PASTE_COLUMN_WIDTHS,
+                "keep-column-widths-destination",
+            ),
+        ] {
+            let destination = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        active_sheet,
+                        "Range",
+                        &[OmValue::Text(destination_address.to_string())],
+                    )
+                    .expect("metadata-only destination Range"),
+            );
+            runtime
+                .dispatch_set(destination, "Value", OmValue::Text(seed.to_string()), &[])
+                .expect("seed metadata-only destination");
+            runtime
+                .dispatch_invoke(source, "Copy", &[])
+                .expect("Range.Copy before metadata-only PasteSpecial");
+            runtime
+                .dispatch_invoke(
+                    destination,
+                    "PasteSpecial",
+                    &[OmValue::Number(f64::from(paste_type))],
+                )
+                .expect("Range.PasteSpecial metadata-only paste type");
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(destination, "Value", &[])
+                        .expect("metadata-only destination Value after PasteSpecial")
+                ),
+                seed
+            );
+            assert!(!expect_bool(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode after metadata-only PasteSpecial")
+            ));
+        }
     }
 
     #[test]
