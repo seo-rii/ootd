@@ -1839,11 +1839,7 @@ impl ExcelRuntime {
                             ));
                         }
                         for (index, label) in [
-                            (2usize, "Range.Sort Key2"),
                             (3usize, "Range.Sort Type"),
-                            (4usize, "Range.Sort Order2"),
-                            (5usize, "Range.Sort Key3"),
-                            (6usize, "Range.Sort Order3"),
                             (8usize, "Range.Sort OrderCustom"),
                         ] {
                             if args
@@ -1855,7 +1851,7 @@ impl ExcelRuntime {
                                 )));
                             }
                         }
-                        let order = Self::coerce_range_find_enum(
+                        let order1 = Self::coerce_range_find_enum(
                             args.get(1),
                             XL_SORT_ASCENDING,
                             "Range.Sort Order1",
@@ -1899,41 +1895,81 @@ impl ExcelRuntime {
                             )?;
                         }
 
-                        let key_rect = match args.first() {
-                            None => None,
-                            Some(value) if om_value_is_omitted(value) => None,
-                            Some(OmValue::Object(handle)) => {
-                                let RuntimeObjectKind::Range {
-                                    workbook: key_workbook,
-                                    sheet_id: key_sheet_id,
-                                    rect: key_rect,
-                                    ..
-                                } = self.runtime_object(*handle)?
-                                else {
-                                    return Err(OmError::type_mismatch(
-                                        "Range.Sort Key1 expects a Range object or A1 reference",
-                                    ));
-                                };
-                                if key_workbook != workbook || key_sheet_id != sheet_id {
-                                    return Err(OmError::invalid_argument(
-                                        "Range.Sort Key1 must belong to the sorted worksheet",
-                                    ));
+                        let parse_key_rect = |value: Option<&OmValue>,
+                                              label: &str|
+                         -> OmResult<Option<Rect>> {
+                            match value {
+                                None => Ok(None),
+                                Some(value) if om_value_is_omitted(value) => Ok(None),
+                                Some(OmValue::Object(handle)) => {
+                                    let RuntimeObjectKind::Range {
+                                        workbook: key_workbook,
+                                        sheet_id: key_sheet_id,
+                                        rect: key_rect,
+                                        ..
+                                    } = self.runtime_object(*handle)?
+                                    else {
+                                        return Err(OmError::type_mismatch(format!(
+                                            "Range.Sort {label} expects a Range object or A1 reference"
+                                        )));
+                                    };
+                                    if key_workbook != workbook || key_sheet_id != sheet_id {
+                                        return Err(OmError::invalid_argument(format!(
+                                            "Range.Sort {label} must belong to the sorted worksheet"
+                                        )));
+                                    }
+                                    Ok(Some(key_rect))
                                 }
-                                Some(key_rect)
-                            }
-                            Some(OmValue::Text(reference)) => {
-                                Some(parse_rect_a1(reference).map_err(|_| {
-                                    OmError::invalid_argument(
-                                        "Range.Sort Key1 text must be an A1 range reference",
-                                    )
-                                })?)
-                            }
-                            Some(_) => {
-                                return Err(OmError::type_mismatch(
-                                    "Range.Sort Key1 expects a Range object or A1 reference",
-                                ));
+                                Some(OmValue::Text(reference)) => {
+                                    Ok(Some(parse_rect_a1(reference).map_err(|_| {
+                                        OmError::invalid_argument(format!(
+                                            "Range.Sort {label} text must be an A1 range reference"
+                                        ))
+                                    })?))
+                                }
+                                Some(_) => Err(OmError::type_mismatch(format!(
+                                    "Range.Sort {label} expects a Range object or A1 reference"
+                                ))),
                             }
                         };
+                        let key1_rect = parse_key_rect(args.first(), "Key1")?;
+                        let key2_rect = parse_key_rect(args.get(2), "Key2")?;
+                        let order2 = if key2_rect.is_some() {
+                            Self::coerce_range_find_enum(
+                                args.get(4),
+                                XL_SORT_ASCENDING,
+                                "Range.Sort Order2",
+                                &[XL_SORT_ASCENDING, XL_SORT_DESCENDING],
+                            )?
+                        } else {
+                            if args.get(4).is_some_and(|value| !om_value_is_omitted(value)) {
+                                return Err(OmError::invalid_argument(
+                                    "Range.Sort Order2 requires Key2",
+                                ));
+                            }
+                            XL_SORT_ASCENDING
+                        };
+                        let key3_rect = parse_key_rect(args.get(5), "Key3")?;
+                        let order3 = if key3_rect.is_some() {
+                            Self::coerce_range_find_enum(
+                                args.get(6),
+                                XL_SORT_ASCENDING,
+                                "Range.Sort Order3",
+                                &[XL_SORT_ASCENDING, XL_SORT_DESCENDING],
+                            )?
+                        } else {
+                            if args.get(6).is_some_and(|value| !om_value_is_omitted(value)) {
+                                return Err(OmError::invalid_argument(
+                                    "Range.Sort Order3 requires Key3",
+                                ));
+                            }
+                            XL_SORT_ASCENDING
+                        };
+                        let key_rects = [
+                            (key1_rect, order1, "Key1"),
+                            (key2_rect, order2, "Key2"),
+                            (key3_rect, order3, "Key3"),
+                        ];
 
                         let source_cells = {
                             let runtime = self.runtime_workbook(workbook)?;
@@ -1951,7 +1987,8 @@ impl ExcelRuntime {
                                 .clone()
                         };
                         let compare_cells = |left: Option<&excel_model::CellData>,
-                                             right: Option<&excel_model::CellData>|
+                                             right: Option<&excel_model::CellData>,
+                                             order: i32|
                          -> Ordering {
                             let left_value =
                                 left.map(|cell| &cell.value).unwrap_or(&CellValue::Blank);
@@ -2027,37 +2064,44 @@ impl ExcelRuntime {
                             if row_first >= rect.row_last {
                                 return Ok(OmValue::Empty);
                             }
-                            let key_col = match key_rect {
-                                Some(key_rect) => {
-                                    if key_rect.width() != 1 {
-                                        return Err(OmError::invalid_argument(
-                                            "Range.Sort Key1 must be a single column for row sorting",
-                                        ));
+                            let mut key_columns = Vec::new();
+                            for (key_rect, order, label) in key_rects {
+                                let key_col = match key_rect {
+                                    Some(key_rect) => {
+                                        if key_rect.width() != 1 {
+                                            return Err(OmError::invalid_argument(format!(
+                                                "Range.Sort {label} must be a single column for row sorting"
+                                            )));
+                                        }
+                                        if key_rect.col_first < rect.col_first
+                                            || key_rect.col_first > rect.col_last
+                                            || key_rect.row_last < rect.row_first
+                                            || key_rect.row_first > rect.row_last
+                                        {
+                                            return Err(OmError::invalid_argument(format!(
+                                                "Range.Sort {label} must intersect the sorted range"
+                                            )));
+                                        }
+                                        key_rect.col_first
                                     }
-                                    if key_rect.col_first < rect.col_first
-                                        || key_rect.col_first > rect.col_last
-                                        || key_rect.row_last < rect.row_first
-                                        || key_rect.row_first > rect.row_last
-                                    {
-                                        return Err(OmError::invalid_argument(
-                                            "Range.Sort Key1 must intersect the sorted range",
-                                        ));
-                                    }
-                                    key_rect.col_first
-                                }
-                                None => rect.col_first,
-                            };
+                                    None if label == "Key1" => rect.col_first,
+                                    None => continue,
+                                };
+                                key_columns.push((key_col, order));
+                            }
                             let mut sorted_rows = (row_first..=rect.row_last).collect::<Vec<_>>();
                             sorted_rows.sort_by(|left, right| {
-                                let ordering = compare_cells(
-                                    source_cells.get(&(*left, key_col)),
-                                    source_cells.get(&(*right, key_col)),
-                                );
-                                if ordering == Ordering::Equal {
-                                    left.cmp(right)
-                                } else {
-                                    ordering
+                                for (key_col, order) in &key_columns {
+                                    let ordering = compare_cells(
+                                        source_cells.get(&(*left, *key_col)),
+                                        source_cells.get(&(*right, *key_col)),
+                                        *order,
+                                    );
+                                    if ordering != Ordering::Equal {
+                                        return ordering;
+                                    }
                                 }
+                                left.cmp(right)
                             });
                             let runtime = self.runtime_workbook_mut(workbook)?;
                             let worksheet = runtime
@@ -2090,37 +2134,44 @@ impl ExcelRuntime {
                             if col_first >= rect.col_last {
                                 return Ok(OmValue::Empty);
                             }
-                            let key_row = match key_rect {
-                                Some(key_rect) => {
-                                    if key_rect.height() != 1 {
-                                        return Err(OmError::invalid_argument(
-                                            "Range.Sort Key1 must be a single row for column sorting",
-                                        ));
+                            let mut key_rows = Vec::new();
+                            for (key_rect, order, label) in key_rects {
+                                let key_row = match key_rect {
+                                    Some(key_rect) => {
+                                        if key_rect.height() != 1 {
+                                            return Err(OmError::invalid_argument(format!(
+                                                "Range.Sort {label} must be a single row for column sorting"
+                                            )));
+                                        }
+                                        if key_rect.row_first < rect.row_first
+                                            || key_rect.row_first > rect.row_last
+                                            || key_rect.col_last < rect.col_first
+                                            || key_rect.col_first > rect.col_last
+                                        {
+                                            return Err(OmError::invalid_argument(format!(
+                                                "Range.Sort {label} must intersect the sorted range"
+                                            )));
+                                        }
+                                        key_rect.row_first
                                     }
-                                    if key_rect.row_first < rect.row_first
-                                        || key_rect.row_first > rect.row_last
-                                        || key_rect.col_last < rect.col_first
-                                        || key_rect.col_first > rect.col_last
-                                    {
-                                        return Err(OmError::invalid_argument(
-                                            "Range.Sort Key1 must intersect the sorted range",
-                                        ));
-                                    }
-                                    key_rect.row_first
-                                }
-                                None => rect.row_first,
-                            };
+                                    None if label == "Key1" => rect.row_first,
+                                    None => continue,
+                                };
+                                key_rows.push((key_row, order));
+                            }
                             let mut sorted_cols = (col_first..=rect.col_last).collect::<Vec<_>>();
                             sorted_cols.sort_by(|left, right| {
-                                let ordering = compare_cells(
-                                    source_cells.get(&(key_row, *left)),
-                                    source_cells.get(&(key_row, *right)),
-                                );
-                                if ordering == Ordering::Equal {
-                                    left.cmp(right)
-                                } else {
-                                    ordering
+                                for (key_row, order) in &key_rows {
+                                    let ordering = compare_cells(
+                                        source_cells.get(&(*key_row, *left)),
+                                        source_cells.get(&(*key_row, *right)),
+                                        *order,
+                                    );
+                                    if ordering != Ordering::Equal {
+                                        return ordering;
+                                    }
                                 }
+                                left.cmp(right)
                             });
                             let runtime = self.runtime_workbook_mut(workbook)?;
                             let worksheet = runtime
@@ -48741,6 +48792,113 @@ mod tests {
     }
 
     #[test]
+    fn range_sort_dispatch_supports_secondary_and_tertiary_row_keys() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let table = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:C5".to_string())])
+                .expect("Range(A1:C5)"),
+        );
+        let dept_key = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A2".to_string())])
+                .expect("Range(A2)"),
+        );
+        let score_key = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B2".to_string())])
+                .expect("Range(B2)"),
+        );
+        let name_key = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C2".to_string())])
+                .expect("Range(C2)"),
+        );
+        runtime
+            .dispatch_set(
+                table,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        5,
+                        3,
+                        vec![
+                            OmValue::Text("Dept".to_string()),
+                            OmValue::Text("Score".to_string()),
+                            OmValue::Text("Name".to_string()),
+                            OmValue::Text("Eng".to_string()),
+                            OmValue::Number(5.0),
+                            OmValue::Text("Bob".to_string()),
+                            OmValue::Text("Sales".to_string()),
+                            OmValue::Number(3.0),
+                            OmValue::Text("Dan".to_string()),
+                            OmValue::Text("Eng".to_string()),
+                            OmValue::Number(5.0),
+                            OmValue::Text("Alice".to_string()),
+                            OmValue::Text("Sales".to_string()),
+                            OmValue::Number(3.0),
+                            OmValue::Text("Charlie".to_string()),
+                        ],
+                    )
+                    .expect("multi-key table values"),
+                ),
+                &[],
+            )
+            .expect("A1:C5.Value2");
+
+        runtime
+            .dispatch_invoke(
+                table,
+                "Sort",
+                &[
+                    OmValue::Object(dept_key),
+                    OmValue::Missing,
+                    OmValue::Object(score_key),
+                    OmValue::Missing,
+                    OmValue::Number(f64::from(super::XL_SORT_DESCENDING)),
+                    OmValue::Object(name_key),
+                    OmValue::Number(f64::from(super::XL_SORT_ASCENDING)),
+                    OmValue::Number(f64::from(super::XL_YES)),
+                ],
+            )
+            .expect("Range.Sort with three row keys");
+
+        for (address, expected) in [
+            ("C2", "Alice"),
+            ("C3", "Bob"),
+            ("C4", "Charlie"),
+            ("C5", "Dan"),
+        ] {
+            let cell = expect_object_handle(
+                runtime
+                    .dispatch_invoke(active_sheet, "Range", &[OmValue::Text(address.to_string())])
+                    .expect("Range(cell)"),
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(cell, "Value2", &[])
+                        .expect("cell Value2")
+                ),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn range_sort_dispatch_sorts_columns_and_validates_options() {
         let mut runtime = ExcelRuntime::new();
         runtime
@@ -48775,12 +48933,12 @@ mod tests {
                         2,
                         3,
                         vec![
-                            OmValue::Number(3.0),
+                            OmValue::Number(1.0),
                             OmValue::Number(1.0),
                             OmValue::Number(2.0),
-                            OmValue::Text("third".to_string()),
-                            OmValue::Text("first".to_string()),
-                            OmValue::Text("second".to_string()),
+                            OmValue::Text("beta".to_string()),
+                            OmValue::Text("alpha".to_string()),
+                            OmValue::Text("gamma".to_string()),
                         ],
                     )
                     .expect("column table values"),
@@ -48796,7 +48954,7 @@ mod tests {
                 &[
                     OmValue::Object(key),
                     OmValue::Missing,
-                    OmValue::Missing,
+                    OmValue::Text("A2".to_string()),
                     OmValue::Missing,
                     OmValue::Missing,
                     OmValue::Missing,
@@ -48808,7 +48966,7 @@ mod tests {
                 ],
             )
             .expect("Range.Sort columns");
-        for (address, expected) in [("A2", "first"), ("B2", "second"), ("C2", "third")] {
+        for (address, expected) in [("A2", "alpha"), ("B2", "beta"), ("C2", "gamma")] {
             let cell = expect_object_handle(
                 runtime
                     .dispatch_invoke(active_sheet, "Range", &[OmValue::Text(address.to_string())])
@@ -48829,11 +48987,17 @@ mod tests {
                 .dispatch_invoke(
                     table,
                     "Sort",
-                    &[OmValue::Object(key), OmValue::Missing, OmValue::Object(key),],
+                    &[
+                        OmValue::Object(key),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(f64::from(super::XL_SORT_DESCENDING)),
+                    ],
                 )
-                .expect_err("Range.Sort should reject Key2")
+                .expect_err("Range.Sort should reject Order2 without Key2")
                 .code,
-            OmErrorCode::Unsupported
+            OmErrorCode::InvalidArgument
         );
         assert_eq!(
             runtime
