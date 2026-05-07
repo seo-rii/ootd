@@ -82,6 +82,7 @@ const XL_YES: i32 = 1;
 const XL_NO: i32 = 2;
 const XL_GUESS: i32 = 0;
 const XL_PINYIN: i32 = 1;
+const XL_STROKE: i32 = 2;
 const XL_SORT_NORMAL: i32 = 0;
 const XL_SORT_TEXT_AS_NUMBERS: i32 = 1;
 const XL_DECIMAL_SEPARATOR: i32 = 3;
@@ -1881,7 +1882,7 @@ impl ExcelRuntime {
                             args.get(11),
                             XL_PINYIN,
                             "Range.Sort SortMethod",
-                            &[XL_PINYIN],
+                            &[XL_PINYIN, XL_STROKE],
                         )?;
 
                         let parse_key_rect = |value: Option<&OmValue>,
@@ -49351,6 +49352,26 @@ mod tests {
                 expected
             );
         }
+        runtime
+            .dispatch_invoke(
+                table,
+                "Sort",
+                &[
+                    OmValue::Object(key),
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Number(f64::from(super::XL_SORT_COLUMNS)),
+                    OmValue::Number(f64::from(super::XL_STROKE)),
+                ],
+            )
+            .expect("Range.Sort should accept xlStroke sort method");
 
         assert_eq!(
             runtime
@@ -49389,6 +49410,30 @@ mod tests {
                     ],
                 )
                 .expect_err("Range.Sort should reject unsupported Orientation")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    table,
+                    "Sort",
+                    &[
+                        OmValue::Object(key),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(999.0),
+                    ],
+                )
+                .expect_err("Range.Sort should reject unsupported SortMethod")
                 .code,
             OmErrorCode::Unsupported
         );
