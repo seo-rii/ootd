@@ -85,9 +85,51 @@ const XL_PINYIN: i32 = 1;
 const XL_STROKE: i32 = 2;
 const XL_SORT_NORMAL: i32 = 0;
 const XL_SORT_TEXT_AS_NUMBERS: i32 = 1;
+const XL_COUNTRY_CODE: i32 = 1;
+const XL_COUNTRY_SETTING: i32 = 2;
 const XL_DECIMAL_SEPARATOR: i32 = 3;
 const XL_THOUSANDS_SEPARATOR: i32 = 4;
 const XL_LIST_SEPARATOR: i32 = 5;
+const XL_UPPER_CASE_ROW_LETTER: i32 = 6;
+const XL_UPPER_CASE_COLUMN_LETTER: i32 = 7;
+const XL_LOWER_CASE_ROW_LETTER: i32 = 8;
+const XL_LOWER_CASE_COLUMN_LETTER: i32 = 9;
+const XL_LEFT_BRACKET: i32 = 10;
+const XL_RIGHT_BRACKET: i32 = 11;
+const XL_LEFT_BRACE: i32 = 12;
+const XL_RIGHT_BRACE: i32 = 13;
+const XL_COLUMN_SEPARATOR: i32 = 14;
+const XL_ROW_SEPARATOR: i32 = 15;
+const XL_ALTERNATE_ARRAY_SEPARATOR: i32 = 16;
+const XL_DATE_SEPARATOR: i32 = 17;
+const XL_TIME_SEPARATOR: i32 = 18;
+const XL_YEAR_CODE: i32 = 19;
+const XL_MONTH_CODE: i32 = 20;
+const XL_DAY_CODE: i32 = 21;
+const XL_HOUR_CODE: i32 = 22;
+const XL_MINUTE_CODE: i32 = 23;
+const XL_SECOND_CODE: i32 = 24;
+const XL_CURRENCY_CODE: i32 = 25;
+const XL_GENERAL_FORMAT_NAME: i32 = 26;
+const XL_CURRENCY_DIGITS: i32 = 27;
+const XL_CURRENCY_NEGATIVE: i32 = 28;
+const XL_NONCURRENCY_DIGITS: i32 = 29;
+const XL_MONTH_NAME_CHARS: i32 = 30;
+const XL_WEEKDAY_NAME_CHARS: i32 = 31;
+const XL_DATE_ORDER: i32 = 32;
+const XL_24_HOUR_CLOCK: i32 = 33;
+const XL_NON_ENGLISH_FUNCTIONS: i32 = 34;
+const XL_METRIC: i32 = 35;
+const XL_CURRENCY_SPACE_BEFORE: i32 = 36;
+const XL_CURRENCY_BEFORE: i32 = 37;
+const XL_CURRENCY_MINUS_SIGN: i32 = 38;
+const XL_CURRENCY_TRAILING_ZEROS: i32 = 39;
+const XL_CURRENCY_LEADING_ZEROS: i32 = 40;
+const XL_MONTH_LEADING_ZERO: i32 = 41;
+const XL_DAY_LEADING_ZERO: i32 = 42;
+const XL_4_DIGIT_YEARS: i32 = 43;
+const XL_MDY: i32 = 44;
+const XL_TIME_LEADING_ZERO: i32 = 45;
 const CONTENT_TYPES_PART_NAME: &str = "[Content_Types].xml";
 const WORKBOOK_PART_NAME: &str = "xl/workbook.xml";
 const WORKBOOK_RELS_PART_NAME: &str = "xl/_rels/workbook.xml.rels";
@@ -4361,17 +4403,56 @@ impl ExcelRuntime {
                         "Application.International index expects an integral XlApplicationInternational value",
                     ));
                 }
+                let list_separator = || {
+                    if self.decimal_separator == "," {
+                        ";"
+                    } else {
+                        ","
+                    }
+                };
                 match *index as i32 {
+                    XL_COUNTRY_CODE | XL_COUNTRY_SETTING => Ok(OmValue::Number(1.0)),
                     XL_DECIMAL_SEPARATOR => Ok(OmValue::Text(self.decimal_separator.clone())),
                     XL_THOUSANDS_SEPARATOR => Ok(OmValue::Text(self.thousands_separator.clone())),
-                    XL_LIST_SEPARATOR => Ok(OmValue::Text(
-                        if self.decimal_separator == "," {
-                            ";"
-                        } else {
-                            ","
-                        }
-                        .to_string(),
-                    )),
+                    XL_LIST_SEPARATOR => Ok(OmValue::Text(list_separator().to_string())),
+                    XL_UPPER_CASE_ROW_LETTER => Ok(OmValue::Text("R".to_string())),
+                    XL_UPPER_CASE_COLUMN_LETTER => Ok(OmValue::Text("C".to_string())),
+                    XL_LOWER_CASE_ROW_LETTER => Ok(OmValue::Text("r".to_string())),
+                    XL_LOWER_CASE_COLUMN_LETTER => Ok(OmValue::Text("c".to_string())),
+                    XL_LEFT_BRACKET => Ok(OmValue::Text("[".to_string())),
+                    XL_RIGHT_BRACKET => Ok(OmValue::Text("]".to_string())),
+                    XL_LEFT_BRACE => Ok(OmValue::Text("{".to_string())),
+                    XL_RIGHT_BRACE => Ok(OmValue::Text("}".to_string())),
+                    XL_COLUMN_SEPARATOR => Ok(OmValue::Text(list_separator().to_string())),
+                    XL_ROW_SEPARATOR => Ok(OmValue::Text(";".to_string())),
+                    XL_ALTERNATE_ARRAY_SEPARATOR => Ok(OmValue::Text("\\".to_string())),
+                    XL_DATE_SEPARATOR => Ok(OmValue::Text("/".to_string())),
+                    XL_TIME_SEPARATOR => Ok(OmValue::Text(":".to_string())),
+                    XL_YEAR_CODE => Ok(OmValue::Text("y".to_string())),
+                    XL_MONTH_CODE => Ok(OmValue::Text("m".to_string())),
+                    XL_DAY_CODE => Ok(OmValue::Text("d".to_string())),
+                    XL_HOUR_CODE => Ok(OmValue::Text("h".to_string())),
+                    XL_MINUTE_CODE => Ok(OmValue::Text("m".to_string())),
+                    XL_SECOND_CODE => Ok(OmValue::Text("s".to_string())),
+                    XL_CURRENCY_CODE => Ok(OmValue::Text("$".to_string())),
+                    XL_GENERAL_FORMAT_NAME => Ok(OmValue::Text("General".to_string())),
+                    XL_CURRENCY_DIGITS | XL_NONCURRENCY_DIGITS => Ok(OmValue::Number(2.0)),
+                    XL_CURRENCY_NEGATIVE => Ok(OmValue::Number(0.0)),
+                    XL_MONTH_NAME_CHARS | XL_WEEKDAY_NAME_CHARS => Ok(OmValue::Number(3.0)),
+                    XL_DATE_ORDER => Ok(OmValue::Number(0.0)),
+                    XL_24_HOUR_CLOCK => Ok(OmValue::Bool(false)),
+                    XL_NON_ENGLISH_FUNCTIONS => Ok(OmValue::Bool(false)),
+                    XL_METRIC => Ok(OmValue::Bool(false)),
+                    XL_CURRENCY_SPACE_BEFORE => Ok(OmValue::Bool(false)),
+                    XL_CURRENCY_BEFORE => Ok(OmValue::Bool(true)),
+                    XL_CURRENCY_MINUS_SIGN => Ok(OmValue::Bool(false)),
+                    XL_CURRENCY_TRAILING_ZEROS => Ok(OmValue::Bool(true)),
+                    XL_CURRENCY_LEADING_ZEROS => Ok(OmValue::Bool(true)),
+                    XL_MONTH_LEADING_ZERO => Ok(OmValue::Bool(false)),
+                    XL_DAY_LEADING_ZERO => Ok(OmValue::Bool(false)),
+                    XL_4_DIGIT_YEARS => Ok(OmValue::Bool(true)),
+                    XL_MDY => Ok(OmValue::Bool(true)),
+                    XL_TIME_LEADING_ZERO => Ok(OmValue::Bool(false)),
                     other => Err(OmError::unsupported(format!(
                         "Application.International index {other} is not implemented"
                     ))),
@@ -29650,10 +29731,12 @@ fn column_to_letters(mut col: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        APPLICATION_NAME, APPLICATION_VERSION, ExcelRuntime, XL_A1, XL_CALCULATION_AUTOMATIC,
-        XL_CALCULATION_MANUAL, XL_CALCULATION_SEMIAUTOMATIC, XL_DECIMAL_SEPARATOR,
-        XL_LIST_SEPARATOR, XL_R1C1, XL_THOUSANDS_SEPARATOR, blank_workbook_bytes,
-        formula_complex_from_text, supports_format,
+        APPLICATION_NAME, APPLICATION_VERSION, ExcelRuntime, XL_4_DIGIT_YEARS, XL_24_HOUR_CLOCK,
+        XL_A1, XL_CALCULATION_AUTOMATIC, XL_CALCULATION_MANUAL, XL_CALCULATION_SEMIAUTOMATIC,
+        XL_COLUMN_SEPARATOR, XL_COUNTRY_CODE, XL_CURRENCY_CODE, XL_CURRENCY_DIGITS,
+        XL_DATE_SEPARATOR, XL_DECIMAL_SEPARATOR, XL_LIST_SEPARATOR, XL_R1C1, XL_ROW_SEPARATOR,
+        XL_THOUSANDS_SEPARATOR, XL_TIME_SEPARATOR, XL_UPPER_CASE_COLUMN_LETTER,
+        XL_UPPER_CASE_ROW_LETTER, blank_workbook_bytes, formula_complex_from_text, supports_format,
     };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -45353,6 +45436,132 @@ mod tests {
             ),
             ","
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(
+                        application,
+                        "International",
+                        &[OmValue::Number(f64::from(XL_COUNTRY_CODE))]
+                    )
+                    .expect("Application.International(xlCountryCode)")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        application,
+                        "International",
+                        &[OmValue::Number(f64::from(XL_DATE_SEPARATOR))]
+                    )
+                    .expect("Application.International(xlDateSeparator)")
+            ),
+            "/"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        application,
+                        "International",
+                        &[OmValue::Number(f64::from(XL_TIME_SEPARATOR))]
+                    )
+                    .expect("Application.International(xlTimeSeparator)")
+            ),
+            ":"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        application,
+                        "International",
+                        &[OmValue::Number(f64::from(XL_UPPER_CASE_ROW_LETTER))]
+                    )
+                    .expect("Application.International(xlUpperCaseRowLetter)")
+            ),
+            "R"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        application,
+                        "International",
+                        &[OmValue::Number(f64::from(XL_UPPER_CASE_COLUMN_LETTER))]
+                    )
+                    .expect("Application.International(xlUpperCaseColumnLetter)")
+            ),
+            "C"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        application,
+                        "International",
+                        &[OmValue::Number(f64::from(XL_CURRENCY_CODE))]
+                    )
+                    .expect("Application.International(xlCurrencyCode)")
+            ),
+            "$"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(
+                        application,
+                        "International",
+                        &[OmValue::Number(f64::from(XL_CURRENCY_DIGITS))]
+                    )
+                    .expect("Application.International(xlCurrencyDigits)")
+            ),
+            2.0
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(
+                    application,
+                    "International",
+                    &[OmValue::Number(f64::from(XL_24_HOUR_CLOCK))]
+                )
+                .expect("Application.International(xl24HourClock)")
+        ));
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(
+                    application,
+                    "International",
+                    &[OmValue::Number(f64::from(XL_4_DIGIT_YEARS))]
+                )
+                .expect("Application.International(xl4DigitYears)")
+        ));
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        application,
+                        "International",
+                        &[OmValue::Number(f64::from(XL_COLUMN_SEPARATOR))]
+                    )
+                    .expect("Application.International(xlColumnSeparator)")
+            ),
+            ","
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        application,
+                        "International",
+                        &[OmValue::Number(f64::from(XL_ROW_SEPARATOR))]
+                    )
+                    .expect("Application.International(xlRowSeparator)")
+            ),
+            ";"
+        );
 
         runtime
             .dispatch_set(
@@ -45404,6 +45613,18 @@ mod tests {
                         &[OmValue::Number(f64::from(XL_LIST_SEPARATOR))]
                     )
                     .expect("Application.International list separator after set")
+            ),
+            ";"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        application,
+                        "International",
+                        &[OmValue::Number(f64::from(XL_COLUMN_SEPARATOR))]
+                    )
+                    .expect("Application.International column separator after set")
             ),
             ";"
         );
