@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs,
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
@@ -20,6 +21,77 @@ fn repo_root() -> PathBuf {
         .join("../..")
         .canonicalize()
         .expect("repo root")
+}
+
+#[test]
+fn pia_common_members_match_pinned_om_signatures() {
+    let pia = PiaPublicSurfaceCapture::from_json_path(
+        repo_root().join("specs/pinned/excel_pia_public_surface.template.json"),
+    )
+    .expect("pia template json")
+    .to_office_idl_document();
+    let om = OfficeIdlDocument::from_path(
+        repo_root().join("specs/pinned/office_idl_excel_om.template.json"),
+    )
+    .expect("om template json");
+
+    let mut pia_members = BTreeMap::new();
+    for interface in &pia.interfaces {
+        for member in &interface.members {
+            pia_members.insert(
+                (
+                    interface.name.as_str(),
+                    member.name.as_str(),
+                    format!("{:?}", member.member_kind),
+                ),
+                member,
+            );
+        }
+    }
+
+    let type_shape = |type_ref: &office_idl::TypeRef| {
+        (
+            type_ref
+                .alias_of
+                .as_deref()
+                .unwrap_or(type_ref.name.as_str())
+                .to_string(),
+            type_ref.nullable,
+        )
+    };
+    let member_signature = |member: &office_idl::Member| {
+        let params = member
+            .params
+            .iter()
+            .map(|param| {
+                let (type_name, nullable) = type_shape(&param.type_ref);
+                (param.name.clone(), param.optional, type_name, nullable)
+            })
+            .collect::<Vec<_>>();
+        let return_type = member.return_type.as_ref().map(type_shape);
+        (params, return_type)
+    };
+
+    for interface in &om.interfaces {
+        for member in &interface.members {
+            let key = (
+                interface.name.as_str(),
+                member.name.as_str(),
+                format!("{:?}", member.member_kind),
+            );
+            let Some(pia_member) = pia_members.get(&key) else {
+                continue;
+            };
+            assert_eq!(
+                member_signature(pia_member),
+                member_signature(member),
+                "{}.{} {:?}",
+                interface.name,
+                member.name,
+                member.member_kind
+            );
+        }
+    }
 }
 
 #[test]

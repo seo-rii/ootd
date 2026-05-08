@@ -293,6 +293,7 @@
           "returnType": {
             "kind": "interface",
             "name": "Range",
+            "nullable": true,
             "aliasOf": "Excel.Range"
           },
           "support": "stub",
@@ -308,6 +309,7 @@
               "typeInfo": {
                 "kind": "interface",
                 "name": "Range",
+                "nullable": true,
                 "aliasOf": "Excel.Range"
               }
             }
@@ -1011,7 +1013,6 @@
           "returnType": {
             "kind": "interface",
             "name": "Range",
-            "nullable": true,
             "aliasOf": "Excel.Range"
           },
           "support": "stub",
@@ -1027,7 +1028,6 @@
               "typeInfo": {
                 "kind": "interface",
                 "name": "Range",
-                "nullable": true,
                 "aliasOf": "Excel.Range"
               }
             }
