@@ -222,7 +222,9 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
         .iter()
         .find(|member| member.name == "Add")
         .expect("Add");
-    assert_eq!(add_member.params.len(), 0);
+    assert_eq!(add_member.params.len(), 1);
+    assert_eq!(add_member.params[0].name, "Template");
+    assert!(add_member.params[0].optional);
     assert_eq!(
         add_member
             .return_type
