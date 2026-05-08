@@ -3,6 +3,15 @@ use std::fmt::{Display, Formatter};
 
 use serde::{Deserialize, Serialize};
 
+mod name;
+mod reference;
+
+pub use name::{
+    BuiltinName, DefinedName, DefinedNameId, DefinedNameKind, DefinedNameMetadata, NameKey,
+    NameScope, NameValidationMode, canonicalize_excel_name,
+};
+pub use reference::{ExternalReference, RangeArea, RangeSet, ReferenceTarget};
+
 pub type OmResult<T> = Result<T, OmError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
