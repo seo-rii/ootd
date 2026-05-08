@@ -16213,10 +16213,6 @@ struct FormulaReference {
 }
 
 impl FormulaReference {
-    fn new(areas: Vec<(SheetId, Rect)>) -> Result<Self, FormulaEvalError> {
-        Self::with_explicit_area_count(areas.len(), areas)
-    }
-
     fn with_explicit_area_count(
         explicit_area_count: usize,
         areas: Vec<(SheetId, Rect)>,
@@ -30721,29 +30717,28 @@ fn parse_formula_reference_text(
 ) -> Result<FormulaReference, FormulaEvalError> {
     let input = input.trim().strip_prefix('=').unwrap_or(input.trim());
     let mut areas = Vec::new();
+    let mut explicit_area_count = 0usize;
     for part in split_reference_union_text(input).map_err(|_| FormulaEvalError::Ref)? {
-        areas.push(parse_formula_reference_area_text(
-            part,
-            default_sheet_id,
-            state,
-        )?);
+        let reference = parse_formula_reference_area_text(part, default_sheet_id, state)?;
+        explicit_area_count += reference.len();
+        areas.extend(reference.areas().iter().copied());
     }
-    FormulaReference::new(areas)
+    FormulaReference::with_explicit_area_count(explicit_area_count, areas)
 }
 
 fn parse_formula_reference_area_text(
     input: &str,
     default_sheet_id: SheetId,
     state: &WorkbookState,
-) -> Result<(SheetId, Rect), FormulaEvalError> {
+) -> Result<FormulaReference, FormulaEvalError> {
     let input = input.trim();
     if input.is_empty() {
         return Err(FormulaEvalError::Ref);
     }
 
-    let (sheet_id, reference_text) = if input.starts_with('\'') {
+    let (sheet_ids, reference_text) = if input.starts_with('\'') {
         let mut cursor = 1usize;
-        let mut sheet_name = String::new();
+        let mut sheet_name_or_span = String::new();
         loop {
             let Some(ch) = input[cursor..].chars().next() else {
                 return Err(FormulaEvalError::Ref);
@@ -30751,30 +30746,49 @@ fn parse_formula_reference_area_text(
             if ch == '\'' {
                 let next_cursor = cursor + ch.len_utf8();
                 if input[next_cursor..].starts_with('\'') {
-                    sheet_name.push('\'');
+                    sheet_name_or_span.push('\'');
                     cursor = next_cursor + 1;
                     continue;
                 }
                 if !input[next_cursor..].starts_with('!') {
                     return Err(FormulaEvalError::Ref);
                 }
-                let sheet_id = resolve_formula_sheet_name(state, sheet_name.as_str())
-                    .ok_or(FormulaEvalError::Ref)?;
-                break (sheet_id, &input[next_cursor + 1..]);
+                let sheet_ids =
+                    resolve_formula_sheet_name_or_span(state, sheet_name_or_span.as_str())?;
+                break (sheet_ids, &input[next_cursor + 1..]);
             }
-            sheet_name.push(ch);
+            sheet_name_or_span.push(ch);
             cursor += ch.len_utf8();
         }
     } else if let Some((sheet_name, reference_text)) = input.split_once('!') {
-        let sheet_id =
-            resolve_formula_sheet_name(state, sheet_name.trim()).ok_or(FormulaEvalError::Ref)?;
-        (sheet_id, reference_text)
+        let sheet_ids = resolve_formula_sheet_name_or_span(state, sheet_name.trim())?;
+        (sheet_ids, reference_text)
     } else {
-        (default_sheet_id, input)
+        (vec![default_sheet_id], input)
     };
 
     let rect = parse_rect_a1(reference_text.trim()).map_err(|_| FormulaEvalError::Ref)?;
-    Ok((sheet_id, rect))
+    let areas = sheet_ids
+        .into_iter()
+        .map(|sheet_id| (sheet_id, rect))
+        .collect::<Vec<_>>();
+    FormulaReference::with_explicit_area_count(1, areas)
+}
+
+fn resolve_formula_sheet_name_or_span(
+    state: &WorkbookState,
+    name_or_span: &str,
+) -> Result<Vec<SheetId>, FormulaEvalError> {
+    if let Some((start_sheet, end_sheet)) = name_or_span.split_once(':') {
+        let start =
+            resolve_formula_sheet_name(state, start_sheet.trim()).ok_or(FormulaEvalError::Ref)?;
+        let end =
+            resolve_formula_sheet_name(state, end_sheet.trim()).ok_or(FormulaEvalError::Ref)?;
+        return formula_sheets_in_3d_span(state, start, end);
+    }
+    resolve_formula_sheet_name(state, name_or_span)
+        .map(|sheet_id| vec![sheet_id])
+        .ok_or(FormulaEvalError::Ref)
 }
 
 fn resolve_formula_sheet_name(state: &WorkbookState, name: &str) -> Option<SheetId> {
@@ -40576,6 +40590,11 @@ mod tests {
                 .dispatch_get(workbook.0, "Worksheets", &[])
                 .expect("Workbook.Worksheets"),
         );
+        let workbook_names = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Names", &[])
+                .expect("Workbook.Names"),
+        );
         let first_sheet = expect_object_handle(
             runtime
                 .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
@@ -40655,10 +40674,25 @@ mod tests {
                 )
                 .expect("set 3D reference source values");
         }
+        for (name, refers_to) in [
+            ("Span3D", "='First Sheet:Third Sheet'!A1"),
+            ("Span3DRect", "='First Sheet:Third Sheet'!A1:B1"),
+        ] {
+            runtime
+                .dispatch_invoke(
+                    workbook_names,
+                    "Add",
+                    &[
+                        OmValue::Text(name.to_string()),
+                        OmValue::Text(refers_to.to_string()),
+                    ],
+                )
+                .expect("Workbook.Names.Add 3D reference");
+        }
 
         let formulas = expect_object_handle(
             runtime
-                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("D1:D5".to_string())])
+                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("D1:D7".to_string())])
                 .expect("formula range"),
         );
         runtime
@@ -40667,7 +40701,7 @@ mod tests {
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        5,
+                        7,
                         1,
                         vec![
                             OmValue::Text("=SUM('First Sheet:Third Sheet'!A1)".to_string()),
@@ -40675,6 +40709,8 @@ mod tests {
                             OmValue::Text("=AREAS('First Sheet:Third Sheet'!A1)".to_string()),
                             OmValue::Text("=ROWS('First Sheet:Third Sheet'!A1:B2)".to_string()),
                             OmValue::Text("=COLUMNS('First Sheet:Third Sheet'!A1:B2)".to_string()),
+                            OmValue::Text("=SUM(Span3DRect)".to_string()),
+                            OmValue::Text("=AREAS(Span3D)".to_string()),
                         ],
                     )
                     .expect("3D reference formulas"),
@@ -40701,6 +40737,8 @@ mod tests {
                 OmValue::Number(1.0),
                 OmValue::Number(2.0),
                 OmValue::Number(2.0),
+                OmValue::Number(66.0),
+                OmValue::Number(1.0),
             ]
         );
     }
