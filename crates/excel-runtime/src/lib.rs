@@ -27347,6 +27347,20 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         &mut self,
         name: &str,
     ) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let reference = self.parse_reference_projection_reference_function(name)?;
+        let Some((sheet_id, rect)) = reference.areas().first().copied() else {
+            return Err(FormulaEvalError::Ref);
+        };
+        let value = self
+            .evaluator
+            .cell_value_or_blank(sheet_id, rect.row_first, rect.col_first)?;
+        Ok(formula_value_probe_from_cell_value(value))
+    }
+
+    fn parse_reference_projection_reference_function(
+        &mut self,
+        name: &str,
+    ) -> Result<FormulaReference, FormulaEvalError> {
         if name.eq_ignore_ascii_case("INDIRECT") {
             let mut reference_text = self.parse_text_value_argument()?;
             let mut a1_style = true;
@@ -27366,29 +27380,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 reference_text =
                     convert_formula_r1c1_to_a1(reference_text.as_str(), base_row, base_col);
             }
-            let mut reference_parser = FormulaParser::new(
+            return parse_formula_reference_text(
                 reference_text.as_str(),
-                &mut *self.evaluator,
                 self.sheet_id,
-                self.current_position,
+                self.evaluator.state,
             );
-            reference_parser.skip_whitespace();
-            let Some((target_sheet_id, rect, next_index)) =
-                reference_parser.try_parse_reference()?
-            else {
-                return Err(FormulaEvalError::Ref);
-            };
-            reference_parser.index = next_index;
-            reference_parser.skip_whitespace();
-            if reference_parser.index != reference_parser.input.len() {
-                return Err(FormulaEvalError::Ref);
-            }
-            let value = reference_parser.evaluator.cell_value_or_blank(
-                target_sheet_id,
-                rect.row_first,
-                rect.col_first,
-            )?;
-            return Ok(formula_value_probe_from_cell_value(value));
         }
 
         if name.eq_ignore_ascii_case("OFFSET") {
@@ -27435,10 +27431,15 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             {
                 return Err(FormulaEvalError::Ref);
             }
-            let value = self
-                .evaluator
-                .cell_value_or_blank(sheet_id, row as u32, col as u32)?;
-            return Ok(formula_value_probe_from_cell_value(value));
+            return Ok(FormulaReference::single(
+                sheet_id,
+                Rect {
+                    row_first: row as u32,
+                    row_last: (row + height - 1) as u32,
+                    col_first: col as u32,
+                    col_last: (col + width - 1) as u32,
+                },
+            ));
         }
 
         if name.eq_ignore_ascii_case("TRIMRANGE") {
@@ -27554,10 +27555,15 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             if col_first > col_last {
                 return Err(FormulaEvalError::Calc);
             }
-            let value = self
-                .evaluator
-                .cell_value_or_blank(sheet_id, row_first, col_first)?;
-            return Ok(formula_value_probe_from_cell_value(value));
+            return Ok(FormulaReference::single(
+                sheet_id,
+                Rect {
+                    row_first,
+                    row_last,
+                    col_first,
+                    col_last,
+                },
+            ));
         }
 
         Err(FormulaEvalError::Unsupported)
@@ -29194,38 +29200,22 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
 
         macro_rules! collect_numeric_argument {
             () => {{
-                let checkpoint = self.index;
-                if let Some((reference, next_index)) = self.try_parse_reference_set()? {
-                    self.index = next_index;
-                    self.skip_whitespace();
-                    if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
-                        for (target_sheet_id, rect) in reference.areas() {
-                            for row in rect.row_first..=rect.row_last {
-                                for col in rect.col_first..=rect.col_last {
-                                    if ignore_nested
-                                        && is_nested_aggregate_cell!(*target_sheet_id, row, col)
-                                    {
-                                        continue;
-                                    }
-                                    let value = self.evaluator.cell_value_or_blank(
-                                        *target_sheet_id,
-                                        row,
-                                        col,
-                                    )?;
-                                    record_numeric_value!(formula_value_probe_from_cell_value(
-                                        value
-                                    ));
+                if let Some(reference) = self.parse_reference_set_before_boundary(&[',', ')'])? {
+                    for (target_sheet_id, rect) in reference.areas() {
+                        for row in rect.row_first..=rect.row_last {
+                            for col in rect.col_first..=rect.col_last {
+                                if ignore_nested
+                                    && is_nested_aggregate_cell!(*target_sheet_id, row, col)
+                                {
+                                    continue;
                                 }
+                                let value = self.evaluator.cell_value_or_blank(
+                                    *target_sheet_id,
+                                    row,
+                                    col,
+                                )?;
+                                record_numeric_value!(formula_value_probe_from_cell_value(value));
                             }
-                        }
-                    } else {
-                        self.index = checkpoint;
-                        match self.parse_catchable_argument()? {
-                            Ok(value) => values.push(value),
-                            Err(error) if ignore_errors => {
-                                let _ = error;
-                            }
-                            Err(error) => return Err(error),
                         }
                     }
                 } else {
@@ -29242,51 +29232,33 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
 
         macro_rules! collect_counta_argument {
             () => {{
-                let checkpoint = self.index;
-                if let Some((reference, next_index)) = self.try_parse_reference_set()? {
-                    self.index = next_index;
-                    self.skip_whitespace();
-                    if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
-                        for (target_sheet_id, rect) in reference.areas() {
-                            for row in rect.row_first..=rect.row_last {
-                                for col in rect.col_first..=rect.col_last {
-                                    if ignore_nested
-                                        && is_nested_aggregate_cell!(*target_sheet_id, row, col)
-                                    {
-                                        continue;
+                if let Some(reference) = self.parse_reference_set_before_boundary(&[',', ')'])? {
+                    for (target_sheet_id, rect) in reference.areas() {
+                        for row in rect.row_first..=rect.row_last {
+                            for col in rect.col_first..=rect.col_last {
+                                if ignore_nested
+                                    && is_nested_aggregate_cell!(*target_sheet_id, row, col)
+                                {
+                                    continue;
+                                }
+                                let value = self.evaluator.cell_value_or_blank(
+                                    *target_sheet_id,
+                                    row,
+                                    col,
+                                )?;
+                                match value {
+                                    CellValue::Error(error) if ignore_errors => {
+                                        let _ = error;
                                     }
-                                    let value = self.evaluator.cell_value_or_blank(
-                                        *target_sheet_id,
-                                        row,
-                                        col,
-                                    )?;
-                                    match value {
-                                        CellValue::Error(error) if ignore_errors => {
-                                            let _ = error;
-                                        }
-                                        CellValue::Error(error) => {
-                                            return Err(formula_eval_error_from_cell_error(error));
-                                        }
-                                        CellValue::Blank => {}
-                                        CellValue::Bool(_)
-                                        | CellValue::Number(_)
-                                        | CellValue::Text(_) => counta += 1,
+                                    CellValue::Error(error) => {
+                                        return Err(formula_eval_error_from_cell_error(error));
                                     }
+                                    CellValue::Blank => {}
+                                    CellValue::Bool(_)
+                                    | CellValue::Number(_)
+                                    | CellValue::Text(_) => counta += 1,
                                 }
                             }
-                        }
-                    } else {
-                        self.index = checkpoint;
-                        match self.parse_value_probe_argument()? {
-                            FormulaValueProbe::Error(error) if ignore_errors => {
-                                let _ = error;
-                            }
-                            FormulaValueProbe::Error(error) => return Err(error),
-                            FormulaValueProbe::Blank => {}
-                            FormulaValueProbe::Bool(_)
-                            | FormulaValueProbe::Number(_)
-                            | FormulaValueProbe::Text(_) => counta += 1,
-                            FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => {}
                         }
                     }
                 } else {
@@ -29634,32 +29606,15 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 return finish_logical!();
             }
 
-            let checkpoint = self.index;
-            if let Some((reference, next_index)) = self.try_parse_reference_set()? {
-                self.index = next_index;
-                self.skip_whitespace();
-                if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
-                    for (target_sheet_id, rect) in reference.areas() {
-                        for row in rect.row_first..=rect.row_last {
-                            for col in rect.col_first..=rect.col_last {
-                                let value = self.evaluator.cell_value_or_blank(
-                                    *target_sheet_id,
-                                    row,
-                                    col,
-                                )?;
-                                record_value!(formula_value_probe_from_cell_value(value), true);
-                            }
+            if let Some(reference) = self.parse_reference_set_before_boundary(&[',', ')'])? {
+                for (target_sheet_id, rect) in reference.areas() {
+                    for row in rect.row_first..=rect.row_last {
+                        for col in rect.col_first..=rect.col_last {
+                            let value =
+                                self.evaluator
+                                    .cell_value_or_blank(*target_sheet_id, row, col)?;
+                            record_value!(formula_value_probe_from_cell_value(value), true);
                         }
-                    }
-                } else {
-                    self.index = checkpoint;
-                    self.skip_whitespace();
-                    if self.parse_string_literal()?.is_some() {
-                        return Err(FormulaEvalError::Value);
-                    }
-                    match self.parse_catchable_argument()? {
-                        Ok(value) => record_value!(FormulaValueProbe::Number(value), false),
-                        Err(error) => record_value!(FormulaValueProbe::Error(error), false),
                     }
                 }
             } else {
@@ -29685,89 +29640,63 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
     }
 
     fn parse_aggregate_argument(&mut self) -> Result<Vec<f64>, FormulaEvalError> {
-        let checkpoint = self.index;
-        if let Some((reference, next_index)) = self.try_parse_reference_set()? {
-            self.index = next_index;
-            self.skip_whitespace();
-            if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
-                return self.evaluator.numeric_values_in_reference(&reference);
-            }
+        if let Some(reference) = self.parse_reference_set_before_boundary(&[',', ')'])? {
+            return self.evaluator.numeric_values_in_reference(&reference);
         }
-        self.index = checkpoint;
         Ok(vec![self.parse_comparison()?])
     }
 
     fn parse_subtotal_numeric_argument(&mut self) -> Result<Vec<f64>, FormulaEvalError> {
-        let checkpoint = self.index;
-        if let Some((reference, next_index)) = self.try_parse_reference_set()? {
-            self.index = next_index;
-            self.skip_whitespace();
-            if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
-                let mut values = Vec::new();
-                for (target_sheet_id, rect) in reference.areas() {
-                    values.extend(
-                        self.evaluator
-                            .subtotal_numeric_values_in_rect(*target_sheet_id, *rect)?,
-                    );
-                }
-                return Ok(values);
+        if let Some(reference) = self.parse_reference_set_before_boundary(&[',', ')'])? {
+            let mut values = Vec::new();
+            for (target_sheet_id, rect) in reference.areas() {
+                values.extend(
+                    self.evaluator
+                        .subtotal_numeric_values_in_rect(*target_sheet_id, *rect)?,
+                );
             }
+            return Ok(values);
         }
-        self.index = checkpoint;
         Ok(vec![self.parse_comparison()?])
     }
 
     fn parse_subtotal_counta_argument(&mut self) -> Result<u64, FormulaEvalError> {
-        let checkpoint = self.index;
-        if let Some((reference, next_index)) = self.try_parse_reference_set()? {
-            self.index = next_index;
-            self.skip_whitespace();
-            if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
-                let mut count = 0_u64;
-                for (target_sheet_id, rect) in reference.areas() {
-                    count += self
-                        .evaluator
-                        .subtotal_counta_values_in_rect(*target_sheet_id, *rect)?;
-                }
-                return Ok(count);
+        if let Some(reference) = self.parse_reference_set_before_boundary(&[',', ')'])? {
+            let mut count = 0_u64;
+            for (target_sheet_id, rect) in reference.areas() {
+                count += self
+                    .evaluator
+                    .subtotal_counta_values_in_rect(*target_sheet_id, *rect)?;
             }
+            return Ok(count);
         }
-        self.index = checkpoint;
         self.parse_comparison()?;
         Ok(1)
     }
 
     fn parse_aggregate_a_argument(&mut self) -> Result<Vec<f64>, FormulaEvalError> {
-        let checkpoint = self.index;
-        if let Some((reference, next_index)) = self.try_parse_reference_set()? {
-            self.index = next_index;
-            self.skip_whitespace();
-            if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
-                let mut values = Vec::new();
-                for (target_sheet_id, rect) in reference.areas() {
-                    for row in rect.row_first..=rect.row_last {
-                        for col in rect.col_first..=rect.col_last {
-                            match self
-                                .evaluator
-                                .cell_value_or_blank(*target_sheet_id, row, col)?
-                            {
-                                CellValue::Blank => {}
-                                CellValue::Bool(value) => {
-                                    values.push(if value { 1.0 } else { 0.0 })
-                                }
-                                CellValue::Number(value) => values.push(value),
-                                CellValue::Text(_) => values.push(0.0),
-                                CellValue::Error(error) => {
-                                    return Err(formula_eval_error_from_cell_error(error));
-                                }
+        if let Some(reference) = self.parse_reference_set_before_boundary(&[',', ')'])? {
+            let mut values = Vec::new();
+            for (target_sheet_id, rect) in reference.areas() {
+                for row in rect.row_first..=rect.row_last {
+                    for col in rect.col_first..=rect.col_last {
+                        match self
+                            .evaluator
+                            .cell_value_or_blank(*target_sheet_id, row, col)?
+                        {
+                            CellValue::Blank => {}
+                            CellValue::Bool(value) => values.push(if value { 1.0 } else { 0.0 }),
+                            CellValue::Number(value) => values.push(value),
+                            CellValue::Text(_) => values.push(0.0),
+                            CellValue::Error(error) => {
+                                return Err(formula_eval_error_from_cell_error(error));
                             }
                         }
                     }
                 }
-                return Ok(values);
             }
+            return Ok(values);
         }
-        self.index = checkpoint;
         let value = self.parse_value_probe_argument()?;
         match value {
             FormulaValueProbe::Blank | FormulaValueProbe::Text(_) => Ok(vec![0.0]),
@@ -29832,48 +29761,29 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
 
     fn parse_holidays_argument(&mut self) -> Result<Vec<i64>, FormulaEvalError> {
         self.skip_whitespace();
-        let checkpoint = self.index;
-        if let Some((reference, next_index)) = self.try_parse_reference_set()? {
-            self.index = next_index;
-            self.skip_whitespace();
-            if self.peek_char().is_none_or(|ch| matches!(ch, ')' | ',')) {
-                return self
-                    .evaluator
-                    .numeric_values_in_reference(&reference)?
-                    .into_iter()
-                    .map(formula_serial_integer)
-                    .collect::<Result<Vec<_>, _>>();
-            } else {
-                self.index = checkpoint;
-            }
+        if let Some(reference) = self.parse_reference_set_before_boundary(&[')', ','])? {
+            return self
+                .evaluator
+                .numeric_values_in_reference(&reference)?
+                .into_iter()
+                .map(formula_serial_integer)
+                .collect::<Result<Vec<_>, _>>();
         }
         Ok(vec![formula_serial_integer(self.parse_comparison()?)?])
     }
 
     fn parse_counta_argument(&mut self) -> Result<u64, FormulaEvalError> {
-        let checkpoint = self.index;
-        if let Some((reference, next_index)) = self.try_parse_reference_set()? {
-            self.index = next_index;
-            self.skip_whitespace();
-            if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
-                return self.evaluator.counta_values_in_reference(&reference);
-            }
+        if let Some(reference) = self.parse_reference_set_before_boundary(&[',', ')'])? {
+            return self.evaluator.counta_values_in_reference(&reference);
         }
-        self.index = checkpoint;
         self.parse_comparison()?;
         Ok(1)
     }
 
     fn parse_countblank_argument(&mut self) -> Result<u64, FormulaEvalError> {
-        let checkpoint = self.index;
-        if let Some((reference, next_index)) = self.try_parse_reference_set()? {
-            self.index = next_index;
-            self.skip_whitespace();
-            if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
-                return self.evaluator.countblank_values_in_reference(&reference);
-            }
+        if let Some(reference) = self.parse_reference_set_before_boundary(&[',', ')'])? {
+            return self.evaluator.countblank_values_in_reference(&reference);
         }
-        self.index = checkpoint;
         self.parse_comparison()?;
         Ok(0)
     }
@@ -29882,8 +29792,46 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         Ok(self.parse_reference_set_argument()?.single_area()?)
     }
 
+    fn parse_reference_set_before_boundary(
+        &mut self,
+        boundaries: &[char],
+    ) -> Result<Option<FormulaReference>, FormulaEvalError> {
+        let checkpoint = self.index;
+        match self.parse_reference_set_argument() {
+            Ok(reference) => {
+                self.skip_whitespace();
+                if self.peek_char().is_none_or(|ch| boundaries.contains(&ch)) {
+                    Ok(Some(reference))
+                } else {
+                    self.index = checkpoint;
+                    Ok(None)
+                }
+            }
+            Err(FormulaEvalError::Value | FormulaEvalError::Unsupported) => {
+                self.index = checkpoint;
+                Ok(None)
+            }
+            Err(error) => {
+                self.index = checkpoint;
+                Err(error)
+            }
+        }
+    }
+
     fn parse_reference_set_argument(&mut self) -> Result<FormulaReference, FormulaEvalError> {
         self.skip_whitespace();
+        let checkpoint = self.index;
+        if let Some(identifier) = self.parse_identifier() {
+            self.skip_whitespace();
+            if self.consume_char('(')
+                && (identifier.eq_ignore_ascii_case("INDIRECT")
+                    || identifier.eq_ignore_ascii_case("OFFSET")
+                    || identifier.eq_ignore_ascii_case("TRIMRANGE"))
+            {
+                return self.parse_reference_projection_reference_function(identifier.as_str());
+            }
+        }
+        self.index = checkpoint;
         let Some((reference, next_index)) = self.try_parse_reference_set()? else {
             return Err(FormulaEvalError::Value);
         };
@@ -30211,28 +30159,22 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
 
     fn parse_text_values_argument(&mut self) -> Result<Vec<String>, FormulaEvalError> {
         self.skip_whitespace();
-        let checkpoint = self.index;
-        if let Some((reference, next_index)) = self.try_parse_reference_set()? {
-            self.index = next_index;
-            self.skip_whitespace();
-            if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
-                let mut values = Vec::new();
-                for (target_sheet_id, rect) in reference.areas() {
-                    for row in rect.row_first..=rect.row_last {
-                        for col in rect.col_first..=rect.col_last {
-                            let value =
-                                self.evaluator
-                                    .cell_value_or_blank(*target_sheet_id, row, col)?;
-                            values.push(formula_text_from_value_probe(
-                                formula_value_probe_from_cell_value(value),
-                            )?);
-                        }
+        if let Some(reference) = self.parse_reference_set_before_boundary(&[',', ')'])? {
+            let mut values = Vec::new();
+            for (target_sheet_id, rect) in reference.areas() {
+                for row in rect.row_first..=rect.row_last {
+                    for col in rect.col_first..=rect.col_last {
+                        let value =
+                            self.evaluator
+                                .cell_value_or_blank(*target_sheet_id, row, col)?;
+                        values.push(formula_text_from_value_probe(
+                            formula_value_probe_from_cell_value(value),
+                        )?);
                     }
                 }
-                return Ok(values);
             }
+            return Ok(values);
         }
-        self.index = checkpoint;
         Ok(vec![self.parse_text_value_argument()?])
     }
 
@@ -40339,6 +40281,137 @@ mod tests {
                 OmValue::Text("red".to_string()),
                 OmValue::Error(CellError::Calc),
                 OmValue::Error(CellError::Value),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_uses_reference_projection_functions_as_references() {
+        let mut runtime = ExcelRuntime::new();
+        runtime.create_workbook().expect("workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let values = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:C3".to_string())])
+                .expect("Range(A1:C3)"),
+        );
+        let trim_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E1:G5".to_string())])
+                .expect("Range(E1:G5)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("J1:J8".to_string())])
+                .expect("Range(J1:J8)"),
+        );
+
+        runtime
+            .dispatch_set(
+                values,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        3,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(10.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(20.0),
+                            OmValue::Number(5.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(30.0),
+                            OmValue::Number(6.0),
+                        ],
+                    )
+                    .expect("reference projection source values"),
+                ),
+                &[],
+            )
+            .expect("set reference projection source values");
+        runtime
+            .dispatch_set(
+                trim_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        5,
+                        3,
+                        vec![
+                            OmValue::Empty,
+                            OmValue::Empty,
+                            OmValue::Empty,
+                            OmValue::Empty,
+                            OmValue::Empty,
+                            OmValue::Empty,
+                            OmValue::Empty,
+                            OmValue::Number(10.0),
+                            OmValue::Empty,
+                            OmValue::Empty,
+                            OmValue::Empty,
+                            OmValue::Empty,
+                            OmValue::Empty,
+                            OmValue::Empty,
+                            OmValue::Empty,
+                        ],
+                    )
+                    .expect("trim reference source values"),
+                ),
+                &[],
+            )
+            .expect("set trim reference source values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        8,
+                        1,
+                        vec![
+                            OmValue::Text("=SUM(OFFSET(A1,0,0,3,1))".to_string()),
+                            OmValue::Text("=ROWS(OFFSET(A1,0,0,3,1))".to_string()),
+                            OmValue::Text(r#"=SUM(INDIRECT("A1:A3"))"#.to_string()),
+                            OmValue::Text(r#"=AREAS(INDIRECT("A1:A2,C1:C2"))"#.to_string()),
+                            OmValue::Text(r#"=SUM(INDIRECT("A1:A2,C1:C2"))"#.to_string()),
+                            OmValue::Text("=SUM(TRIMRANGE(E1:G5))".to_string()),
+                            OmValue::Text("=ROWS(TRIMRANGE(E1:G5))".to_string()),
+                            OmValue::Text("=OFFSET(A1,2,1)".to_string()),
+                        ],
+                    )
+                    .expect("reference projection formulas"),
+                ),
+                &[],
+            )
+            .expect("set reference projection formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("reference projection values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected reference projection value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(6.0),
+                OmValue::Number(3.0),
+                OmValue::Number(6.0),
+                OmValue::Number(2.0),
+                OmValue::Number(12.0),
+                OmValue::Number(10.0),
+                OmValue::Number(1.0),
+                OmValue::Number(30.0),
             ]
         );
     }
