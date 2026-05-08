@@ -2087,6 +2087,33 @@
                 "aliasOf": "VARIANT"
               },
               "optional": true
+            },
+            {
+              "name": "ReferenceStyle",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "XlReferenceStyle"
+              },
+              "optional": true
+            },
+            {
+              "name": "External",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "RelativeTo",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
             }
           ],
           "returnType": {

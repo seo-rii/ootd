@@ -462,11 +462,18 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
         .find(|member| member.name == "Address")
         .expect("Range.Address");
     assert_eq!(range_address.access, AccessMode::Read);
-    assert_eq!(range_address.params.len(), 2);
-    assert_eq!(range_address.params[0].name, "RowAbsolute");
-    assert!(range_address.params[0].optional);
-    assert_eq!(range_address.params[1].name, "ColumnAbsolute");
-    assert!(range_address.params[1].optional);
+    let expected_address_names = [
+        "RowAbsolute",
+        "ColumnAbsolute",
+        "ReferenceStyle",
+        "External",
+        "RelativeTo",
+    ];
+    assert_eq!(range_address.params.len(), expected_address_names.len());
+    for (index, expected_name) in expected_address_names.iter().enumerate() {
+        assert_eq!(range_address.params[index].name, *expected_name);
+        assert!(range_address.params[index].optional);
+    }
     assert_eq!(
         range_address
             .return_type
@@ -2099,11 +2106,18 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|member| member.name == "Address")
         .expect("Range.Address");
     assert_eq!(range_address.access, AccessMode::Read);
-    assert_eq!(range_address.params.len(), 2);
-    assert_eq!(range_address.params[0].name, "RowAbsolute");
-    assert!(range_address.params[0].optional);
-    assert_eq!(range_address.params[1].name, "ColumnAbsolute");
-    assert!(range_address.params[1].optional);
+    let expected_address_names = [
+        "RowAbsolute",
+        "ColumnAbsolute",
+        "ReferenceStyle",
+        "External",
+        "RelativeTo",
+    ];
+    assert_eq!(range_address.params.len(), expected_address_names.len());
+    for (index, expected_name) in expected_address_names.iter().enumerate() {
+        assert_eq!(range_address.params[index].name, *expected_name);
+        assert!(range_address.params[index].optional);
+    }
     assert_eq!(
         range_address
             .return_type
@@ -2158,6 +2172,34 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             .and_then(|type_ref| type_ref.alias_of.as_deref()),
         Some("Excel.Range")
     );
+    let range_find = range
+        .members
+        .iter()
+        .find(|member| member.name == "Find")
+        .expect("Range.Find");
+    assert_eq!(range_find.access, AccessMode::Read);
+    assert_eq!(range_find.params.len(), 9);
+    assert_eq!(range_find.params[0].name, "What");
+    assert!(!range_find.params[0].optional);
+    assert_eq!(range_find.params[8].name, "SearchFormat");
+    assert!(range_find.params[8].optional);
+    let range_find_return = range_find.return_type.as_ref().expect("Range.Find return");
+    assert_eq!(range_find_return.alias_of.as_deref(), Some("Excel.Range"));
+    assert!(range_find_return.nullable);
+    for member_name in ["FindNext", "FindPrevious"] {
+        let find_member = range
+            .members
+            .iter()
+            .find(|member| member.name == member_name)
+            .expect(member_name);
+        assert_eq!(find_member.access, AccessMode::Read);
+        assert_eq!(find_member.params.len(), 1);
+        assert_eq!(find_member.params[0].name, "After");
+        assert!(find_member.params[0].optional);
+        let return_type = find_member.return_type.as_ref().expect("Find return");
+        assert_eq!(return_type.alias_of.as_deref(), Some("Excel.Range"));
+        assert!(return_type.nullable);
+    }
     let range_replace = range
         .members
         .iter()
