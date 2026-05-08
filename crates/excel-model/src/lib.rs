@@ -115,54 +115,83 @@ impl WorkbookState {
     }
 
     pub fn set_range_values(&mut self, range: &RangeRef, values: &OmArray) -> OmResult<()> {
-        let (sheet_id, rect) = self.single_sheet_rect(range)?;
-        if values.rows != rect.height() as usize || values.cols != rect.width() as usize {
-            return Err(OmError::invalid_argument(format!(
-                "range dimensions {}x{} do not match value matrix {}x{}",
-                rect.height(),
-                rect.width(),
-                values.rows,
-                values.cols,
-            )));
+        let (sheet_id, rects) = self.same_sheet_rects(range)?;
+        let mut updates = Vec::new();
+
+        if rects.len() == 1 {
+            let rect = rects[0];
+            if values.rows != rect.height() as usize || values.cols != rect.width() as usize {
+                return Err(OmError::invalid_argument(format!(
+                    "range dimensions {}x{} do not match value matrix {}x{}",
+                    rect.height(),
+                    rect.width(),
+                    values.rows,
+                    values.cols,
+                )));
+            }
+
+            updates.reserve(values.values.len());
+            for row_offset in 0..values.rows {
+                for col_offset in 0..values.cols {
+                    let row = rect.row_first + row_offset as u32;
+                    let col = rect.col_first + col_offset as u32;
+                    let value = CellValue::try_from(
+                        values.values[row_offset * values.cols + col_offset].clone(),
+                    )?;
+                    updates.push(((row, col), value));
+                }
+            }
+        } else {
+            if values.rows != 1 || values.cols != 1 {
+                return Err(OmError::unsupported(
+                    "multi-area range value assignment currently supports scalar values only",
+                ));
+            }
+
+            let value = CellValue::try_from(values.values[0].clone())?;
+            updates.reserve(
+                rects
+                    .iter()
+                    .map(|rect| (rect.height() * rect.width()) as usize)
+                    .sum(),
+            );
+            for rect in &rects {
+                for row in rect.row_first..=rect.row_last {
+                    for col in rect.col_first..=rect.col_last {
+                        updates.push(((row, col), value.clone()));
+                    }
+                }
+            }
         }
 
         let worksheet = self.worksheet_data_for_sheet_mut(sheet_id)?;
-        for row_offset in 0..values.rows {
-            for col_offset in 0..values.cols {
-                let row = rect.row_first + row_offset as u32;
-                let col = rect.col_first + col_offset as u32;
-                let key = (row, col);
-                let value = CellValue::try_from(
-                    values.values[row_offset * values.cols + col_offset].clone(),
-                )?;
-
-                if let Some(existing) = worksheet.cells.get_mut(&key) {
-                    if existing.value == value && existing.formula.is_none() {
-                        continue;
-                    }
-
-                    existing.value = value;
-                    existing.formula = None;
-                    if matches!(existing.value, CellValue::Blank) && existing.style_id.is_none() {
-                        worksheet.cells.remove(&key);
-                    }
-                    worksheet.dirty = true;
-                    worksheet.dirty_cells.insert(key);
+        for (key, value) in updates {
+            if let Some(existing) = worksheet.cells.get_mut(&key) {
+                if existing.value == value && existing.formula.is_none() {
                     continue;
                 }
 
-                if !matches!(value, CellValue::Blank) {
-                    worksheet.cells.insert(
-                        key,
-                        CellData {
-                            value,
-                            formula: None,
-                            style_id: None,
-                        },
-                    );
-                    worksheet.dirty = true;
-                    worksheet.dirty_cells.insert(key);
+                existing.value = value;
+                existing.formula = None;
+                if matches!(existing.value, CellValue::Blank) && existing.style_id.is_none() {
+                    worksheet.cells.remove(&key);
                 }
+                worksheet.dirty = true;
+                worksheet.dirty_cells.insert(key);
+                continue;
+            }
+
+            if !matches!(value, CellValue::Blank) {
+                worksheet.cells.insert(
+                    key,
+                    CellData {
+                        value,
+                        formula: None,
+                        style_id: None,
+                    },
+                );
+                worksheet.dirty = true;
+                worksheet.dirty_cells.insert(key);
             }
         }
 
@@ -170,40 +199,81 @@ impl WorkbookState {
     }
 
     pub fn set_range_formulas(&mut self, range: &RangeRef, values: &OmArray) -> OmResult<()> {
-        let (sheet_id, rect) = self.single_sheet_rect(range)?;
-        if values.rows != rect.height() as usize || values.cols != rect.width() as usize {
-            return Err(OmError::invalid_argument(format!(
-                "range dimensions {}x{} do not match formula matrix {}x{}",
-                rect.height(),
-                rect.width(),
-                values.rows,
-                values.cols,
-            )));
-        }
+        let (sheet_id, rects) = self.same_sheet_rects(range)?;
+        let mut updates = Vec::new();
 
-        let mut updates = Vec::with_capacity(values.values.len());
-        for row_offset in 0..values.rows {
-            for col_offset in 0..values.cols {
-                let row = rect.row_first + row_offset as u32;
-                let col = rect.col_first + col_offset as u32;
-                let value = values.values[row_offset * values.cols + col_offset].clone();
-                let (cell_value, formula) = match value {
-                    OmValue::Text(text) => {
-                        if let Some(formula_text) = text.strip_prefix('=') {
-                            (
-                                CellValue::Blank,
-                                Some(FormulaSource {
-                                    text: formula_text.to_string(),
-                                    is_r1c1: false,
-                                }),
-                            )
-                        } else {
-                            (CellValue::Text(text), None)
+        if rects.len() == 1 {
+            let rect = rects[0];
+            if values.rows != rect.height() as usize || values.cols != rect.width() as usize {
+                return Err(OmError::invalid_argument(format!(
+                    "range dimensions {}x{} do not match formula matrix {}x{}",
+                    rect.height(),
+                    rect.width(),
+                    values.rows,
+                    values.cols,
+                )));
+            }
+
+            updates.reserve(values.values.len());
+            for row_offset in 0..values.rows {
+                for col_offset in 0..values.cols {
+                    let row = rect.row_first + row_offset as u32;
+                    let col = rect.col_first + col_offset as u32;
+                    let value = values.values[row_offset * values.cols + col_offset].clone();
+                    let (cell_value, formula) = match value {
+                        OmValue::Text(text) => {
+                            if let Some(formula_text) = text.strip_prefix('=') {
+                                (
+                                    CellValue::Blank,
+                                    Some(FormulaSource {
+                                        text: formula_text.to_string(),
+                                        is_r1c1: false,
+                                    }),
+                                )
+                            } else {
+                                (CellValue::Text(text), None)
+                            }
                         }
+                        other => (CellValue::try_from(other)?, None),
+                    };
+                    updates.push(((row, col), cell_value, formula));
+                }
+            }
+        } else {
+            if values.rows != 1 || values.cols != 1 {
+                return Err(OmError::unsupported(
+                    "multi-area range formula assignment currently supports scalar values only",
+                ));
+            }
+
+            let (cell_value, formula) = match values.values[0].clone() {
+                OmValue::Text(text) => {
+                    if let Some(formula_text) = text.strip_prefix('=') {
+                        (
+                            CellValue::Blank,
+                            Some(FormulaSource {
+                                text: formula_text.to_string(),
+                                is_r1c1: false,
+                            }),
+                        )
+                    } else {
+                        (CellValue::Text(text), None)
                     }
-                    other => (CellValue::try_from(other)?, None),
-                };
-                updates.push(((row, col), cell_value, formula));
+                }
+                other => (CellValue::try_from(other)?, None),
+            };
+            updates.reserve(
+                rects
+                    .iter()
+                    .map(|rect| (rect.height() * rect.width()) as usize)
+                    .sum(),
+            );
+            for rect in &rects {
+                for row in rect.row_first..=rect.row_last {
+                    for col in rect.col_first..=rect.col_last {
+                        updates.push(((row, col), cell_value.clone(), formula.clone()));
+                    }
+                }
             }
         }
 
@@ -245,31 +315,34 @@ impl WorkbookState {
     }
 
     pub fn clear_range_contents(&mut self, range: &RangeRef) -> OmResult<()> {
-        let (sheet_id, rect) = self.single_sheet_rect(range)?;
+        let (sheet_id, rects) = self.same_sheet_rects(range)?;
         let worksheet = self.worksheet_data_for_sheet_mut(sheet_id)?;
-        for row in rect.row_first..=rect.row_last {
-            for col in rect.col_first..=rect.col_last {
-                let key = (row, col);
-                let mut changed = false;
-                let mut remove = false;
+        for rect in rects {
+            for row in rect.row_first..=rect.row_last {
+                for col in rect.col_first..=rect.col_last {
+                    let key = (row, col);
+                    let mut changed = false;
+                    let mut remove = false;
 
-                if let Some(existing) = worksheet.cells.get_mut(&key) {
-                    if matches!(existing.value, CellValue::Blank) && existing.formula.is_none() {
-                        continue;
+                    if let Some(existing) = worksheet.cells.get_mut(&key) {
+                        if matches!(existing.value, CellValue::Blank) && existing.formula.is_none()
+                        {
+                            continue;
+                        }
+
+                        existing.value = CellValue::Blank;
+                        existing.formula = None;
+                        remove = existing.style_id.is_none();
+                        changed = true;
                     }
 
-                    existing.value = CellValue::Blank;
-                    existing.formula = None;
-                    remove = existing.style_id.is_none();
-                    changed = true;
-                }
-
-                if changed {
-                    if remove {
-                        worksheet.cells.remove(&key);
+                    if changed {
+                        if remove {
+                            worksheet.cells.remove(&key);
+                        }
+                        worksheet.dirty = true;
+                        worksheet.dirty_cells.insert(key);
                     }
-                    worksheet.dirty = true;
-                    worksheet.dirty_cells.insert(key);
                 }
             }
         }
@@ -282,6 +355,17 @@ impl WorkbookState {
     }
 
     fn single_sheet_rect(&self, range: &RangeRef) -> OmResult<(SheetId, Rect)> {
+        let (sheet_id, rects) = self.same_sheet_rects(range)?;
+        if rects.len() != 1 {
+            return Err(OmError::unsupported(
+                "multi-area ranges are not supported for this worksheet operation",
+            ));
+        }
+
+        Ok((sheet_id, rects[0]))
+    }
+
+    fn same_sheet_rects(&self, range: &RangeRef) -> OmResult<(SheetId, Vec<Rect>)> {
         if range.workbook_id != self.model.id {
             return Err(OmError::invalid_argument(format!(
                 "range workbook {} does not match loaded workbook {}",
@@ -289,22 +373,27 @@ impl WorkbookState {
             )));
         }
 
-        if range.areas.len() != 1 {
-            return Err(OmError::unsupported(
-                "multi-area ranges are not supported in the core worksheet model yet",
+        if range.areas.is_empty() {
+            return Err(OmError::invalid_argument(
+                "worksheet range must contain at least one area",
             ));
         }
 
-        let rect = range.areas[0];
-        if rect.row_first == 0 || rect.row_last == 0 || rect.col_first == 0 || rect.col_last == 0 {
-            return Err(OmError::invalid_argument(
-                "worksheet coordinates are 1-based and must be greater than zero",
-            ));
-        }
-        if rect.row_first > rect.row_last || rect.col_first > rect.col_last {
-            return Err(OmError::invalid_argument(
-                "worksheet range bounds must be ordered",
-            ));
+        for rect in &range.areas {
+            if rect.row_first == 0
+                || rect.row_last == 0
+                || rect.col_first == 0
+                || rect.col_last == 0
+            {
+                return Err(OmError::invalid_argument(
+                    "worksheet coordinates are 1-based and must be greater than zero",
+                ));
+            }
+            if rect.row_first > rect.row_last || rect.col_first > rect.col_last {
+                return Err(OmError::invalid_argument(
+                    "worksheet range bounds must be ordered",
+                ));
+            }
         }
 
         let sheet_id = match range.scope {
@@ -327,7 +416,7 @@ impl WorkbookState {
             ));
         }
 
-        Ok((sheet_id, rect))
+        Ok((sheet_id, range.areas.clone()))
     }
 }
 
@@ -495,18 +584,59 @@ mod tests {
     }
 
     #[test]
-    fn set_range_values_rejects_multi_area_ranges() {
+    fn set_range_values_scalar_broadcasts_to_multi_area_ranges() {
         let mut state = sample_state();
-        let result = state.set_range_values(
-            &RangeRef {
-                workbook_id: WorkbookId(7),
-                scope: office_common::SheetScope::Single(SheetId(3)),
-                areas: vec![Rect::single_cell(1, 1), Rect::single_cell(2, 2)],
-            },
-            &OmArray::new(1, 2, vec![OmValue::Number(1.0), OmValue::Number(2.0)]).expect("array"),
-        );
+        state
+            .set_range_values(
+                &RangeRef {
+                    workbook_id: WorkbookId(7),
+                    scope: SheetScope::Single(SheetId(3)),
+                    areas: vec![Rect::single_cell(1, 1), Rect::single_cell(2, 2)],
+                },
+                &OmArray::scalar(OmValue::Number(9.0)),
+            )
+            .expect("broadcast scalar");
 
-        assert!(result.is_err());
+        let worksheet = state
+            .worksheet_data_for_sheet(SheetId(3))
+            .expect("worksheet data");
+        assert!(worksheet.dirty);
+        assert_eq!(worksheet.dirty_cells, BTreeSet::from([(1, 1), (2, 2)]));
+        assert_eq!(
+            worksheet.cells.get(&(1, 1)).expect("A1").value,
+            CellValue::Number(9.0)
+        );
+        assert_eq!(
+            worksheet.cells.get(&(2, 2)).expect("B2").value,
+            CellValue::Number(9.0)
+        );
+        assert_eq!(
+            worksheet.cells.get(&(2, 2)).expect("B2").style_id,
+            Some(StyleId(9))
+        );
+    }
+
+    #[test]
+    fn set_range_values_rejects_array_assignment_to_multi_area_ranges() {
+        let mut state = sample_state();
+        let error = state
+            .set_range_values(
+                &RangeRef {
+                    workbook_id: WorkbookId(7),
+                    scope: SheetScope::Single(SheetId(3)),
+                    areas: vec![Rect::single_cell(1, 1), Rect::single_cell(2, 2)],
+                },
+                &OmArray::new(1, 2, vec![OmValue::Number(1.0), OmValue::Number(2.0)])
+                    .expect("array"),
+            )
+            .expect_err("multi-area array assignment should fail");
+
+        assert_eq!(error.code, OmErrorCode::Unsupported);
+        let worksheet = state
+            .worksheet_data_for_sheet(SheetId(3))
+            .expect("worksheet data");
+        assert!(!worksheet.dirty);
+        assert!(worksheet.dirty_cells.is_empty());
     }
 
     #[test]
@@ -815,6 +945,38 @@ mod tests {
     }
 
     #[test]
+    fn set_range_formulas_scalar_broadcasts_to_multi_area_ranges() {
+        let mut state = sample_state();
+        state
+            .set_range_formulas(
+                &RangeRef {
+                    workbook_id: WorkbookId(7),
+                    scope: SheetScope::Single(SheetId(3)),
+                    areas: vec![Rect::single_cell(1, 1), Rect::single_cell(3, 3)],
+                },
+                &OmArray::scalar(OmValue::Text("=SUM(B1:B2)".to_string())),
+            )
+            .expect("broadcast formula");
+
+        let worksheet = state
+            .worksheet_data_for_sheet(SheetId(3))
+            .expect("worksheet data");
+        assert!(worksheet.dirty);
+        assert_eq!(worksheet.dirty_cells, BTreeSet::from([(1, 1), (3, 3)]));
+        for key in [(1, 1), (3, 3)] {
+            let cell = worksheet.cells.get(&key).expect("formula cell");
+            assert_eq!(cell.value, CellValue::Blank);
+            assert_eq!(
+                cell.formula,
+                Some(FormulaSource {
+                    text: "SUM(B1:B2)".to_string(),
+                    is_r1c1: false,
+                })
+            );
+        }
+    }
+
+    #[test]
     fn blank_write_preserves_styled_cell_shell() {
         let mut state = sample_state();
         state
@@ -879,5 +1041,56 @@ mod tests {
         assert_eq!(styled_cell.value, CellValue::Blank);
         assert!(styled_cell.formula.is_none());
         assert_eq!(styled_cell.style_id, Some(StyleId(9)));
+    }
+
+    #[test]
+    fn clear_range_contents_clears_each_multi_area_rect() {
+        let mut state = sample_state();
+        let worksheet = state
+            .worksheet_data_for_sheet_mut(SheetId(3))
+            .expect("worksheet data");
+        worksheet.cells.insert(
+            (4, 4),
+            CellData {
+                value: CellValue::Text("keep".to_string()),
+                formula: None,
+                style_id: None,
+            },
+        );
+        worksheet.cells.insert(
+            (3, 3),
+            CellData {
+                value: CellValue::Blank,
+                formula: Some(FormulaSource {
+                    text: "A1+B2".to_string(),
+                    is_r1c1: false,
+                }),
+                style_id: None,
+            },
+        );
+
+        state
+            .clear_range_contents(&RangeRef {
+                workbook_id: WorkbookId(7),
+                scope: SheetScope::Single(SheetId(3)),
+                areas: vec![Rect::single_cell(1, 1), Rect::single_cell(3, 3)],
+            })
+            .expect("clear multi-area contents");
+
+        let worksheet = state
+            .worksheet_data_for_sheet(SheetId(3))
+            .expect("worksheet data");
+        assert!(worksheet.dirty);
+        assert_eq!(worksheet.dirty_cells, BTreeSet::from([(1, 1), (3, 3)]));
+        assert!(!worksheet.cells.contains_key(&(1, 1)));
+        assert!(!worksheet.cells.contains_key(&(3, 3)));
+        assert_eq!(
+            worksheet.cells.get(&(2, 2)).expect("B2").value,
+            CellValue::Text("hello".to_string())
+        );
+        assert_eq!(
+            worksheet.cells.get(&(4, 4)).expect("D4").value,
+            CellValue::Text("keep".to_string())
+        );
     }
 }
