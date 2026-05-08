@@ -230,6 +230,32 @@
           }
         },
         {
+          "name": "Charts",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Worksheets",
+            "aliasOf": "Excel.Charts"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Application",
+                  "sourceMember": "Charts"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Worksheets",
+                "aliasOf": "Excel.Charts"
+              }
+            }
+          }
+        },
+        {
           "name": "ActiveWorkbook",
           "memberKind": "property",
           "returnType": {
@@ -2223,6 +2249,32 @@
                 "kind": "interface",
                 "name": "Worksheets",
                 "aliasOf": "Excel.Sheets"
+              }
+            }
+          }
+        },
+        {
+          "name": "Charts",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Worksheets",
+            "aliasOf": "Excel.Charts"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "Charts"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Worksheets",
+                "aliasOf": "Excel.Charts"
               }
             }
           }

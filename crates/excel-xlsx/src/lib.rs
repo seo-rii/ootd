@@ -5,7 +5,7 @@ use excel_model::{CellData, DefinedNameTable, WorkbookState, WorksheetData};
 use office_common::{
     CellError, CellValue, DefinedName, DefinedNameId, FileFormat, FormulaSource, LoadOptions,
     NameScope, NameValidationMode, OmError, OmErrorCode, OmResult, OpaquePart, SaveOptions,
-    SheetId, SheetVisibility, StyleId, WorkbookId, WorkbookModel, WorksheetModel,
+    SheetId, SheetKind, SheetVisibility, StyleId, WorkbookId, WorkbookModel, WorksheetModel,
 };
 use office_opc::OpcPackage;
 use quick_xml::escape::partial_escape;
@@ -15,6 +15,10 @@ use quick_xml::{Reader, Writer};
 const CALC_CHAIN_PART_NAME: &str = "xl/calcChain.xml";
 const CALC_CHAIN_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/calcChain";
+const WORKSHEET_RELATIONSHIP_TYPE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet";
+const CHARTSHEET_RELATIONSHIP_TYPE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet";
 const STYLES_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles";
 const THEME_RELATIONSHIP_TYPE: &str =
@@ -584,7 +588,7 @@ impl XlsxCodec {
             .unwrap_or_default();
         let relationships = relationship_entries
             .iter()
-            .map(|relationship| (relationship.id.clone(), relationship.target.clone()))
+            .map(|relationship| (relationship.id.clone(), relationship.clone()))
             .collect::<BTreeMap<_, _>>();
         let parsed_workbook = parse_workbook(workbook_part.bytes.as_slice(), &relationships)?;
         let date1904 = parsed_workbook.date1904;
@@ -601,20 +605,27 @@ impl XlsxCodec {
 
         for worksheet in &worksheets {
             if let Some(part_uri) = worksheet.part_uri.as_deref() {
-                let worksheet_part = package.part(part_uri).ok_or_else(|| {
+                let sheet_part = package.part(part_uri).ok_or_else(|| {
                     OmError::new(
                         OmErrorCode::Parse,
-                        format!("worksheet part is missing: {part_uri}"),
+                        format!("sheet part is missing: {part_uri}"),
                     )
                 })?;
+                if worksheet.kind != SheetKind::Worksheet {
+                    worksheet_data.insert(
+                        worksheet.id,
+                        WorksheetData {
+                            source_xml: sheet_part.bytes.clone(),
+                            ..WorksheetData::default()
+                        },
+                    );
+                    continue;
+                }
                 worksheet_data.insert(
                     worksheet.id,
                     WorksheetData {
-                        cells: parse_worksheet_cells(
-                            worksheet_part.bytes.as_slice(),
-                            &shared_strings,
-                        )?,
-                        source_xml: worksheet_part.bytes.clone(),
+                        cells: parse_worksheet_cells(sheet_part.bytes.as_slice(), &shared_strings)?,
+                        source_xml: sheet_part.bytes.clone(),
                         dirty: false,
                         dirty_cells: Default::default(),
                     },
@@ -1101,7 +1112,7 @@ struct ParsedDefinedNameRecord {
 
 fn parse_workbook(
     workbook_xml: &[u8],
-    relationships: &BTreeMap<String, String>,
+    relationships: &BTreeMap<String, RelationshipEntry>,
 ) -> OmResult<ParsedWorkbook> {
     let mut reader = Reader::from_reader(Cursor::new(workbook_xml));
     reader.config_mut().trim_text(false);
@@ -1179,14 +1190,18 @@ fn parse_workbook(
                     }
                 }
                 let next_id = sheet_id.unwrap_or_else(|| worksheets.len() as u64 + 1);
-                let part_uri = relationship_id
+                let relationship = relationship_id
                     .as_ref()
-                    .and_then(|id| relationships.get(id))
-                    .cloned();
+                    .and_then(|id| relationships.get(id));
+                let part_uri = relationship.map(|relationship| relationship.target.clone());
+                let kind = relationship
+                    .map(|relationship| workbook_sheet_kind(&relationship.relationship_type))
+                    .unwrap_or_default();
                 worksheets.push(WorksheetModel {
                     id: SheetId(next_id),
                     workbook_id: WorkbookId(0),
                     name: name.unwrap_or_else(|| format!("Sheet{}", worksheets.len() + 1)),
+                    kind,
                     visibility,
                     relationship_id,
                     part_uri,
@@ -1252,6 +1267,14 @@ fn parse_workbook(
         worksheets,
         defined_names,
     })
+}
+
+fn workbook_sheet_kind(relationship_type: &str) -> SheetKind {
+    match relationship_type {
+        WORKSHEET_RELATIONSHIP_TYPE => SheetKind::Worksheet,
+        CHARTSHEET_RELATIONSHIP_TYPE => SheetKind::ChartSheet,
+        _ => SheetKind::Worksheet,
+    }
 }
 
 fn parse_defined_name_record(
@@ -16649,7 +16672,7 @@ mod tests {
         BorderSummary, COMMENTS_RELATIONSHIP_TYPE, CellData, CommentPartSummary, DxfSummary,
         FileFormat, FillSummary, FontSummary, HYPERLINK_RELATIONSHIP_TYPE, OpcPackage,
         STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE, VML_DRAWING_RELATIONSHIP_TYPE,
-        WorksheetCommentSummary, WorksheetData, WorksheetHyperlinkBinding,
+        WORKBOOK_RELS_PART_NAME, WorksheetCommentSummary, WorksheetData, WorksheetHyperlinkBinding,
         WorksheetHyperlinkSummary, WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec,
         collect_support_part_dimension_coords, compute_dimension_ref,
         compute_dimension_ref_with_preserved, parse_shared_strings, parse_workbook,
@@ -16657,7 +16680,7 @@ mod tests {
     };
     use office_common::{
         CellError, CellValue, FormulaSource, LoadOptions as CommonLoadOptions, NameScope,
-        NameValidationMode, OmErrorCode, SheetId, SheetVisibility, StyleId, WorkbookId,
+        NameValidationMode, OmErrorCode, SheetId, SheetKind, SheetVisibility, StyleId, WorkbookId,
     };
     use office_opc::{CompressionMethod, OpcPart};
 
@@ -17207,6 +17230,64 @@ mod tests {
             saved_workbook_xml.contains(
                 r#"<definedName name="GlobalTotal" hidden="1">Sheet1!$A$1</definedName>"#
             )
+        );
+    }
+
+    #[test]
+    fn load_classifies_chartsheet_relationship_as_chart_sheet_kind() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        let workbook_rels_xml = std::str::from_utf8(
+            package
+                .part(WORKBOOK_RELS_PART_NAME)
+                .expect("workbook rels")
+                .bytes
+                .as_slice(),
+        )
+        .expect("workbook rels utf8")
+        .replace(
+            r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml""#,
+            r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet" Target="chartsheets/sheet1.xml""#,
+        );
+        package
+            .replace_part_bytes(WORKBOOK_RELS_PART_NAME, workbook_rels_xml.into_bytes())
+            .expect("replace workbook rels");
+        package
+            .add_part(OpcPart {
+                name: "xl/chartsheets/sheet1.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?><chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>"#.to_vec(),
+            })
+            .expect("add chartsheet part");
+        let bytes = package.to_bytes().expect("package bytes");
+
+        let loaded = codec
+            .load(bytes.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook with chartsheet");
+
+        assert_eq!(loaded.state.worksheets[0].kind, SheetKind::ChartSheet);
+        assert_eq!(
+            loaded.state.worksheets[0].part_uri.as_deref(),
+            Some("xl/chartsheets/sheet1.xml")
+        );
+        assert!(
+            loaded
+                .state
+                .worksheet_data
+                .get(&loaded.state.worksheets[0].id)
+                .expect("chartsheet data placeholder")
+                .cells
+                .is_empty()
+        );
+        assert!(
+            !loaded
+                .state
+                .worksheet_data
+                .get(&loaded.state.worksheets[0].id)
+                .expect("chartsheet data placeholder")
+                .source_xml
+                .is_empty()
         );
     }
 

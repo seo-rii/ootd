@@ -5,8 +5,9 @@ use office_common::{
     CellError, CellValue, DefinedNameId, ExcelProfile, FileFormat, FormulaSource,
     GetRangeValuesSpec, LoadOptions, NameScope, NameValidationMode, ObjectHandle, OmArray, OmError,
     OmErrorCode, OmResult, OmValue, OpaquePart, OpenWorkbookSpec, RangeArea, RangeHandle, RangeRef,
-    RangeSet, Rect, SaveOptions, SaveWorkbookSpec, SetRangeValuesSpec, SheetId, SheetScope,
-    SheetVisibility, WorkbookHandle, WorkbookId, WorkbookModel, WorksheetHandle, WorksheetModel,
+    RangeSet, Rect, SaveOptions, SaveWorkbookSpec, SetRangeValuesSpec, SheetId, SheetKind,
+    SheetScope, SheetVisibility, WorkbookHandle, WorkbookId, WorkbookModel, WorksheetHandle,
+    WorksheetModel,
 };
 use office_idl::{AccessMode, SupportState};
 use office_opc::{CompressionMethod, OpcPackage, OpcPart};
@@ -200,6 +201,14 @@ impl RuntimeSheetTemplate {
             Self::Excel4IntlMacroSheet => "IntlMacro",
         }
     }
+
+    fn sheet_kind(self) -> SheetKind {
+        match self {
+            Self::Worksheet => SheetKind::Worksheet,
+            Self::Chart => SheetKind::ChartSheet,
+            Self::Excel4MacroSheet | Self::Excel4IntlMacroSheet => SheetKind::MacroSheet,
+        }
+    }
 }
 
 const COMMENTS_PART_CONTENT_TYPE: &str =
@@ -263,6 +272,31 @@ enum RuntimeNamesScope {
     Worksheet(SheetId),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeSheetCollectionKind {
+    Worksheets,
+    Sheets,
+    Charts,
+}
+
+impl RuntimeSheetCollectionKind {
+    fn member_name(self) -> &'static str {
+        match self {
+            Self::Worksheets => "Worksheets",
+            Self::Sheets => "Sheets",
+            Self::Charts => "Charts",
+        }
+    }
+
+    fn includes(self, kind: SheetKind) -> bool {
+        match self {
+            Self::Worksheets => kind == SheetKind::Worksheet,
+            Self::Sheets => true,
+            Self::Charts => kind == SheetKind::ChartSheet,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 enum RuntimeObjectKind {
     Application,
@@ -272,6 +306,7 @@ enum RuntimeObjectKind {
     },
     WorksheetsCollection {
         workbook: WorkbookHandle,
+        kind: RuntimeSheetCollectionKind,
     },
     Worksheet {
         workbook: WorkbookHandle,
@@ -419,6 +454,7 @@ impl ExcelRuntime {
                 OmError::new(OmErrorCode::InvalidState, "workbook has no worksheets")
             })?;
             worksheet.name = sheet_name;
+            worksheet.kind = template.sheet_kind();
         }
         Ok(workbook)
     }
@@ -770,8 +806,8 @@ impl ExcelRuntime {
             RuntimeObjectKind::Workbook { workbook } => {
                 self.dispatch_get_workbook(workbook, member, args)
             }
-            RuntimeObjectKind::WorksheetsCollection { workbook } => {
-                self.dispatch_get_worksheets(workbook, member, args)
+            RuntimeObjectKind::WorksheetsCollection { workbook, kind } => {
+                self.dispatch_get_sheet_collection(workbook, kind, member, args)
             }
             RuntimeObjectKind::Worksheet { workbook, sheet_id } => {
                 self.dispatch_get_worksheet(workbook, sheet_id, member, args)
@@ -1242,8 +1278,8 @@ impl ExcelRuntime {
             RuntimeObjectKind::Workbook { workbook } => {
                 self.dispatch_invoke_workbook(workbook, member, args)
             }
-            RuntimeObjectKind::WorksheetsCollection { workbook } => {
-                self.dispatch_invoke_worksheets(workbook, member, args)
+            RuntimeObjectKind::WorksheetsCollection { workbook, kind } => {
+                self.dispatch_invoke_sheet_collection(workbook, kind, member, args)
             }
             RuntimeObjectKind::Worksheet { workbook, sheet_id } => {
                 self.dispatch_invoke_worksheet(workbook, sheet_id, member, args)
@@ -4306,6 +4342,7 @@ impl ExcelRuntime {
                     | "Workbooks"
                     | "Worksheets"
                     | "Sheets"
+                    | "Charts"
                     | "Names"
                     | "International"
             )
@@ -4324,12 +4361,18 @@ impl ExcelRuntime {
                     self.dispatch_invoke(handle, "Item", args)
                 }
             }
-            "Worksheets" | "Sheets" => {
+            "Worksheets" | "Sheets" | "Charts" => {
                 let Some(active_workbook) = self.active_workbook else {
                     return Ok(OmValue::Empty);
                 };
                 let handle = self.register_object(RuntimeObjectKind::WorksheetsCollection {
                     workbook: active_workbook,
+                    kind: match member {
+                        "Worksheets" => RuntimeSheetCollectionKind::Worksheets,
+                        "Sheets" => RuntimeSheetCollectionKind::Sheets,
+                        "Charts" => RuntimeSheetCollectionKind::Charts,
+                        _ => unreachable!("sheet collection member"),
+                    },
                 });
                 if args.is_empty() {
                     Ok(OmValue::Object(handle))
@@ -4665,7 +4708,7 @@ impl ExcelRuntime {
         args: &[OmValue],
     ) -> OmResult<OmValue> {
         self.focus_member_supported("Workbook", member, false)?;
-        if !args.is_empty() && !matches!(member, "Worksheets" | "Sheets" | "Names") {
+        if !args.is_empty() && !matches!(member, "Worksheets" | "Sheets" | "Charts" | "Names") {
             return Err(OmError::invalid_argument(format!(
                 "Workbook.{member} does not accept index arguments"
             )));
@@ -4718,9 +4761,16 @@ impl ExcelRuntime {
                         .values()
                         .all(|worksheet| !worksheet.dirty)
             })),
-            "Worksheets" | "Sheets" => {
-                let handle =
-                    self.register_object(RuntimeObjectKind::WorksheetsCollection { workbook });
+            "Worksheets" | "Sheets" | "Charts" => {
+                let handle = self.register_object(RuntimeObjectKind::WorksheetsCollection {
+                    workbook,
+                    kind: match member {
+                        "Worksheets" => RuntimeSheetCollectionKind::Worksheets,
+                        "Sheets" => RuntimeSheetCollectionKind::Sheets,
+                        "Charts" => RuntimeSheetCollectionKind::Charts,
+                        _ => unreachable!("sheet collection member"),
+                    },
+                });
                 if args.is_empty() {
                     Ok(OmValue::Object(handle))
                 } else {
@@ -4778,46 +4828,50 @@ impl ExcelRuntime {
         }
     }
 
-    fn dispatch_get_worksheets(
+    fn dispatch_get_sheet_collection(
         &mut self,
         workbook: WorkbookHandle,
+        collection_kind: RuntimeSheetCollectionKind,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        let collection_name = collection_kind.member_name();
         match member {
             "Count" => {
                 if !args.is_empty() {
-                    return Err(OmError::invalid_argument(
-                        "Worksheets.Count does not accept arguments",
-                    ));
+                    return Err(OmError::invalid_argument(format!(
+                        "{collection_name}.Count does not accept arguments"
+                    )));
                 }
                 Ok(OmValue::Number(
                     self.runtime_workbook(workbook)?
                         .loaded
                         .state
                         .worksheets
-                        .len() as f64,
+                        .iter()
+                        .filter(|worksheet| collection_kind.includes(worksheet.kind))
+                        .count() as f64,
                 ))
             }
             "Parent" => {
                 if !args.is_empty() {
-                    return Err(OmError::invalid_argument(
-                        "Worksheets.Parent does not accept arguments",
-                    ));
+                    return Err(OmError::invalid_argument(format!(
+                        "{collection_name}.Parent does not accept arguments"
+                    )));
                 }
                 Ok(OmValue::Object(workbook.0))
             }
             "Application" => {
                 if !args.is_empty() {
-                    return Err(OmError::invalid_argument(
-                        "Worksheets.Application does not accept arguments",
-                    ));
+                    return Err(OmError::invalid_argument(format!(
+                        "{collection_name}.Application does not accept arguments"
+                    )));
                 }
                 Ok(OmValue::Object(self.root_application()))
             }
-            "Item" => self.resolve_worksheet_item(workbook, args),
+            "Item" => self.resolve_sheet_collection_item(workbook, collection_kind, args),
             _ => Err(OmError::unsupported(format!(
-                "Worksheets.{member} is not implemented"
+                "{collection_name}.{member} is not implemented"
             ))),
         }
     }
@@ -4925,7 +4979,13 @@ impl ExcelRuntime {
                         "Worksheet.Type does not accept arguments",
                     ));
                 }
-                Ok(OmValue::Number(f64::from(XL_SHEET_TYPE_WORKSHEET)))
+                let sheet_type = match self.worksheet_model(workbook, sheet_id)?.kind {
+                    SheetKind::Worksheet => XL_SHEET_TYPE_WORKSHEET,
+                    SheetKind::ChartSheet => XL_SHEET_TYPE_CHART,
+                    SheetKind::MacroSheet => XL_SHEET_TYPE_EXCEL4_MACRO_SHEET,
+                    SheetKind::DialogSheet => XL_SHEET_TYPE_WORKSHEET,
+                };
+                Ok(OmValue::Number(f64::from(sheet_type)))
             }
             "UsedRange" => {
                 if !args.is_empty() {
@@ -6750,17 +6810,24 @@ impl ExcelRuntime {
         }
     }
 
-    fn dispatch_invoke_worksheets(
+    fn dispatch_invoke_sheet_collection(
         &mut self,
         workbook: WorkbookHandle,
+        collection_kind: RuntimeSheetCollectionKind,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        let collection_name = collection_kind.member_name();
         match member {
-            "Add" => Ok(OmValue::Object(self.add_worksheet(workbook, args)?.0)),
-            "Item" => self.resolve_worksheet_item(workbook, args),
+            "Add" if collection_kind != RuntimeSheetCollectionKind::Charts => {
+                Ok(OmValue::Object(self.add_worksheet(workbook, args)?.0))
+            }
+            "Add" => Err(OmError::unsupported(
+                "Charts.Add is not implemented as a method",
+            )),
+            "Item" => self.resolve_sheet_collection_item(workbook, collection_kind, args),
             _ => Err(OmError::unsupported(format!(
-                "Worksheets.{member} is not implemented as a method"
+                "{collection_name}.{member} is not implemented as a method"
             ))),
         }
     }
@@ -7285,6 +7352,7 @@ impl ExcelRuntime {
                         id: sheet_id,
                         workbook_id: runtime.loaded.state.model.id,
                         name: worksheet_name,
+                        kind: sheet_template.sheet_kind(),
                         visibility: SheetVisibility::Visible,
                         relationship_id: Some(relationship_id),
                         part_uri: Some(part_uri.clone()),
@@ -8470,25 +8538,31 @@ impl ExcelRuntime {
         Ok(OmValue::Object(workbook.0))
     }
 
-    fn resolve_worksheet_item(
+    fn resolve_sheet_collection_item(
         &mut self,
         workbook: WorkbookHandle,
+        collection_kind: RuntimeSheetCollectionKind,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        let collection_name = collection_kind.member_name();
         if args.len() != 1 {
-            return Err(OmError::invalid_argument(
-                "Worksheets.Item expects a single worksheet index or name",
-            ));
+            return Err(OmError::invalid_argument(format!(
+                "{collection_name}.Item expects a single sheet index or name"
+            )));
         }
 
-        let worksheet = match &args[0] {
+        let sheet_id = match &args[0] {
             OmValue::Number(index) => {
-                let index = coerce_positive_index(*index, "Worksheets.Item index")?;
+                let index =
+                    coerce_positive_index(*index, &format!("{collection_name}.Item index"))?;
                 self.runtime_workbook(workbook)?
                     .loaded
                     .state
                     .worksheets
-                    .get(index as usize - 1)
+                    .iter()
+                    .filter(|worksheet| collection_kind.includes(worksheet.kind))
+                    .nth(index as usize - 1)
+                    .map(|worksheet| worksheet.id)
             }
             OmValue::Text(name) => self
                 .runtime_workbook(workbook)?
@@ -8496,17 +8570,24 @@ impl ExcelRuntime {
                 .state
                 .worksheets
                 .iter()
-                .find(|worksheet| worksheet.name.eq_ignore_ascii_case(name)),
+                .filter(|worksheet| collection_kind.includes(worksheet.kind))
+                .find(|worksheet| worksheet.name.eq_ignore_ascii_case(name))
+                .map(|worksheet| worksheet.id),
             _ => {
-                return Err(OmError::type_mismatch(
-                    "Worksheets.Item expects a numeric index or worksheet name",
-                ));
+                return Err(OmError::type_mismatch(format!(
+                    "{collection_name}.Item expects a numeric index or sheet name"
+                )));
             }
         }
-        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "worksheet item not found"))?;
+        .ok_or_else(|| {
+            OmError::new(
+                OmErrorCode::NotFound,
+                format!("{collection_name} item not found"),
+            )
+        })?;
 
         Ok(OmValue::Object(
-            self.register_worksheet_handle(workbook, worksheet.id).0,
+            self.register_worksheet_handle(workbook, sheet_id).0,
         ))
     }
 
@@ -10820,7 +10901,7 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
     match object {
         RuntimeObjectKind::Application | RuntimeObjectKind::WorkbooksCollection => None,
         RuntimeObjectKind::Workbook { workbook }
-        | RuntimeObjectKind::WorksheetsCollection { workbook }
+        | RuntimeObjectKind::WorksheetsCollection { workbook, .. }
         | RuntimeObjectKind::Worksheet { workbook, .. }
         | RuntimeObjectKind::Range { workbook, .. }
         | RuntimeObjectKind::Areas { workbook, .. }
@@ -53799,6 +53880,42 @@ mod tests {
                 ),
                 expected_sheet_name
             );
+            if template == super::XL_WBA_TEMPLATE_CHART {
+                let charts = expect_object_handle(
+                    runtime
+                        .dispatch_get(workbook, "Charts", &[])
+                        .expect("Workbook.Charts"),
+                );
+                let worksheets = expect_object_handle(
+                    runtime
+                        .dispatch_get(workbook, "Worksheets", &[])
+                        .expect("Workbook.Worksheets"),
+                );
+                assert_eq!(
+                    expect_number(
+                        runtime
+                            .dispatch_get(charts, "Count", &[])
+                            .expect("Workbook.Charts.Count")
+                    ),
+                    1.0
+                );
+                assert_eq!(
+                    expect_number(
+                        runtime
+                            .dispatch_get(worksheets, "Count", &[])
+                            .expect("Workbook.Worksheets.Count")
+                    ),
+                    0.0
+                );
+                assert_eq!(
+                    expect_number(
+                        runtime
+                            .dispatch_get(active_sheet, "Type", &[])
+                            .expect("ActiveSheet.Type")
+                    ),
+                    f64::from(super::XL_SHEET_TYPE_CHART)
+                );
+            }
             assert!(expect_bool(
                 runtime
                     .dispatch_get(workbook, "Saved", &[])
@@ -61045,6 +61162,16 @@ mod tests {
                 .dispatch_get(workbook.0, "Worksheets", &[])
                 .expect("Workbook.Worksheets"),
         );
+        let sheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("Workbook.Sheets"),
+        );
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
 
         let chart_sheet = expect_object_handle(
             runtime
@@ -61119,7 +61246,61 @@ mod tests {
                     .dispatch_get(worksheets, "Count", &[])
                     .expect("Worksheets.Count after typed shell adds")
             ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheets, "Count", &[])
+                    .expect("Sheets.Count after typed shell adds")
+            ),
             4.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Count", &[])
+                    .expect("Charts.Count after typed shell adds")
+            ),
+            1.0
+        );
+        let application_charts = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Charts", &[])
+                .expect("Application.Charts"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application_charts, "Count", &[])
+                    .expect("Application.Charts.Count after typed shell adds")
+            ),
+            1.0
+        );
+        let chart_from_charts = expect_object_handle(
+            runtime
+                .dispatch_invoke(charts, "Item", &[OmValue::Number(1.0)])
+                .expect("Charts.Item(1)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(chart_sheet, "Name", &[])
+                    .expect("chart shell name through original handle")
+            ),
+            expect_text(
+                runtime
+                    .dispatch_get(chart_from_charts, "Name", &[])
+                    .expect("Charts.Item(1).Name")
+            )
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_sheet, "Type", &[])
+                    .expect("chart shell type")
+            ),
+            f64::from(super::XL_SHEET_TYPE_CHART)
         );
         let active_sheet = expect_object_handle(
             runtime

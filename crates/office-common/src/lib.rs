@@ -307,11 +307,28 @@ pub enum SheetVisibility {
     VeryHidden,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SheetKind {
+    #[default]
+    Worksheet,
+    ChartSheet,
+    MacroSheet,
+    DialogSheet,
+}
+
+impl SheetKind {
+    pub fn is_worksheet(&self) -> bool {
+        *self == Self::Worksheet
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorksheetModel {
     pub id: SheetId,
     pub workbook_id: WorkbookId,
     pub name: String,
+    #[serde(default, skip_serializing_if = "SheetKind::is_worksheet")]
+    pub kind: SheetKind,
     #[serde(default)]
     pub visibility: SheetVisibility,
     #[serde(default, skip_serializing_if = "Option::is_none")]
