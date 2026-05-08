@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Write};
 
-use excel_model::{CellData, WorkbookState, WorksheetData};
+use excel_model::{CellData, DefinedNameTable, WorkbookState, WorksheetData};
 use office_common::{
     CellError, CellValue, FileFormat, FormulaSource, LoadOptions, OmError, OmErrorCode, OmResult,
     OpaquePart, SaveOptions, SheetId, SheetVisibility, StyleId, WorkbookId, WorkbookModel,
@@ -645,6 +645,7 @@ impl XlsxCodec {
             },
             worksheets,
             worksheet_data,
+            defined_names: DefinedNameTable::default(),
             opaque_parts,
         };
         ensure_workbook_style_ids_are_valid(&state, &support_parts)?;

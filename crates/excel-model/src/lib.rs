@@ -1,9 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use office_common::{
-    CellValue, FormulaSource, OmArray, OmError, OmErrorCode, OmResult, OmValue, OpaquePart,
-    RangeRef, Rect, SheetId, SheetScope, StyleId, WorkbookId, WorkbookModel, WorksheetModel,
+    CellValue, DefinedName, DefinedNameId, FormulaSource, NameScope, NameValidationMode, OmArray,
+    OmError, OmErrorCode, OmResult, OmValue, OpaquePart, RangeRef, Rect, SheetId, SheetScope,
+    StyleId, WorkbookId, WorkbookModel, WorksheetModel,
 };
+
+mod names;
+
+pub use names::DefinedNameTable;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CellData {
@@ -25,6 +30,7 @@ pub struct WorkbookState {
     pub model: WorkbookModel,
     pub worksheets: Vec<WorksheetModel>,
     pub worksheet_data: BTreeMap<SheetId, WorksheetData>,
+    pub defined_names: DefinedNameTable,
     pub opaque_parts: Vec<OpaquePart>,
 }
 
@@ -51,6 +57,37 @@ impl WorkbookState {
         self.worksheet_data
             .get(&sheet_id)
             .and_then(|worksheet| worksheet.cells.get(&(row, col)))
+    }
+
+    pub fn defined_names(&self) -> &DefinedNameTable {
+        &self.defined_names
+    }
+
+    pub fn defined_names_mut(&mut self) -> &mut DefinedNameTable {
+        &mut self.defined_names
+    }
+
+    pub fn add_defined_name(
+        &mut self,
+        scope: NameScope,
+        display_name: impl Into<String>,
+        refers_to: FormulaSource,
+        validation_mode: NameValidationMode,
+    ) -> OmResult<DefinedNameId> {
+        self.defined_names
+            .add(scope, display_name, refers_to, validation_mode)
+    }
+
+    pub fn remove_defined_name(&mut self, scope: NameScope, name: &str) -> OmResult<DefinedName> {
+        self.defined_names.remove(scope, name)
+    }
+
+    pub fn lookup_name(&self, current_sheet: Option<SheetId>, name: &str) -> Option<&DefinedName> {
+        self.defined_names.lookup(current_sheet, name)
+    }
+
+    pub fn lookup_name_in_scope(&self, scope: NameScope, name: &str) -> Option<&DefinedName> {
+        self.defined_names.lookup_in_scope(scope, name)
     }
 
     pub fn worksheet_data_for_sheet(&self, sheet_id: SheetId) -> OmResult<&WorksheetData> {
@@ -422,13 +459,13 @@ impl WorkbookState {
 
 #[cfg(test)]
 mod tests {
-    use super::{CellData, WorkbookState, WorksheetData};
+    use super::{CellData, DefinedNameTable, WorkbookState, WorksheetData};
     use std::collections::{BTreeMap, BTreeSet};
 
     use office_common::{
-        CellValue, FileFormat, FormulaSource, ObjectHandle, OmArray, OmErrorCode, OmValue,
-        RangeRef, Rect, SheetId, SheetScope, SheetVisibility, StyleId, WorkbookId, WorkbookModel,
-        WorksheetModel,
+        CellValue, FileFormat, FormulaSource, NameScope, NameValidationMode, ObjectHandle, OmArray,
+        OmErrorCode, OmValue, RangeRef, Rect, SheetId, SheetScope, SheetVisibility, StyleId,
+        WorkbookId, WorkbookModel, WorksheetModel,
     };
 
     fn sample_state() -> WorkbookState {
@@ -476,8 +513,131 @@ mod tests {
                     dirty_cells: BTreeSet::new(),
                 },
             )]),
+            defined_names: DefinedNameTable::default(),
             opaque_parts: Vec::new(),
         }
+    }
+
+    fn formula_source(text: &str) -> FormulaSource {
+        FormulaSource {
+            text: text.to_string(),
+            is_r1c1: false,
+        }
+    }
+
+    #[test]
+    fn workbook_state_defined_name_workbook_scope_lookup_is_case_insensitive() {
+        let mut state = sample_state();
+        state
+            .add_defined_name(
+                NameScope::Workbook,
+                "Total",
+                formula_source("Sheet1!$A$1"),
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add workbook name");
+
+        let found = state
+            .lookup_name(Some(SheetId(3)), "total")
+            .expect("lookup workbook name");
+
+        assert_eq!(found.display_name, "Total");
+        assert_eq!(found.refers_to.text, "Sheet1!$A$1");
+    }
+
+    #[test]
+    fn workbook_state_defined_name_sheet_scope_shadows_workbook_scope() {
+        let mut state = sample_state();
+        state
+            .add_defined_name(
+                NameScope::Workbook,
+                "Total",
+                formula_source("Sheet1!$A$1"),
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add workbook name");
+        state
+            .add_defined_name(
+                NameScope::Worksheet(SheetId(3)),
+                "total",
+                formula_source("Sheet1!$B$1"),
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add sheet name");
+
+        let found = state
+            .lookup_name(Some(SheetId(3)), "TOTAL")
+            .expect("lookup shadowing name");
+
+        assert_eq!(found.scope, NameScope::Worksheet(SheetId(3)));
+        assert_eq!(found.refers_to.text, "Sheet1!$B$1");
+    }
+
+    #[test]
+    fn workbook_state_defined_name_duplicate_same_scope_is_rejected() {
+        let mut state = sample_state();
+        state
+            .add_defined_name(
+                NameScope::Workbook,
+                "Total",
+                formula_source("Sheet1!$A$1"),
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add workbook name");
+
+        let error = state
+            .add_defined_name(
+                NameScope::Workbook,
+                "total",
+                formula_source("Sheet1!$B$1"),
+                NameValidationMode::StrictExcel,
+            )
+            .expect_err("duplicate should fail");
+
+        assert_eq!(error.code, OmErrorCode::InvalidArgument);
+    }
+
+    #[test]
+    fn workbook_state_defined_name_allows_same_name_on_different_sheets() {
+        let mut state = sample_state();
+        state
+            .add_defined_name(
+                NameScope::Worksheet(SheetId(3)),
+                "Total",
+                formula_source("Sheet1!$A$1"),
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add sheet name");
+        state
+            .add_defined_name(
+                NameScope::Worksheet(SheetId(4)),
+                "total",
+                formula_source("Sheet2!$A$1"),
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add same name on another sheet");
+
+        assert_eq!(state.defined_names().len(), 2);
+    }
+
+    #[test]
+    fn workbook_state_defined_name_remove_clears_lookup() {
+        let mut state = sample_state();
+        state
+            .add_defined_name(
+                NameScope::Workbook,
+                "Total",
+                formula_source("Sheet1!$A$1"),
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add workbook name");
+
+        let removed = state
+            .remove_defined_name(NameScope::Workbook, "total")
+            .expect("remove name");
+
+        assert_eq!(removed.display_name, "Total");
+        assert!(state.lookup_name(None, "Total").is_none());
     }
 
     #[test]
