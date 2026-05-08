@@ -114,13 +114,28 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
         .iter()
         .find(|member| member.name == "Open")
         .expect("Workbooks.Open");
-    assert_eq!(workbooks_open.params.len(), 3);
-    assert_eq!(workbooks_open.params[0].name, "Filename");
-    assert!(!workbooks_open.params[0].optional);
-    assert_eq!(workbooks_open.params[1].name, "UpdateLinks");
-    assert!(workbooks_open.params[1].optional);
-    assert_eq!(workbooks_open.params[2].name, "ReadOnly");
-    assert!(workbooks_open.params[2].optional);
+    let expected_names = [
+        "Filename",
+        "UpdateLinks",
+        "ReadOnly",
+        "Format",
+        "Password",
+        "WriteResPassword",
+        "IgnoreReadOnlyRecommended",
+        "Origin",
+        "Delimiter",
+        "Editable",
+        "Notify",
+        "Converter",
+        "AddToMru",
+        "Local",
+        "CorruptLoad",
+    ];
+    assert_eq!(workbooks_open.params.len(), expected_names.len());
+    for (index, expected_name) in expected_names.iter().enumerate() {
+        assert_eq!(workbooks_open.params[index].name, *expected_name);
+        assert_eq!(workbooks_open.params[index].optional, index != 0);
+    }
 }
 
 #[test]

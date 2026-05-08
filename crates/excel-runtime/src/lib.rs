@@ -6087,9 +6087,9 @@ impl ExcelRuntime {
                 Ok(OmValue::Object(workbook.0))
             }
             "Open" => {
-                if args.is_empty() || args.len() > 3 {
+                if args.is_empty() || args.len() > 15 {
                     return Err(OmError::invalid_argument(
-                        "Workbooks.Open expects Filename and optional UpdateLinks and ReadOnly arguments",
+                        "Workbooks.Open expects Filename and up to 14 optional arguments",
                     ));
                 }
                 let path = match &args[0] {
@@ -6100,9 +6100,62 @@ impl ExcelRuntime {
                         ));
                     }
                 };
+                let validate_optional_integer = |index: usize, label: &str| -> OmResult<()> {
+                    match args.get(index) {
+                        None => Ok(()),
+                        Some(value) if om_value_is_omitted(value) => Ok(()),
+                        Some(OmValue::Number(value)) => {
+                            if !value.is_finite()
+                                || value.fract() != 0.0
+                                || *value < i32::MIN as f64
+                                || *value > i32::MAX as f64
+                            {
+                                return Err(OmError::invalid_argument(format!(
+                                    "{label} expects an integer value when provided"
+                                )));
+                            }
+                            Ok(())
+                        }
+                        Some(_) => Err(OmError::type_mismatch(format!(
+                            "{label} expects a numeric value when provided"
+                        ))),
+                    }
+                };
+                let validate_optional_bool = |index: usize, label: &str| -> OmResult<()> {
+                    match args.get(index) {
+                        None => Ok(()),
+                        Some(value) if om_value_is_omitted(value) => Ok(()),
+                        Some(OmValue::Bool(_)) => Ok(()),
+                        Some(_) => Err(OmError::type_mismatch(format!(
+                            "{label} expects a boolean value when provided"
+                        ))),
+                    }
+                };
+                let validate_optional_text = |index: usize, label: &str| -> OmResult<()> {
+                    match args.get(index) {
+                        None => Ok(()),
+                        Some(value) if om_value_is_omitted(value) => Ok(()),
+                        Some(OmValue::Text(_)) => Ok(()),
+                        Some(_) => Err(OmError::type_mismatch(format!(
+                            "{label} expects a string value when provided"
+                        ))),
+                    }
+                };
                 match args.get(1) {
-                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => {}
-                    Some(OmValue::Bool(_) | OmValue::Number(_)) => {}
+                    None => {}
+                    Some(value) if om_value_is_omitted(value) => {}
+                    Some(OmValue::Bool(_)) => {}
+                    Some(OmValue::Number(value)) => {
+                        if !value.is_finite()
+                            || value.fract() != 0.0
+                            || *value < i32::MIN as f64
+                            || *value > i32::MAX as f64
+                        {
+                            return Err(OmError::invalid_argument(
+                                "Workbooks.Open UpdateLinks expects an integer numeric value when provided",
+                            ));
+                        }
+                    }
                     Some(_) => {
                         return Err(OmError::type_mismatch(
                             "Workbooks.Open UpdateLinks expects a boolean or numeric value when provided",
@@ -6118,6 +6171,18 @@ impl ExcelRuntime {
                         ));
                     }
                 };
+                validate_optional_integer(3, "Workbooks.Open Format")?;
+                validate_optional_text(4, "Workbooks.Open Password")?;
+                validate_optional_text(5, "Workbooks.Open WriteResPassword")?;
+                validate_optional_bool(6, "Workbooks.Open IgnoreReadOnlyRecommended")?;
+                validate_optional_integer(7, "Workbooks.Open Origin")?;
+                validate_optional_text(8, "Workbooks.Open Delimiter")?;
+                validate_optional_bool(9, "Workbooks.Open Editable")?;
+                validate_optional_bool(10, "Workbooks.Open Notify")?;
+                validate_optional_integer(11, "Workbooks.Open Converter")?;
+                validate_optional_bool(12, "Workbooks.Open AddToMru")?;
+                validate_optional_bool(13, "Workbooks.Open Local")?;
+                validate_optional_integer(14, "Workbooks.Open CorruptLoad")?;
                 let bytes = fs::read(path).map_err(|error| {
                     OmError::new(
                         OmErrorCode::Io,
@@ -58089,6 +58154,36 @@ mod tests {
                 .dispatch_get(opened, "ReadOnly", &[])
                 .expect("Workbook.ReadOnly")
         ));
+        let opened_with_options = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[
+                        OmValue::Text(path.to_string_lossy().into_owned()),
+                        OmValue::Number(0.0),
+                        OmValue::Bool(true),
+                        OmValue::Number(6.0),
+                        OmValue::Text("password".to_string()),
+                        OmValue::Text("write-res-password".to_string()),
+                        OmValue::Bool(true),
+                        OmValue::Number(1.0),
+                        OmValue::Text(",".to_string()),
+                        OmValue::Bool(false),
+                        OmValue::Bool(false),
+                        OmValue::Number(0.0),
+                        OmValue::Bool(false),
+                        OmValue::Bool(true),
+                        OmValue::Number(0.0),
+                    ],
+                )
+                .expect("Workbooks.Open with optional arguments"),
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(opened_with_options, "ReadOnly", &[])
+                .expect("Workbook.ReadOnly with optional arguments")
+        ));
         let active_sheet = expect_object_handle(
             runtime
                 .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
@@ -58135,6 +58230,20 @@ mod tests {
                     "Open",
                     &[
                         OmValue::Text(path.to_string_lossy().into_owned()),
+                        OmValue::Number(1.5),
+                    ],
+                )
+                .expect_err("Workbooks.Open should reject fractional UpdateLinks")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[
+                        OmValue::Text(path.to_string_lossy().into_owned()),
                         OmValue::Missing,
                         OmValue::Number(1.0),
                     ],
@@ -58150,6 +58259,70 @@ mod tests {
                     "Open",
                     &[
                         OmValue::Text(path.to_string_lossy().into_owned()),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(1.25),
+                    ],
+                )
+                .expect_err("Workbooks.Open should reject fractional Format")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[
+                        OmValue::Text(path.to_string_lossy().into_owned()),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                    ],
+                )
+                .expect_err("Workbooks.Open should reject non-string Password")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[
+                        OmValue::Text(path.to_string_lossy().into_owned()),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Text("bad".to_string()),
+                    ],
+                )
+                .expect_err("Workbooks.Open should reject non-bool IgnoreReadOnlyRecommended")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[
+                        OmValue::Text(path.to_string_lossy().into_owned()),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
                         OmValue::Missing,
                         OmValue::Missing,
                         OmValue::Missing,
