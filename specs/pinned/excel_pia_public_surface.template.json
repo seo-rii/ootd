@@ -382,6 +382,258 @@
                 "name": "Range",
                 "aliasOf": "Excel.Range"
               }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg4",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg5",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg6",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg7",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg8",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg9",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg10",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg11",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg12",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg13",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg14",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg15",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg16",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg17",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg18",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg19",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg20",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg21",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg22",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg23",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg24",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg25",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg26",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg27",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg28",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg29",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg30",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
             }
           ],
           "metadata": {
@@ -426,6 +678,258 @@
                 "name": "Range",
                 "aliasOf": "Excel.Range"
               }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg4",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg5",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg6",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg7",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg8",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg9",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg10",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg11",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg12",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg13",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg14",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg15",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg16",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg17",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg18",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg19",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg20",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg21",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg22",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg23",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg24",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg25",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg26",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg27",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg28",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg29",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg30",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              },
+              "optional": true
             }
           ],
           "metadata": {

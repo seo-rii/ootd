@@ -56805,6 +56805,12 @@ mod tests {
                 )
                 .expect("Application.Intersect(range1, range2, range3)"),
         );
+        let thirty_overlap_args = vec![OmValue::Object(range1); 30];
+        let thirty_overlap = expect_object_handle(
+            runtime
+                .dispatch_invoke(application, "Intersect", &thirty_overlap_args)
+                .expect("Application.Intersect with 30 args"),
+        );
         let selection_after_intersect = expect_object_handle(
             runtime
                 .dispatch_get(application, "Selection", &[])
@@ -56836,6 +56842,14 @@ mod tests {
                     .expect("Application.Intersect multi-arg overlap address")
             ),
             "$B$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(thirty_overlap, "Address", &[])
+                    .expect("Application.Intersect 30-arg overlap address")
+            ),
+            "$A$1:$B$2"
         );
         assert_eq!(
             expect_text(
@@ -57000,6 +57014,12 @@ mod tests {
                 )
                 .expect("Application.Union(range1, range2, range3)"),
         );
+        let thirty_union_args = vec![OmValue::Object(range1); 30];
+        let thirty_union = expect_object_handle(
+            runtime
+                .dispatch_invoke(application, "Union", &thirty_union_args)
+                .expect("Application.Union with 30 args"),
+        );
         let foreign_range = expect_object_handle(
             runtime
                 .dispatch_invoke(worksheet2, "Range", &[OmValue::Text("A1".to_string())])
@@ -57021,6 +57041,14 @@ mod tests {
                     .expect("Application.Union multi-arg address")
             ),
             "$A$1:$D$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(thirty_union, "Address", &[])
+                    .expect("Application.Union 30-arg address")
+            ),
+            "$A$1:$B$2"
         );
         assert_eq!(
             expect_text(

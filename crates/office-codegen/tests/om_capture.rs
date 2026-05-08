@@ -344,7 +344,11 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
         .find(|member| member.name == "Intersect")
         .expect("Application.Intersect");
     assert_eq!(application_intersect.access, AccessMode::Read);
-    assert_eq!(application_intersect.params.len(), 2);
+    assert_eq!(application_intersect.params.len(), 30);
+    for (index, param) in application_intersect.params.iter().enumerate() {
+        assert_eq!(param.name, format!("Arg{}", index + 1));
+        assert_eq!(param.optional, index >= 2);
+    }
     assert_eq!(
         application_intersect
             .return_type
@@ -358,7 +362,11 @@ fn normalizes_pia_capture_template_into_office_idl_surface() {
         .find(|member| member.name == "Union")
         .expect("Application.Union");
     assert_eq!(application_union.access, AccessMode::Read);
-    assert_eq!(application_union.params.len(), 2);
+    assert_eq!(application_union.params.len(), 30);
+    for (index, param) in application_union.params.iter().enumerate() {
+        assert_eq!(param.name, format!("Arg{}", index + 1));
+        assert_eq!(param.optional, index >= 2);
+    }
     assert_eq!(
         application_union
             .return_type
@@ -1828,7 +1836,11 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|member| member.name == "Intersect")
         .expect("Application.Intersect");
     assert_eq!(application_intersect.access, AccessMode::Read);
-    assert_eq!(application_intersect.params.len(), 2);
+    assert_eq!(application_intersect.params.len(), 30);
+    for (index, param) in application_intersect.params.iter().enumerate() {
+        assert_eq!(param.name, format!("Arg{}", index + 1));
+        assert_eq!(param.optional, index >= 2);
+    }
     assert_eq!(
         application_intersect
             .return_type
@@ -1842,7 +1854,11 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|member| member.name == "Union")
         .expect("Application.Union");
     assert_eq!(application_union.access, AccessMode::Read);
-    assert_eq!(application_union.params.len(), 2);
+    assert_eq!(application_union.params.len(), 30);
+    for (index, param) in application_union.params.iter().enumerate() {
+        assert_eq!(param.name, format!("Arg{}", index + 1));
+        assert_eq!(param.optional, index >= 2);
+    }
     assert_eq!(
         application_union
             .return_type
