@@ -20980,6 +20980,13 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
             return Ok(mean_y + sum_xy_deviation / sum_x_deviation_square * (x - mean_x));
         }
+        if name.eq_ignore_ascii_case("FORECAST.ETS")
+            || name.eq_ignore_ascii_case("FORECAST.ETS.CONFINT")
+            || name.eq_ignore_ascii_case("FORECAST.ETS.SEASONALITY")
+            || name.eq_ignore_ascii_case("FORECAST.ETS.STAT")
+        {
+            return self.parse_forecast_ets_function(name);
+        }
         if name.eq_ignore_ascii_case("LINEST") || name.eq_ignore_ascii_case("LOGEST") {
             return self.parse_regression_coefficient_function(name.eq_ignore_ascii_case("LOGEST"));
         }
@@ -23169,6 +23176,551 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         output.push_str(expanded.as_str());
         output.push_str(&text[*end..]);
         Ok(output)
+    }
+
+    fn parse_forecast_ets_function(&mut self, name: &str) -> Result<f64, FormulaEvalError> {
+        macro_rules! parse_optional_number {
+            ($default:expr) => {{
+                self.skip_whitespace();
+                if self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                    $default
+                } else {
+                    self.parse_comparison()?
+                }
+            }};
+        }
+
+        let is_forecast = name.eq_ignore_ascii_case("FORECAST.ETS");
+        let is_confint = name.eq_ignore_ascii_case("FORECAST.ETS.CONFINT");
+        let is_seasonality = name.eq_ignore_ascii_case("FORECAST.ETS.SEASONALITY");
+        let is_stat = name.eq_ignore_ascii_case("FORECAST.ETS.STAT");
+
+        let mut target_date = None;
+        if is_forecast || is_confint {
+            let target = self.parse_comparison()?;
+            if !target.is_finite() {
+                return Err(FormulaEvalError::Value);
+            }
+            target_date = Some(target);
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+        }
+
+        let values = self.parse_aggregate_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let timeline = self.parse_aggregate_argument()?;
+
+        let mut confidence_level = 0.95_f64;
+        let mut statistic_type = None;
+        let mut seasonality = 1.0_f64;
+        let mut data_completion = 1.0_f64;
+        let mut aggregation = 0.0_f64;
+
+        if is_confint {
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                confidence_level = parse_optional_number!(0.95_f64);
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    seasonality = parse_optional_number!(1.0_f64);
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        if !self.consume_char(',') {
+                            return Err(FormulaEvalError::Unsupported);
+                        }
+                        data_completion = parse_optional_number!(1.0_f64);
+                        self.skip_whitespace();
+                        if !self.consume_char(')') {
+                            if !self.consume_char(',') {
+                                return Err(FormulaEvalError::Unsupported);
+                            }
+                            aggregation = parse_optional_number!(0.0_f64);
+                            self.skip_whitespace();
+                            if !self.consume_char(')') {
+                                return Err(FormulaEvalError::Unsupported);
+                            }
+                        }
+                    }
+                }
+            }
+        } else if is_stat {
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let statistic = self.parse_comparison()?;
+            if !statistic.is_finite() {
+                return Err(FormulaEvalError::Value);
+            }
+            statistic_type = Some(formula_integer_argument(statistic)?);
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                seasonality = parse_optional_number!(1.0_f64);
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    data_completion = parse_optional_number!(1.0_f64);
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        if !self.consume_char(',') {
+                            return Err(FormulaEvalError::Unsupported);
+                        }
+                        aggregation = parse_optional_number!(0.0_f64);
+                        self.skip_whitespace();
+                        if !self.consume_char(')') {
+                            return Err(FormulaEvalError::Unsupported);
+                        }
+                    }
+                }
+            }
+        } else if is_seasonality {
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                data_completion = parse_optional_number!(1.0_f64);
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    aggregation = parse_optional_number!(0.0_f64);
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                }
+            }
+        } else {
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                seasonality = parse_optional_number!(1.0_f64);
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    data_completion = parse_optional_number!(1.0_f64);
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        if !self.consume_char(',') {
+                            return Err(FormulaEvalError::Unsupported);
+                        }
+                        aggregation = parse_optional_number!(0.0_f64);
+                        self.skip_whitespace();
+                        if !self.consume_char(')') {
+                            return Err(FormulaEvalError::Unsupported);
+                        }
+                    }
+                }
+            }
+        }
+
+        if values.len() != timeline.len() || values.is_empty() {
+            return Err(FormulaEvalError::NA);
+        }
+        if values
+            .iter()
+            .chain(timeline.iter())
+            .any(|value| !value.is_finite())
+        {
+            return Err(FormulaEvalError::Value);
+        }
+        if is_confint
+            && (!confidence_level.is_finite() || confidence_level <= 0.0 || confidence_level >= 1.0)
+        {
+            return Err(FormulaEvalError::Num);
+        }
+        let statistic_type = if let Some(statistic_type) = statistic_type {
+            if !(1..=8).contains(&statistic_type) {
+                return Err(FormulaEvalError::Num);
+            }
+            Some(statistic_type)
+        } else {
+            None
+        };
+
+        let seasonality_setting = formula_integer_argument(seasonality)?;
+        if !(0..=8760).contains(&seasonality_setting) {
+            return Err(FormulaEvalError::Num);
+        }
+        let data_completion = formula_integer_argument(data_completion)?;
+        if data_completion != 0 && data_completion != 1 {
+            return Err(FormulaEvalError::Num);
+        }
+        let aggregation = formula_integer_argument(aggregation)?;
+        if !(0..=7).contains(&aggregation) {
+            return Err(FormulaEvalError::Num);
+        }
+
+        let mut pairs = timeline
+            .iter()
+            .copied()
+            .zip(values.iter().copied())
+            .collect::<Vec<_>>();
+        pairs.sort_by(|left, right| left.0.partial_cmp(&right.0).unwrap_or(Ordering::Equal));
+
+        let mut aggregated_times = Vec::new();
+        let mut aggregated_values = Vec::new();
+        let mut index = 0usize;
+        while index < pairs.len() {
+            let time = pairs[index].0;
+            let mut group = Vec::new();
+            while index < pairs.len() && pairs[index].0 == time {
+                group.push(pairs[index].1);
+                index += 1;
+            }
+            let value = match aggregation {
+                0 | 1 => group.iter().sum::<f64>() / group.len() as f64,
+                2 | 3 => group.len() as f64,
+                4 => group.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                5 => {
+                    group.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
+                    let mid = group.len() / 2;
+                    if group.len() % 2 == 0 {
+                        (group[mid - 1] + group[mid]) / 2.0
+                    } else {
+                        group[mid]
+                    }
+                }
+                6 => group.iter().copied().fold(f64::INFINITY, f64::min),
+                7 => group.iter().sum::<f64>(),
+                _ => unreachable!("aggregation was validated"),
+            };
+            aggregated_times.push(time);
+            aggregated_values.push(value);
+        }
+
+        if aggregated_times.len() < 2 {
+            return Err(FormulaEvalError::Num);
+        }
+        let mut step = f64::INFINITY;
+        for window in aggregated_times.windows(2) {
+            let diff = window[1] - window[0];
+            if diff <= 0.0 {
+                return Err(FormulaEvalError::Value);
+            }
+            step = step.min(diff);
+        }
+        if !step.is_finite() || step == 0.0 {
+            return Err(FormulaEvalError::Num);
+        }
+
+        let first_time = aggregated_times[0];
+        let last_time = *aggregated_times
+            .last()
+            .expect("timeline has at least two points");
+        let total_slots_float = (last_time - first_time) / step;
+        let total_slots_rounded = total_slots_float.round();
+        if (total_slots_float - total_slots_rounded).abs() > 1e-7 {
+            return Err(FormulaEvalError::Num);
+        }
+        let total_slots = total_slots_rounded as usize + 1;
+        if total_slots < aggregated_values.len() {
+            return Err(FormulaEvalError::Num);
+        }
+        let missing_slots = total_slots - aggregated_values.len();
+        if missing_slots > 0 && (missing_slots as f64 / total_slots as f64) > 0.30 {
+            return Err(FormulaEvalError::Num);
+        }
+
+        let mut completed = vec![None; total_slots];
+        for (time, value) in aggregated_times.iter().zip(aggregated_values.iter()) {
+            let slot_float = (*time - first_time) / step;
+            let slot_rounded = slot_float.round();
+            if (slot_float - slot_rounded).abs() > 1e-7 || slot_rounded < 0.0 {
+                return Err(FormulaEvalError::Num);
+            }
+            let slot = slot_rounded as usize;
+            if slot >= completed.len() {
+                return Err(FormulaEvalError::Num);
+            }
+            completed[slot] = Some(*value);
+        }
+        for slot in 0..completed.len() {
+            if completed[slot].is_some() {
+                continue;
+            }
+            completed[slot] = Some(if data_completion == 0 {
+                0.0
+            } else {
+                let previous = (0..slot).rev().find_map(|index| completed[index]);
+                let next = (slot + 1..completed.len()).find_map(|index| completed[index]);
+                match (previous, next) {
+                    (Some(left), Some(right)) => (left + right) / 2.0,
+                    (Some(left), None) => left,
+                    (None, Some(right)) => right,
+                    (None, None) => 0.0,
+                }
+            });
+        }
+        let completed_values = completed
+            .into_iter()
+            .map(|value| value.expect("missing slots were completed"))
+            .collect::<Vec<_>>();
+
+        let fit_model = |period: usize| -> (Vec<(f64, f64)>, Vec<f64>, f64, f64) {
+            let period = period.max(1);
+            let mut coefficients = vec![(0.0_f64, 0.0_f64); period];
+            if period == 1 {
+                let x_values = formula_regression_default_x(completed_values.len());
+                let (slope, intercept) = formula_regression_slope_intercept(
+                    completed_values.as_slice(),
+                    x_values.as_slice(),
+                    true,
+                    false,
+                )
+                .unwrap_or((
+                    0.0,
+                    completed_values.iter().sum::<f64>() / completed_values.len() as f64,
+                ));
+                coefficients[0] = (slope, intercept);
+            } else {
+                for slot in 0..period {
+                    let mut x_values = Vec::new();
+                    let mut y_values = Vec::new();
+                    for (index, value) in completed_values.iter().enumerate() {
+                        if index % period == slot {
+                            x_values.push(index as f64 + 1.0);
+                            y_values.push(*value);
+                        }
+                    }
+                    coefficients[slot] = if y_values.len() >= 2 {
+                        formula_regression_slope_intercept(
+                            y_values.as_slice(),
+                            x_values.as_slice(),
+                            true,
+                            false,
+                        )
+                        .unwrap_or((0.0, y_values.iter().sum::<f64>() / y_values.len() as f64))
+                    } else {
+                        (
+                            0.0,
+                            y_values.first().copied().unwrap_or_else(|| {
+                                completed_values.iter().sum::<f64>() / completed_values.len() as f64
+                            }),
+                        )
+                    };
+                }
+            }
+
+            let fitted = completed_values
+                .iter()
+                .enumerate()
+                .map(|(index, _)| {
+                    let (slope, intercept) = coefficients[index % period];
+                    intercept + slope * (index as f64 + 1.0)
+                })
+                .collect::<Vec<_>>();
+            let mae = completed_values
+                .iter()
+                .zip(fitted.iter())
+                .map(|(actual, fitted)| (actual - fitted).abs())
+                .sum::<f64>()
+                / completed_values.len() as f64;
+            let rmse = (completed_values
+                .iter()
+                .zip(fitted.iter())
+                .map(|(actual, fitted)| {
+                    let error = actual - fitted;
+                    error * error
+                })
+                .sum::<f64>()
+                / completed_values.len() as f64)
+                .sqrt();
+            (coefficients, fitted, mae, rmse)
+        };
+
+        let detect_period = || -> usize {
+            if completed_values.len() < 4 {
+                return 1;
+            }
+            let max_period = (completed_values.len() / 2).min(24).min(8760);
+            let mut best_period = 1usize;
+            let (_, _, _, mut best_rmse) = fit_model(1);
+            for period in 2..=max_period {
+                let (_, _, _, rmse) = fit_model(period);
+                if rmse + 1e-9 < best_rmse {
+                    best_rmse = rmse;
+                    best_period = period;
+                }
+            }
+            best_period
+        };
+
+        let period = if seasonality_setting == 0 {
+            1usize
+        } else if seasonality_setting == 1 {
+            detect_period()
+        } else {
+            let period = usize::try_from(seasonality_setting).map_err(|_| FormulaEvalError::Num)?;
+            if period > completed_values.len() || period > completed_values.len() / 2 {
+                return Err(FormulaEvalError::Num);
+            }
+            period
+        };
+
+        let (coefficients, fitted, mae, rmse) = fit_model(period);
+        let target_index = if let Some(target_date) = target_date {
+            if target_date < last_time {
+                return Err(FormulaEvalError::Num);
+            }
+            let offset = (target_date - first_time) / step;
+            let rounded = offset.round();
+            if (offset - rounded).abs() > 1e-7 || rounded < 0.0 {
+                return Err(FormulaEvalError::Num);
+            }
+            rounded as usize
+        } else {
+            completed_values.len()
+        };
+        let (target_slope, target_intercept) = coefficients[target_index % period];
+        let forecast = target_intercept + target_slope * (target_index as f64 + 1.0);
+
+        if is_forecast {
+            return formula_checked_numeric_result(forecast);
+        }
+        if is_seasonality {
+            return Ok(period as f64);
+        }
+        if is_confint {
+            let inverse_standard_normal = |probability: f64| -> Result<f64, FormulaEvalError> {
+                if !probability.is_finite() {
+                    return Err(FormulaEvalError::Value);
+                }
+                if probability <= 0.0 || probability >= 1.0 {
+                    return Err(FormulaEvalError::Num);
+                }
+                const A: [f64; 6] = [
+                    -3.969683028665376e1,
+                    2.209460984245205e2,
+                    -2.759285104469687e2,
+                    1.383577518672690e2,
+                    -3.066479806614716e1,
+                    2.506628277459239,
+                ];
+                const B: [f64; 5] = [
+                    -5.447609879822406e1,
+                    1.615858368580409e2,
+                    -1.556989798598866e2,
+                    6.680131188771972e1,
+                    -1.328068155288572e1,
+                ];
+                const C: [f64; 6] = [
+                    -7.784894002430293e-3,
+                    -3.223964580411365e-1,
+                    -2.400758277161838,
+                    -2.549732539343734,
+                    4.374664141464968,
+                    2.938163982698783,
+                ];
+                const D: [f64; 4] = [
+                    7.784695709041462e-3,
+                    3.224671290700398e-1,
+                    2.445134137142996,
+                    3.754408661907416,
+                ];
+                const P_LOW: f64 = 0.02425;
+                const P_HIGH: f64 = 1.0 - P_LOW;
+                if probability < P_LOW {
+                    let q = (-2.0 * probability.ln()).sqrt();
+                    let numerator =
+                        (((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q) + C[5];
+                    let denominator = ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q) + 1.0;
+                    Ok(numerator / denominator)
+                } else if probability <= P_HIGH {
+                    let q = probability - 0.5;
+                    let r = q * q;
+                    let numerator =
+                        (((((A[0] * r + A[1]) * r + A[2]) * r + A[3]) * r + A[4]) * r) + A[5];
+                    let denominator =
+                        (((((B[0] * r + B[1]) * r + B[2]) * r + B[3]) * r + B[4]) * r) + 1.0;
+                    Ok(numerator * q / denominator)
+                } else {
+                    let q = (-2.0 * (1.0 - probability).ln()).sqrt();
+                    let numerator =
+                        (((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q) + C[5];
+                    let denominator = ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q) + 1.0;
+                    Ok(-numerator / denominator)
+                }
+            };
+            let horizon = target_index.saturating_sub(completed_values.len() - 1) as f64;
+            return formula_checked_numeric_result(
+                inverse_standard_normal(0.5 + confidence_level / 2.0)?
+                    * rmse
+                    * (1.0 + horizon / completed_values.len() as f64).sqrt(),
+            );
+        }
+
+        let statistic_type = statistic_type.expect("statistic type was parsed");
+        match statistic_type {
+            1 => Ok(0.5),
+            2 => {
+                let trend_weight = coefficients
+                    .iter()
+                    .any(|(slope, _)| slope.abs() > f64::EPSILON);
+                Ok(if trend_weight { 0.1 } else { 0.0 })
+            }
+            3 => Ok(if period > 1 { 0.1 } else { 0.0 }),
+            4 => {
+                let lag = period.max(1);
+                if completed_values.len() <= lag {
+                    return Err(FormulaEvalError::Div0);
+                }
+                let scale = (lag..completed_values.len())
+                    .map(|index| (completed_values[index] - completed_values[index - lag]).abs())
+                    .sum::<f64>()
+                    / (completed_values.len() - lag) as f64;
+                if scale == 0.0 {
+                    return if mae == 0.0 {
+                        Ok(0.0)
+                    } else {
+                        Err(FormulaEvalError::Div0)
+                    };
+                }
+                formula_checked_numeric_result(mae / scale)
+            }
+            5 => {
+                let mut total = 0.0_f64;
+                let mut count = 0usize;
+                for (actual, forecast) in completed_values.iter().zip(fitted.iter()) {
+                    let denominator = actual.abs() + forecast.abs();
+                    if denominator != 0.0 {
+                        total += 200.0 * (actual - forecast).abs() / denominator;
+                        count += 1;
+                    }
+                }
+                Ok(if count == 0 {
+                    0.0
+                } else {
+                    total / count as f64
+                })
+            }
+            6 => Ok(mae),
+            7 => Ok(rmse),
+            8 => Ok(step),
+            _ => unreachable!("statistic type was validated"),
+        }
     }
 
     fn parse_regression_coefficient_function(
@@ -32884,6 +33436,209 @@ mod tests {
                 OmValue::Error(CellError::Div0),
                 OmValue::Error(CellError::NA),
                 OmValue::Error(CellError::Div0),
+                OmValue::Error(CellError::Num),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_updates_forecast_ets_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let timeline = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A8".to_string())])
+                .expect("Range(A1:A8)"),
+        );
+        let values = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1:B8".to_string())])
+                .expect("Range(B1:B8)"),
+        );
+        let duplicate_timeline = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1:D4".to_string())])
+                .expect("Range(D1:D4)"),
+        );
+        let duplicate_values = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E1:E4".to_string())])
+                .expect("Range(E1:E4)"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("G1:G12".to_string())],
+                )
+                .expect("Range(G1:G12)"),
+        );
+
+        runtime
+            .dispatch_set(
+                timeline,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        8,
+                        1,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(5.0),
+                            OmValue::Number(6.0),
+                            OmValue::Number(7.0),
+                            OmValue::Number(8.0),
+                        ],
+                    )
+                    .expect("forecast timeline"),
+                ),
+                &[],
+            )
+            .expect("set forecast timeline");
+        runtime
+            .dispatch_set(
+                values,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        8,
+                        1,
+                        vec![
+                            OmValue::Number(10.0),
+                            OmValue::Number(20.0),
+                            OmValue::Number(12.0),
+                            OmValue::Number(22.0),
+                            OmValue::Number(14.0),
+                            OmValue::Number(24.0),
+                            OmValue::Number(16.0),
+                            OmValue::Number(26.0),
+                        ],
+                    )
+                    .expect("forecast values"),
+                ),
+                &[],
+            )
+            .expect("set forecast values");
+        runtime
+            .dispatch_set(
+                duplicate_timeline,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        1,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(2.0),
+                        ],
+                    )
+                    .expect("duplicate forecast timeline"),
+                ),
+                &[],
+            )
+            .expect("set duplicate forecast timeline");
+        runtime
+            .dispatch_set(
+                duplicate_values,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        1,
+                        vec![
+                            OmValue::Number(10.0),
+                            OmValue::Number(14.0),
+                            OmValue::Number(20.0),
+                            OmValue::Number(24.0),
+                        ],
+                    )
+                    .expect("duplicate forecast values"),
+                ),
+                &[],
+            )
+            .expect("set duplicate forecast values");
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        12,
+                        1,
+                        vec![
+                            OmValue::Text("=FORECAST.ETS(9,B1:B8,A1:A8,2)".to_string()),
+                            OmValue::Text("=FORECAST.ETS(10,B1:B8,A1:A8,2)".to_string()),
+                            OmValue::Text("=FORECAST.ETS(9,B1:B8,A1:A8,0)".to_string()),
+                            OmValue::Text("=FORECAST.ETS.SEASONALITY(B1:B8,A1:A8)".to_string()),
+                            OmValue::Text("=FORECAST.ETS.STAT(B1:B8,A1:A8,8,2)".to_string()),
+                            OmValue::Text("=FORECAST.ETS.STAT(B1:B8,A1:A8,6,2)".to_string()),
+                            OmValue::Text(
+                                "=FORECAST.ETS.CONFINT(9,B1:B8,A1:A8,0.95,2)".to_string(),
+                            ),
+                            OmValue::Text("=FORECAST.ETS(3,B1:B8,A1:A8,2)".to_string()),
+                            OmValue::Text("=FORECAST.ETS.STAT(B1:B8,A1:A8,9,2)".to_string()),
+                            OmValue::Text("=FORECAST.ETS(9,B1:B8,A1:A7,2)".to_string()),
+                            OmValue::Text("=FORECAST.ETS.CONFINT(9,B1:B8,A1:A8,1,2)".to_string()),
+                            OmValue::Text("=FORECAST.ETS(3,E1:E4,D1:D4,0,1,7)".to_string()),
+                        ],
+                    )
+                    .expect("forecast ets formulas"),
+                ),
+                &[],
+            )
+            .expect("set forecast ets formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let formula_values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("forecast ets values after Calculate");
+        let OmValue::Array(formula_values) = formula_values else {
+            panic!("expected forecast ets value array");
+        };
+        for (index, expected) in [
+            (0, 18.0),
+            (1, 28.0),
+            (2, 24.42857142857143),
+            (3, 2.0),
+            (4, 1.0),
+            (5, 0.0),
+            (6, 0.0),
+            (11, 64.0),
+        ] {
+            let number = expect_number(formula_values.values[index].clone());
+            assert!(
+                (number - expected).abs() < 1e-6,
+                "forecast ets result {} expected {expected}, got {number}",
+                index + 1
+            );
+        }
+        assert_eq!(
+            &formula_values.values[7..11],
+            &[
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::Num),
+                OmValue::Error(CellError::NA),
                 OmValue::Error(CellError::Num),
             ]
         );

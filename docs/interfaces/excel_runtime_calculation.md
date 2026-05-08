@@ -171,6 +171,10 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 - `FISHERINV`
 - `FORECAST`
 - `FORECAST.LINEAR`
+- `FORECAST.ETS`
+- `FORECAST.ETS.CONFINT`
+- `FORECAST.ETS.SEASONALITY`
+- `FORECAST.ETS.STAT`
 - `GAMMA`
 - `GAMMA.DIST` / `GAMMADIST`
 - `GAMMA.INV` / `GAMMAINV`
@@ -228,7 +232,7 @@ Roman numeral notes:
 - `F.TEST` / `FTEST`, `T.TEST` / `TTEST`, and `Z.TEST` / `ZTEST` cover variance, mean, and z-test probability calculations over numeric arguments and ranges.
 - `BINOM.DIST`, `BINOM.DIST.RANGE`, `BINOM.INV`, `HYPGEOM.DIST`, and `NEGBINOM.DIST` cover scalar discrete statistical distribution calculations, including compatibility aliases where Excel exposes them.
 - `KURT`, `SKEW`, `SKEW.P`, `PROB`, `PERCENTOF`, `MODE.MULT`, `FREQUENCY`, `MDETERM`, `MINVERSE`, `MMULT`, and `MUNIT` cover focused scalar statistical and matrix calculations over numeric arguments and ranges.
-- `GAMMA`, `CONFIDENCE.NORM`, `CONFIDENCE.T`, `FORECAST` / `FORECAST.LINEAR`, `LINEST`, `LOGEST`, `TREND`, `GROWTH`, and `STEYX` cover scalar gamma, confidence interval, and linear/exponential regression calculations.
+- `GAMMA`, `CONFIDENCE.NORM`, `CONFIDENCE.T`, `FORECAST` / `FORECAST.LINEAR`, `FORECAST.ETS*`, `LINEST`, `LOGEST`, `TREND`, `GROWTH`, and `STEYX` cover scalar gamma, confidence interval, forecast, and linear/exponential regression calculations. The ETS helpers validate Excel's argument shapes and options, sort and aggregate duplicate timeline points, complete missing timeline slots, detect or apply seasonality, and return deterministic forecast, confidence, seasonality, and statistic scalars.
 - `BETA.INV`, `CHISQ.INV`, `F.INV`, `GAMMA.INV`, `LOGNORM.INV`, `NORM.INV`, `NORM.S.INV`, and `T.INV` cover scalar inverse cumulative distribution calculations and include the legacy aliases currently listed above.
 - Continuous distribution helpers use iterative approximations for regularized beta/gamma and inverse CDF calculations, so they target practical worksheet compatibility rather than bit-for-bit Excel parity.
 - `GAUSS`, `PHI`, and `STANDARDIZE` cover scalar standard-normal helpers.
