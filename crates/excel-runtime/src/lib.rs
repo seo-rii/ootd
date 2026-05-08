@@ -2,11 +2,11 @@ use excel_model::{WorkbookState, WorksheetData};
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
 use office_common::{
-    CellError, CellValue, ExcelProfile, FileFormat, FormulaSource, GetRangeValuesSpec, LoadOptions,
-    ObjectHandle, OmArray, OmError, OmErrorCode, OmResult, OmValue, OpaquePart, OpenWorkbookSpec,
-    RangeArea, RangeHandle, RangeRef, RangeSet, Rect, SaveOptions, SaveWorkbookSpec,
-    SetRangeValuesSpec, SheetId, SheetScope, SheetVisibility, WorkbookHandle, WorkbookId,
-    WorkbookModel, WorksheetHandle, WorksheetModel,
+    CellError, CellValue, DefinedNameId, ExcelProfile, FileFormat, FormulaSource,
+    GetRangeValuesSpec, LoadOptions, NameScope, NameValidationMode, ObjectHandle, OmArray, OmError,
+    OmErrorCode, OmResult, OmValue, OpaquePart, OpenWorkbookSpec, RangeArea, RangeHandle, RangeRef,
+    RangeSet, Rect, SaveOptions, SaveWorkbookSpec, SetRangeValuesSpec, SheetId, SheetScope,
+    SheetVisibility, WorkbookHandle, WorkbookId, WorkbookModel, WorksheetHandle, WorksheetModel,
 };
 use office_idl::{AccessMode, SupportState};
 use office_opc::{CompressionMethod, OpcPackage, OpcPart};
@@ -257,6 +257,12 @@ enum RangeProjection {
     Columns,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum RuntimeNamesScope {
+    Workbook,
+    Worksheet(SheetId),
+}
+
 #[derive(Debug, Clone)]
 enum RuntimeObjectKind {
     Application,
@@ -279,6 +285,14 @@ enum RuntimeObjectKind {
     Areas {
         workbook: WorkbookHandle,
         range: RangeSet,
+    },
+    Names {
+        workbook: WorkbookHandle,
+        scope: RuntimeNamesScope,
+    },
+    Name {
+        workbook: WorkbookHandle,
+        name_id: DefinedNameId,
     },
 }
 
@@ -770,6 +784,12 @@ impl ExcelRuntime {
             RuntimeObjectKind::Areas { workbook, range } => {
                 self.dispatch_get_areas(workbook, range, member, args)
             }
+            RuntimeObjectKind::Names { workbook, scope } => {
+                self.dispatch_get_names(workbook, scope, member, args)
+            }
+            RuntimeObjectKind::Name { workbook, name_id } => {
+                self.dispatch_get_name(workbook, name_id, member, args)
+            }
         }
     }
 
@@ -1198,6 +1218,11 @@ impl ExcelRuntime {
             RuntimeObjectKind::Areas { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
             ))),
+            RuntimeObjectKind::Names { .. } | RuntimeObjectKind::Name { .. } => {
+                Err(OmError::unsupported(format!(
+                    "member {member} is not writable for this object handle"
+                )))
+            }
             RuntimeObjectKind::WorkbooksCollection
             | RuntimeObjectKind::WorksheetsCollection { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
@@ -4171,6 +4196,12 @@ impl ExcelRuntime {
             RuntimeObjectKind::Areas { workbook, range } => {
                 self.dispatch_invoke_areas(workbook, range, member, args)
             }
+            RuntimeObjectKind::Names { workbook, scope } => {
+                self.dispatch_invoke_names(workbook, scope, member, args)
+            }
+            RuntimeObjectKind::Name { workbook, name_id } => {
+                self.dispatch_invoke_name(workbook, name_id, member, args)
+            }
         }
     }
 
@@ -4212,6 +4243,20 @@ impl ExcelRuntime {
     }
 
     fn focus_member_supported(&self, surface: &str, member: &str, write: bool) -> OmResult<()> {
+        if !write
+            && matches!(
+                (surface, member),
+                ("Application" | "Workbook" | "Worksheet", "Names")
+                    | ("Names", "Count" | "Item" | "Add" | "Application" | "Parent")
+                    | (
+                        "Name",
+                        "Name" | "RefersTo" | "RefersToRange" | "Application" | "Parent" | "Delete"
+                    )
+            )
+        {
+            return Ok(());
+        }
+
         let Some(surface_entry) = self
             .dispatch_registry
             .focus_surfaces
@@ -4261,6 +4306,7 @@ impl ExcelRuntime {
                     | "Workbooks"
                     | "Worksheets"
                     | "Sheets"
+                    | "Names"
                     | "International"
             )
         {
@@ -4285,6 +4331,18 @@ impl ExcelRuntime {
                 let handle = self.register_object(RuntimeObjectKind::WorksheetsCollection {
                     workbook: active_workbook,
                 });
+                if args.is_empty() {
+                    Ok(OmValue::Object(handle))
+                } else {
+                    self.dispatch_invoke(handle, "Item", args)
+                }
+            }
+            "Names" => {
+                let Some(active_workbook) = self.active_workbook else {
+                    return Ok(OmValue::Empty);
+                };
+                let handle =
+                    self.register_names_handle(active_workbook, RuntimeNamesScope::Workbook);
                 if args.is_empty() {
                     Ok(OmValue::Object(handle))
                 } else {
@@ -4607,7 +4665,7 @@ impl ExcelRuntime {
         args: &[OmValue],
     ) -> OmResult<OmValue> {
         self.focus_member_supported("Workbook", member, false)?;
-        if !args.is_empty() && !matches!(member, "Worksheets" | "Sheets") {
+        if !args.is_empty() && !matches!(member, "Worksheets" | "Sheets" | "Names") {
             return Err(OmError::invalid_argument(format!(
                 "Workbook.{member} does not accept index arguments"
             )));
@@ -4652,6 +4710,7 @@ impl ExcelRuntime {
             "Saved" => Ok(OmValue::Bool({
                 let runtime = self.runtime_workbook(workbook)?;
                 !runtime.dirty
+                    && !runtime.loaded.state.defined_names.is_dirty()
                     && runtime
                         .loaded
                         .state
@@ -4662,6 +4721,14 @@ impl ExcelRuntime {
             "Worksheets" | "Sheets" => {
                 let handle =
                     self.register_object(RuntimeObjectKind::WorksheetsCollection { workbook });
+                if args.is_empty() {
+                    Ok(OmValue::Object(handle))
+                } else {
+                    self.dispatch_invoke(handle, "Item", args)
+                }
+            }
+            "Names" => {
+                let handle = self.register_names_handle(workbook, RuntimeNamesScope::Workbook);
                 if args.is_empty() {
                     Ok(OmValue::Object(handle))
                 } else {
@@ -4789,6 +4856,15 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Object(self.root_application()))
+            }
+            "Names" => {
+                let handle =
+                    self.register_names_handle(workbook, RuntimeNamesScope::Worksheet(sheet_id));
+                if args.is_empty() {
+                    Ok(OmValue::Object(handle))
+                } else {
+                    self.dispatch_invoke(handle, "Item", args)
+                }
             }
             "Index" => {
                 if !args.is_empty() {
@@ -5538,6 +5614,227 @@ impl ExcelRuntime {
             }
             _ => Err(OmError::unsupported(format!(
                 "Areas.{member} is not implemented as a method"
+            ))),
+        }
+    }
+
+    fn dispatch_get_names(
+        &mut self,
+        workbook: WorkbookHandle,
+        scope: RuntimeNamesScope,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        match member {
+            "Count" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Names.Count does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Number(
+                    self.names_in_scope(workbook, scope)?.len() as f64
+                ))
+            }
+            "Item" => self.dispatch_invoke_names(workbook, scope, member, args),
+            "Application" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Names.Application does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Object(self.root_application()))
+            }
+            "Parent" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Names.Parent does not accept arguments",
+                    ));
+                }
+                match scope {
+                    RuntimeNamesScope::Workbook => Ok(OmValue::Object(workbook.0)),
+                    RuntimeNamesScope::Worksheet(sheet_id) => Ok(OmValue::Object(
+                        self.register_worksheet_handle(workbook, sheet_id).0,
+                    )),
+                }
+            }
+            _ => Err(OmError::unsupported(format!(
+                "Names.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_invoke_names(
+        &mut self,
+        workbook: WorkbookHandle,
+        scope: RuntimeNamesScope,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        match member {
+            "Item" => {
+                let [index] = args else {
+                    return Err(OmError::invalid_argument(
+                        "Names.Item expects a single name or 1-based index",
+                    ));
+                };
+                let name_id = match index {
+                    OmValue::Text(name) => {
+                        let name_scope = runtime_name_scope(scope);
+                        self.runtime_workbook(workbook)?
+                            .loaded
+                            .state
+                            .lookup_name_in_scope(name_scope, name)
+                            .map(|defined_name| defined_name.id)
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::NotFound,
+                                    format!("defined name '{name}' was not found"),
+                                )
+                            })?
+                    }
+                    OmValue::Number(_) => {
+                        let index = coerce_u32_arg(index, "Names.Item index")? as usize;
+                        *self
+                            .names_in_scope(workbook, scope)?
+                            .get(index - 1)
+                            .ok_or_else(|| {
+                                OmError::invalid_argument("Names.Item index is out of bounds")
+                            })?
+                    }
+                    _ => {
+                        return Err(OmError::type_mismatch(
+                            "Names.Item expects a name string or numeric index",
+                        ));
+                    }
+                };
+                Ok(OmValue::Object(
+                    self.register_name_handle(workbook, name_id),
+                ))
+            }
+            "Add" => {
+                if args.len() != 2 {
+                    return Err(OmError::invalid_argument(
+                        "Names.Add expects Name and RefersTo arguments",
+                    ));
+                }
+                let name = match &args[0] {
+                    OmValue::Text(name) => name.clone(),
+                    _ => {
+                        return Err(OmError::type_mismatch("Names.Add Name expects a string"));
+                    }
+                };
+                let refers_to = match &args[1] {
+                    OmValue::Text(refers_to) => refers_to.trim_start_matches('=').to_string(),
+                    _ => {
+                        return Err(OmError::type_mismatch(
+                            "Names.Add RefersTo expects a string",
+                        ));
+                    }
+                };
+                let name_id = {
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    let name_id = runtime.loaded.state.add_defined_name(
+                        runtime_name_scope(scope),
+                        name,
+                        FormulaSource {
+                            text: refers_to,
+                            is_r1c1: false,
+                        },
+                        NameValidationMode::StrictExcel,
+                    )?;
+                    runtime.dirty = true;
+                    name_id
+                };
+                Ok(OmValue::Object(
+                    self.register_name_handle(workbook, name_id),
+                ))
+            }
+            _ => Err(OmError::unsupported(format!(
+                "Names.{member} is not implemented as a method"
+            ))),
+        }
+    }
+
+    fn dispatch_get_name(
+        &mut self,
+        workbook: WorkbookHandle,
+        name_id: DefinedNameId,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        if !args.is_empty() {
+            return Err(OmError::invalid_argument(format!(
+                "Name.{member} does not accept arguments"
+            )));
+        }
+
+        match member {
+            "Name" => Ok(OmValue::Text(
+                self.defined_name(workbook, name_id)?.display_name.clone(),
+            )),
+            "RefersTo" => {
+                let refers_to = self.defined_name(workbook, name_id)?.refers_to.text.clone();
+                if refers_to.starts_with('=') {
+                    Ok(OmValue::Text(refers_to))
+                } else {
+                    Ok(OmValue::Text(format!("={refers_to}")))
+                }
+            }
+            "RefersToRange" => {
+                let refers_to = self.defined_name(workbook, name_id)?.refers_to.text.clone();
+                let reference = refers_to.trim_start_matches('=');
+                let (target_workbook, range) = self.resolve_application_range_text(reference)?;
+                if target_workbook != workbook {
+                    return Err(OmError::unsupported(
+                        "Name.RefersToRange cross-workbook references are not supported",
+                    ));
+                }
+                Ok(OmValue::Object(
+                    self.register_range_set_handle(workbook, range).0,
+                ))
+            }
+            "Application" => Ok(OmValue::Object(self.root_application())),
+            "Parent" => Ok(OmValue::Object(workbook.0)),
+            _ => Err(OmError::unsupported(format!(
+                "Name.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_invoke_name(
+        &mut self,
+        workbook: WorkbookHandle,
+        name_id: DefinedNameId,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        match member {
+            "Delete" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Name.Delete does not accept arguments",
+                    ));
+                }
+                let runtime = self.runtime_workbook_mut(workbook)?;
+                if runtime.read_only {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        "cannot modify a read-only workbook",
+                    ));
+                }
+                runtime.loaded.state.defined_names.remove_by_id(name_id)?;
+                runtime.dirty = true;
+                Ok(OmValue::Empty)
+            }
+            _ => Err(OmError::unsupported(format!(
+                "Name.{member} is not implemented as a method"
             ))),
         }
     }
@@ -8271,6 +8568,52 @@ impl ExcelRuntime {
         self.register_object(RuntimeObjectKind::Areas { workbook, range })
     }
 
+    fn register_names_handle(
+        &mut self,
+        workbook: WorkbookHandle,
+        scope: RuntimeNamesScope,
+    ) -> ObjectHandle {
+        self.register_object(RuntimeObjectKind::Names { workbook, scope })
+    }
+
+    fn register_name_handle(
+        &mut self,
+        workbook: WorkbookHandle,
+        name_id: DefinedNameId,
+    ) -> ObjectHandle {
+        self.register_object(RuntimeObjectKind::Name { workbook, name_id })
+    }
+
+    fn defined_name(
+        &self,
+        workbook: WorkbookHandle,
+        name_id: DefinedNameId,
+    ) -> OmResult<&office_common::DefinedName> {
+        self.runtime_workbook(workbook)?
+            .loaded
+            .state
+            .defined_names
+            .get(name_id)
+            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown defined name"))
+    }
+
+    fn names_in_scope(
+        &self,
+        workbook: WorkbookHandle,
+        scope: RuntimeNamesScope,
+    ) -> OmResult<Vec<DefinedNameId>> {
+        let name_scope = runtime_name_scope(scope);
+        Ok(self
+            .runtime_workbook(workbook)?
+            .loaded
+            .state
+            .defined_names
+            .iter()
+            .filter(|defined_name| defined_name.scope == name_scope)
+            .map(|defined_name| defined_name.id)
+            .collect())
+    }
+
     fn range_set_first_area(range: &RangeSet) -> OmResult<(SheetId, Rect)> {
         let Some(area) = range.areas().first().copied() else {
             return Err(OmError::invalid_argument(
@@ -8911,6 +9254,7 @@ impl ExcelRuntime {
             worksheet.dirty = false;
             worksheet.dirty_cells.clear();
         }
+        runtime.loaded.state.defined_names.mark_clean();
         Ok(())
     }
 
@@ -10479,7 +10823,16 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         | RuntimeObjectKind::WorksheetsCollection { workbook }
         | RuntimeObjectKind::Worksheet { workbook, .. }
         | RuntimeObjectKind::Range { workbook, .. }
-        | RuntimeObjectKind::Areas { workbook, .. } => Some(workbook),
+        | RuntimeObjectKind::Areas { workbook, .. }
+        | RuntimeObjectKind::Names { workbook, .. }
+        | RuntimeObjectKind::Name { workbook, .. } => Some(workbook),
+    }
+}
+
+fn runtime_name_scope(scope: RuntimeNamesScope) -> NameScope {
+    match scope {
+        RuntimeNamesScope::Workbook => NameScope::Workbook,
+        RuntimeNamesScope::Worksheet(sheet_id) => NameScope::Worksheet(sheet_id),
     }
 }
 
@@ -31962,6 +32315,154 @@ mod tests {
                     .expect("Selection after Cells address")
             ),
             "$B$2"
+        );
+    }
+
+    #[test]
+    fn workbook_names_add_lookup_refers_to_range_and_delete() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime.create_workbook().expect("workbook");
+
+        let names = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Names", &[])
+                .expect("Workbook.Names"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(names, "Count", &[])
+                    .expect("Names.Count before add")
+            ),
+            0.0
+        );
+
+        let name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    names,
+                    "Add",
+                    &[
+                        OmValue::Text("Total".to_string()),
+                        OmValue::Text("=Sheet1!$A$1".to_string()),
+                    ],
+                )
+                .expect("Names.Add"),
+        );
+        assert_eq!(
+            expect_text(runtime.dispatch_get(name, "Name", &[]).expect("Name.Name")),
+            "Total"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(name, "RefersTo", &[])
+                    .expect("Name.RefersTo")
+            ),
+            "=Sheet1!$A$1"
+        );
+
+        let item = expect_object_handle(
+            runtime
+                .dispatch_get(names, "Item", &[OmValue::Text("total".to_string())])
+                .expect("Names.Item(total)"),
+        );
+        let refers_to_range = expect_object_handle(
+            runtime
+                .dispatch_get(item, "RefersToRange", &[])
+                .expect("Name.RefersToRange"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(refers_to_range, "Address", &[])
+                    .expect("RefersToRange.Address")
+            ),
+            "$A$1"
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after add")
+        ));
+
+        runtime
+            .dispatch_invoke(name, "Delete", &[])
+            .expect("Name.Delete");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(names, "Count", &[])
+                    .expect("Names.Count after delete")
+            ),
+            0.0
+        );
+    }
+
+    #[test]
+    fn worksheet_names_are_sheet_scoped() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime.create_workbook().expect("workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("Application.ActiveSheet"),
+        );
+        let workbook_names = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Names", &[])
+                .expect("Workbook.Names"),
+        );
+        let worksheet_names = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "Names", &[])
+                .expect("Worksheet.Names"),
+        );
+
+        runtime
+            .dispatch_invoke(
+                worksheet_names,
+                "Add",
+                &[
+                    OmValue::Text("LocalTotal".to_string()),
+                    OmValue::Text("=Sheet1!$B$2".to_string()),
+                ],
+            )
+            .expect("Worksheet.Names.Add");
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbook_names, "Count", &[])
+                    .expect("Workbook.Names.Count")
+            ),
+            0.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(worksheet_names, "Count", &[])
+                    .expect("Worksheet.Names.Count")
+            ),
+            1.0
+        );
+        assert!(
+            runtime
+                .dispatch_get(
+                    workbook_names,
+                    "Item",
+                    &[OmValue::Text("LocalTotal".to_string())],
+                )
+                .is_err()
+        );
+        assert!(
+            runtime
+                .dispatch_get(
+                    worksheet_names,
+                    "Item",
+                    &[OmValue::Text("localtotal".to_string())],
+                )
+                .is_ok()
         );
     }
 
