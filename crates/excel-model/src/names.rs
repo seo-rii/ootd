@@ -5,11 +5,12 @@ use office_common::{
     OmErrorCode, OmResult, SheetId, canonicalize_excel_name,
 };
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DefinedNameTable {
     next_id: u32,
     names_by_id: BTreeMap<DefinedNameId, DefinedName>,
     ids_by_key: BTreeMap<NameKey, DefinedNameId>,
+    dirty: bool,
 }
 
 impl Default for DefinedNameTable {
@@ -18,6 +19,7 @@ impl Default for DefinedNameTable {
             next_id: 1,
             names_by_id: BTreeMap::new(),
             ids_by_key: BTreeMap::new(),
+            dirty: false,
         }
     }
 }
@@ -29,6 +31,14 @@ impl DefinedNameTable {
 
     pub fn is_empty(&self) -> bool {
         self.names_by_id.is_empty()
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    pub fn mark_clean(&mut self) {
+        self.dirty = false;
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &DefinedName> {
@@ -83,6 +93,7 @@ impl DefinedNameTable {
 
         self.ids_by_key.insert(key, id);
         self.names_by_id.insert(id, defined_name);
+        self.dirty = true;
         Ok(id)
     }
 
@@ -90,6 +101,23 @@ impl DefinedNameTable {
         &mut self,
         defined_name: DefinedName,
         validation_mode: NameValidationMode,
+    ) -> OmResult<()> {
+        self.insert_with_dirty(defined_name, validation_mode, true)
+    }
+
+    pub fn insert_loaded(
+        &mut self,
+        defined_name: DefinedName,
+        validation_mode: NameValidationMode,
+    ) -> OmResult<()> {
+        self.insert_with_dirty(defined_name, validation_mode, false)
+    }
+
+    fn insert_with_dirty(
+        &mut self,
+        defined_name: DefinedName,
+        validation_mode: NameValidationMode,
+        dirty: bool,
     ) -> OmResult<()> {
         validate_defined_name(&defined_name.display_name, validation_mode)?;
 
@@ -114,6 +142,7 @@ impl DefinedNameTable {
                 })?);
         self.ids_by_key.insert(key, defined_name.id);
         self.names_by_id.insert(defined_name.id, defined_name);
+        self.dirty |= dirty;
         Ok(())
     }
 
@@ -125,12 +154,14 @@ impl DefinedNameTable {
                 format!("defined name '{}' was not found", name),
             )
         })?;
-        self.names_by_id.remove(&id).ok_or_else(|| {
+        let defined_name = self.names_by_id.remove(&id).ok_or_else(|| {
             OmError::new(
                 OmErrorCode::InvalidState,
                 format!("defined name id {} is missing", id.0),
             )
-        })
+        })?;
+        self.dirty = true;
+        Ok(defined_name)
     }
 
     pub fn remove_by_id(&mut self, id: DefinedNameId) -> OmResult<DefinedName> {
@@ -141,6 +172,7 @@ impl DefinedNameTable {
             )
         })?;
         self.ids_by_key.remove(&defined_name.key());
+        self.dirty = true;
         Ok(defined_name)
     }
 }
@@ -355,6 +387,44 @@ mod tests {
         assert_eq!(found.id, DefinedNameId(42));
         assert_eq!(found.display_name, "Revenue_2026");
         assert_eq!(found.refers_to.text, "Sheet1!$A$1:$A$4");
+    }
+
+    #[test]
+    fn insert_loaded_preserves_clean_state() {
+        let mut table = DefinedNameTable::default();
+        let defined_name = DefinedName::new(
+            DefinedNameId(1),
+            NameScope::Workbook,
+            "Total",
+            source("Sheet1!$A$1"),
+        );
+        table
+            .insert_loaded(defined_name, NameValidationMode::StrictExcel)
+            .expect("insert loaded name");
+
+        assert!(!table.is_dirty());
+    }
+
+    #[test]
+    fn add_remove_and_mark_clean_update_dirty_state() {
+        let mut table = DefinedNameTable::default();
+        table
+            .add(
+                NameScope::Workbook,
+                "Total",
+                source("Sheet1!$A$1"),
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add name");
+        assert!(table.is_dirty());
+
+        table.mark_clean();
+        assert!(!table.is_dirty());
+
+        table
+            .remove(NameScope::Workbook, "Total")
+            .expect("remove name");
+        assert!(table.is_dirty());
     }
 
     #[test]

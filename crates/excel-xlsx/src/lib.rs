@@ -3,9 +3,9 @@ use std::io::{Cursor, Write};
 
 use excel_model::{CellData, DefinedNameTable, WorkbookState, WorksheetData};
 use office_common::{
-    CellError, CellValue, FileFormat, FormulaSource, LoadOptions, OmError, OmErrorCode, OmResult,
-    OpaquePart, SaveOptions, SheetId, SheetVisibility, StyleId, WorkbookId, WorkbookModel,
-    WorksheetModel,
+    CellError, CellValue, DefinedName, DefinedNameId, FileFormat, FormulaSource, LoadOptions,
+    NameScope, NameValidationMode, OmError, OmErrorCode, OmResult, OpaquePart, SaveOptions,
+    SheetId, SheetVisibility, StyleId, WorkbookId, WorkbookModel, WorksheetModel,
 };
 use office_opc::OpcPackage;
 use quick_xml::escape::partial_escape;
@@ -590,6 +590,7 @@ impl XlsxCodec {
         let date1904 = parsed_workbook.date1904;
         let is_addin = parsed_workbook.is_addin;
         let worksheets = parsed_workbook.worksheets;
+        let defined_names = parsed_workbook.defined_names;
         let shared_strings = package
             .part("xl/sharedStrings.xml")
             .map(|part| parse_shared_strings(part.bytes.as_slice()))
@@ -645,7 +646,7 @@ impl XlsxCodec {
             },
             worksheets,
             worksheet_data,
-            defined_names: DefinedNameTable::default(),
+            defined_names,
             opaque_parts,
         };
         ensure_workbook_style_ids_are_valid(&state, &support_parts)?;
@@ -676,6 +677,7 @@ impl XlsxCodec {
         let saved_workbook = parse_workbook(workbook_xml.as_slice(), &BTreeMap::new())?;
         if saved_workbook.date1904 != workbook.state.model.date1904
             || saved_workbook.is_addin != workbook.state.model.is_addin
+            || workbook.state.defined_names.is_dirty()
             || saved_workbook.worksheets.len() != workbook.state.worksheets.len()
             || saved_workbook
                 .worksheets
@@ -691,6 +693,9 @@ impl XlsxCodec {
             reader.config_mut().trim_text(false);
             let mut writer = Writer::new(Cursor::new(Vec::new()));
             let mut buffer = Vec::new();
+            let rewrite_defined_names = workbook.state.defined_names.is_dirty();
+            let mut skip_defined_names_depth = 0usize;
+            let mut wrote_defined_names = false;
             let rewrite_sheet_element = |element: &BytesStart<'_>,
                                          decoder: quick_xml::encoding::Decoder|
              -> OmResult<BytesStart<'static>> {
@@ -767,6 +772,20 @@ impl XlsxCodec {
 
             loop {
                 match reader.read_event_into(&mut buffer) {
+                    Ok(Event::Start(element))
+                        if rewrite_defined_names && element.name().as_ref() == b"definedNames" =>
+                    {
+                        skip_defined_names_depth = 1;
+                    }
+                    Ok(Event::Empty(element))
+                        if rewrite_defined_names && element.name().as_ref() == b"definedNames" => {}
+                    Ok(Event::Start(_)) if skip_defined_names_depth > 0 => {
+                        skip_defined_names_depth += 1;
+                    }
+                    Ok(Event::End(_)) if skip_defined_names_depth > 0 => {
+                        skip_defined_names_depth -= 1;
+                    }
+                    Ok(_) if skip_defined_names_depth > 0 => {}
                     Ok(Event::Start(element)) if element.name().as_ref() == b"workbook" => {
                         writer
                             .write_event(Event::Start(element.into_owned()))
@@ -810,6 +829,34 @@ impl XlsxCodec {
                             reader.decoder(),
                         )?))
                         .map_err(xml_error)?,
+                    Ok(Event::End(element))
+                        if rewrite_defined_names && element.name().as_ref() == b"sheets" =>
+                    {
+                        writer
+                            .write_event(Event::End(element.into_owned()))
+                            .map_err(xml_error)?;
+                        write_defined_names(
+                            &mut writer,
+                            &workbook.state.defined_names,
+                            &workbook.state.worksheets,
+                        )?;
+                        wrote_defined_names = true;
+                    }
+                    Ok(Event::End(element))
+                        if rewrite_defined_names
+                            && !wrote_defined_names
+                            && element.name().as_ref() == b"workbook" =>
+                    {
+                        write_defined_names(
+                            &mut writer,
+                            &workbook.state.defined_names,
+                            &workbook.state.worksheets,
+                        )?;
+                        wrote_defined_names = true;
+                        writer
+                            .write_event(Event::End(element.into_owned()))
+                            .map_err(xml_error)?;
+                    }
                     Ok(Event::Eof) => break,
                     Ok(event) => writer.write_event(event.into_owned()).map_err(xml_error)?,
                     Err(error) => return Err(xml_error(error)),
@@ -1034,6 +1081,22 @@ struct ParsedWorkbook {
     is_addin: bool,
     has_workbook_pr: bool,
     worksheets: Vec<WorksheetModel>,
+    defined_names: DefinedNameTable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedDefinedNameRecord {
+    display_name: String,
+    local_sheet_id: Option<u32>,
+    hidden: bool,
+    function: bool,
+    vb_procedure: bool,
+    xlm: bool,
+    workbook_parameter: bool,
+    description: Option<String>,
+    comment: Option<String>,
+    custom_xml_attrs: BTreeMap<String, String>,
+    text: String,
 }
 
 fn parse_workbook(
@@ -1041,15 +1104,42 @@ fn parse_workbook(
     relationships: &BTreeMap<String, String>,
 ) -> OmResult<ParsedWorkbook> {
     let mut reader = Reader::from_reader(Cursor::new(workbook_xml));
-    reader.config_mut().trim_text(true);
+    reader.config_mut().trim_text(false);
     let mut buffer = Vec::new();
     let mut date1904 = false;
     let mut is_addin = false;
     let mut has_workbook_pr = false;
     let mut worksheets = Vec::new();
+    let mut defined_name_records = Vec::<ParsedDefinedNameRecord>::new();
+    let mut current_defined_name = None::<ParsedDefinedNameRecord>;
 
     loop {
         match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) if element.name().as_ref() == b"definedName" => {
+                current_defined_name = Some(parse_defined_name_record(&element, reader.decoder())?);
+            }
+            Ok(Event::Empty(element)) if element.name().as_ref() == b"definedName" => {
+                defined_name_records.push(parse_defined_name_record(&element, reader.decoder())?);
+            }
+            Ok(Event::Text(text)) if current_defined_name.is_some() => {
+                if let Some(record) = &mut current_defined_name {
+                    record
+                        .text
+                        .push_str(&text.xml_content().map_err(xml_error)?);
+                }
+            }
+            Ok(Event::CData(text)) if current_defined_name.is_some() => {
+                if let Some(record) = &mut current_defined_name {
+                    record
+                        .text
+                        .push_str(&text.xml_content().map_err(xml_error)?);
+                }
+            }
+            Ok(Event::End(element)) if element.name().as_ref() == b"definedName" => {
+                if let Some(record) = current_defined_name.take() {
+                    defined_name_records.push(record);
+                }
+            }
             Ok(Event::Start(element)) | Ok(Event::Empty(element))
                 if element.name().as_ref() == b"workbookPr" =>
             {
@@ -1109,6 +1199,45 @@ fn parse_workbook(
         buffer.clear();
     }
 
+    let mut defined_names = DefinedNameTable::default();
+    for (index, record) in defined_name_records.into_iter().enumerate() {
+        let id =
+            DefinedNameId(u32::try_from(index + 1).map_err(|_| {
+                OmError::new(OmErrorCode::InvalidState, "defined name id overflow")
+            })?);
+        let scope = record
+            .local_sheet_id
+            .and_then(|local_sheet_id| worksheets.get(local_sheet_id as usize))
+            .map(|worksheet| NameScope::Worksheet(worksheet.id))
+            .unwrap_or(NameScope::Workbook);
+        let mut defined_name = DefinedName::new(
+            id,
+            scope,
+            record.display_name,
+            FormulaSource {
+                text: record.text,
+                is_r1c1: false,
+            },
+        );
+        defined_name.metadata.hidden = record.hidden;
+        defined_name.metadata.function = record.function;
+        defined_name.metadata.vb_procedure = record.vb_procedure;
+        defined_name.metadata.xlm = record.xlm;
+        defined_name.metadata.workbook_parameter = record.workbook_parameter;
+        defined_name.metadata.description = record.description;
+        defined_name.metadata.comment = record.comment;
+        defined_name.metadata.custom_xml_attrs = record.custom_xml_attrs;
+
+        if let Err(error) =
+            defined_names.insert_loaded(defined_name, NameValidationMode::PreserveLoadedInvalid)
+        {
+            if error.code != OmErrorCode::InvalidArgument {
+                return Err(error);
+            }
+        }
+    }
+    defined_names.mark_clean();
+
     if worksheets.is_empty() {
         return Err(OmError::new(
             OmErrorCode::Parse,
@@ -1121,6 +1250,58 @@ fn parse_workbook(
         is_addin,
         has_workbook_pr,
         worksheets,
+        defined_names,
+    })
+}
+
+fn parse_defined_name_record(
+    element: &BytesStart<'_>,
+    decoder: quick_xml::encoding::Decoder,
+) -> OmResult<ParsedDefinedNameRecord> {
+    let mut display_name = String::new();
+    let mut local_sheet_id = None;
+    let mut hidden = false;
+    let mut function = false;
+    let mut vb_procedure = false;
+    let mut xlm = false;
+    let mut workbook_parameter = false;
+    let mut description = None;
+    let mut comment = None;
+    let mut custom_xml_attrs = BTreeMap::new();
+
+    for attr in element.attributes() {
+        let attr = attr.map_err(xml_error)?;
+        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+        let value = attr.decode_and_unescape_value(decoder).map_err(xml_error)?;
+        let value = value.into_owned();
+        match key.as_str() {
+            "name" => display_name = value,
+            "localSheetId" => local_sheet_id = value.parse::<u32>().ok(),
+            "hidden" => hidden = parse_ooxml_bool(value.as_str())?,
+            "function" => function = parse_ooxml_bool(value.as_str())?,
+            "vbProcedure" => vb_procedure = parse_ooxml_bool(value.as_str())?,
+            "xlm" => xlm = parse_ooxml_bool(value.as_str())?,
+            "workbookParameter" => workbook_parameter = parse_ooxml_bool(value.as_str())?,
+            "description" => description = Some(value),
+            "comment" => comment = Some(value),
+            _ => {
+                custom_xml_attrs.insert(key, value);
+            }
+        }
+    }
+
+    Ok(ParsedDefinedNameRecord {
+        display_name,
+        local_sheet_id,
+        hidden,
+        function,
+        vb_procedure,
+        xlm,
+        workbook_parameter,
+        description,
+        comment,
+        custom_xml_attrs,
+        text: String::new(),
     })
 }
 
@@ -14762,6 +14943,74 @@ fn should_strip_calc_chain_relationship(
     )
 }
 
+fn write_defined_names<W: Write>(
+    writer: &mut Writer<W>,
+    defined_names: &DefinedNameTable,
+    worksheets: &[WorksheetModel],
+) -> OmResult<()> {
+    if defined_names.is_empty() {
+        return Ok(());
+    }
+
+    writer
+        .write_event(Event::Start(BytesStart::new("definedNames")))
+        .map_err(xml_error)?;
+    for defined_name in defined_names.iter() {
+        let mut element = BytesStart::new("definedName");
+        element.push_attribute(("name", defined_name.display_name.as_str()));
+        let local_sheet_id = match defined_name.scope {
+            NameScope::Workbook => None,
+            NameScope::Worksheet(sheet_id) => worksheets
+                .iter()
+                .position(|worksheet| worksheet.id == sheet_id)
+                .map(|index| index.to_string()),
+        };
+        if let Some(local_sheet_id) = local_sheet_id.as_deref() {
+            element.push_attribute(("localSheetId", local_sheet_id));
+        }
+        if defined_name.metadata.hidden {
+            element.push_attribute(("hidden", "1"));
+        }
+        if defined_name.metadata.function {
+            element.push_attribute(("function", "1"));
+        }
+        if defined_name.metadata.vb_procedure {
+            element.push_attribute(("vbProcedure", "1"));
+        }
+        if defined_name.metadata.xlm {
+            element.push_attribute(("xlm", "1"));
+        }
+        if defined_name.metadata.workbook_parameter {
+            element.push_attribute(("workbookParameter", "1"));
+        }
+        if let Some(description) = defined_name.metadata.description.as_deref() {
+            element.push_attribute(("description", description));
+        }
+        if let Some(comment) = defined_name.metadata.comment.as_deref() {
+            element.push_attribute(("comment", comment));
+        }
+        for (key, value) in &defined_name.metadata.custom_xml_attrs {
+            element.push_attribute((key.as_str(), value.as_str()));
+        }
+
+        writer
+            .write_event(Event::Start(element))
+            .map_err(xml_error)?;
+        writer
+            .write_event(Event::Text(BytesText::from_escaped(partial_escape(
+                defined_name.refers_to.text.as_str(),
+            ))))
+            .map_err(xml_error)?;
+        writer
+            .write_event(Event::End(BytesEnd::new("definedName")))
+            .map_err(xml_error)?;
+    }
+    writer
+        .write_event(Event::End(BytesEnd::new("definedNames")))
+        .map_err(xml_error)?;
+    Ok(())
+}
+
 fn strip_calc_chain_content_type_override(content_types_xml: &[u8]) -> OmResult<Vec<u8>> {
     let mut reader = Reader::from_reader(Cursor::new(content_types_xml));
     reader.config_mut().trim_text(false);
@@ -16407,8 +16656,8 @@ mod tests {
         parse_workbook_relationships, parse_worksheet_cells, rewrite_worksheet_xml,
     };
     use office_common::{
-        CellError, CellValue, LoadOptions as CommonLoadOptions, OmErrorCode, SheetVisibility,
-        StyleId, WorkbookId,
+        CellError, CellValue, FormulaSource, LoadOptions as CommonLoadOptions, NameScope,
+        NameValidationMode, OmErrorCode, SheetId, SheetVisibility, StyleId, WorkbookId,
     };
     use office_opc::{CompressionMethod, OpcPart};
 
@@ -16872,6 +17121,142 @@ mod tests {
         assert!(workbook.has_workbook_pr);
         assert!(workbook.is_addin);
         assert_eq!(workbook.worksheets.len(), 1);
+    }
+
+    #[test]
+    fn parses_workbook_defined_names_into_model_table() {
+        let workbook = parse_workbook(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheet name="Sheet2" sheetId="2" r:id="rId2"/>
+  </sheets>
+  <definedNames>
+    <definedName name="GlobalTotal" hidden="1" comment="kept">Sheet1!$A$1</definedName>
+    <definedName name="_xlnm.Print_Area" localSheetId="1">Sheet2!$A:$D</definedName>
+  </definedNames>
+</workbook>"#,
+            &BTreeMap::new(),
+        )
+        .expect("workbook defined names");
+
+        assert!(!workbook.defined_names.is_dirty());
+        let global = workbook
+            .defined_names
+            .lookup_in_scope(NameScope::Workbook, "globaltotal")
+            .expect("global defined name");
+        assert_eq!(global.refers_to.text, "Sheet1!$A$1");
+        assert!(global.metadata.hidden);
+        assert_eq!(global.metadata.comment.as_deref(), Some("kept"));
+
+        let local = workbook
+            .defined_names
+            .lookup_in_scope(NameScope::Worksheet(SheetId(2)), "_XLNM.PRINT_AREA")
+            .expect("sheet defined name");
+        assert_eq!(local.refers_to.text, "Sheet2!$A:$D");
+        assert_eq!(local.scope, NameScope::Worksheet(SheetId(2)));
+    }
+
+    #[test]
+    fn load_and_clean_save_preserve_defined_names() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        let workbook_xml = std::str::from_utf8(
+            package
+                .part("xl/workbook.xml")
+                .expect("workbook xml")
+                .bytes
+                .as_slice(),
+        )
+        .expect("workbook xml utf8")
+        .replace(
+            "</sheets>",
+            r#"</sheets><definedNames><definedName name="GlobalTotal" hidden="1">Sheet1!$A$1</definedName></definedNames>"#,
+        );
+        package
+            .replace_part_bytes("xl/workbook.xml", workbook_xml.into_bytes())
+            .expect("replace workbook xml");
+        let bytes = package.to_bytes().expect("package bytes");
+
+        let loaded = codec
+            .load(bytes.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook");
+        let loaded_name = loaded
+            .state
+            .lookup_name(None, "globaltotal")
+            .expect("loaded defined name");
+        assert_eq!(loaded_name.refers_to.text, "Sheet1!$A$1");
+        assert!(loaded_name.metadata.hidden);
+        assert!(!loaded.state.defined_names.is_dirty());
+
+        let saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("save workbook");
+        let saved_package = OpcPackage::from_bytes(saved.as_slice()).expect("saved package");
+        let saved_workbook_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/workbook.xml")
+                .expect("saved workbook xml")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved workbook xml utf8");
+        assert!(
+            saved_workbook_xml.contains(
+                r#"<definedName name="GlobalTotal" hidden="1">Sheet1!$A$1</definedName>"#
+            )
+        );
+    }
+
+    #[test]
+    fn save_writes_dirty_defined_name_table() {
+        let codec = XlsxCodec;
+        let mut loaded = codec
+            .load(
+                synthetic_workbook_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        loaded
+            .state
+            .add_defined_name(
+                NameScope::Worksheet(sheet_id),
+                "LocalTotal",
+                FormulaSource {
+                    text: "Sheet1!$B$2".to_string(),
+                    is_r1c1: false,
+                },
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add local defined name");
+
+        let saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("save workbook");
+        let saved_package = OpcPackage::from_bytes(saved.as_slice()).expect("saved package");
+        let saved_workbook_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/workbook.xml")
+                .expect("saved workbook xml")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved workbook xml utf8");
+        assert!(saved_workbook_xml.contains(
+            r#"<definedName name="LocalTotal" localSheetId="0">Sheet1!$B$2</definedName>"#
+        ));
+
+        let reopened = codec
+            .load(saved.as_slice(), CommonLoadOptions::default())
+            .expect("reopen workbook");
+        let reopened_name = reopened
+            .state
+            .lookup_name(Some(sheet_id), "localtotal")
+            .expect("reopened local name");
+        assert_eq!(reopened_name.refers_to.text, "Sheet1!$B$2");
     }
 
     #[test]
