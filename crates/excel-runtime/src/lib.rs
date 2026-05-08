@@ -16209,31 +16209,46 @@ struct FormulaCriteriaRange {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FormulaReference {
     areas: Vec<(SheetId, Rect)>,
+    explicit_area_count: usize,
 }
 
 impl FormulaReference {
     fn new(areas: Vec<(SheetId, Rect)>) -> Result<Self, FormulaEvalError> {
+        Self::with_explicit_area_count(areas.len(), areas)
+    }
+
+    fn with_explicit_area_count(
+        explicit_area_count: usize,
+        areas: Vec<(SheetId, Rect)>,
+    ) -> Result<Self, FormulaEvalError> {
         if areas.is_empty() {
             return Err(FormulaEvalError::Ref);
         }
-        Ok(Self { areas })
+        if explicit_area_count == 0 {
+            return Err(FormulaEvalError::Ref);
+        }
+        Ok(Self {
+            areas,
+            explicit_area_count,
+        })
     }
 
     fn single(sheet_id: SheetId, rect: Rect) -> Self {
         Self {
             areas: vec![(sheet_id, rect)],
+            explicit_area_count: 1,
         }
     }
 
     fn single_area(&self) -> Result<(SheetId, Rect), FormulaEvalError> {
-        let [(sheet_id, rect)] = self.areas.as_slice() else {
+        if self.explicit_area_count != 1 {
             return Err(FormulaEvalError::Value);
-        };
-        Ok((*sheet_id, *rect))
+        }
+        self.areas.first().copied().ok_or(FormulaEvalError::Ref)
     }
 
     fn len(&self) -> usize {
-        self.areas.len()
+        self.explicit_area_count
     }
 
     fn areas(&self) -> &[(SheetId, Rect)] {
@@ -30310,6 +30325,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
     fn try_parse_reference_set(
         &self,
     ) -> Result<Option<(FormulaReference, usize)>, FormulaEvalError> {
+        if let Some((reference, next_index)) = self.try_parse_3d_reference()? {
+            return Ok(Some((reference, next_index)));
+        }
         if let Some((sheet_id, rect, next_index)) = self.try_parse_a1_reference()? {
             return Ok(Some((FormulaReference::single(sheet_id, rect), next_index)));
         }
@@ -30351,6 +30369,113 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return Ok(None);
         };
         Ok(Some((sheet_id, rect, cursor)))
+    }
+
+    fn try_parse_3d_reference(
+        &self,
+    ) -> Result<Option<(FormulaReference, usize)>, FormulaEvalError> {
+        let Some((start_sheet_id, end_sheet_id, reference_start)) =
+            self.try_parse_3d_sheet_span_prefix()?
+        else {
+            return Ok(None);
+        };
+        let mut cursor = reference_start;
+        let mut saw_reference_char = false;
+        while let Some(ch) = self.input[cursor..].chars().next() {
+            if ch.is_ascii_alphanumeric() || ch == '$' || ch == ':' {
+                saw_reference_char = true;
+                cursor += ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+        if !saw_reference_char {
+            return Ok(None);
+        }
+        let next_is_boundary = self.input[cursor..]
+            .chars()
+            .next()
+            .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.');
+        if !next_is_boundary {
+            return Ok(None);
+        }
+        let Some(rect) = parse_rect_a1(&self.input[reference_start..cursor]).ok() else {
+            return Ok(None);
+        };
+        let sheets = formula_sheets_in_3d_span(self.evaluator.state, start_sheet_id, end_sheet_id)?;
+        let areas = sheets
+            .into_iter()
+            .map(|sheet_id| (sheet_id, rect))
+            .collect::<Vec<_>>();
+        Ok(Some((
+            FormulaReference::with_explicit_area_count(1, areas)?,
+            cursor,
+        )))
+    }
+
+    fn try_parse_3d_sheet_span_prefix(
+        &self,
+    ) -> Result<Option<(SheetId, SheetId, usize)>, FormulaEvalError> {
+        if self.peek_char() == Some('\'') {
+            let mut cursor = self.index + 1;
+            let mut sheet_span = String::new();
+            while cursor < self.input.len() {
+                let ch = self.input[cursor..]
+                    .chars()
+                    .next()
+                    .ok_or(FormulaEvalError::Unsupported)?;
+                if ch == '\'' {
+                    let next_cursor = cursor + ch.len_utf8();
+                    if self.input[next_cursor..].starts_with('\'') {
+                        sheet_span.push('\'');
+                        cursor = next_cursor + 1;
+                        continue;
+                    }
+                    if !self.input[next_cursor..].starts_with('!') {
+                        return Ok(None);
+                    }
+                    let Some((start_sheet, end_sheet)) = sheet_span.split_once(':') else {
+                        return Ok(None);
+                    };
+                    let start_sheet_id = self
+                        .resolve_sheet_name(start_sheet)
+                        .ok_or(FormulaEvalError::Ref)?;
+                    let end_sheet_id = self
+                        .resolve_sheet_name(end_sheet)
+                        .ok_or(FormulaEvalError::Ref)?;
+                    return Ok(Some((start_sheet_id, end_sheet_id, next_cursor + 1)));
+                }
+                sheet_span.push(ch);
+                cursor += ch.len_utf8();
+            }
+            return Ok(None);
+        }
+
+        let mut cursor = self.index;
+        while let Some(ch) = self.input[cursor..].chars().next() {
+            if ch == '!' {
+                let sheet_span = &self.input[self.index..cursor];
+                let Some((start_sheet, end_sheet)) = sheet_span.split_once(':') else {
+                    return Ok(None);
+                };
+                if start_sheet.is_empty() || end_sheet.is_empty() {
+                    return Err(FormulaEvalError::Ref);
+                }
+                let start_sheet_id = self
+                    .resolve_sheet_name(start_sheet)
+                    .ok_or(FormulaEvalError::Ref)?;
+                let end_sheet_id = self
+                    .resolve_sheet_name(end_sheet)
+                    .ok_or(FormulaEvalError::Ref)?;
+                return Ok(Some((start_sheet_id, end_sheet_id, cursor + 1)));
+            }
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' || ch == ':' {
+                cursor += ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+        Ok(None)
     }
 
     fn try_parse_named_reference(
@@ -30658,6 +30783,32 @@ fn resolve_formula_sheet_name(state: &WorkbookState, name: &str) -> Option<Sheet
         .iter()
         .find(|worksheet| worksheet.name.eq_ignore_ascii_case(name))
         .map(|worksheet| worksheet.id)
+}
+
+fn formula_sheets_in_3d_span(
+    state: &WorkbookState,
+    start: SheetId,
+    end: SheetId,
+) -> Result<Vec<SheetId>, FormulaEvalError> {
+    let start_index = state
+        .worksheets
+        .iter()
+        .position(|worksheet| worksheet.id == start)
+        .ok_or(FormulaEvalError::Ref)?;
+    let end_index = state
+        .worksheets
+        .iter()
+        .position(|worksheet| worksheet.id == end)
+        .ok_or(FormulaEvalError::Ref)?;
+    let (first, last) = if start_index <= end_index {
+        (start_index, end_index)
+    } else {
+        (end_index, start_index)
+    };
+    Ok(state.worksheets[first..=last]
+        .iter()
+        .map(|worksheet| worksheet.id)
+        .collect())
 }
 
 fn parse_rect_a1(input: &str) -> OmResult<Rect> {
@@ -40412,6 +40563,144 @@ mod tests {
                 OmValue::Number(10.0),
                 OmValue::Number(1.0),
                 OmValue::Number(30.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn application_calculate_expands_3d_references_by_sheet_order() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime.create_workbook().expect("workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let first_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        runtime
+            .dispatch_set(
+                first_sheet,
+                "Name",
+                OmValue::Text("First Sheet".to_string()),
+                &[],
+            )
+            .expect("rename first sheet");
+        let middle_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheets,
+                    "Add",
+                    &[OmValue::Missing, OmValue::Object(first_sheet)],
+                )
+                .expect("Worksheets.Add after first sheet"),
+        );
+        runtime
+            .dispatch_set(
+                middle_sheet,
+                "Name",
+                OmValue::Text("Middle Sheet".to_string()),
+                &[],
+            )
+            .expect("rename middle sheet");
+        let third_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheets,
+                    "Add",
+                    &[OmValue::Missing, OmValue::Object(middle_sheet)],
+                )
+                .expect("Worksheets.Add after middle sheet"),
+        );
+        runtime
+            .dispatch_set(
+                third_sheet,
+                "Name",
+                OmValue::Text("Third Sheet".to_string()),
+                &[],
+            )
+            .expect("rename third sheet");
+
+        for (sheet, first, second) in [
+            (first_sheet, 1.0, 10.0),
+            (middle_sheet, 2.0, 20.0),
+            (third_sheet, 3.0, 30.0),
+        ] {
+            let values = expect_object_handle(
+                runtime
+                    .dispatch_invoke(sheet, "Range", &[OmValue::Text("A1:B2".to_string())])
+                    .expect("sheet values range"),
+            );
+            runtime
+                .dispatch_set(
+                    values,
+                    "Value2",
+                    OmValue::Array(
+                        OmArray::new(
+                            2,
+                            2,
+                            vec![
+                                OmValue::Number(first),
+                                OmValue::Number(second),
+                                OmValue::Empty,
+                                OmValue::Empty,
+                            ],
+                        )
+                        .expect("3D reference source values"),
+                    ),
+                    &[],
+                )
+                .expect("set 3D reference source values");
+        }
+
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("D1:D5".to_string())])
+                .expect("formula range"),
+        );
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        5,
+                        1,
+                        vec![
+                            OmValue::Text("=SUM('First Sheet:Third Sheet'!A1)".to_string()),
+                            OmValue::Text("=SUM('First Sheet:Third Sheet'!A1:B1)".to_string()),
+                            OmValue::Text("=AREAS('First Sheet:Third Sheet'!A1)".to_string()),
+                            OmValue::Text("=ROWS('First Sheet:Third Sheet'!A1:B2)".to_string()),
+                            OmValue::Text("=COLUMNS('First Sheet:Third Sheet'!A1:B2)".to_string()),
+                        ],
+                    )
+                    .expect("3D reference formulas"),
+                ),
+                &[],
+            )
+            .expect("set 3D reference formulas");
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+
+        let values = runtime
+            .dispatch_get(formulas, "Value2", &[])
+            .expect("3D reference values after Calculate");
+        let OmValue::Array(values) = values else {
+            panic!("expected 3D reference value array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(6.0),
+                OmValue::Number(66.0),
+                OmValue::Number(1.0),
+                OmValue::Number(2.0),
+                OmValue::Number(2.0),
             ]
         );
     }
