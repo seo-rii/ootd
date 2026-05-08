@@ -4,8 +4,9 @@ use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_j
 use office_common::{
     CellError, CellValue, ExcelProfile, FileFormat, FormulaSource, GetRangeValuesSpec, LoadOptions,
     ObjectHandle, OmArray, OmError, OmErrorCode, OmResult, OmValue, OpaquePart, OpenWorkbookSpec,
-    RangeHandle, RangeRef, Rect, SaveOptions, SaveWorkbookSpec, SetRangeValuesSpec, SheetId,
-    SheetVisibility, WorkbookHandle, WorkbookId, WorkbookModel, WorksheetHandle, WorksheetModel,
+    RangeHandle, RangeRef, RangeSet, Rect, SaveOptions, SaveWorkbookSpec, SetRangeValuesSpec,
+    SheetId, SheetScope, SheetVisibility, WorkbookHandle, WorkbookId, WorkbookModel,
+    WorksheetHandle, WorksheetModel,
 };
 use office_idl::{AccessMode, SupportState};
 use office_opc::{CompressionMethod, OpcPackage, OpcPart};
@@ -256,7 +257,7 @@ enum RangeProjection {
     Columns,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum RuntimeObjectKind {
     Application,
     WorkbooksCollection,
@@ -272,8 +273,7 @@ enum RuntimeObjectKind {
     },
     Range {
         workbook: WorkbookHandle,
-        sheet_id: SheetId,
-        rect: Rect,
+        range: RangeSet,
         projection: RangeProjection,
     },
 }
@@ -547,7 +547,7 @@ impl ExcelRuntime {
             .objects
             .iter()
             .filter_map(|(&object_id, object)| {
-                runtime_object_owner(*object)
+                runtime_object_owner(object.clone())
                     .filter(|owner| *owner == workbook)
                     .map(|_| object_id)
             })
@@ -760,10 +760,12 @@ impl ExcelRuntime {
             }
             RuntimeObjectKind::Range {
                 workbook,
-                sheet_id,
-                rect,
+                range,
                 projection,
-            } => self.dispatch_get_range(workbook, sheet_id, rect, projection, member, args),
+            } => {
+                let (sheet_id, rect) = Self::range_set_single_area(&range)?;
+                self.dispatch_get_range(workbook, sheet_id, rect, projection, member, args)
+            }
         }
     }
 
@@ -1183,10 +1185,12 @@ impl ExcelRuntime {
             }
             RuntimeObjectKind::Range {
                 workbook,
-                sheet_id,
-                rect,
+                range,
                 projection,
-            } => self.dispatch_set_range(workbook, sheet_id, rect, projection, member, value, args),
+            } => {
+                let (sheet_id, rect) = Self::range_set_single_area(&range)?;
+                self.dispatch_set_range(workbook, sheet_id, rect, projection, member, value, args)
+            }
             RuntimeObjectKind::WorkbooksCollection
             | RuntimeObjectKind::WorksheetsCollection { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
@@ -1214,10 +1218,10 @@ impl ExcelRuntime {
             }
             RuntimeObjectKind::Range {
                 workbook,
-                sheet_id,
-                rect,
+                range,
                 projection,
             } => {
+                let (sheet_id, rect) = Self::range_set_single_area(&range)?;
                 self.focus_member_supported("Range", member, false)?;
                 match member {
                     "Item" => {
@@ -1966,8 +1970,7 @@ impl ExcelRuntime {
                                 Some(OmValue::Object(handle)) => {
                                     let RuntimeObjectKind::Range {
                                         workbook: key_workbook,
-                                        sheet_id: key_sheet_id,
-                                        rect: key_rect,
+                                        range: key_range,
                                         ..
                                     } = self.runtime_object(*handle)?
                                     else {
@@ -1975,6 +1978,8 @@ impl ExcelRuntime {
                                             "Range.Sort {label} expects a Range object or A1 reference"
                                         )));
                                     };
+                                    let (key_sheet_id, key_rect) =
+                                        Self::range_set_single_area(&key_range)?;
                                     if key_workbook != workbook || key_sheet_id != sheet_id {
                                         return Err(OmError::invalid_argument(format!(
                                             "Range.Sort {label} must belong to the sorted worksheet"
@@ -2717,8 +2722,7 @@ impl ExcelRuntime {
 
                         let RuntimeObjectKind::Range {
                             workbook: destination_workbook,
-                            sheet_id: destination_sheet_id,
-                            rect: destination_rect,
+                            range: destination_range,
                             ..
                         } = self.runtime_object(destination)?
                         else {
@@ -2726,6 +2730,8 @@ impl ExcelRuntime {
                                 "Range.Copy Destination expects a Range object",
                             ));
                         };
+                        let (destination_sheet_id, destination_rect) =
+                            Self::range_set_single_area(&destination_range)?;
 
                         let target_rect = if destination_rect.height() == 1
                             && destination_rect.width() == 1
@@ -2886,8 +2892,7 @@ impl ExcelRuntime {
 
                         let RuntimeObjectKind::Range {
                             workbook: destination_workbook,
-                            sheet_id: destination_sheet_id,
-                            rect: destination_rect,
+                            range: destination_range,
                             ..
                         } = self.runtime_object(destination)?
                         else {
@@ -2895,6 +2900,8 @@ impl ExcelRuntime {
                                 "Range.Cut Destination expects a Range object",
                             ));
                         };
+                        let (destination_sheet_id, destination_rect) =
+                            Self::range_set_single_area(&destination_range)?;
 
                         let target_rect = if destination_rect.height() == 1
                             && destination_rect.width() == 1
@@ -4178,7 +4185,7 @@ impl ExcelRuntime {
     }
 
     fn runtime_object(&self, handle: ObjectHandle) -> OmResult<RuntimeObjectKind> {
-        if let Some(object) = self.objects.get(&handle.0).copied() {
+        if let Some(object) = self.objects.get(&handle.0).cloned() {
             return Ok(object);
         }
         if self.stale_objects.contains(&handle.0) {
@@ -5231,10 +5238,10 @@ impl ExcelRuntime {
                     None => None,
                     Some(value) if om_value_is_omitted(value) => None,
                     Some(OmValue::Object(handle)) => match self.runtime_object(*handle)? {
-                        RuntimeObjectKind::Range {
-                            rect: relative_rect,
-                            ..
-                        } => Some((relative_rect.row_first, relative_rect.col_first)),
+                        RuntimeObjectKind::Range { range, .. } => {
+                            let (_, relative_rect) = Self::range_set_single_area(&range)?;
+                            Some((relative_rect.row_first, relative_rect.col_first))
+                        }
                         _ => {
                             return Err(OmError::type_mismatch(
                                 "Range.Address RelativeTo expects a Range object when provided",
@@ -5867,11 +5874,11 @@ impl ExcelRuntime {
                     }
                     Some(OmValue::Object(handle)) => match self.runtime_object(*handle)? {
                         RuntimeObjectKind::Range {
-                            workbook,
-                            sheet_id,
-                            rect,
-                            ..
-                        } => (workbook, sheet_id, rect),
+                            workbook, range, ..
+                        } => {
+                            let (sheet_id, rect) = Self::range_set_single_area(&range)?;
+                            (workbook, sheet_id, rect)
+                        }
                         _ => {
                             return Err(OmError::type_mismatch(
                                 "Application.Goto expects a Range object or A1-style text reference",
@@ -5924,11 +5931,11 @@ impl ExcelRuntime {
                     match value {
                         OmValue::Object(handle) => match runtime.runtime_object(*handle)? {
                             RuntimeObjectKind::Range {
-                                workbook,
-                                sheet_id,
-                                rect,
-                                ..
-                            } => Ok((workbook, sheet_id, rect)),
+                                workbook, range, ..
+                            } => {
+                                let (sheet_id, rect) = Self::range_set_single_area(&range)?;
+                                Ok((workbook, sheet_id, rect))
+                            }
                             _ => Err(OmError::type_mismatch(format!(
                                 "Application.Intersect {label} expects range objects"
                             ))),
@@ -5995,11 +6002,11 @@ impl ExcelRuntime {
                     match value {
                         OmValue::Object(handle) => match runtime.runtime_object(*handle)? {
                             RuntimeObjectKind::Range {
-                                workbook,
-                                sheet_id,
-                                rect,
-                                ..
-                            } => Ok((workbook, sheet_id, rect)),
+                                workbook, range, ..
+                            } => {
+                                let (sheet_id, rect) = Self::range_set_single_area(&range)?;
+                                Ok((workbook, sheet_id, rect))
+                            }
                             _ => Err(OmError::type_mismatch(format!(
                                 "Application.Union {label} expects range objects"
                             ))),
@@ -7490,10 +7497,11 @@ impl ExcelRuntime {
                     [OmValue::Object(handle)] => match self.runtime_object(*handle)? {
                         RuntimeObjectKind::Range {
                             workbook: range_workbook,
-                            sheet_id: range_sheet_id,
-                            rect,
+                            range: object_range,
                             ..
                         } => {
+                            let (range_sheet_id, rect) =
+                                Self::range_set_single_area(&object_range)?;
                             if range_workbook != workbook || range_sheet_id != sheet_id {
                                 return Err(OmError::invalid_argument(
                                     "Worksheet.Range object argument must belong to the same worksheet",
@@ -7513,10 +7521,11 @@ impl ExcelRuntime {
                             OmValue::Object(handle) => match self.runtime_object(*handle)? {
                                 RuntimeObjectKind::Range {
                                     workbook: range_workbook,
-                                    sheet_id: range_sheet_id,
-                                    rect,
+                                    range: object_range,
                                     ..
                                 } => {
+                                    let (range_sheet_id, rect) =
+                                        Self::range_set_single_area(&object_range)?;
                                     if range_workbook != workbook || range_sheet_id != sheet_id {
                                         return Err(OmError::invalid_argument(
                                             "Worksheet.Range object arguments must belong to the same worksheet",
@@ -7541,10 +7550,11 @@ impl ExcelRuntime {
                             OmValue::Object(handle) => match self.runtime_object(*handle)? {
                                 RuntimeObjectKind::Range {
                                     workbook: range_workbook,
-                                    sheet_id: range_sheet_id,
-                                    rect,
+                                    range: object_range,
                                     ..
                                 } => {
+                                    let (range_sheet_id, rect) =
+                                        Self::range_set_single_area(&object_range)?;
                                     if range_workbook != workbook || range_sheet_id != sheet_id {
                                         return Err(OmError::invalid_argument(
                                             "Worksheet.Range object arguments must belong to the same worksheet",
@@ -7974,12 +7984,40 @@ impl ExcelRuntime {
         rect: Rect,
         projection: RangeProjection,
     ) -> RangeHandle {
+        let workbook_id = self
+            .workbook_model(workbook)
+            .expect("registered range handles require a valid workbook")
+            .id;
+        let range = RangeSet::single_rect(workbook_id, sheet_id, rect)
+            .expect("runtime range handles require valid 1-based rectangles");
         RangeHandle(self.register_object(RuntimeObjectKind::Range {
             workbook,
-            sheet_id,
-            rect,
+            range,
             projection,
         }))
+    }
+
+    fn range_set_single_area(range: &RangeSet) -> OmResult<(SheetId, Rect)> {
+        if range.areas().len() != 1 {
+            return Err(OmError::unsupported(
+                "multi-area range handles are not supported by this operation yet",
+            ));
+        }
+
+        let area = range.areas()[0];
+        match area.scope {
+            SheetScope::Single(sheet_id) => Ok((sheet_id, area.rect)),
+            SheetScope::Multi3D { .. } => Err(OmError::unsupported(
+                "3D range handles are not supported by this operation yet",
+            )),
+        }
+    }
+
+    fn range_set_targets_sheet(range: &RangeSet, sheet_id: SheetId) -> bool {
+        range.areas().iter().any(|area| match area.scope {
+            SheetScope::Single(area_sheet_id) => area_sheet_id == sheet_id,
+            SheetScope::Multi3D { start, end } => start == sheet_id || end == sheet_id,
+        })
     }
 
     fn worksheet_model(
@@ -8240,10 +8278,10 @@ impl ExcelRuntime {
             Some(OmValue::Object(handle)) => match self.runtime_object(*handle)? {
                 RuntimeObjectKind::Range {
                     workbook: after_workbook,
-                    sheet_id: after_sheet_id,
-                    rect: after_rect,
+                    range: after_range,
                     ..
                 } => {
+                    let (after_sheet_id, after_rect) = Self::range_set_single_area(&after_range)?;
                     if after_workbook != workbook || after_sheet_id != sheet_id {
                         return Err(OmError::invalid_argument(format!(
                             "{context} After must belong to the searched worksheet"
@@ -8575,12 +8613,16 @@ impl ExcelRuntime {
                 RuntimeObjectKind::Worksheet {
                     workbook: object_workbook,
                     sheet_id: object_sheet_id,
-                }
-                | RuntimeObjectKind::Range {
-                    workbook: object_workbook,
-                    sheet_id: object_sheet_id,
-                    ..
                 } if *object_workbook == workbook && *object_sheet_id == sheet_id => {
+                    Some(object_id)
+                }
+                RuntimeObjectKind::Range {
+                    workbook: object_workbook,
+                    range: object_range,
+                    ..
+                } if *object_workbook == workbook
+                    && Self::range_set_targets_sheet(object_range, sheet_id) =>
+                {
                     Some(object_id)
                 }
                 _ => None,
