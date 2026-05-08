@@ -4,9 +4,9 @@ use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_j
 use office_common::{
     CellError, CellValue, ExcelProfile, FileFormat, FormulaSource, GetRangeValuesSpec, LoadOptions,
     ObjectHandle, OmArray, OmError, OmErrorCode, OmResult, OmValue, OpaquePart, OpenWorkbookSpec,
-    RangeHandle, RangeRef, RangeSet, Rect, SaveOptions, SaveWorkbookSpec, SetRangeValuesSpec,
-    SheetId, SheetScope, SheetVisibility, WorkbookHandle, WorkbookId, WorkbookModel,
-    WorksheetHandle, WorksheetModel,
+    RangeArea, RangeHandle, RangeRef, RangeSet, Rect, SaveOptions, SaveWorkbookSpec,
+    SetRangeValuesSpec, SheetId, SheetScope, SheetVisibility, WorkbookHandle, WorkbookId,
+    WorkbookModel, WorksheetHandle, WorksheetModel,
 };
 use office_idl::{AccessMode, SupportState};
 use office_opc::{CompressionMethod, OpcPackage, OpcPart};
@@ -275,6 +275,10 @@ enum RuntimeObjectKind {
         workbook: WorkbookHandle,
         range: RangeSet,
         projection: RangeProjection,
+    },
+    Areas {
+        workbook: WorkbookHandle,
+        range: RangeSet,
     },
 }
 
@@ -762,9 +766,9 @@ impl ExcelRuntime {
                 workbook,
                 range,
                 projection,
-            } => {
-                let (sheet_id, rect) = Self::range_set_single_area(&range)?;
-                self.dispatch_get_range(workbook, sheet_id, rect, projection, member, args)
+            } => self.dispatch_get_range_set(workbook, range, projection, member, args),
+            RuntimeObjectKind::Areas { workbook, range } => {
+                self.dispatch_get_areas(workbook, range, member, args)
             }
         }
     }
@@ -1191,6 +1195,9 @@ impl ExcelRuntime {
                 let (sheet_id, rect) = Self::range_set_single_area(&range)?;
                 self.dispatch_set_range(workbook, sheet_id, rect, projection, member, value, args)
             }
+            RuntimeObjectKind::Areas { .. } => Err(OmError::unsupported(format!(
+                "member {member} is not writable for this object handle"
+            ))),
             RuntimeObjectKind::WorkbooksCollection
             | RuntimeObjectKind::WorksheetsCollection { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
@@ -4161,6 +4168,9 @@ impl ExcelRuntime {
                     ))),
                 }
             }
+            RuntimeObjectKind::Areas { workbook, range } => {
+                self.dispatch_invoke_areas(workbook, range, member, args)
+            }
         }
     }
 
@@ -5368,6 +5378,263 @@ impl ExcelRuntime {
         }
     }
 
+    fn dispatch_get_range_set(
+        &mut self,
+        workbook: WorkbookHandle,
+        range: RangeSet,
+        projection: RangeProjection,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        if range.areas().len() == 1 {
+            let (sheet_id, rect) = Self::range_set_single_area(&range)?;
+            return self.dispatch_get_range(workbook, sheet_id, rect, projection, member, args);
+        }
+
+        self.focus_member_supported("Range", member, false)?;
+        if !args.is_empty() && !matches!(member, "Address" | "Rows" | "Columns" | "Cells") {
+            return Err(OmError::invalid_argument(format!(
+                "Range.{member} does not accept arguments"
+            )));
+        }
+
+        match member {
+            "Areas" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Range.Areas does not accept index arguments",
+                    ));
+                }
+                Ok(OmValue::Object(self.register_areas_handle(workbook, range)))
+            }
+            "Address" => self.range_set_address(workbook, &range, args),
+            "Count" | "CountLarge" => Ok(OmValue::Number(
+                range
+                    .areas()
+                    .iter()
+                    .map(|area| match projection {
+                        RangeProjection::Cells => {
+                            u64::from(area.rect.width()) * u64::from(area.rect.height())
+                        }
+                        RangeProjection::Rows => u64::from(area.rect.height()),
+                        RangeProjection::Columns => u64::from(area.rect.width()),
+                    })
+                    .sum::<u64>() as f64,
+            )),
+            "Rows" => {
+                let (sheet_id, rect) = Self::range_set_first_area(&range)?;
+                let handle = self.register_projected_range_handle(
+                    workbook,
+                    sheet_id,
+                    rect,
+                    RangeProjection::Rows,
+                );
+                if args.is_empty() {
+                    Ok(OmValue::Object(handle.0))
+                } else {
+                    self.dispatch_invoke(handle.0, "Item", args)
+                }
+            }
+            "Columns" => {
+                let (sheet_id, rect) = Self::range_set_first_area(&range)?;
+                let handle = self.register_projected_range_handle(
+                    workbook,
+                    sheet_id,
+                    rect,
+                    RangeProjection::Columns,
+                );
+                if args.is_empty() {
+                    Ok(OmValue::Object(handle.0))
+                } else {
+                    self.dispatch_invoke(handle.0, "Item", args)
+                }
+            }
+            "Cells" => {
+                let (sheet_id, rect) = Self::range_set_first_area(&range)?;
+                let handle = self.register_projected_range_handle(
+                    workbook,
+                    sheet_id,
+                    rect,
+                    RangeProjection::Cells,
+                );
+                if args.is_empty() {
+                    Ok(OmValue::Object(handle.0))
+                } else {
+                    self.dispatch_invoke(handle.0, "Item", args)
+                }
+            }
+            _ => {
+                let (sheet_id, rect) = Self::range_set_first_area(&range)?;
+                self.dispatch_get_range(workbook, sheet_id, rect, projection, member, args)
+            }
+        }
+    }
+
+    fn dispatch_get_areas(
+        &mut self,
+        workbook: WorkbookHandle,
+        range: RangeSet,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        match member {
+            "Count" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Areas.Count does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Number(range.len() as f64))
+            }
+            "Item" => self.dispatch_invoke_areas(workbook, range, member, args),
+            "Application" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Areas.Application does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Object(self.root_application()))
+            }
+            "Parent" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Areas.Parent does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Object(
+                    self.register_range_set_handle(workbook, range).0,
+                ))
+            }
+            _ => Err(OmError::unsupported(format!(
+                "Areas.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_invoke_areas(
+        &mut self,
+        workbook: WorkbookHandle,
+        range: RangeSet,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        match member {
+            "Item" => {
+                let [index] = args else {
+                    return Err(OmError::invalid_argument(
+                        "Areas.Item expects a single 1-based index",
+                    ));
+                };
+                let index = coerce_u32_arg(index, "Areas.Item index")? as usize;
+                let Some(area) = range.areas().get(index - 1).copied() else {
+                    return Err(OmError::invalid_argument(
+                        "Areas.Item index is out of bounds",
+                    ));
+                };
+                let area_range = RangeSet::new(range.workbook_id(), vec![area])?;
+                Ok(OmValue::Object(
+                    self.register_range_set_handle(workbook, area_range).0,
+                ))
+            }
+            _ => Err(OmError::unsupported(format!(
+                "Areas.{member} is not implemented as a method"
+            ))),
+        }
+    }
+
+    fn range_set_address(
+        &mut self,
+        workbook: WorkbookHandle,
+        range: &RangeSet,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        if args.len() > 5 {
+            return Err(OmError::invalid_argument(
+                "Range.Address accepts optional RowAbsolute, ColumnAbsolute, ReferenceStyle, External, and RelativeTo arguments",
+            ));
+        }
+        let row_absolute = args
+            .first()
+            .map(|value| coerce_optional_bool_arg(value, true, "Range.Address row absolute"))
+            .transpose()?
+            .unwrap_or(true);
+        let column_absolute = args
+            .get(1)
+            .map(|value| coerce_optional_bool_arg(value, true, "Range.Address column absolute"))
+            .transpose()?
+            .unwrap_or(true);
+        let reference_style = args
+            .get(2)
+            .map(coerce_optional_reference_style_arg)
+            .transpose()?
+            .unwrap_or(RangeAddressReferenceStyle::A1);
+        let external = args
+            .get(3)
+            .map(|value| coerce_optional_bool_arg(value, false, "Range.Address external"))
+            .transpose()?
+            .unwrap_or(false);
+        let relative_to = match args.get(4) {
+            None => None,
+            Some(value) if om_value_is_omitted(value) => None,
+            Some(OmValue::Object(handle)) => match self.runtime_object(*handle)? {
+                RuntimeObjectKind::Range { range, .. } => {
+                    let (_, relative_rect) = Self::range_set_single_area(&range)?;
+                    Some((relative_rect.row_first, relative_rect.col_first))
+                }
+                _ => {
+                    return Err(OmError::type_mismatch(
+                        "Range.Address RelativeTo expects a Range object when provided",
+                    ));
+                }
+            },
+            Some(_) => {
+                return Err(OmError::type_mismatch(
+                    "Range.Address RelativeTo expects a Range object when provided",
+                ));
+            }
+        };
+
+        let workbook_name = if external {
+            Some(self.workbook_model(workbook)?.display_name.clone())
+        } else {
+            None
+        };
+        let mut parts = Vec::with_capacity(range.areas().len());
+        for area in range.areas() {
+            let SheetScope::Single(sheet_id) = area.scope else {
+                return Err(OmError::unsupported(
+                    "3D range handles are not supported by Range.Address yet",
+                ));
+            };
+            let mut address = match reference_style {
+                RangeAddressReferenceStyle::A1 => {
+                    format_rect_address_with_flags(area.rect, row_absolute, column_absolute)
+                }
+                RangeAddressReferenceStyle::R1C1 => {
+                    let (base_row, base_col) =
+                        relative_to.unwrap_or((area.rect.row_first, area.rect.col_first));
+                    format_rect_r1c1_address_with_flags(
+                        area.rect,
+                        row_absolute,
+                        column_absolute,
+                        base_row,
+                        base_col,
+                    )
+                }
+            };
+            if let Some(workbook_name) = workbook_name.as_ref() {
+                let worksheet_name = self.worksheet_model(workbook, sheet_id)?.name.clone();
+                address.insert_str(
+                    0,
+                    format_external_address_qualifier(workbook_name, &worksheet_name).as_str(),
+                );
+            }
+            parts.push(address);
+        }
+
+        Ok(OmValue::Text(parts.join(",")))
+    }
+
     fn dispatch_set_range(
         &mut self,
         workbook: WorkbookHandle,
@@ -5902,11 +6169,11 @@ impl ExcelRuntime {
             }
             "Range" => match args {
                 [OmValue::Text(reference)] => {
-                    let (workbook, sheet_id, rect) =
-                        self.resolve_application_reference_text(reference)?;
+                    let (workbook, range) = self.resolve_application_range_text(reference)?;
+                    let (sheet_id, rect) = Self::range_set_first_area(&range)?;
                     self.remember_selection(workbook, sheet_id, rect);
                     Ok(OmValue::Object(
-                        self.register_range_handle(workbook, sheet_id, rect).0,
+                        self.register_range_set_handle(workbook, range).0,
                     ))
                 }
                 _ => {
@@ -5927,15 +6194,12 @@ impl ExcelRuntime {
                 let parse_range = |value: &OmValue,
                                    label: &str,
                                    runtime: &ExcelRuntime|
-                 -> OmResult<(WorkbookHandle, SheetId, Rect)> {
+                 -> OmResult<(WorkbookHandle, RangeSet)> {
                     match value {
                         OmValue::Object(handle) => match runtime.runtime_object(*handle)? {
                             RuntimeObjectKind::Range {
                                 workbook, range, ..
-                            } => {
-                                let (sheet_id, rect) = Self::range_set_single_area(&range)?;
-                                Ok((workbook, sheet_id, rect))
-                            }
+                            } => Ok((workbook, range)),
                             _ => Err(OmError::type_mismatch(format!(
                                 "Application.Intersect {label} expects range objects"
                             ))),
@@ -5946,46 +6210,51 @@ impl ExcelRuntime {
                     }
                 };
 
-                let (workbook, sheet_id, mut row_first, mut row_last, mut col_first, mut col_last) = {
-                    let (workbook, sheet_id, rect) = parse_range(&args[0], "Arg1", self)?;
-                    (
-                        workbook,
-                        sheet_id,
-                        rect.row_first,
-                        rect.row_last,
-                        rect.col_first,
-                        rect.col_last,
-                    )
-                };
+                let (workbook, first_range) = parse_range(&args[0], "Arg1", self)?;
+                let (sheet_id, mut current_rects) =
+                    Self::range_set_single_sheet_rects(&first_range)?;
                 for (index, arg) in args.iter().enumerate().skip(1) {
-                    let (next_workbook, next_sheet_id, next_rect) =
+                    let (next_workbook, next_range) =
                         parse_range(arg, &format!("Arg{}", index + 1), self)?;
+                    let (next_sheet_id, next_rects) =
+                        Self::range_set_single_sheet_rects(&next_range)?;
                     if next_workbook != workbook || next_sheet_id != sheet_id {
                         return Err(OmError::invalid_argument(
                             "Application.Intersect expects ranges from the same worksheet",
                         ));
                     }
-                    row_first = row_first.max(next_rect.row_first);
-                    row_last = row_last.min(next_rect.row_last);
-                    col_first = col_first.max(next_rect.col_first);
-                    col_last = col_last.min(next_rect.col_last);
-                }
-                if row_first > row_last || col_first > col_last {
-                    return Ok(OmValue::Empty);
+                    let mut intersections = Vec::new();
+                    for left in &current_rects {
+                        for right in &next_rects {
+                            let row_first = left.row_first.max(right.row_first);
+                            let row_last = left.row_last.min(right.row_last);
+                            let col_first = left.col_first.max(right.col_first);
+                            let col_last = left.col_last.min(right.col_last);
+                            if row_first <= row_last && col_first <= col_last {
+                                intersections.push(Rect {
+                                    row_first,
+                                    row_last,
+                                    col_first,
+                                    col_last,
+                                });
+                            }
+                        }
+                    }
+                    current_rects = intersections;
+                    if current_rects.is_empty() {
+                        return Ok(OmValue::Empty);
+                    }
                 }
 
+                let workbook_id = self.workbook_model(workbook)?.id;
+                let areas = current_rects
+                    .into_iter()
+                    .map(|rect| RangeArea::new(SheetScope::Single(sheet_id), rect))
+                    .collect::<OmResult<Vec<_>>>()?;
+
                 Ok(OmValue::Object(
-                    self.register_range_handle(
-                        workbook,
-                        sheet_id,
-                        Rect {
-                            row_first,
-                            row_last,
-                            col_first,
-                            col_last,
-                        },
-                    )
-                    .0,
+                    self.register_range_set_handle(workbook, RangeSet::new(workbook_id, areas)?)
+                        .0,
                 ))
             }
             "Union" => {
@@ -5998,15 +6267,12 @@ impl ExcelRuntime {
                 let parse_range = |value: &OmValue,
                                    label: &str,
                                    runtime: &ExcelRuntime|
-                 -> OmResult<(WorkbookHandle, SheetId, Rect)> {
+                 -> OmResult<(WorkbookHandle, RangeSet)> {
                     match value {
                         OmValue::Object(handle) => match runtime.runtime_object(*handle)? {
                             RuntimeObjectKind::Range {
                                 workbook, range, ..
-                            } => {
-                                let (sheet_id, rect) = Self::range_set_single_area(&range)?;
-                                Ok((workbook, sheet_id, rect))
-                            }
+                            } => Ok((workbook, range)),
                             _ => Err(OmError::type_mismatch(format!(
                                 "Application.Union {label} expects range objects"
                             ))),
@@ -6017,51 +6283,31 @@ impl ExcelRuntime {
                     }
                 };
 
-                let (workbook, sheet_id, mut rect) = parse_range(&args[0], "Arg1", self)?;
-                let rect_area =
-                    |rect: Rect| -> u64 { u64::from(rect.width()) * u64::from(rect.height()) };
-                let intersection_area = |left: Rect, right: Rect| -> u64 {
-                    let row_first = left.row_first.max(right.row_first);
-                    let row_last = left.row_last.min(right.row_last);
-                    let col_first = left.col_first.max(right.col_first);
-                    let col_last = left.col_last.min(right.col_last);
-                    if row_first > row_last || col_first > col_last {
-                        0
-                    } else {
-                        rect_area(Rect {
-                            row_first,
-                            row_last,
-                            col_first,
-                            col_last,
-                        })
-                    }
-                };
+                let (workbook, first_range) = parse_range(&args[0], "Arg1", self)?;
+                let (sheet_id, first_rects) = Self::range_set_single_sheet_rects(&first_range)?;
+                let workbook_id = self.workbook_model(workbook)?.id;
+                let mut areas = first_rects
+                    .into_iter()
+                    .map(|rect| RangeArea::new(SheetScope::Single(sheet_id), rect))
+                    .collect::<OmResult<Vec<_>>>()?;
                 for (index, arg) in args.iter().enumerate().skip(1) {
-                    let (next_workbook, next_sheet_id, next_rect) =
+                    let (next_workbook, next_range) =
                         parse_range(arg, &format!("Arg{}", index + 1), self)?;
+                    let (next_sheet_id, next_rects) =
+                        Self::range_set_single_sheet_rects(&next_range)?;
                     if next_workbook != workbook || next_sheet_id != sheet_id {
                         return Err(OmError::invalid_argument(
                             "Application.Union expects ranges from the same worksheet",
                         ));
                     }
-                    let next_union = Rect {
-                        row_first: rect.row_first.min(next_rect.row_first),
-                        row_last: rect.row_last.max(next_rect.row_last),
-                        col_first: rect.col_first.min(next_rect.col_first),
-                        col_last: rect.col_last.max(next_rect.col_last),
-                    };
-                    let combined_area =
-                        rect_area(rect) + rect_area(next_rect) - intersection_area(rect, next_rect);
-                    if rect_area(next_union) != combined_area {
-                        return Err(OmError::unsupported(
-                            "Application.Union is only implemented for rectangular unions",
-                        ));
+                    for rect in next_rects {
+                        areas.push(RangeArea::new(SheetScope::Single(sheet_id), rect)?);
                     }
-                    rect = next_union;
                 }
 
                 Ok(OmValue::Object(
-                    self.register_range_handle(workbook, sheet_id, rect).0,
+                    self.register_range_set_handle(workbook, RangeSet::new(workbook_id, areas)?)
+                        .0,
                 ))
             }
             _ => Err(OmError::unsupported(format!(
@@ -7492,8 +7738,15 @@ impl ExcelRuntime {
         self.focus_member_supported("Worksheet", member, false)?;
         match member {
             "Range" => {
+                if let [OmValue::Text(reference)] = args {
+                    let range = self.resolve_worksheet_range_text(workbook, sheet_id, reference)?;
+                    let (_, rect) = Self::range_set_first_area(&range)?;
+                    self.remember_selection(workbook, sheet_id, rect);
+                    return Ok(OmValue::Object(
+                        self.register_range_set_handle(workbook, range).0,
+                    ));
+                }
                 let rect = match args {
-                    [OmValue::Text(a1)] => parse_rect_a1(a1)?,
                     [OmValue::Object(handle)] => match self.runtime_object(*handle)? {
                         RuntimeObjectKind::Range {
                             workbook: range_workbook,
@@ -7977,6 +8230,14 @@ impl ExcelRuntime {
         self.register_projected_range_handle(workbook, sheet_id, rect, RangeProjection::Cells)
     }
 
+    fn register_range_set_handle(
+        &mut self,
+        workbook: WorkbookHandle,
+        range: RangeSet,
+    ) -> RangeHandle {
+        self.register_projected_range_set_handle(workbook, range, RangeProjection::Cells)
+    }
+
     fn register_projected_range_handle(
         &mut self,
         workbook: WorkbookHandle,
@@ -7990,11 +8251,38 @@ impl ExcelRuntime {
             .id;
         let range = RangeSet::single_rect(workbook_id, sheet_id, rect)
             .expect("runtime range handles require valid 1-based rectangles");
+        self.register_projected_range_set_handle(workbook, range, projection)
+    }
+
+    fn register_projected_range_set_handle(
+        &mut self,
+        workbook: WorkbookHandle,
+        range: RangeSet,
+        projection: RangeProjection,
+    ) -> RangeHandle {
         RangeHandle(self.register_object(RuntimeObjectKind::Range {
             workbook,
             range,
             projection,
         }))
+    }
+
+    fn register_areas_handle(&mut self, workbook: WorkbookHandle, range: RangeSet) -> ObjectHandle {
+        self.register_object(RuntimeObjectKind::Areas { workbook, range })
+    }
+
+    fn range_set_first_area(range: &RangeSet) -> OmResult<(SheetId, Rect)> {
+        let Some(area) = range.areas().first().copied() else {
+            return Err(OmError::invalid_argument(
+                "range set must contain at least one area",
+            ));
+        };
+        match area.scope {
+            SheetScope::Single(sheet_id) => Ok((sheet_id, area.rect)),
+            SheetScope::Multi3D { .. } => Err(OmError::unsupported(
+                "3D range handles are not supported by this operation yet",
+            )),
+        }
     }
 
     fn range_set_single_area(range: &RangeSet) -> OmResult<(SheetId, Rect)> {
@@ -8011,6 +8299,31 @@ impl ExcelRuntime {
                 "3D range handles are not supported by this operation yet",
             )),
         }
+    }
+
+    fn range_set_single_sheet_rects(range: &RangeSet) -> OmResult<(SheetId, Vec<Rect>)> {
+        let mut sheet_id = None;
+        let mut rects = Vec::with_capacity(range.areas().len());
+        for area in range.areas() {
+            let SheetScope::Single(area_sheet_id) = area.scope else {
+                return Err(OmError::unsupported(
+                    "3D range handles are not supported by this operation yet",
+                ));
+            };
+            match sheet_id {
+                Some(existing_sheet_id) if existing_sheet_id != area_sheet_id => {
+                    return Err(OmError::invalid_argument(
+                        "range handles must belong to a single worksheet",
+                    ));
+                }
+                Some(_) => {}
+                None => sheet_id = Some(area_sheet_id),
+            }
+            rects.push(area.rect);
+        }
+        let sheet_id = sheet_id
+            .ok_or_else(|| OmError::invalid_argument("range set must contain at least one area"))?;
+        Ok((sheet_id, rects))
     }
 
     fn range_set_targets_sheet(range: &RangeSet, sheet_id: SheetId) -> bool {
@@ -8109,6 +8422,59 @@ impl ExcelRuntime {
             .filter(|selection| selection.workbook == workbook)
             .map(|selection| selection.sheet_id)
             .unwrap_or(self.default_selection(workbook)?.sheet_id))
+    }
+
+    fn resolve_application_range_text(
+        &self,
+        reference: &str,
+    ) -> OmResult<(WorkbookHandle, RangeSet)> {
+        let parts = split_reference_union_text(reference)?;
+        let mut target_workbook = None;
+        let mut areas = Vec::with_capacity(parts.len());
+
+        for part in parts {
+            let (workbook, sheet_id, rect) = self.resolve_application_reference_text(part)?;
+            match target_workbook {
+                Some(existing_workbook) if existing_workbook != workbook => {
+                    return Err(OmError::invalid_argument(
+                        "Application.Range multi-area references must belong to the same workbook",
+                    ));
+                }
+                Some(_) => {}
+                None => target_workbook = Some(workbook),
+            }
+            areas.push(RangeArea::new(SheetScope::Single(sheet_id), rect)?);
+        }
+
+        let target_workbook = target_workbook.ok_or_else(|| {
+            OmError::invalid_argument(
+                "Application string references must use A1 notation or SheetName!A1 notation",
+            )
+        })?;
+        let workbook_id = self.workbook_model(target_workbook)?.id;
+        Ok((target_workbook, RangeSet::new(workbook_id, areas)?))
+    }
+
+    fn resolve_worksheet_range_text(
+        &self,
+        workbook: WorkbookHandle,
+        sheet_id: SheetId,
+        reference: &str,
+    ) -> OmResult<RangeSet> {
+        let parts = split_reference_union_text(reference)?;
+        let mut areas = Vec::with_capacity(parts.len());
+        for part in parts {
+            if part.contains('!') {
+                return Err(OmError::parse(
+                    "Worksheet.Range text references must be relative A1 references",
+                ));
+            }
+            areas.push(RangeArea::new(
+                SheetScope::Single(sheet_id),
+                parse_rect_a1(part)?,
+            )?);
+        }
+        RangeSet::new(self.workbook_model(workbook)?.id, areas)
     }
 
     fn resolve_application_reference_text(
@@ -8620,6 +8986,14 @@ impl ExcelRuntime {
                     workbook: object_workbook,
                     range: object_range,
                     ..
+                } if *object_workbook == workbook
+                    && Self::range_set_targets_sheet(object_range, sheet_id) =>
+                {
+                    Some(object_id)
+                }
+                RuntimeObjectKind::Areas {
+                    workbook: object_workbook,
+                    range: object_range,
                 } if *object_workbook == workbook
                     && Self::range_set_targets_sheet(object_range, sheet_id) =>
                 {
@@ -10104,7 +10478,8 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         RuntimeObjectKind::Workbook { workbook }
         | RuntimeObjectKind::WorksheetsCollection { workbook }
         | RuntimeObjectKind::Worksheet { workbook, .. }
-        | RuntimeObjectKind::Range { workbook, .. } => Some(workbook),
+        | RuntimeObjectKind::Range { workbook, .. }
+        | RuntimeObjectKind::Areas { workbook, .. } => Some(workbook),
     }
 }
 
@@ -29688,6 +30063,63 @@ fn parse_rect_a1(input: &str) -> OmResult<Rect> {
     }
 }
 
+fn split_reference_union_text(input: &str) -> OmResult<Vec<&str>> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err(OmError::invalid_argument("range reference text is empty"));
+    }
+
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut in_quote = false;
+    let mut in_brackets = false;
+    let mut chars = input.char_indices().peekable();
+    while let Some((index, ch)) = chars.next() {
+        match ch {
+            '\'' => {
+                if in_quote && chars.peek().is_some_and(|(_, next)| *next == '\'') {
+                    chars.next();
+                } else {
+                    in_quote = !in_quote;
+                }
+            }
+            '[' if !in_quote => in_brackets = true,
+            ']' if !in_quote => in_brackets = false,
+            ',' if !in_quote && !in_brackets => {
+                let part = input[start..index].trim();
+                if part.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "multi-area range references cannot contain empty areas",
+                    ));
+                }
+                parts.push(part);
+                start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+
+    if in_quote {
+        return Err(OmError::invalid_argument(
+            "range references use unmatched worksheet quoting",
+        ));
+    }
+    if in_brackets {
+        return Err(OmError::invalid_argument(
+            "range references use invalid workbook qualification",
+        ));
+    }
+
+    let part = input[start..].trim();
+    if part.is_empty() {
+        return Err(OmError::invalid_argument(
+            "multi-area range references cannot contain empty areas",
+        ));
+    }
+    parts.push(part);
+    Ok(parts)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum A1Endpoint {
     Cell(u32, u32),
@@ -48077,6 +48509,104 @@ mod tests {
     }
 
     #[test]
+    fn worksheet_range_parses_multi_area_text_and_exposes_areas_collection() {
+        let mut runtime = ExcelRuntime::new();
+        let _workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+
+        let range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("C1,A1:B1".to_string())],
+                )
+                .expect("Range(C1,A1:B1)"),
+        );
+        let areas = expect_object_handle(
+            runtime
+                .dispatch_get(range, "Areas", &[])
+                .expect("Range.Areas"),
+        );
+        let first_area = expect_object_handle(
+            runtime
+                .dispatch_invoke(areas, "Item", &[OmValue::Number(1.0)])
+                .expect("Areas.Item(1)"),
+        );
+        let second_area = expect_object_handle(
+            runtime
+                .dispatch_invoke(areas, "Item", &[OmValue::Number(2.0)])
+                .expect("Areas.Item(2)"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(range, "Address", &[])
+                    .expect("multi-area address")
+            ),
+            "$C$1,$A$1:$B$1"
+        );
+        assert_eq!(
+            expect_number(runtime.dispatch_get(range, "Count", &[]).expect("Count")),
+            3.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(areas, "Count", &[])
+                    .expect("Areas.Count")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(first_area, "Address", &[])
+                    .expect("first area address")
+            ),
+            "$C$1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(second_area, "Address", &[])
+                    .expect("second area address")
+            ),
+            "$A$1:$B$1"
+        );
+
+        let application_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    runtime.root_application(),
+                    "Range",
+                    &[OmValue::Text("Sheet1!C1,Sheet1!A1:B1".to_string())],
+                )
+                .expect("Application.Range(Sheet1!C1,Sheet1!A1:B1)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(application_range, "Address", &[])
+                    .expect("application multi-area address")
+            ),
+            "$C$1,$A$1:$B$1"
+        );
+    }
+
+    #[test]
     fn range_dispatch_rows_and_columns_project_count_over_same_rect() {
         let mut runtime = ExcelRuntime::new();
         let _workbook = runtime
@@ -56868,6 +57398,29 @@ mod tests {
                 .dispatch_invoke(worksheet2, "Range", &[OmValue::Text("A1".to_string())])
                 .expect("Workbook2.Range(A1)"),
         );
+        let multi_area_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    application,
+                    "Range",
+                    &[OmValue::Text("A1:A3,C1:C3".to_string())],
+                )
+                .expect("Application.Range(A1:A3,C1:C3)"),
+        );
+        let row_mask = expect_object_handle(
+            runtime
+                .dispatch_invoke(application, "Range", &[OmValue::Text("A2:C2".to_string())])
+                .expect("Application.Range(A2:C2)"),
+        );
+        let pairwise_overlap = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    application,
+                    "Intersect",
+                    &[OmValue::Object(multi_area_range), OmValue::Object(row_mask)],
+                )
+                .expect("Application.Intersect multi-area pairwise"),
+        );
 
         assert_eq!(
             expect_text(
@@ -56876,6 +57429,14 @@ mod tests {
                     .expect("Application.Intersect overlap address")
             ),
             "$B$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(pairwise_overlap, "Address", &[])
+                    .expect("Application.Intersect pairwise overlap address")
+            ),
+            "$A$2,$C$2"
         );
         assert_eq!(
             expect_text(
@@ -56965,7 +57526,7 @@ mod tests {
     }
 
     #[test]
-    fn application_union_returns_rectangular_unions_and_rejects_multi_area_results() {
+    fn application_union_preserves_multi_area_results_in_argument_order() {
         let mut runtime = ExcelRuntime::new();
         let workbook1 = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -57074,7 +57635,7 @@ mod tests {
                     .dispatch_get(union, "Address", &[])
                     .expect("Application.Union address")
             ),
-            "$A$1:$C$2"
+            "$A$1:$B$2,$B$1:$C$2"
         );
         assert_eq!(
             expect_text(
@@ -57082,15 +57643,15 @@ mod tests {
                     .dispatch_get(multi_union, "Address", &[])
                     .expect("Application.Union multi-arg address")
             ),
-            "$A$1:$D$2"
+            "$A$1:$B$2,$B$1:$C$2,$D$1:$D$2"
         );
         assert_eq!(
-            expect_text(
+            expect_number(
                 runtime
-                    .dispatch_get(thirty_union, "Address", &[])
-                    .expect("Application.Union 30-arg address")
+                    .dispatch_get(thirty_union, "Count", &[])
+                    .expect("Application.Union 30-arg count")
             ),
-            "$A$1:$B$2"
+            120.0
         );
         assert_eq!(
             expect_text(
@@ -57100,16 +57661,30 @@ mod tests {
             ),
             "$B$1:$C$2"
         );
-        assert_eq!(
+        let disjoint_union = expect_object_handle(
             runtime
                 .dispatch_invoke(
                     application,
                     "Union",
                     &[OmValue::Object(range1), OmValue::Object(disjoint)],
                 )
-                .expect_err("Application.Union should reject multi-area results")
-                .code,
-            OmErrorCode::Unsupported
+                .expect("Application.Union should allow disjoint multi-area results"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(disjoint_union, "Address", &[])
+                    .expect("disjoint union address")
+            ),
+            "$A$1:$B$2,$E$1"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(disjoint_union, "Count", &[])
+                    .expect("disjoint union count")
+            ),
+            5.0
         );
         assert_eq!(
             runtime

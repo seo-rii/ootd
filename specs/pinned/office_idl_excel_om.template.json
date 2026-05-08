@@ -4056,6 +4056,32 @@
           }
         },
         {
+          "name": "Areas",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Areas",
+            "aliasOf": "Excel.Areas"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Range",
+                  "sourceMember": "Areas"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Areas",
+                "aliasOf": "Excel.Areas"
+              }
+            }
+          }
+        },
+        {
           "name": "Application",
           "memberKind": "property",
           "returnType": {
