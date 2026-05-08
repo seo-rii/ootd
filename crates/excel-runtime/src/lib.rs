@@ -149,6 +149,10 @@ const WORKBOOK_XLTX_CONTENT_TYPE: &str =
 const WORKBOOK_XLTM_CONTENT_TYPE: &str = "application/vnd.ms-excel.template.macroEnabled.main+xml";
 const WORKSHEET_PART_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
+const VBA_PROJECT_PART_NAME: &str = "xl/vbaProject.bin";
+const VBA_PROJECT_CONTENT_TYPE: &str = "application/vnd.ms-office.vbaProject";
+const VBA_PROJECT_RELATIONSHIP_TYPE: &str =
+    "http://schemas.microsoft.com/office/2006/relationships/vbaProject";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeSheetTemplate {
@@ -8702,14 +8706,9 @@ fn retag_loaded_workbook_format(
         return Ok(loaded.clone());
     }
     let content_type = workbook_main_content_type(format)?;
-    if loaded.package.contains("xl/vbaProject.bin") && !format_allows_vba_project(format) {
-        return Err(OmError::unsupported(
-            "saving macro-enabled workbooks as non-macro OOXML formats is not implemented",
-        ));
-    }
 
     let mut retagged = loaded.clone();
-    let content_types_xml = retagged
+    let mut content_types_xml = retagged
         .package
         .part(CONTENT_TYPES_PART_NAME)
         .ok_or_else(|| {
@@ -8720,6 +8719,36 @@ fn retag_loaded_workbook_format(
         })?
         .bytes
         .clone();
+    if retagged.package.contains(VBA_PROJECT_PART_NAME) && !format_allows_vba_project(format) {
+        retagged.package.remove_part(VBA_PROJECT_PART_NAME);
+        content_types_xml = strip_content_type_overrides(
+            content_types_xml.as_slice(),
+            &[VBA_PROJECT_PART_NAME.to_string()],
+        )?;
+        content_types_xml = strip_content_type_defaults_by_content_type(
+            content_types_xml.as_slice(),
+            &[VBA_PROJECT_CONTENT_TYPE],
+        )?;
+        let workbook_rels_part_name = retagged
+            .support_parts
+            .workbook_relationships_part_uri
+            .clone()
+            .unwrap_or_else(|| WORKBOOK_RELS_PART_NAME.to_string());
+        if let Some(workbook_rels_xml) = retagged
+            .package
+            .part(workbook_rels_part_name.as_str())
+            .map(|part| part.bytes.clone())
+        {
+            retagged.package.replace_part_bytes(
+                workbook_rels_part_name.as_str(),
+                strip_relationship_entries_by_type_or_target(
+                    workbook_rels_xml.as_slice(),
+                    &[VBA_PROJECT_RELATIONSHIP_TYPE],
+                    &[VBA_PROJECT_PART_NAME, "vbaProject.bin"],
+                )?,
+            )?;
+        }
+    }
     let content_types_xml = set_content_type_override(
         content_types_xml.as_slice(),
         WORKBOOK_PART_NAME,
@@ -9624,6 +9653,62 @@ fn strip_relationship_entries_by_id(
     Ok(writer.into_inner().into_inner())
 }
 
+fn strip_relationship_entries_by_type_or_target(
+    rels_xml: &[u8],
+    relationship_types: &[&str],
+    relationship_targets: &[&str],
+) -> OmResult<Vec<u8>> {
+    let relationship_types = relationship_types.iter().copied().collect::<BTreeSet<_>>();
+    let relationship_targets = relationship_targets
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let mut reader = Reader::from_reader(Cursor::new(rels_xml));
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut buffer = Vec::new();
+    let mut skip_depth = 0usize;
+
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(_)) if skip_depth > 0 => {
+                skip_depth += 1;
+            }
+            Ok(Event::End(_)) if skip_depth > 0 => {
+                skip_depth -= 1;
+            }
+            Ok(Event::Empty(element))
+                if xml_local_name(element.name().as_ref()) == b"Relationship"
+                    && should_strip_relationship_entry_by_type_or_target(
+                        &element,
+                        reader.decoder(),
+                        &relationship_types,
+                        &relationship_targets,
+                    )? => {}
+            Ok(Event::Start(element))
+                if xml_local_name(element.name().as_ref()) == b"Relationship"
+                    && should_strip_relationship_entry_by_type_or_target(
+                        &element,
+                        reader.decoder(),
+                        &relationship_types,
+                        &relationship_targets,
+                    )? =>
+            {
+                skip_depth = 1;
+            }
+            Ok(Event::Eof) => break,
+            Ok(event) if skip_depth == 0 => writer
+                .write_event(event.into_owned())
+                .map_err(runtime_xml_error)?,
+            Ok(_) => {}
+            Err(error) => return Err(runtime_xml_error(error)),
+        }
+        buffer.clear();
+    }
+
+    Ok(writer.into_inner().into_inner())
+}
+
 fn should_strip_relationship_entry(
     element: &BytesStart<'_>,
     decoder: quick_xml::encoding::Decoder,
@@ -9640,6 +9725,37 @@ fn should_strip_relationship_entry(
             .into_owned();
         if relationship_ids.contains(value.as_str()) {
             return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn should_strip_relationship_entry_by_type_or_target(
+    element: &BytesStart<'_>,
+    decoder: quick_xml::encoding::Decoder,
+    relationship_types: &BTreeSet<&str>,
+    relationship_targets: &BTreeSet<&str>,
+) -> OmResult<bool> {
+    for attr in element.attributes() {
+        let attr = attr.map_err(runtime_xml_error)?;
+        let value = attr
+            .decode_and_unescape_value(decoder)
+            .map_err(runtime_xml_error)?
+            .into_owned();
+        match attr.key.as_ref() {
+            b"Type" if relationship_types.contains(value.as_str()) => return Ok(true),
+            b"Target" => {
+                if relationship_targets.contains(value.trim_start_matches('/'))
+                    || relationship_targets.iter().any(|target| {
+                        value.ends_with(target)
+                            && value.len() > target.len()
+                            && value.as_bytes()[value.len() - target.len() - 1] == b'/'
+                    })
+                {
+                    return Ok(true);
+                }
+            }
+            _ => {}
         }
     }
     Ok(false)
@@ -9712,6 +9828,76 @@ fn should_strip_content_type_override(
             .map_err(runtime_xml_error)?
             .into_owned();
         if part_names.contains(value.as_str()) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn strip_content_type_defaults_by_content_type(
+    content_types_xml: &[u8],
+    content_types: &[&str],
+) -> OmResult<Vec<u8>> {
+    let content_types = content_types.iter().copied().collect::<BTreeSet<_>>();
+    let mut reader = Reader::from_reader(Cursor::new(content_types_xml));
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut buffer = Vec::new();
+    let mut skip_depth = 0usize;
+
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(_)) if skip_depth > 0 => {
+                skip_depth += 1;
+            }
+            Ok(Event::End(_)) if skip_depth > 0 => {
+                skip_depth -= 1;
+            }
+            Ok(Event::Empty(element))
+                if xml_local_name(element.name().as_ref()) == b"Default"
+                    && should_strip_content_type_default(
+                        &element,
+                        reader.decoder(),
+                        &content_types,
+                    )? => {}
+            Ok(Event::Start(element))
+                if xml_local_name(element.name().as_ref()) == b"Default"
+                    && should_strip_content_type_default(
+                        &element,
+                        reader.decoder(),
+                        &content_types,
+                    )? =>
+            {
+                skip_depth = 1;
+            }
+            Ok(Event::Eof) => break,
+            Ok(event) if skip_depth == 0 => writer
+                .write_event(event.into_owned())
+                .map_err(runtime_xml_error)?,
+            Ok(_) => {}
+            Err(error) => return Err(runtime_xml_error(error)),
+        }
+        buffer.clear();
+    }
+
+    Ok(writer.into_inner().into_inner())
+}
+
+fn should_strip_content_type_default(
+    element: &BytesStart<'_>,
+    decoder: quick_xml::encoding::Decoder,
+    content_types: &BTreeSet<&str>,
+) -> OmResult<bool> {
+    for attr in element.attributes() {
+        let attr = attr.map_err(runtime_xml_error)?;
+        if attr.key.as_ref() != b"ContentType" {
+            continue;
+        }
+        let value = attr
+            .decode_and_unescape_value(decoder)
+            .map_err(runtime_xml_error)?
+            .into_owned();
+        if content_types.contains(value.as_str()) {
             return Ok(true);
         }
     }
@@ -61745,13 +61931,13 @@ mod tests {
     }
 
     #[test]
-    fn workbook_save_as_rejects_macro_stripping_to_non_macro_format() {
+    fn workbook_save_as_strips_macro_parts_to_non_macro_format() {
         let mut package =
             OpcPackage::from_bytes(synthetic_workbook_bytes().as_slice()).expect("package");
         package
             .add_part(OpcPart {
-                name: "xl/vbaProject.bin".to_string(),
-                content_type: Some("application/vnd.ms-office.vbaProject".to_string()),
+                name: super::VBA_PROJECT_PART_NAME.to_string(),
+                content_type: Some(super::VBA_PROJECT_CONTENT_TYPE.to_string()),
                 compression: CompressionMethod::Stored,
                 bytes: vec![0x56, 0x42, 0x41],
             })
@@ -61772,6 +61958,68 @@ mod tests {
                 .expect("retag workbook content type"),
             )
             .expect("replace content types");
+        let content_types_xml = String::from_utf8(
+            package
+                .part(super::CONTENT_TYPES_PART_NAME)
+                .expect("content types after workbook retag")
+                .bytes
+                .clone(),
+        )
+        .expect("content types utf8")
+        .replace(
+            r#"<Default Extension="xml" ContentType="application/xml"/>"#,
+            format!(
+                r#"<Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="bin" ContentType="{}"/>"#,
+                super::VBA_PROJECT_CONTENT_TYPE
+            )
+            .as_str(),
+        );
+        package
+            .replace_part_bytes(
+                super::CONTENT_TYPES_PART_NAME,
+                content_types_xml.into_bytes(),
+            )
+            .expect("replace content types with vba default");
+        let content_types_xml = package
+            .part(super::CONTENT_TYPES_PART_NAME)
+            .expect("content types part after retag")
+            .bytes
+            .clone();
+        package
+            .replace_part_bytes(
+                super::CONTENT_TYPES_PART_NAME,
+                super::append_content_type_override_if_missing(
+                    content_types_xml.as_slice(),
+                    super::VBA_PROJECT_PART_NAME,
+                    super::VBA_PROJECT_CONTENT_TYPE,
+                )
+                .expect("add vba content type override"),
+            )
+            .expect("replace content types with vba override");
+        let workbook_rels_xml = String::from_utf8(
+            package
+                .part(super::WORKBOOK_RELS_PART_NAME)
+                .expect("workbook rels")
+                .bytes
+                .clone(),
+        )
+        .expect("workbook rels utf8")
+        .replace(
+            "</Relationships>",
+            format!(
+                r#"  <Relationship Id="rId2" Type="{}" Target="vbaProject.bin"/>
+</Relationships>"#,
+                super::VBA_PROJECT_RELATIONSHIP_TYPE
+            )
+            .as_str(),
+        );
+        package
+            .replace_part_bytes(
+                super::WORKBOOK_RELS_PART_NAME,
+                workbook_rels_xml.into_bytes(),
+            )
+            .expect("replace workbook rels");
 
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -61783,14 +62031,19 @@ mod tests {
             })
             .expect("open macro workbook");
         let target_path = std::env::temp_dir().join(format!(
-            "ootd-reject-macro-strip-{}.xlsx",
+            "ootd-strip-macro-{}.xlsx",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("system clock")
                 .as_nanos()
         ));
 
-        let error = runtime
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "HasVBProject", &[])
+                .expect("macro Workbook.HasVBProject before SaveAs")
+        ));
+        runtime
             .dispatch_invoke(
                 workbook.0,
                 "SaveAs",
@@ -61799,9 +62052,55 @@ mod tests {
                     OmValue::Number(f64::from(super::XL_OPEN_XML_WORKBOOK)),
                 ],
             )
-            .expect_err("Workbook.SaveAs should reject macro stripping");
-        assert_eq!(error.code, OmErrorCode::Unsupported);
-        assert!(!target_path.exists());
+            .expect("Workbook.SaveAs should strip macro parts");
+        assert!(target_path.exists());
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "HasVBProject", &[])
+                .expect("macro Workbook.HasVBProject after SaveAs")
+        ));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbook.0, "FileFormat", &[])
+                    .expect("Workbook.FileFormat after macro stripping SaveAs")
+            ),
+            f64::from(super::XL_OPEN_XML_WORKBOOK)
+        );
+
+        let saved_bytes = fs::read(&target_path).expect("read stripped macro target");
+        let saved_package =
+            OpcPackage::from_bytes(saved_bytes.as_slice()).expect("stripped macro package");
+        assert!(!saved_package.contains(super::VBA_PROJECT_PART_NAME));
+        let saved_content_types = String::from_utf8(
+            saved_package
+                .part(super::CONTENT_TYPES_PART_NAME)
+                .expect("saved content types")
+                .bytes
+                .clone(),
+        )
+        .expect("saved content types utf8");
+        assert!(!saved_content_types.contains(super::VBA_PROJECT_CONTENT_TYPE));
+        assert!(saved_content_types.contains(super::WORKBOOK_XLSX_CONTENT_TYPE));
+        let saved_workbook_rels = String::from_utf8(
+            saved_package
+                .part(super::WORKBOOK_RELS_PART_NAME)
+                .expect("saved workbook rels")
+                .bytes
+                .clone(),
+        )
+        .expect("saved workbook rels utf8");
+        assert!(!saved_workbook_rels.contains(super::VBA_PROJECT_RELATIONSHIP_TYPE));
+        assert!(!saved_workbook_rels.contains("vbaProject.bin"));
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(
+                saved_bytes.as_slice(),
+                office_common::LoadOptions::default(),
+            )
+            .expect("reload stripped macro target");
+        assert_eq!(reopened.detected_format, FileFormat::Xlsx);
+        fs::remove_file(&target_path).expect("cleanup stripped macro target");
     }
 
     #[test]
