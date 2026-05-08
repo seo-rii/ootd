@@ -1662,11 +1662,25 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|member| member.name == "SaveAs")
         .expect("Workbook.SaveAs");
     assert_eq!(workbook_save_as.access, AccessMode::Read);
-    assert_eq!(workbook_save_as.params.len(), 2);
-    assert_eq!(workbook_save_as.params[0].name, "Filename");
-    assert!(!workbook_save_as.params[0].optional);
-    assert_eq!(workbook_save_as.params[1].name, "FileFormat");
-    assert!(workbook_save_as.params[1].optional);
+    let expected_save_as_names = [
+        "Filename",
+        "FileFormat",
+        "Password",
+        "WriteResPassword",
+        "ReadOnlyRecommended",
+        "CreateBackup",
+        "AccessMode",
+        "ConflictResolution",
+        "AddToMru",
+        "TextCodepage",
+        "TextVisualLayout",
+        "Local",
+    ];
+    assert_eq!(workbook_save_as.params.len(), expected_save_as_names.len());
+    for (index, expected_name) in expected_save_as_names.iter().enumerate() {
+        assert_eq!(workbook_save_as.params[index].name, *expected_name);
+        assert_eq!(workbook_save_as.params[index].optional, index != 0);
+    }
     let workbook_refresh_all = workbook
         .members
         .iter()

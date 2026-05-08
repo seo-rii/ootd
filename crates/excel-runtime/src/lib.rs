@@ -5544,9 +5544,9 @@ impl ExcelRuntime {
                 Ok(OmValue::Empty)
             }
             "SaveAs" => {
-                if args.is_empty() || args.len() > 2 {
+                if args.is_empty() || args.len() > 12 {
                     return Err(OmError::invalid_argument(
-                        "Workbook.SaveAs expects Filename and optional FileFormat arguments",
+                        "Workbook.SaveAs expects Filename and up to 11 optional arguments",
                     ));
                 }
                 let path = match &args[0] {
@@ -5591,6 +5591,16 @@ impl ExcelRuntime {
                         ));
                     }
                 };
+                validate_optional_text_arg(args, 2, "Workbook.SaveAs Password")?;
+                validate_optional_text_arg(args, 3, "Workbook.SaveAs WriteResPassword")?;
+                validate_optional_bool_arg(args, 4, "Workbook.SaveAs ReadOnlyRecommended")?;
+                validate_optional_bool_arg(args, 5, "Workbook.SaveAs CreateBackup")?;
+                validate_optional_integer_arg(args, 6, "Workbook.SaveAs AccessMode")?;
+                validate_optional_integer_arg(args, 7, "Workbook.SaveAs ConflictResolution")?;
+                validate_optional_bool_arg(args, 8, "Workbook.SaveAs AddToMru")?;
+                validate_optional_integer_arg(args, 9, "Workbook.SaveAs TextCodepage")?;
+                validate_optional_integer_arg(args, 10, "Workbook.SaveAs TextVisualLayout")?;
+                validate_optional_bool_arg(args, 11, "Workbook.SaveAs Local")?;
                 let bytes = self.save_workbook(
                     workbook,
                     SaveWorkbookSpec {
@@ -6100,47 +6110,6 @@ impl ExcelRuntime {
                         ));
                     }
                 };
-                let validate_optional_integer = |index: usize, label: &str| -> OmResult<()> {
-                    match args.get(index) {
-                        None => Ok(()),
-                        Some(value) if om_value_is_omitted(value) => Ok(()),
-                        Some(OmValue::Number(value)) => {
-                            if !value.is_finite()
-                                || value.fract() != 0.0
-                                || *value < i32::MIN as f64
-                                || *value > i32::MAX as f64
-                            {
-                                return Err(OmError::invalid_argument(format!(
-                                    "{label} expects an integer value when provided"
-                                )));
-                            }
-                            Ok(())
-                        }
-                        Some(_) => Err(OmError::type_mismatch(format!(
-                            "{label} expects a numeric value when provided"
-                        ))),
-                    }
-                };
-                let validate_optional_bool = |index: usize, label: &str| -> OmResult<()> {
-                    match args.get(index) {
-                        None => Ok(()),
-                        Some(value) if om_value_is_omitted(value) => Ok(()),
-                        Some(OmValue::Bool(_)) => Ok(()),
-                        Some(_) => Err(OmError::type_mismatch(format!(
-                            "{label} expects a boolean value when provided"
-                        ))),
-                    }
-                };
-                let validate_optional_text = |index: usize, label: &str| -> OmResult<()> {
-                    match args.get(index) {
-                        None => Ok(()),
-                        Some(value) if om_value_is_omitted(value) => Ok(()),
-                        Some(OmValue::Text(_)) => Ok(()),
-                        Some(_) => Err(OmError::type_mismatch(format!(
-                            "{label} expects a string value when provided"
-                        ))),
-                    }
-                };
                 match args.get(1) {
                     None => {}
                     Some(value) if om_value_is_omitted(value) => {}
@@ -6171,18 +6140,18 @@ impl ExcelRuntime {
                         ));
                     }
                 };
-                validate_optional_integer(3, "Workbooks.Open Format")?;
-                validate_optional_text(4, "Workbooks.Open Password")?;
-                validate_optional_text(5, "Workbooks.Open WriteResPassword")?;
-                validate_optional_bool(6, "Workbooks.Open IgnoreReadOnlyRecommended")?;
-                validate_optional_integer(7, "Workbooks.Open Origin")?;
-                validate_optional_text(8, "Workbooks.Open Delimiter")?;
-                validate_optional_bool(9, "Workbooks.Open Editable")?;
-                validate_optional_bool(10, "Workbooks.Open Notify")?;
-                validate_optional_integer(11, "Workbooks.Open Converter")?;
-                validate_optional_bool(12, "Workbooks.Open AddToMru")?;
-                validate_optional_bool(13, "Workbooks.Open Local")?;
-                validate_optional_integer(14, "Workbooks.Open CorruptLoad")?;
+                validate_optional_integer_arg(args, 3, "Workbooks.Open Format")?;
+                validate_optional_text_arg(args, 4, "Workbooks.Open Password")?;
+                validate_optional_text_arg(args, 5, "Workbooks.Open WriteResPassword")?;
+                validate_optional_bool_arg(args, 6, "Workbooks.Open IgnoreReadOnlyRecommended")?;
+                validate_optional_integer_arg(args, 7, "Workbooks.Open Origin")?;
+                validate_optional_text_arg(args, 8, "Workbooks.Open Delimiter")?;
+                validate_optional_bool_arg(args, 9, "Workbooks.Open Editable")?;
+                validate_optional_bool_arg(args, 10, "Workbooks.Open Notify")?;
+                validate_optional_integer_arg(args, 11, "Workbooks.Open Converter")?;
+                validate_optional_bool_arg(args, 12, "Workbooks.Open AddToMru")?;
+                validate_optional_bool_arg(args, 13, "Workbooks.Open Local")?;
+                validate_optional_integer_arg(args, 14, "Workbooks.Open CorruptLoad")?;
                 let bytes = fs::read(path).map_err(|error| {
                     OmError::new(
                         OmErrorCode::Io,
@@ -8630,6 +8599,50 @@ fn xml_local_name(name: &[u8]) -> &[u8] {
 
 fn om_value_is_omitted(value: &OmValue) -> bool {
     matches!(value, OmValue::Missing | OmValue::Empty | OmValue::Null)
+}
+
+fn validate_optional_integer_arg(args: &[OmValue], index: usize, label: &str) -> OmResult<()> {
+    match args.get(index) {
+        None => Ok(()),
+        Some(value) if om_value_is_omitted(value) => Ok(()),
+        Some(OmValue::Number(value)) => {
+            if !value.is_finite()
+                || value.fract() != 0.0
+                || *value < i32::MIN as f64
+                || *value > i32::MAX as f64
+            {
+                return Err(OmError::invalid_argument(format!(
+                    "{label} expects an integer value when provided"
+                )));
+            }
+            Ok(())
+        }
+        Some(_) => Err(OmError::type_mismatch(format!(
+            "{label} expects a numeric value when provided"
+        ))),
+    }
+}
+
+fn validate_optional_bool_arg(args: &[OmValue], index: usize, label: &str) -> OmResult<()> {
+    match args.get(index) {
+        None => Ok(()),
+        Some(value) if om_value_is_omitted(value) => Ok(()),
+        Some(OmValue::Bool(_)) => Ok(()),
+        Some(_) => Err(OmError::type_mismatch(format!(
+            "{label} expects a boolean value when provided"
+        ))),
+    }
+}
+
+fn validate_optional_text_arg(args: &[OmValue], index: usize, label: &str) -> OmResult<()> {
+    match args.get(index) {
+        None => Ok(()),
+        Some(value) if om_value_is_omitted(value) => Ok(()),
+        Some(OmValue::Text(_)) => Ok(()),
+        Some(_) => Err(OmError::type_mismatch(format!(
+            "{label} expects a string value when provided"
+        ))),
+    }
 }
 
 fn sheet_visibility_to_excel_value(visibility: SheetVisibility) -> i32 {
@@ -61932,6 +61945,7 @@ mod tests {
         let source_path = base_dir.join("source.xlsx");
         let target_path = base_dir.join("target.bin");
         let macro_target_path = base_dir.join("target.xlsm");
+        let options_target_path = base_dir.join("target-options.xlsx");
         let invalid_target_path = base_dir.join("invalid.xlsx");
         fs::write(&source_path, synthetic_workbook_bytes()).expect("write source workbook");
 
@@ -62042,6 +62056,44 @@ mod tests {
             "SavedAfterXlsm"
         );
 
+        runtime
+            .dispatch_invoke(
+                workbook,
+                "SaveAs",
+                &[
+                    OmValue::Text(options_target_path.to_string_lossy().into_owned()),
+                    OmValue::Number(f64::from(super::XL_OPEN_XML_WORKBOOK)),
+                    OmValue::Text(String::new()),
+                    OmValue::Text(String::new()),
+                    OmValue::Bool(false),
+                    OmValue::Bool(false),
+                    OmValue::Number(1.0),
+                    OmValue::Number(1.0),
+                    OmValue::Bool(false),
+                    OmValue::Number(65001.0),
+                    OmValue::Number(1.0),
+                    OmValue::Bool(true),
+                ],
+            )
+            .expect("Workbook.SaveAs with optional arguments");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbook, "FileFormat", &[])
+                    .expect("Workbook.FileFormat after optional SaveAs")
+            ),
+            f64::from(super::XL_OPEN_XML_WORKBOOK)
+        );
+        let reopened_options = ExcelRuntime::new()
+            .codec
+            .load(
+                &fs::read(&options_target_path).expect("read optional SaveAs target"),
+                office_common::LoadOptions::default(),
+            )
+            .expect("reload optional SaveAs target");
+        assert_eq!(reopened_options.detected_format, FileFormat::Xlsx);
+        assert_eq!(reopened_options.state.worksheets[0].name, "SavedAfterXlsm");
+
         assert_eq!(
             runtime
                 .dispatch_invoke(
@@ -62091,6 +62143,68 @@ mod tests {
                     "SaveAs",
                     &[
                         OmValue::Text(invalid_target_path.to_string_lossy().into_owned()),
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                    ],
+                )
+                .expect_err("Workbook.SaveAs should reject non-string Password")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbook,
+                    "SaveAs",
+                    &[
+                        OmValue::Text(invalid_target_path.to_string_lossy().into_owned()),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Text("bad".to_string()),
+                    ],
+                )
+                .expect_err("Workbook.SaveAs should reject non-bool CreateBackup")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbook,
+                    "SaveAs",
+                    &[
+                        OmValue::Text(invalid_target_path.to_string_lossy().into_owned()),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(1.5),
+                    ],
+                )
+                .expect_err("Workbook.SaveAs should reject fractional AccessMode")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbook,
+                    "SaveAs",
+                    &[
+                        OmValue::Text(invalid_target_path.to_string_lossy().into_owned()),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
                         OmValue::Missing,
                         OmValue::Missing,
                     ],
