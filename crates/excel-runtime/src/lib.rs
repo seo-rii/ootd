@@ -1,13 +1,15 @@
-use excel_model::{WorkbookState, WorksheetData};
+use excel_model::{
+    ChartModel, ChartObjectModel, ChartType, DrawingObjectModel, WorkbookState, WorksheetData,
+};
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
 use office_common::{
-    CellError, CellValue, DefinedNameId, ExcelProfile, FileFormat, FormulaSource,
-    GetRangeValuesSpec, LoadOptions, NameScope, NameValidationMode, ObjectHandle, OmArray, OmError,
-    OmErrorCode, OmResult, OmValue, OpaquePart, OpenWorkbookSpec, RangeArea, RangeHandle, RangeRef,
-    RangeSet, Rect, SaveOptions, SaveWorkbookSpec, SetRangeValuesSpec, SheetId, SheetKind,
-    SheetScope, SheetVisibility, WorkbookHandle, WorkbookId, WorkbookModel, WorksheetHandle,
-    WorksheetModel,
+    CellError, CellValue, ChartId, ChartObjectId, DefinedNameId, DrawingAnchor, ExcelProfile,
+    FileFormat, FormulaSource, GetRangeValuesSpec, LoadOptions, NameScope, NameValidationMode,
+    ObjectHandle, OmArray, OmError, OmErrorCode, OmResult, OmValue, OpaquePart, OpenWorkbookSpec,
+    RangeArea, RangeHandle, RangeRef, RangeSet, Rect, SaveOptions, SaveWorkbookSpec,
+    SetRangeValuesSpec, SheetId, SheetKind, SheetScope, SheetVisibility, WorkbookHandle,
+    WorkbookId, WorkbookModel, WorksheetHandle, WorksheetModel,
 };
 use office_idl::{AccessMode, SupportState};
 use office_opc::{CompressionMethod, OpcPackage, OpcPart};
@@ -36,6 +38,10 @@ const XL_SHEET_TYPE_WORKSHEET: i32 = -4167;
 const XL_SHEET_TYPE_CHART: i32 = -4109;
 const XL_SHEET_TYPE_EXCEL4_MACRO_SHEET: i32 = 3;
 const XL_SHEET_TYPE_EXCEL4_INTL_MACRO_SHEET: i32 = 4;
+const XL_LINE: i32 = 4;
+const XL_PIE: i32 = 5;
+const XL_BAR_CLUSTERED: i32 = 57;
+const XL_XY_SCATTER: i32 = -4169;
 const XL_WBA_TEMPLATE_WORKSHEET: i32 = -4167;
 const XL_WBA_TEMPLATE_CHART: i32 = -4109;
 const XL_WBA_TEMPLATE_EXCEL4_MACRO_SHEET: i32 = 3;
@@ -328,6 +334,22 @@ enum RuntimeObjectKind {
     Name {
         workbook: WorkbookHandle,
         name_id: DefinedNameId,
+    },
+    ChartObjects {
+        workbook: WorkbookHandle,
+        sheet_id: SheetId,
+    },
+    ChartObject {
+        workbook: WorkbookHandle,
+        chart_object_id: ChartObjectId,
+    },
+    Chart {
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+    },
+    SeriesCollection {
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
     },
 }
 
@@ -826,6 +848,19 @@ impl ExcelRuntime {
             RuntimeObjectKind::Name { workbook, name_id } => {
                 self.dispatch_get_name(workbook, name_id, member, args)
             }
+            RuntimeObjectKind::ChartObjects { workbook, sheet_id } => {
+                self.dispatch_get_chart_objects(workbook, sheet_id, member, args)
+            }
+            RuntimeObjectKind::ChartObject {
+                workbook,
+                chart_object_id,
+            } => self.dispatch_get_chart_object(workbook, chart_object_id, member, args),
+            RuntimeObjectKind::Chart { workbook, chart_id } => {
+                self.dispatch_get_chart(workbook, chart_id, member, args)
+            }
+            RuntimeObjectKind::SeriesCollection { workbook, chart_id } => {
+                self.dispatch_get_series_collection(workbook, chart_id, member, args)
+            }
         }
     }
 
@@ -1259,6 +1294,12 @@ impl ExcelRuntime {
                     "member {member} is not writable for this object handle"
                 )))
             }
+            RuntimeObjectKind::ChartObjects { .. }
+            | RuntimeObjectKind::ChartObject { .. }
+            | RuntimeObjectKind::Chart { .. }
+            | RuntimeObjectKind::SeriesCollection { .. } => Err(OmError::unsupported(format!(
+                "member {member} is not writable for this object handle"
+            ))),
             RuntimeObjectKind::WorkbooksCollection
             | RuntimeObjectKind::WorksheetsCollection { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
@@ -4238,6 +4279,14 @@ impl ExcelRuntime {
             RuntimeObjectKind::Name { workbook, name_id } => {
                 self.dispatch_invoke_name(workbook, name_id, member, args)
             }
+            RuntimeObjectKind::ChartObjects { workbook, sheet_id } => {
+                self.dispatch_invoke_chart_objects(workbook, sheet_id, member, args)
+            }
+            RuntimeObjectKind::ChartObject { .. }
+            | RuntimeObjectKind::Chart { .. }
+            | RuntimeObjectKind::SeriesCollection { .. } => Err(OmError::unsupported(format!(
+                "member {member} is not implemented as a method for this object handle"
+            ))),
         }
     }
 
@@ -4283,11 +4332,29 @@ impl ExcelRuntime {
             && matches!(
                 (surface, member),
                 ("Application" | "Workbook" | "Worksheet", "Names")
+                    | ("Worksheet", "ChartObjects")
                     | ("Names", "Count" | "Item" | "Add" | "Application" | "Parent")
                     | (
                         "Name",
                         "Name" | "RefersTo" | "RefersToRange" | "Application" | "Parent" | "Delete"
                     )
+                    | ("ChartObjects", "Count" | "Item" | "Application" | "Parent")
+                    | (
+                        "ChartObject",
+                        "Name"
+                            | "Chart"
+                            | "Left"
+                            | "Top"
+                            | "Width"
+                            | "Height"
+                            | "Application"
+                            | "Parent"
+                    )
+                    | (
+                        "Chart",
+                        "ChartType" | "SeriesCollection" | "Application" | "Parent"
+                    )
+                    | ("SeriesCollection", "Count" | "Application" | "Parent")
             )
         {
             return Ok(());
@@ -4914,6 +4981,19 @@ impl ExcelRuntime {
             "Names" => {
                 let handle =
                     self.register_names_handle(workbook, RuntimeNamesScope::Worksheet(sheet_id));
+                if args.is_empty() {
+                    Ok(OmValue::Object(handle))
+                } else {
+                    self.dispatch_invoke(handle, "Item", args)
+                }
+            }
+            "ChartObjects" => {
+                if self.worksheet_model(workbook, sheet_id)?.kind != SheetKind::Worksheet {
+                    return Err(OmError::unsupported(
+                        "Worksheet.ChartObjects is only available on worksheets",
+                    ));
+                }
+                let handle = self.register_chart_objects_handle(workbook, sheet_id);
                 if args.is_empty() {
                     Ok(OmValue::Object(handle))
                 } else {
@@ -5895,6 +5975,239 @@ impl ExcelRuntime {
             }
             _ => Err(OmError::unsupported(format!(
                 "Name.{member} is not implemented as a method"
+            ))),
+        }
+    }
+
+    fn dispatch_get_chart_objects(
+        &mut self,
+        workbook: WorkbookHandle,
+        sheet_id: SheetId,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        match member {
+            "Count" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ChartObjects.Count does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Number(
+                    self.chart_object_entries_for_sheet(workbook, sheet_id)?
+                        .len() as f64,
+                ))
+            }
+            "Item" => self.dispatch_invoke_chart_objects(workbook, sheet_id, member, args),
+            "Application" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ChartObjects.Application does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Object(self.root_application()))
+            }
+            "Parent" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ChartObjects.Parent does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Object(
+                    self.register_worksheet_handle(workbook, sheet_id).0,
+                ))
+            }
+            _ => Err(OmError::unsupported(format!(
+                "ChartObjects.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_invoke_chart_objects(
+        &mut self,
+        workbook: WorkbookHandle,
+        sheet_id: SheetId,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        match member {
+            "Item" => {
+                let [index] = args else {
+                    return Err(OmError::invalid_argument(
+                        "ChartObjects.Item expects a single chart object index or name",
+                    ));
+                };
+                let chart_object_id = match index {
+                    OmValue::Number(_) => {
+                        let index = coerce_u32_arg(index, "ChartObjects.Item index")? as usize;
+                        self.chart_object_entries_for_sheet(workbook, sheet_id)?
+                            .get(index - 1)
+                            .map(|(chart_object_id, _)| *chart_object_id)
+                            .ok_or_else(|| {
+                                OmError::invalid_argument(
+                                    "ChartObjects.Item index is out of bounds",
+                                )
+                            })?
+                    }
+                    OmValue::Text(name) => self
+                        .chart_object_entries_for_sheet(workbook, sheet_id)?
+                        .into_iter()
+                        .find(|(_, chart_object_name)| chart_object_name.eq_ignore_ascii_case(name))
+                        .map(|(chart_object_id, _)| chart_object_id)
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::NotFound,
+                                format!("chart object '{name}' was not found"),
+                            )
+                        })?,
+                    _ => {
+                        return Err(OmError::type_mismatch(
+                            "ChartObjects.Item expects a numeric index or chart object name",
+                        ));
+                    }
+                };
+                Ok(OmValue::Object(
+                    self.register_chart_object_handle(workbook, chart_object_id),
+                ))
+            }
+            _ => Err(OmError::unsupported(format!(
+                "ChartObjects.{member} is not implemented as a method"
+            ))),
+        }
+    }
+
+    fn dispatch_get_chart_object(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_object_id: ChartObjectId,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        if !args.is_empty() {
+            return Err(OmError::invalid_argument(format!(
+                "ChartObject.{member} does not accept arguments"
+            )));
+        }
+
+        match member {
+            "Name" => Ok(OmValue::Text(
+                self.chart_object_model(workbook, chart_object_id)?
+                    .name
+                    .clone(),
+            )),
+            "Chart" => {
+                let chart_id = self.chart_object_model(workbook, chart_object_id)?.chart_id;
+                Ok(OmValue::Object(
+                    self.register_chart_handle(workbook, chart_id),
+                ))
+            }
+            "Left" | "Top" | "Width" | "Height" => {
+                Ok(OmValue::Number(Self::chart_object_geometry_value(
+                    self.chart_object_model(workbook, chart_object_id)?,
+                    member,
+                )?))
+            }
+            "Application" => Ok(OmValue::Object(self.root_application())),
+            "Parent" => {
+                let sheet_id = self
+                    .chart_object_model(workbook, chart_object_id)?
+                    .host_sheet_id;
+                Ok(OmValue::Object(
+                    self.register_worksheet_handle(workbook, sheet_id).0,
+                ))
+            }
+            _ => Err(OmError::unsupported(format!(
+                "ChartObject.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_get_chart(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        match member {
+            "ChartType" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Chart.ChartType does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Number(f64::from(chart_type_to_excel_value(
+                    &self.chart_model(workbook, chart_id)?.chart_type,
+                )?)))
+            }
+            "SeriesCollection" => {
+                let handle = self.register_series_collection_handle(workbook, chart_id);
+                if args.is_empty() {
+                    Ok(OmValue::Object(handle))
+                } else {
+                    self.dispatch_invoke(handle, "Item", args)
+                }
+            }
+            "Application" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Chart.Application does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Object(self.root_application()))
+            }
+            "Parent" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Chart.Parent does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Object(workbook.0))
+            }
+            _ => Err(OmError::unsupported(format!(
+                "Chart.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_get_series_collection(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        match member {
+            "Count" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "SeriesCollection.Count does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Number(
+                    self.chart_model(workbook, chart_id)?.series.len() as f64,
+                ))
+            }
+            "Application" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "SeriesCollection.Application does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Object(self.root_application()))
+            }
+            "Parent" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "SeriesCollection.Parent does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Object(
+                    self.register_chart_handle(workbook, chart_id),
+                ))
+            }
+            _ => Err(OmError::unsupported(format!(
+                "SeriesCollection.{member} is not implemented"
             ))),
         }
     }
@@ -8665,6 +8978,41 @@ impl ExcelRuntime {
         self.register_object(RuntimeObjectKind::Name { workbook, name_id })
     }
 
+    fn register_chart_objects_handle(
+        &mut self,
+        workbook: WorkbookHandle,
+        sheet_id: SheetId,
+    ) -> ObjectHandle {
+        self.register_object(RuntimeObjectKind::ChartObjects { workbook, sheet_id })
+    }
+
+    fn register_chart_object_handle(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_object_id: ChartObjectId,
+    ) -> ObjectHandle {
+        self.register_object(RuntimeObjectKind::ChartObject {
+            workbook,
+            chart_object_id,
+        })
+    }
+
+    fn register_chart_handle(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+    ) -> ObjectHandle {
+        self.register_object(RuntimeObjectKind::Chart { workbook, chart_id })
+    }
+
+    fn register_series_collection_handle(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+    ) -> ObjectHandle {
+        self.register_object(RuntimeObjectKind::SeriesCollection { workbook, chart_id })
+    }
+
     fn defined_name(
         &self,
         workbook: WorkbookHandle,
@@ -8676,6 +9024,101 @@ impl ExcelRuntime {
             .defined_names
             .get(name_id)
             .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown defined name"))
+    }
+
+    fn chart_object_entries_for_sheet(
+        &self,
+        workbook: WorkbookHandle,
+        sheet_id: SheetId,
+    ) -> OmResult<Vec<(ChartObjectId, String)>> {
+        let state = &self.runtime_workbook(workbook)?.loaded.state;
+        if !state
+            .worksheets
+            .iter()
+            .any(|worksheet| worksheet.id == sheet_id)
+        {
+            return Err(OmError::new(OmErrorCode::NotFound, "unknown worksheet"));
+        }
+        Ok(state
+            .drawings
+            .values()
+            .filter(|drawing| drawing.host_sheet_id == sheet_id)
+            .flat_map(|drawing| drawing.objects.iter())
+            .filter_map(|object| match object {
+                DrawingObjectModel::ChartFrame(chart_object) => {
+                    Some((chart_object.id, chart_object.name.clone()))
+                }
+                DrawingObjectModel::UnsupportedRaw { .. } => None,
+            })
+            .collect())
+    }
+
+    fn chart_object_model(
+        &self,
+        workbook: WorkbookHandle,
+        chart_object_id: ChartObjectId,
+    ) -> OmResult<&ChartObjectModel> {
+        self.runtime_workbook(workbook)?
+            .loaded
+            .state
+            .drawings
+            .values()
+            .flat_map(|drawing| drawing.objects.iter())
+            .find_map(|object| match object {
+                DrawingObjectModel::ChartFrame(chart_object)
+                    if chart_object.id == chart_object_id =>
+                {
+                    Some(chart_object)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart object not found"))
+    }
+
+    fn chart_model(&self, workbook: WorkbookHandle, chart_id: ChartId) -> OmResult<&ChartModel> {
+        self.runtime_workbook(workbook)?
+            .loaded
+            .state
+            .charts
+            .get(&chart_id)
+            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))
+    }
+
+    fn chart_object_geometry_value(chart_object: &ChartObjectModel, member: &str) -> OmResult<f64> {
+        let Some(anchor) = chart_object.anchor.as_ref() else {
+            return Err(OmError::unsupported(
+                "ChartObject geometry is unavailable for unsupported drawing anchors",
+            ));
+        };
+        let value = match (anchor, member) {
+            (DrawingAnchor::Absolute(anchor), "Left") => anchor.position.x,
+            (DrawingAnchor::Absolute(anchor), "Top") => anchor.position.y,
+            (DrawingAnchor::Absolute(anchor), "Width") => anchor.extents.cx,
+            (DrawingAnchor::Absolute(anchor), "Height") => anchor.extents.cy,
+            (DrawingAnchor::OneCell(anchor), "Left") => anchor.from.col_offset,
+            (DrawingAnchor::OneCell(anchor), "Top") => anchor.from.row_offset,
+            (DrawingAnchor::OneCell(anchor), "Width") => anchor.extents.cx,
+            (DrawingAnchor::OneCell(anchor), "Height") => anchor.extents.cy,
+            (DrawingAnchor::TwoCell(anchor), "Left") => anchor.from.col_offset,
+            (DrawingAnchor::TwoCell(anchor), "Top") => anchor.from.row_offset,
+            (DrawingAnchor::TwoCell(anchor), "Width") => {
+                office_common::Emu((anchor.to.col_offset.0 - anchor.from.col_offset.0).max(0))
+            }
+            (DrawingAnchor::TwoCell(anchor), "Height") => {
+                office_common::Emu((anchor.to.row_offset.0 - anchor.from.row_offset.0).max(0))
+            }
+            (DrawingAnchor::UnsupportedRaw, _) => {
+                return Err(OmError::unsupported(
+                    "ChartObject geometry is unavailable for unsupported drawing anchors",
+                ));
+            }
+            (_, _) => {
+                return Err(OmError::unsupported(format!(
+                    "ChartObject.{member} geometry is not supported"
+                )));
+            }
+        };
+        Ok(value.to_points().0)
     }
 
     fn names_in_scope(
@@ -10897,6 +11340,21 @@ fn blank_worksheet_xml_bytes() -> Vec<u8> {
         .to_vec()
 }
 
+fn chart_type_to_excel_value(chart_type: &ChartType) -> OmResult<i32> {
+    match chart_type {
+        ChartType::Bar => Ok(XL_BAR_CLUSTERED),
+        ChartType::Line => Ok(XL_LINE),
+        ChartType::Scatter => Ok(XL_XY_SCATTER),
+        ChartType::Pie => Ok(XL_PIE),
+        ChartType::Unknown => Err(OmError::unsupported(
+            "Chart.ChartType is unavailable for unknown chart types",
+        )),
+        ChartType::Unsupported(name) => Err(OmError::unsupported(format!(
+            "Chart.ChartType is unavailable for unsupported chart type {name}"
+        ))),
+    }
+}
+
 fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
     match object {
         RuntimeObjectKind::Application | RuntimeObjectKind::WorkbooksCollection => None,
@@ -10906,7 +11364,11 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         | RuntimeObjectKind::Range { workbook, .. }
         | RuntimeObjectKind::Areas { workbook, .. }
         | RuntimeObjectKind::Names { workbook, .. }
-        | RuntimeObjectKind::Name { workbook, .. } => Some(workbook),
+        | RuntimeObjectKind::Name { workbook, .. }
+        | RuntimeObjectKind::ChartObjects { workbook, .. }
+        | RuntimeObjectKind::ChartObject { workbook, .. }
+        | RuntimeObjectKind::Chart { workbook, .. }
+        | RuntimeObjectKind::SeriesCollection { workbook, .. } => Some(workbook),
     }
 }
 
@@ -61348,6 +61810,132 @@ mod tests {
     }
 
     #[test]
+    fn worksheet_chartobjects_dispatch_reads_loaded_embedded_chart_models() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count")
+            ),
+            1.0
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart_object_by_property = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    worksheet,
+                    "ChartObjects",
+                    &[OmValue::Text("Chart 1".to_string())],
+                )
+                .expect("Worksheet.ChartObjects(\"Chart 1\")"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(chart_object, "Name", &[])
+                    .expect("ChartObject.Name")
+            ),
+            "Chart 1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(chart_object_by_property, "Name", &[])
+                    .expect("ChartObject.Name by property")
+            ),
+            "Chart 1"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_object, "Left", &[])
+                    .expect("ChartObject.Left")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_object, "Top", &[])
+                    .expect("ChartObject.Top")
+            ),
+            3.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_object, "Width", &[])
+                    .expect("ChartObject.Width")
+            ),
+            100.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_object, "Height", &[])
+                    .expect("ChartObject.Height")
+            ),
+            50.0
+        );
+
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "ChartType", &[])
+                    .expect("Chart.ChartType")
+            ),
+            f64::from(super::XL_BAR_CLUSTERED)
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection.Count")
+            ),
+            1.0
+        );
+    }
+
+    #[test]
     fn worksheet_visible_dispatch_roundtrips_and_rejects_invalid_values() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -65416,6 +66004,85 @@ mod tests {
                 bytes: br#"<payload preserved="true"/>"#.to_vec(),
             },
         ]);
+
+        package.to_bytes().expect("package bytes")
+    }
+
+    fn synthetic_workbook_with_embedded_chart_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(synthetic_workbook_bytes().as_slice())
+            .expect("base workbook package");
+        let sheet_xml = String::from_utf8(
+            package
+                .part("xl/worksheets/sheet1.xml")
+                .expect("sheet part")
+                .bytes
+                .clone(),
+        )
+        .expect("sheet xml utf8")
+        .replace(
+            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
+            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
+        )
+        .replace(
+            "</worksheet>",
+            r#"<drawing r:id="rIdChartDrawing"/></worksheet>"#,
+        );
+        package
+            .replace_part_bytes("xl/worksheets/sheet1.xml", sheet_xml.into_bytes())
+            .expect("replace sheet xml");
+        package
+            .add_part(OpcPart {
+                name: "xl/worksheets/_rels/sheet1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdChartDrawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            })
+            .expect("add worksheet rels");
+        package
+            .add_part(OpcPart {
+                name: "xl/drawings/drawing1.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <xdr:absoluteAnchor>
+    <xdr:pos x="25400" y="38100"/>
+    <xdr:ext cx="1270000" cy="635000"/>
+    <xdr:graphicFrame><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart1"/></a:graphicData></a:graphic></xdr:graphicFrame>
+    <xdr:clientData/>
+  </xdr:absoluteAnchor>
+</xdr:wsDr>"#
+                    .to_vec(),
+            })
+            .expect("add drawing");
+        package
+            .add_part(OpcPart {
+                name: "xl/drawings/_rels/drawing1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdChart1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            })
+            .expect("add drawing rels");
+        package
+            .add_part(OpcPart {
+                name: "xl/charts/chart1.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart><c:plotArea><c:barChart><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart>
+</c:chartSpace>"#
+                    .to_vec(),
+            })
+            .expect("add chart");
 
         package.to_bytes().expect("package bytes")
     }
