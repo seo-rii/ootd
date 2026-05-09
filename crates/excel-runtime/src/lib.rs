@@ -1,5 +1,6 @@
 use excel_model::{
-    ChartModel, ChartObjectModel, ChartType, DrawingObjectModel, WorkbookState, WorksheetData,
+    ChartModel, ChartObjectModel, ChartType, DrawingObjectModel, SeriesModel, WorkbookState,
+    WorksheetData,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
@@ -350,6 +351,11 @@ enum RuntimeObjectKind {
     SeriesCollection {
         workbook: WorkbookHandle,
         chart_id: ChartId,
+    },
+    Series {
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
     },
 }
 
@@ -861,6 +867,11 @@ impl ExcelRuntime {
             RuntimeObjectKind::SeriesCollection { workbook, chart_id } => {
                 self.dispatch_get_series_collection(workbook, chart_id, member, args)
             }
+            RuntimeObjectKind::Series {
+                workbook,
+                chart_id,
+                series_index,
+            } => self.dispatch_get_series(workbook, chart_id, series_index, member, args),
         }
     }
 
@@ -1297,7 +1308,8 @@ impl ExcelRuntime {
             RuntimeObjectKind::ChartObjects { .. }
             | RuntimeObjectKind::ChartObject { .. }
             | RuntimeObjectKind::Chart { .. }
-            | RuntimeObjectKind::SeriesCollection { .. } => Err(OmError::unsupported(format!(
+            | RuntimeObjectKind::SeriesCollection { .. }
+            | RuntimeObjectKind::Series { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
             ))),
             RuntimeObjectKind::WorkbooksCollection
@@ -4282,9 +4294,12 @@ impl ExcelRuntime {
             RuntimeObjectKind::ChartObjects { workbook, sheet_id } => {
                 self.dispatch_invoke_chart_objects(workbook, sheet_id, member, args)
             }
+            RuntimeObjectKind::SeriesCollection { workbook, chart_id } => {
+                self.dispatch_invoke_series_collection(workbook, chart_id, member, args)
+            }
             RuntimeObjectKind::ChartObject { .. }
             | RuntimeObjectKind::Chart { .. }
-            | RuntimeObjectKind::SeriesCollection { .. } => Err(OmError::unsupported(format!(
+            | RuntimeObjectKind::Series { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not implemented as a method for this object handle"
             ))),
         }
@@ -4354,7 +4369,14 @@ impl ExcelRuntime {
                         "Chart",
                         "ChartType" | "SeriesCollection" | "Application" | "Parent"
                     )
-                    | ("SeriesCollection", "Count" | "Application" | "Parent")
+                    | (
+                        "SeriesCollection",
+                        "Count" | "Item" | "Application" | "Parent"
+                    )
+                    | (
+                        "Series",
+                        "Name" | "Values" | "XValues" | "Formula" | "Application" | "Parent"
+                    )
             )
         {
             return Ok(());
@@ -6188,6 +6210,7 @@ impl ExcelRuntime {
                     self.chart_model(workbook, chart_id)?.series.len() as f64,
                 ))
             }
+            "Item" => self.dispatch_invoke_series_collection(workbook, chart_id, member, args),
             "Application" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(
@@ -6208,6 +6231,74 @@ impl ExcelRuntime {
             }
             _ => Err(OmError::unsupported(format!(
                 "SeriesCollection.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_invoke_series_collection(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        match member {
+            "Item" => {
+                let [index] = args else {
+                    return Err(OmError::invalid_argument(
+                        "SeriesCollection.Item expects a single 1-based index",
+                    ));
+                };
+                let index = coerce_u32_arg(index, "SeriesCollection.Item index")? as usize;
+                if index == 0 || index > self.chart_model(workbook, chart_id)?.series.len() {
+                    return Err(OmError::invalid_argument(
+                        "SeriesCollection.Item index is out of bounds",
+                    ));
+                }
+                Ok(OmValue::Object(self.register_series_handle(
+                    workbook,
+                    chart_id,
+                    index - 1,
+                )))
+            }
+            _ => Err(OmError::unsupported(format!(
+                "SeriesCollection.{member} is not implemented as a method"
+            ))),
+        }
+    }
+
+    fn dispatch_get_series(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        if !args.is_empty() {
+            return Err(OmError::invalid_argument(format!(
+                "Series.{member} does not accept arguments"
+            )));
+        }
+
+        let series = self.series_model(workbook, chart_id, series_index)?;
+        match member {
+            "Name" => Ok(chart_source_expr_text(series.name.as_ref())
+                .map(OmValue::Text)
+                .unwrap_or(OmValue::Empty)),
+            "Values" => Ok(chart_source_expr_text(series.values.as_ref())
+                .map(OmValue::Text)
+                .unwrap_or(OmValue::Empty)),
+            "XValues" => Ok(chart_source_expr_text(series.x_values.as_ref())
+                .map(OmValue::Text)
+                .unwrap_or(OmValue::Empty)),
+            "Formula" => Ok(OmValue::Text(series_formula_text(series, series_index))),
+            "Application" => Ok(OmValue::Object(self.root_application())),
+            "Parent" => Ok(OmValue::Object(
+                self.register_series_collection_handle(workbook, chart_id),
+            )),
+            _ => Err(OmError::unsupported(format!(
+                "Series.{member} is not implemented"
             ))),
         }
     }
@@ -9013,6 +9104,19 @@ impl ExcelRuntime {
         self.register_object(RuntimeObjectKind::SeriesCollection { workbook, chart_id })
     }
 
+    fn register_series_handle(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
+    ) -> ObjectHandle {
+        self.register_object(RuntimeObjectKind::Series {
+            workbook,
+            chart_id,
+            series_index,
+        })
+    }
+
     fn defined_name(
         &self,
         workbook: WorkbookHandle,
@@ -9082,6 +9186,18 @@ impl ExcelRuntime {
             .charts
             .get(&chart_id)
             .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))
+    }
+
+    fn series_model(
+        &self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
+    ) -> OmResult<&SeriesModel> {
+        self.chart_model(workbook, chart_id)?
+            .series
+            .get(series_index)
+            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "series not found"))
     }
 
     fn chart_object_geometry_value(chart_object: &ChartObjectModel, member: &str) -> OmResult<f64> {
@@ -9864,6 +9980,22 @@ impl ExcelRuntime {
                     range: object_range,
                 } if *object_workbook == workbook
                     && Self::range_set_targets_sheet(object_range, sheet_id) =>
+                {
+                    Some(object_id)
+                }
+                RuntimeObjectKind::ChartObjects {
+                    workbook: object_workbook,
+                    sheet_id: object_sheet_id,
+                } if *object_workbook == workbook && *object_sheet_id == sheet_id => {
+                    Some(object_id)
+                }
+                RuntimeObjectKind::ChartObject {
+                    workbook: object_workbook,
+                    chart_object_id,
+                } if *object_workbook == workbook
+                    && self
+                        .chart_object_model(workbook, *chart_object_id)
+                        .is_ok_and(|chart_object| chart_object.host_sheet_id == sheet_id) =>
                 {
                     Some(object_id)
                 }
@@ -11355,6 +11487,30 @@ fn chart_type_to_excel_value(chart_type: &ChartType) -> OmResult<i32> {
     }
 }
 
+fn chart_source_expr_text(source: Option<&excel_model::ChartSourceExpr>) -> Option<String> {
+    source.map(|source| {
+        if source.raw.text.starts_with('=') {
+            source.raw.text.clone()
+        } else {
+            format!("={}", source.raw.text)
+        }
+    })
+}
+
+fn series_formula_text(series: &SeriesModel, series_index: usize) -> String {
+    let formula_arg_text = |source: Option<&excel_model::ChartSourceExpr>| {
+        source.map(|source| source.raw.text.trim_start_matches('=').to_string())
+    };
+    let name = formula_arg_text(series.name.as_ref()).unwrap_or_default();
+    let x_values = formula_arg_text(series.x_values.as_ref()).unwrap_or_default();
+    let values = formula_arg_text(series.values.as_ref()).unwrap_or_default();
+    let order = series
+        .order
+        .map(|order| order + 1)
+        .unwrap_or((series_index + 1) as u32);
+    format!("=SERIES({name},{x_values},{values},{order})")
+}
+
 fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
     match object {
         RuntimeObjectKind::Application | RuntimeObjectKind::WorkbooksCollection => None,
@@ -11368,7 +11524,8 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         | RuntimeObjectKind::ChartObjects { workbook, .. }
         | RuntimeObjectKind::ChartObject { workbook, .. }
         | RuntimeObjectKind::Chart { workbook, .. }
-        | RuntimeObjectKind::SeriesCollection { workbook, .. } => Some(workbook),
+        | RuntimeObjectKind::SeriesCollection { workbook, .. }
+        | RuntimeObjectKind::Series { workbook, .. } => Some(workbook),
     }
 }
 
@@ -61932,6 +62089,46 @@ mod tests {
                     .expect("SeriesCollection.Count")
             ),
             1.0
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Values", &[])
+                    .expect("Series.Values")
+            ),
+            "=Sheet1!$A$1:$C$1"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Name", &[])
+                .expect("Series.Name"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Formula", &[])
+                    .expect("Series.Formula")
+            ),
+            "=SERIES(,,Sheet1!$A$1:$C$1,1)"
+        );
+        let series_by_chart_property = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[OmValue::Number(1.0)])
+                .expect("Chart.SeriesCollection(1)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series_by_chart_property, "Values", &[])
+                    .expect("Series.Values from Chart.SeriesCollection(1)")
+            ),
+            "=Sheet1!$A$1:$C$1"
         );
     }
 
