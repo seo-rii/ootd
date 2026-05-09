@@ -589,6 +589,7 @@ pub struct DrawingPartSummary {
 pub struct DrawingAnchorSummary {
     pub kind: DrawingAnchorKind,
     pub edit_as: Option<String>,
+    pub name: Option<String>,
     pub from: Option<DrawingCellMarkerSummary>,
     pub to: Option<DrawingCellMarkerSummary>,
     pub position: Option<DrawingPointSummary>,
@@ -2597,7 +2598,10 @@ fn build_chart_model_overlay(
                         workbook_id,
                         host_sheet_id: *sheet_id,
                         chart_id: *chart_id,
-                        name: format!("Chart {}", next_drawing_object_id),
+                        name: anchor_summary
+                            .name
+                            .clone()
+                            .unwrap_or_else(|| format!("Chart {}", next_drawing_object_id)),
                         anchor: drawing_anchor_from_summary(anchor_summary),
                         placement: object_placement_from_anchor(anchor_summary),
                         z_order: u32::try_from(anchor_index).ok(),
@@ -14419,6 +14423,7 @@ fn parse_drawing_part_summary(
                         active_anchor = Some(DrawingAnchorSummary {
                             kind,
                             edit_as: decode_attr(&element, b"editAs", &reader)?,
+                            name: None,
                             from: None,
                             to: None,
                             position: None,
@@ -14473,6 +14478,13 @@ fn parse_drawing_part_summary(
                                 });
                             }
                         }
+                        b"cNvPr" => {
+                            if let Some(anchor) = active_anchor.as_mut()
+                                && anchor.name.is_none()
+                            {
+                                anchor.name = decode_attr(&element, b"name", &reader)?;
+                            }
+                        }
                         b"chart" => collect_chart_relationship_id(
                             &element,
                             &reader,
@@ -14491,6 +14503,7 @@ fn parse_drawing_part_summary(
                         anchors.push(DrawingAnchorSummary {
                             kind,
                             edit_as: decode_attr(&element, b"editAs", &reader)?,
+                            name: None,
                             from: None,
                             to: None,
                             position: None,
@@ -14523,6 +14536,13 @@ fn parse_drawing_part_summary(
                                 cx: decode_i64_attr(&element, b"cx", &reader)?,
                                 cy: decode_i64_attr(&element, b"cy", &reader)?,
                             });
+                        }
+                    }
+                    b"cNvPr" => {
+                        if let Some(anchor) = active_anchor.as_mut()
+                            && anchor.name.is_none()
+                        {
+                            anchor.name = decode_attr(&element, b"name", &reader)?;
                         }
                     }
                     b"chart" => collect_chart_relationship_id(
@@ -18469,7 +18489,7 @@ mod tests {
   <xdr:absoluteAnchor>
     <xdr:pos x="0" y="0"/>
     <xdr:ext cx="5486400" cy="3200400"/>
-    <xdr:graphicFrame><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart2"/></a:graphicData></a:graphic></xdr:graphicFrame>
+    <xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart Sheet Chart"/></xdr:nvGraphicFramePr><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart2"/></a:graphicData></a:graphic></xdr:graphicFrame>
     <xdr:clientData/>
   </xdr:absoluteAnchor>
 </xdr:wsDr>"#
@@ -18538,6 +18558,7 @@ mod tests {
             vec![DrawingAnchorSummary {
                 kind: DrawingAnchorKind::Absolute,
                 edit_as: None,
+                name: Some("Chart Sheet Chart".to_string()),
                 from: None,
                 to: None,
                 position: Some(DrawingPointSummary {
@@ -18602,6 +18623,7 @@ mod tests {
             panic!("expected chart frame");
         };
         assert_eq!(chart_object.chart_id, *chart_id);
+        assert_eq!(chart_object.name, "Chart Sheet Chart");
         assert_eq!(chart_object.placement, ObjectPlacement::FreeFloating);
         assert_eq!(
             chart_object.raw_binding.as_deref(),
@@ -18672,7 +18694,7 @@ mod tests {
   <xdr:twoCellAnchor>
     <xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
     <xdr:to><xdr:col>6</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>12</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
-    <xdr:graphicFrame><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart1"/></a:graphicData></a:graphic></xdr:graphicFrame>
+    <xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Embedded Revenue Chart"/></xdr:nvGraphicFramePr><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart1"/></a:graphicData></a:graphic></xdr:graphicFrame>
     <xdr:clientData/>
   </xdr:twoCellAnchor>
 </xdr:wsDr>"#
@@ -18791,6 +18813,7 @@ mod tests {
             vec![DrawingAnchorSummary {
                 kind: DrawingAnchorKind::TwoCell,
                 edit_as: None,
+                name: Some("Embedded Revenue Chart".to_string()),
                 from: Some(DrawingCellMarkerSummary {
                     col: Some(0),
                     col_offset: Some(0),
@@ -18930,7 +18953,7 @@ mod tests {
             panic!("expected chart frame");
         };
         assert_eq!(chart_object.chart_id, *chart_id);
-        assert_eq!(chart_object.name, "Chart 1");
+        assert_eq!(chart_object.name, "Embedded Revenue Chart");
         assert_eq!(chart_object.placement, ObjectPlacement::MoveAndSize);
         assert_eq!(
             chart_object.raw_binding.as_deref(),

@@ -62011,9 +62011,9 @@ mod tests {
                 .dispatch_get(
                     worksheet,
                     "ChartObjects",
-                    &[OmValue::Text("Chart 1".to_string())],
+                    &[OmValue::Text("Embedded Revenue Chart".to_string())],
                 )
-                .expect("Worksheet.ChartObjects(\"Chart 1\")"),
+                .expect("Worksheet.ChartObjects(\"Embedded Revenue Chart\")"),
         );
         assert_eq!(
             expect_text(
@@ -62021,7 +62021,7 @@ mod tests {
                     .dispatch_get(chart_object, "Name", &[])
                     .expect("ChartObject.Name")
             ),
-            "Chart 1"
+            "Embedded Revenue Chart"
         );
         assert_eq!(
             expect_text(
@@ -62029,7 +62029,7 @@ mod tests {
                     .dispatch_get(chart_object_by_property, "Name", &[])
                     .expect("ChartObject.Name by property")
             ),
-            "Chart 1"
+            "Embedded Revenue Chart"
         );
         assert_eq!(
             expect_number(
@@ -66257,7 +66257,7 @@ mod tests {
   <xdr:absoluteAnchor>
     <xdr:pos x="25400" y="38100"/>
     <xdr:ext cx="1270000" cy="635000"/>
-    <xdr:graphicFrame><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart1"/></a:graphicData></a:graphic></xdr:graphicFrame>
+    <xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Embedded Revenue Chart"/></xdr:nvGraphicFramePr><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart1"/></a:graphicData></a:graphic></xdr:graphicFrame>
     <xdr:clientData/>
   </xdr:absoluteAnchor>
 </xdr:wsDr>"#
