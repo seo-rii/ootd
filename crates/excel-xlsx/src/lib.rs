@@ -23,6 +23,10 @@ const DRAWING_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing";
 const CHART_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
+const CHART_STYLE_RELATIONSHIP_TYPE: &str =
+    "http://schemas.microsoft.com/office/2011/relationships/chartStyle";
+const CHART_COLOR_STYLE_RELATIONSHIP_TYPE: &str =
+    "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle";
 const STYLES_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles";
 const THEME_RELATIONSHIP_TYPE: &str =
@@ -548,9 +552,15 @@ pub struct WorksheetDrawingSupportParts {
     pub drawing_relationships: Vec<WorksheetRelationshipBinding>,
     pub drawing_part_uris: Vec<String>,
     pub drawing_part_source_bytes: BTreeMap<String, Vec<u8>>,
+    pub drawing_relationships_part_uris: Vec<String>,
+    pub drawing_relationships_part_source_bytes: BTreeMap<String, Vec<u8>>,
     pub drawing_summaries: BTreeMap<String, DrawingPartSummary>,
     pub chart_part_uris: Vec<String>,
     pub chart_part_source_bytes: BTreeMap<String, Vec<u8>>,
+    pub chart_relationships_part_uris: Vec<String>,
+    pub chart_relationships_part_source_bytes: BTreeMap<String, Vec<u8>>,
+    pub chart_support_part_uris: Vec<String>,
+    pub chart_support_part_source_bytes: BTreeMap<String, Vec<u8>>,
     pub chart_summaries: BTreeMap<String, ChartPartSummary>,
 }
 
@@ -559,6 +569,7 @@ impl WorksheetDrawingSupportParts {
         self.drawing_relationship_ids.is_empty()
             && self.drawing_part_uris.is_empty()
             && self.chart_part_uris.is_empty()
+            && self.chart_support_part_uris.is_empty()
     }
 }
 
@@ -574,6 +585,15 @@ pub struct ChartPartSummary {
     pub chart_type_names: Vec<String>,
     pub formula_refs: Vec<String>,
     pub has_extension_list: bool,
+    pub relationships_part_uri: Option<String>,
+    pub support_relationships: Vec<ChartSupportRelationshipBinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChartSupportRelationshipBinding {
+    pub relationship_id: String,
+    pub relationship_type: String,
+    pub target: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2289,9 +2309,15 @@ fn collect_worksheet_drawing_support_parts(
         .map(|relationship| relationship.target.clone())
         .collect::<Vec<_>>();
     let mut drawing_part_source_bytes = BTreeMap::new();
+    let mut drawing_relationships_part_uris = Vec::new();
+    let mut drawing_relationships_part_source_bytes = BTreeMap::new();
     let mut drawing_summaries = BTreeMap::new();
     let mut chart_part_uris = Vec::new();
     let mut chart_part_source_bytes = BTreeMap::new();
+    let mut chart_relationships_part_uris = Vec::new();
+    let mut chart_relationships_part_source_bytes = BTreeMap::new();
+    let mut chart_support_part_uris = Vec::new();
+    let mut chart_support_part_source_bytes = BTreeMap::new();
     let mut chart_summaries = BTreeMap::new();
 
     for drawing_part_uri in &drawing_part_uris {
@@ -2308,6 +2334,14 @@ fn collect_worksheet_drawing_support_parts(
                 package
                     .part(drawing_rels_part_uri)
                     .map(|part| {
+                        if drawing_relationships_part_uris
+                            .iter()
+                            .all(|existing| existing != drawing_rels_part_uri)
+                        {
+                            drawing_relationships_part_uris.push(drawing_rels_part_uri.to_string());
+                        }
+                        drawing_relationships_part_source_bytes
+                            .insert(drawing_rels_part_uri.to_string(), part.bytes.clone());
                         let drawing_base_segments = drawing_part_uri
                             .rsplit_once('/')
                             .map(|(parent, _)| {
@@ -2347,10 +2381,63 @@ fn collect_worksheet_drawing_support_parts(
             )
         })?;
         chart_part_source_bytes.insert(chart_part_uri.clone(), chart_part.bytes.clone());
-        chart_summaries.insert(
-            chart_part_uri.clone(),
-            parse_chart_part_summary(chart_part.bytes.as_slice())?,
-        );
+        let mut chart_summary = parse_chart_part_summary(chart_part.bytes.as_slice())?;
+        if let Some(chart_rels_part_uri) = relationships_part_uri_for_part(chart_part_uri)
+            && let Some(chart_rels_part) = package.part(&chart_rels_part_uri)
+        {
+            if chart_relationships_part_uris
+                .iter()
+                .all(|existing| existing != &chart_rels_part_uri)
+            {
+                chart_relationships_part_uris.push(chart_rels_part_uri.clone());
+            }
+            chart_relationships_part_source_bytes
+                .insert(chart_rels_part_uri.clone(), chart_rels_part.bytes.clone());
+            let chart_base_segments = chart_part_uri
+                .rsplit_once('/')
+                .map(|(parent, _)| {
+                    parent
+                        .split('/')
+                        .filter(|segment| !segment.is_empty())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let chart_relationship_entries =
+                parse_relationship_entries(chart_rels_part.bytes.as_slice(), &chart_base_segments)?;
+            chart_summary.relationships_part_uri = Some(chart_rels_part_uri);
+            for relationship in &chart_relationship_entries {
+                if relationship.relationship_type != CHART_STYLE_RELATIONSHIP_TYPE
+                    && relationship.relationship_type != CHART_COLOR_STYLE_RELATIONSHIP_TYPE
+                {
+                    continue;
+                }
+                let support_part = package.part(&relationship.target).ok_or_else(|| {
+                    OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!(
+                            "explicit chart support part is missing: {}",
+                            relationship.target
+                        ),
+                    )
+                })?;
+                chart_summary
+                    .support_relationships
+                    .push(ChartSupportRelationshipBinding {
+                        relationship_id: relationship.id.clone(),
+                        relationship_type: relationship.relationship_type.clone(),
+                        target: relationship.target.clone(),
+                    });
+                if chart_support_part_uris
+                    .iter()
+                    .all(|existing| existing != &relationship.target)
+                {
+                    chart_support_part_uris.push(relationship.target.clone());
+                }
+                chart_support_part_source_bytes
+                    .insert(relationship.target.clone(), support_part.bytes.clone());
+            }
+        }
+        chart_summaries.insert(chart_part_uri.clone(), chart_summary);
     }
 
     Ok(WorksheetDrawingSupportParts {
@@ -2360,9 +2447,15 @@ fn collect_worksheet_drawing_support_parts(
         drawing_relationships,
         drawing_part_uris,
         drawing_part_source_bytes,
+        drawing_relationships_part_uris,
+        drawing_relationships_part_source_bytes,
         drawing_summaries,
         chart_part_uris,
         chart_part_source_bytes,
+        chart_relationships_part_uris,
+        chart_relationships_part_source_bytes,
+        chart_support_part_uris,
+        chart_support_part_source_bytes,
         chart_summaries,
     })
 }
@@ -14039,6 +14132,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         chart_type_names,
         formula_refs,
         has_extension_list,
+        relationships_part_uri: None,
+        support_relationships: Vec::new(),
     })
 }
 
@@ -17039,11 +17134,12 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::{
-        BorderSummary, COMMENTS_RELATIONSHIP_TYPE, CellData, CommentPartSummary, DxfSummary,
-        FileFormat, FillSummary, FontSummary, HYPERLINK_RELATIONSHIP_TYPE, OpcPackage,
-        STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE, VML_DRAWING_RELATIONSHIP_TYPE,
-        WORKBOOK_RELS_PART_NAME, WorksheetCommentSummary, WorksheetData, WorksheetHyperlinkBinding,
-        WorksheetHyperlinkSummary, WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec,
+        BorderSummary, COMMENTS_RELATIONSHIP_TYPE, CellData, ChartSupportRelationshipBinding,
+        CommentPartSummary, DxfSummary, FileFormat, FillSummary, FontSummary,
+        HYPERLINK_RELATIONSHIP_TYPE, OpcPackage, STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE,
+        VML_DRAWING_RELATIONSHIP_TYPE, WORKBOOK_RELS_PART_NAME, WorksheetCommentSummary,
+        WorksheetData, WorksheetHyperlinkBinding, WorksheetHyperlinkSummary,
+        WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec,
         collect_support_part_dimension_coords, compute_dimension_ref,
         compute_dimension_ref_with_preserved, parse_shared_strings, parse_workbook,
         parse_workbook_relationships, parse_worksheet_cells, rewrite_worksheet_xml,
@@ -17744,6 +17840,41 @@ mod tests {
                 bytes: chart_xml.clone(),
             })
             .expect("add chart");
+        package
+            .add_part(OpcPart {
+                name: "xl/charts/_rels/chart1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdStyle1" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="style1.xml"/>
+  <Relationship Id="rIdColors1" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="colors1.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            })
+            .expect("add chart rels");
+        let chart_style_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<cs:chartStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" id="101"/>"#
+            .to_vec();
+        let chart_colors_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<cs:colorStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" id="101"/>"#
+            .to_vec();
+        package
+            .add_part(OpcPart {
+                name: "xl/charts/style1.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: chart_style_xml.clone(),
+            })
+            .expect("add chart style");
+        package
+            .add_part(OpcPart {
+                name: "xl/charts/colors1.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: chart_colors_xml.clone(),
+            })
+            .expect("add chart colors");
         let bytes = package.to_bytes().expect("package bytes");
 
         let loaded = codec
@@ -17786,6 +17917,54 @@ mod tests {
             vec!["Sheet1!$A$1:$C$1".to_string()]
         );
         assert!(chart_summary.has_extension_list);
+        assert_eq!(
+            chart_summary.relationships_part_uri.as_deref(),
+            Some("xl/charts/_rels/chart1.xml.rels")
+        );
+        assert_eq!(
+            chart_summary.support_relationships,
+            vec![
+                ChartSupportRelationshipBinding {
+                    relationship_id: "rIdStyle1".to_string(),
+                    relationship_type:
+                        "http://schemas.microsoft.com/office/2011/relationships/chartStyle"
+                            .to_string(),
+                    target: "xl/charts/style1.xml".to_string(),
+                },
+                ChartSupportRelationshipBinding {
+                    relationship_id: "rIdColors1".to_string(),
+                    relationship_type:
+                        "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle"
+                            .to_string(),
+                    target: "xl/charts/colors1.xml".to_string(),
+                },
+            ]
+        );
+        assert_eq!(
+            drawing_support.chart_relationships_part_uris,
+            vec!["xl/charts/_rels/chart1.xml.rels".to_string()]
+        );
+        assert_eq!(
+            drawing_support.chart_support_part_uris,
+            vec![
+                "xl/charts/style1.xml".to_string(),
+                "xl/charts/colors1.xml".to_string()
+            ]
+        );
+        assert_eq!(
+            drawing_support
+                .chart_support_part_source_bytes
+                .get("xl/charts/style1.xml")
+                .expect("chart style bytes"),
+            &chart_style_xml
+        );
+        assert_eq!(
+            drawing_support
+                .chart_support_part_source_bytes
+                .get("xl/charts/colors1.xml")
+                .expect("chart colors bytes"),
+            &chart_colors_xml
+        );
 
         let saved = codec
             .save(&loaded, office_common::SaveOptions::default())
@@ -17800,6 +17979,21 @@ mod tests {
         );
         assert!(saved_package.contains("xl/drawings/drawing1.xml"));
         assert!(saved_package.contains("xl/drawings/_rels/drawing1.xml.rels"));
+        assert_eq!(
+            saved_package
+                .part("xl/charts/style1.xml")
+                .expect("saved chart style")
+                .bytes,
+            chart_style_xml
+        );
+        assert_eq!(
+            saved_package
+                .part("xl/charts/colors1.xml")
+                .expect("saved chart colors")
+                .bytes,
+            chart_colors_xml
+        );
+        assert!(saved_package.contains("xl/charts/_rels/chart1.xml.rels"));
     }
 
     #[test]
