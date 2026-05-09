@@ -19,6 +19,10 @@ const WORKSHEET_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet";
 const CHARTSHEET_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet";
+const DRAWING_RELATIONSHIP_TYPE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing";
+const CHART_RELATIONSHIP_TYPE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
 const STYLES_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles";
 const THEME_RELATIONSHIP_TYPE: &str =
@@ -42,6 +46,7 @@ pub struct LoadedXlsxWorkbook {
     pub detected_format: FileFormat,
     pub support_parts: WorkbookSupportParts,
     pub worksheet_support_parts: BTreeMap<SheetId, WorksheetSupportParts>,
+    pub worksheet_drawing_support_parts: BTreeMap<SheetId, WorksheetDrawingSupportParts>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -535,6 +540,42 @@ pub struct WorksheetSupportParts {
     pub comment_relationship_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WorksheetDrawingSupportParts {
+    pub worksheet_part_uri: Option<String>,
+    pub relationships_part_uri: Option<String>,
+    pub drawing_relationship_ids: Vec<String>,
+    pub drawing_relationships: Vec<WorksheetRelationshipBinding>,
+    pub drawing_part_uris: Vec<String>,
+    pub drawing_part_source_bytes: BTreeMap<String, Vec<u8>>,
+    pub drawing_summaries: BTreeMap<String, DrawingPartSummary>,
+    pub chart_part_uris: Vec<String>,
+    pub chart_part_source_bytes: BTreeMap<String, Vec<u8>>,
+    pub chart_summaries: BTreeMap<String, ChartPartSummary>,
+}
+
+impl WorksheetDrawingSupportParts {
+    pub fn is_empty(&self) -> bool {
+        self.drawing_relationship_ids.is_empty()
+            && self.drawing_part_uris.is_empty()
+            && self.chart_part_uris.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DrawingPartSummary {
+    pub chart_relationship_ids: Vec<String>,
+    pub chart_relationships: Vec<WorksheetRelationshipBinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ChartPartSummary {
+    pub root_name: Option<String>,
+    pub chart_type_names: Vec<String>,
+    pub formula_refs: Vec<String>,
+    pub has_extension_list: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RelationshipEntry {
     id: String,
@@ -602,6 +643,7 @@ impl XlsxCodec {
             .unwrap_or_default();
         let mut worksheet_data = BTreeMap::new();
         let mut worksheet_support_parts = BTreeMap::new();
+        let mut worksheet_drawing_support_parts = BTreeMap::new();
 
         for worksheet in &worksheets {
             if let Some(part_uri) = worksheet.part_uri.as_deref() {
@@ -634,6 +676,11 @@ impl XlsxCodec {
                     worksheet.id,
                     collect_worksheet_support_parts(part_uri, &package)?,
                 );
+                let drawing_support_parts =
+                    collect_worksheet_drawing_support_parts(part_uri, &package)?;
+                if !drawing_support_parts.is_empty() {
+                    worksheet_drawing_support_parts.insert(worksheet.id, drawing_support_parts);
+                }
             }
         }
 
@@ -668,6 +715,7 @@ impl XlsxCodec {
             detected_format,
             support_parts,
             worksheet_support_parts,
+            worksheet_drawing_support_parts,
         })
     }
 
@@ -2155,8 +2203,176 @@ fn collect_worksheet_support_parts(
     Ok(support_parts)
 }
 
+fn collect_worksheet_drawing_support_parts(
+    worksheet_part_uri: &str,
+    package: &OpcPackage,
+) -> OmResult<WorksheetDrawingSupportParts> {
+    let worksheet_part = package.part(worksheet_part_uri).ok_or_else(|| {
+        OmError::new(
+            OmErrorCode::NotFound,
+            format!("worksheet part is missing: {worksheet_part_uri}"),
+        )
+    })?;
+    let drawing_relationship_ids =
+        parse_worksheet_relationship_ids(worksheet_part.bytes.as_slice(), b"drawing")?;
+    let Some(relationships_part_uri) = worksheet_relationships_part_uri(worksheet_part_uri) else {
+        if drawing_relationship_ids.is_empty() {
+            return Ok(WorksheetDrawingSupportParts {
+                worksheet_part_uri: Some(worksheet_part_uri.to_string()),
+                drawing_relationship_ids,
+                ..WorksheetDrawingSupportParts::default()
+            });
+        }
+        return Err(OmError::new(
+            OmErrorCode::InvalidState,
+            format!(
+                "worksheet drawing relationships part cannot be resolved: {worksheet_part_uri}"
+            ),
+        ));
+    };
+    if !package.contains(&relationships_part_uri) {
+        if drawing_relationship_ids.is_empty() {
+            return Ok(WorksheetDrawingSupportParts {
+                worksheet_part_uri: Some(worksheet_part_uri.to_string()),
+                drawing_relationship_ids,
+                ..WorksheetDrawingSupportParts::default()
+            });
+        }
+        return Err(OmError::new(
+            OmErrorCode::InvalidState,
+            format!(
+                "explicit worksheet drawing relationships part is missing: {relationships_part_uri}"
+            ),
+        ));
+    }
+
+    let base_segments = worksheet_part_uri
+        .rsplit_once('/')
+        .map(|(parent, _)| {
+            parent
+                .split('/')
+                .filter(|segment| !segment.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let relationships_part = package.part(&relationships_part_uri).ok_or_else(|| {
+        OmError::new(
+            OmErrorCode::NotFound,
+            format!("worksheet relationships part is missing: {relationships_part_uri}"),
+        )
+    })?;
+    let relationship_entries =
+        parse_relationship_entries(relationships_part.bytes.as_slice(), &base_segments)?;
+    let mut drawing_relationships = Vec::new();
+    for relationship_id in &drawing_relationship_ids {
+        let relationship = relationship_entries
+            .iter()
+            .find(|relationship| {
+                relationship.id == *relationship_id
+                    && relationship.relationship_type == DRAWING_RELATIONSHIP_TYPE
+            })
+            .ok_or_else(|| {
+                OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "explicit worksheet drawing relationship is missing: {relationship_id}"
+                    ),
+                )
+            })?;
+        drawing_relationships.push(WorksheetRelationshipBinding {
+            relationship_id: relationship.id.clone(),
+            target: relationship.target.clone(),
+        });
+    }
+    let drawing_part_uris = drawing_relationships
+        .iter()
+        .map(|relationship| relationship.target.clone())
+        .collect::<Vec<_>>();
+    let mut drawing_part_source_bytes = BTreeMap::new();
+    let mut drawing_summaries = BTreeMap::new();
+    let mut chart_part_uris = Vec::new();
+    let mut chart_part_source_bytes = BTreeMap::new();
+    let mut chart_summaries = BTreeMap::new();
+
+    for drawing_part_uri in &drawing_part_uris {
+        let drawing_part = package.part(drawing_part_uri).ok_or_else(|| {
+            OmError::new(
+                OmErrorCode::InvalidState,
+                format!("explicit worksheet drawing part is missing: {drawing_part_uri}"),
+            )
+        })?;
+        drawing_part_source_bytes.insert(drawing_part_uri.clone(), drawing_part.bytes.clone());
+        let drawing_rels_part_uri = relationships_part_uri_for_part(drawing_part_uri);
+        let drawing_relationship_entries =
+            if let Some(drawing_rels_part_uri) = drawing_rels_part_uri.as_deref() {
+                package
+                    .part(drawing_rels_part_uri)
+                    .map(|part| {
+                        let drawing_base_segments = drawing_part_uri
+                            .rsplit_once('/')
+                            .map(|(parent, _)| {
+                                parent
+                                    .split('/')
+                                    .filter(|segment| !segment.is_empty())
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
+                        parse_relationship_entries(part.bytes.as_slice(), &drawing_base_segments)
+                    })
+                    .transpose()?
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+        let drawing_summary = parse_drawing_part_summary(
+            drawing_part.bytes.as_slice(),
+            &drawing_relationship_entries,
+        )?;
+        for chart_relationship in &drawing_summary.chart_relationships {
+            if chart_part_uris
+                .iter()
+                .all(|existing| existing != &chart_relationship.target)
+            {
+                chart_part_uris.push(chart_relationship.target.clone());
+            }
+        }
+        drawing_summaries.insert(drawing_part_uri.clone(), drawing_summary);
+    }
+
+    for chart_part_uri in &chart_part_uris {
+        let chart_part = package.part(chart_part_uri).ok_or_else(|| {
+            OmError::new(
+                OmErrorCode::InvalidState,
+                format!("explicit worksheet chart part is missing: {chart_part_uri}"),
+            )
+        })?;
+        chart_part_source_bytes.insert(chart_part_uri.clone(), chart_part.bytes.clone());
+        chart_summaries.insert(
+            chart_part_uri.clone(),
+            parse_chart_part_summary(chart_part.bytes.as_slice())?,
+        );
+    }
+
+    Ok(WorksheetDrawingSupportParts {
+        worksheet_part_uri: Some(worksheet_part_uri.to_string()),
+        relationships_part_uri: Some(relationships_part_uri),
+        drawing_relationship_ids,
+        drawing_relationships,
+        drawing_part_uris,
+        drawing_part_source_bytes,
+        drawing_summaries,
+        chart_part_uris,
+        chart_part_source_bytes,
+        chart_summaries,
+    })
+}
+
 fn worksheet_relationships_part_uri(worksheet_part_uri: &str) -> Option<String> {
-    let (parent, file_name) = worksheet_part_uri.rsplit_once('/')?;
+    relationships_part_uri_for_part(worksheet_part_uri)
+}
+
+fn relationships_part_uri_for_part(part_uri: &str) -> Option<String> {
+    let (parent, file_name) = part_uri.rsplit_once('/')?;
     Some(format!("{parent}/_rels/{file_name}.rels"))
 }
 
@@ -13676,6 +13892,160 @@ fn parse_worksheet_relationship_ids(
     Ok(relationship_ids)
 }
 
+fn parse_drawing_part_summary(
+    drawing_xml: &[u8],
+    relationship_entries: &[RelationshipEntry],
+) -> OmResult<DrawingPartSummary> {
+    let mut reader = Reader::from_reader(Cursor::new(drawing_xml));
+    reader.config_mut().trim_text(true);
+    let mut buffer = Vec::new();
+    let mut chart_relationship_ids = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) | Ok(Event::Empty(element))
+                if xml_local_name(element.name().as_ref()) == b"chart" =>
+            {
+                for attr in element.attributes() {
+                    let attr = attr.map_err(xml_error)?;
+                    if attr.key.as_ref() != b"r:id" {
+                        continue;
+                    }
+                    let relationship_id = attr
+                        .decode_and_unescape_value(reader.decoder())
+                        .map_err(xml_error)?
+                        .into_owned();
+                    if chart_relationship_ids
+                        .iter()
+                        .all(|existing| existing != &relationship_id)
+                    {
+                        chart_relationship_ids.push(relationship_id);
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(error) => return Err(xml_error(error)),
+        }
+        buffer.clear();
+    }
+
+    let mut chart_relationships = Vec::new();
+    for relationship_id in &chart_relationship_ids {
+        let relationship = relationship_entries
+            .iter()
+            .find(|relationship| {
+                relationship.id == *relationship_id
+                    && relationship.relationship_type == CHART_RELATIONSHIP_TYPE
+            })
+            .ok_or_else(|| {
+                OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!("explicit drawing chart relationship is missing: {relationship_id}"),
+                )
+            })?;
+        chart_relationships.push(WorksheetRelationshipBinding {
+            relationship_id: relationship.id.clone(),
+            target: relationship.target.clone(),
+        });
+    }
+
+    Ok(DrawingPartSummary {
+        chart_relationship_ids,
+        chart_relationships,
+    })
+}
+
+fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
+    let mut reader = Reader::from_reader(Cursor::new(chart_xml));
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut root_name = None;
+    let mut chart_type_names = Vec::new();
+    let mut formula_refs = Vec::new();
+    let mut has_extension_list = false;
+    let mut formula_text = None::<String>;
+    let mut formula_depth = 0usize;
+
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) => {
+                let element_name = element.name();
+                let local_name = xml_local_name(element_name.as_ref());
+                if root_name.is_none() {
+                    root_name = Some(String::from_utf8_lossy(local_name).into_owned());
+                }
+                if local_name.ends_with(b"Chart") && local_name != b"chart" {
+                    let name = String::from_utf8_lossy(local_name).into_owned();
+                    if chart_type_names.iter().all(|existing| existing != &name) {
+                        chart_type_names.push(name);
+                    }
+                }
+                if local_name == b"extLst" {
+                    has_extension_list = true;
+                }
+                if local_name == b"f" {
+                    formula_text = Some(String::new());
+                    formula_depth = 1;
+                } else if formula_depth > 0 {
+                    formula_depth += 1;
+                }
+            }
+            Ok(Event::Empty(element)) => {
+                let element_name = element.name();
+                let local_name = xml_local_name(element_name.as_ref());
+                if root_name.is_none() {
+                    root_name = Some(String::from_utf8_lossy(local_name).into_owned());
+                }
+                if local_name.ends_with(b"Chart") && local_name != b"chart" {
+                    let name = String::from_utf8_lossy(local_name).into_owned();
+                    if chart_type_names.iter().all(|existing| existing != &name) {
+                        chart_type_names.push(name);
+                    }
+                }
+                if local_name == b"extLst" {
+                    has_extension_list = true;
+                }
+            }
+            Ok(Event::Text(text)) if formula_text.is_some() => {
+                if let Some(value) = &mut formula_text {
+                    value.push_str(&text.xml_content().map_err(xml_error)?);
+                }
+            }
+            Ok(Event::CData(text)) if formula_text.is_some() => {
+                if let Some(value) = &mut formula_text {
+                    value.push_str(&text.xml_content().map_err(xml_error)?);
+                }
+            }
+            Ok(Event::End(element)) if formula_depth > 0 => {
+                if xml_local_name(element.name().as_ref()) == b"f" && formula_depth == 1 {
+                    if let Some(value) = formula_text.take()
+                        && !value.is_empty()
+                    {
+                        formula_refs.push(value);
+                    }
+                }
+                formula_depth -= 1;
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(error) => return Err(xml_error(error)),
+        }
+        buffer.clear();
+    }
+
+    Ok(ChartPartSummary {
+        root_name,
+        chart_type_names,
+        formula_refs,
+        has_extension_list,
+    })
+}
+
+fn xml_local_name(name: &[u8]) -> &[u8] {
+    name.rsplit(|byte| *byte == b':').next().unwrap_or(name)
+}
+
 fn collect_support_part_dimension_coords(
     support_parts: Option<&WorksheetSupportParts>,
 ) -> BTreeSet<(u32, u32)> {
@@ -17289,6 +17659,147 @@ mod tests {
                 .source_xml
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn load_collects_embedded_chart_drawing_inventory_and_clean_save_preserves_parts() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        let sheet_xml = String::from_utf8(
+            package
+                .part("xl/worksheets/sheet1.xml")
+                .expect("sheet part")
+                .bytes
+                .clone(),
+        )
+        .expect("sheet xml utf8")
+        .replace(
+            "</worksheet>",
+            r#"<drawing r:id="rIdChartDrawing"/></worksheet>"#,
+        );
+        package
+            .replace_part_bytes("xl/worksheets/sheet1.xml", sheet_xml.into_bytes())
+            .expect("replace sheet xml");
+        package
+            .add_part(OpcPart {
+                name: "xl/worksheets/_rels/sheet1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdChartDrawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            })
+            .expect("add worksheet rels");
+        package
+            .add_part(OpcPart {
+                name: "xl/drawings/drawing1.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <xdr:twoCellAnchor>
+    <xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:to><xdr:col>6</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>12</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+    <xdr:graphicFrame><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart1"/></a:graphicData></a:graphic></xdr:graphicFrame>
+    <xdr:clientData/>
+  </xdr:twoCellAnchor>
+</xdr:wsDr>"#
+                    .to_vec(),
+            })
+            .expect("add drawing");
+        package
+            .add_part(OpcPart {
+                name: "xl/drawings/_rels/drawing1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdChart1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            })
+            .expect("add drawing rels");
+        let chart_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart>
+    <c:plotArea>
+      <c:barChart>
+        <c:ser>
+          <c:idx val="0"/><c:order val="0"/>
+          <c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f><c:numCache><c:ptCount val="3"/></c:numCache></c:numRef></c:val>
+        </c:ser>
+      </c:barChart>
+    </c:plotArea>
+  </c:chart>
+  <c:extLst><c:ext uri="urn:test"/></c:extLst>
+</c:chartSpace>"#
+            .to_vec();
+        package
+            .add_part(OpcPart {
+                name: "xl/charts/chart1.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: chart_xml.clone(),
+            })
+            .expect("add chart");
+        let bytes = package.to_bytes().expect("package bytes");
+
+        let loaded = codec
+            .load(bytes.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook with embedded chart");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let drawing_support = loaded
+            .worksheet_drawing_support_parts
+            .get(&sheet_id)
+            .expect("drawing support");
+
+        assert_eq!(
+            drawing_support.drawing_relationship_ids,
+            vec!["rIdChartDrawing".to_string()]
+        );
+        assert_eq!(
+            drawing_support.drawing_part_uris,
+            vec!["xl/drawings/drawing1.xml".to_string()]
+        );
+        assert_eq!(
+            drawing_support.chart_part_uris,
+            vec!["xl/charts/chart1.xml".to_string()]
+        );
+        assert_eq!(
+            drawing_support
+                .drawing_summaries
+                .get("xl/drawings/drawing1.xml")
+                .expect("drawing summary")
+                .chart_relationship_ids,
+            vec!["rIdChart1".to_string()]
+        );
+        let chart_summary = drawing_support
+            .chart_summaries
+            .get("xl/charts/chart1.xml")
+            .expect("chart summary");
+        assert_eq!(chart_summary.root_name.as_deref(), Some("chartSpace"));
+        assert_eq!(chart_summary.chart_type_names, vec!["barChart".to_string()]);
+        assert_eq!(
+            chart_summary.formula_refs,
+            vec!["Sheet1!$A$1:$C$1".to_string()]
+        );
+        assert!(chart_summary.has_extension_list);
+
+        let saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("clean save");
+        let saved_package = OpcPackage::from_bytes(saved.as_slice()).expect("saved package");
+        assert_eq!(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart")
+                .bytes,
+            chart_xml
+        );
+        assert!(saved_package.contains("xl/drawings/drawing1.xml"));
+        assert!(saved_package.contains("xl/drawings/_rels/drawing1.xml.rels"));
     }
 
     #[test]
