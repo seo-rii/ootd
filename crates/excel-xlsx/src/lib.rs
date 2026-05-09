@@ -575,8 +575,47 @@ impl SheetDrawingSupportParts {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DrawingPartSummary {
+    pub anchors: Vec<DrawingAnchorSummary>,
     pub chart_relationship_ids: Vec<String>,
     pub chart_relationships: Vec<WorksheetRelationshipBinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DrawingAnchorSummary {
+    pub kind: DrawingAnchorKind,
+    pub edit_as: Option<String>,
+    pub from: Option<DrawingCellMarkerSummary>,
+    pub to: Option<DrawingCellMarkerSummary>,
+    pub position: Option<DrawingPointSummary>,
+    pub extents: Option<DrawingSizeSummary>,
+    pub chart_relationship_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DrawingAnchorKind {
+    TwoCell,
+    OneCell,
+    Absolute,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DrawingCellMarkerSummary {
+    pub col: Option<i64>,
+    pub col_offset: Option<i64>,
+    pub row: Option<i64>,
+    pub row_offset: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DrawingPointSummary {
+    pub x: Option<i64>,
+    pub y: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DrawingSizeSummary {
+    pub cx: Option<i64>,
+    pub cy: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -13988,30 +14027,269 @@ fn parse_drawing_part_summary(
     drawing_xml: &[u8],
     relationship_entries: &[RelationshipEntry],
 ) -> OmResult<DrawingPartSummary> {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum MarkerSlot {
+        From,
+        To,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum MarkerField {
+        Col,
+        ColOffset,
+        Row,
+        RowOffset,
+    }
+
     let mut reader = Reader::from_reader(Cursor::new(drawing_xml));
     reader.config_mut().trim_text(true);
     let mut buffer = Vec::new();
+    let mut anchors = Vec::new();
     let mut chart_relationship_ids = Vec::new();
+    let mut active_anchor = None::<DrawingAnchorSummary>;
+    let mut active_anchor_depth = 0usize;
+    let mut active_marker = None::<MarkerSlot>;
+    let mut active_marker_field = None::<MarkerField>;
+
+    let anchor_kind_for = |local_name: &[u8]| match local_name {
+        b"twoCellAnchor" => Some(DrawingAnchorKind::TwoCell),
+        b"oneCellAnchor" => Some(DrawingAnchorKind::OneCell),
+        b"absoluteAnchor" => Some(DrawingAnchorKind::Absolute),
+        _ => None,
+    };
+
+    let decode_attr = |element: &BytesStart<'_>,
+                       attr_name: &[u8],
+                       reader: &Reader<Cursor<&[u8]>>|
+     -> OmResult<Option<String>> {
+        for attr in element.attributes() {
+            let attr = attr.map_err(xml_error)?;
+            if attr.key.as_ref() != attr_name {
+                continue;
+            }
+            return Ok(Some(
+                attr.decode_and_unescape_value(reader.decoder())
+                    .map_err(xml_error)?
+                    .into_owned(),
+            ));
+        }
+        Ok(None)
+    };
+
+    let decode_i64_attr = |element: &BytesStart<'_>,
+                           attr_name: &[u8],
+                           reader: &Reader<Cursor<&[u8]>>|
+     -> OmResult<Option<i64>> {
+        let Some(value) = decode_attr(element, attr_name, reader)? else {
+            return Ok(None);
+        };
+        value.trim().parse::<i64>().map(Some).map_err(|error| {
+            OmError::new(
+                OmErrorCode::Parse,
+                format!("drawing attribute value must be an integer: {value}: {error}"),
+            )
+        })
+    };
+
+    let apply_marker_value =
+        |anchor: &mut DrawingAnchorSummary, marker: MarkerSlot, field: MarkerField, value: i64| {
+            let marker_summary = match marker {
+                MarkerSlot::From => anchor
+                    .from
+                    .get_or_insert_with(DrawingCellMarkerSummary::default),
+                MarkerSlot::To => anchor
+                    .to
+                    .get_or_insert_with(DrawingCellMarkerSummary::default),
+            };
+            match field {
+                MarkerField::Col => marker_summary.col = Some(value),
+                MarkerField::ColOffset => marker_summary.col_offset = Some(value),
+                MarkerField::Row => marker_summary.row = Some(value),
+                MarkerField::RowOffset => marker_summary.row_offset = Some(value),
+            }
+        };
+
+    let collect_chart_relationship_id = |element: &BytesStart<'_>,
+                                         reader: &Reader<Cursor<&[u8]>>,
+                                         chart_relationship_ids: &mut Vec<String>,
+                                         active_anchor: &mut Option<DrawingAnchorSummary>|
+     -> OmResult<()> {
+        let Some(relationship_id) = decode_attr(element, b"r:id", reader)? else {
+            return Ok(());
+        };
+        if chart_relationship_ids
+            .iter()
+            .all(|existing| existing != &relationship_id)
+        {
+            chart_relationship_ids.push(relationship_id.clone());
+        }
+        if let Some(anchor) = active_anchor.as_mut()
+            && anchor
+                .chart_relationship_ids
+                .iter()
+                .all(|existing| existing != &relationship_id)
+        {
+            anchor.chart_relationship_ids.push(relationship_id);
+        }
+        Ok(())
+    };
 
     loop {
         match reader.read_event_into(&mut buffer) {
-            Ok(Event::Start(element)) | Ok(Event::Empty(element))
-                if xml_local_name(element.name().as_ref()) == b"chart" =>
-            {
-                for attr in element.attributes() {
-                    let attr = attr.map_err(xml_error)?;
-                    if attr.key.as_ref() != b"r:id" {
-                        continue;
+            Ok(Event::Start(element)) => {
+                let element_name = element.name();
+                let local_name = xml_local_name(element_name.as_ref());
+                if active_anchor.is_none() {
+                    if let Some(kind) = anchor_kind_for(local_name) {
+                        active_anchor = Some(DrawingAnchorSummary {
+                            kind,
+                            edit_as: decode_attr(&element, b"editAs", &reader)?,
+                            from: None,
+                            to: None,
+                            position: None,
+                            extents: None,
+                            chart_relationship_ids: Vec::new(),
+                        });
+                        active_anchor_depth = 1;
+                    } else if local_name == b"chart" {
+                        collect_chart_relationship_id(
+                            &element,
+                            &reader,
+                            &mut chart_relationship_ids,
+                            &mut active_anchor,
+                        )?;
                     }
-                    let relationship_id = attr
-                        .decode_and_unescape_value(reader.decoder())
-                        .map_err(xml_error)?
-                        .into_owned();
-                    if chart_relationship_ids
-                        .iter()
-                        .all(|existing| existing != &relationship_id)
-                    {
-                        chart_relationship_ids.push(relationship_id);
+                } else {
+                    active_anchor_depth += 1;
+                    match local_name {
+                        b"from" => {
+                            active_marker = Some(MarkerSlot::From);
+                            if let Some(anchor) = active_anchor.as_mut() {
+                                anchor
+                                    .from
+                                    .get_or_insert_with(DrawingCellMarkerSummary::default);
+                            }
+                        }
+                        b"to" => {
+                            active_marker = Some(MarkerSlot::To);
+                            if let Some(anchor) = active_anchor.as_mut() {
+                                anchor
+                                    .to
+                                    .get_or_insert_with(DrawingCellMarkerSummary::default);
+                            }
+                        }
+                        b"col" => active_marker_field = Some(MarkerField::Col),
+                        b"colOff" => active_marker_field = Some(MarkerField::ColOffset),
+                        b"row" => active_marker_field = Some(MarkerField::Row),
+                        b"rowOff" => active_marker_field = Some(MarkerField::RowOffset),
+                        b"pos" => {
+                            if let Some(anchor) = active_anchor.as_mut() {
+                                anchor.position = Some(DrawingPointSummary {
+                                    x: decode_i64_attr(&element, b"x", &reader)?,
+                                    y: decode_i64_attr(&element, b"y", &reader)?,
+                                });
+                            }
+                        }
+                        b"ext" => {
+                            if let Some(anchor) = active_anchor.as_mut() {
+                                anchor.extents = Some(DrawingSizeSummary {
+                                    cx: decode_i64_attr(&element, b"cx", &reader)?,
+                                    cy: decode_i64_attr(&element, b"cy", &reader)?,
+                                });
+                            }
+                        }
+                        b"chart" => collect_chart_relationship_id(
+                            &element,
+                            &reader,
+                            &mut chart_relationship_ids,
+                            &mut active_anchor,
+                        )?,
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Event::Empty(element)) => {
+                let element_name = element.name();
+                let local_name = xml_local_name(element_name.as_ref());
+                if active_anchor.is_none() {
+                    if let Some(kind) = anchor_kind_for(local_name) {
+                        anchors.push(DrawingAnchorSummary {
+                            kind,
+                            edit_as: decode_attr(&element, b"editAs", &reader)?,
+                            from: None,
+                            to: None,
+                            position: None,
+                            extents: None,
+                            chart_relationship_ids: Vec::new(),
+                        });
+                    } else if local_name == b"chart" {
+                        collect_chart_relationship_id(
+                            &element,
+                            &reader,
+                            &mut chart_relationship_ids,
+                            &mut active_anchor,
+                        )?;
+                    }
+                    buffer.clear();
+                    continue;
+                }
+                match local_name {
+                    b"pos" => {
+                        if let Some(anchor) = active_anchor.as_mut() {
+                            anchor.position = Some(DrawingPointSummary {
+                                x: decode_i64_attr(&element, b"x", &reader)?,
+                                y: decode_i64_attr(&element, b"y", &reader)?,
+                            });
+                        }
+                    }
+                    b"ext" => {
+                        if let Some(anchor) = active_anchor.as_mut() {
+                            anchor.extents = Some(DrawingSizeSummary {
+                                cx: decode_i64_attr(&element, b"cx", &reader)?,
+                                cy: decode_i64_attr(&element, b"cy", &reader)?,
+                            });
+                        }
+                    }
+                    b"chart" => collect_chart_relationship_id(
+                        &element,
+                        &reader,
+                        &mut chart_relationship_ids,
+                        &mut active_anchor,
+                    )?,
+                    _ => {}
+                }
+            }
+            Ok(Event::Text(text)) => {
+                if let (Some(marker), Some(field), Some(anchor)) =
+                    (active_marker, active_marker_field, active_anchor.as_mut())
+                {
+                    let value = text.xml_content().map_err(xml_error)?;
+                    let parsed = value.trim().parse::<i64>().map_err(|error| {
+                        OmError::new(
+                            OmErrorCode::Parse,
+                            format!("drawing marker value must be an integer: {value}: {error}"),
+                        )
+                    })?;
+                    apply_marker_value(anchor, marker, field, parsed);
+                }
+            }
+            Ok(Event::End(element)) => {
+                let element_name = element.name();
+                let local_name = xml_local_name(element_name.as_ref());
+                match local_name {
+                    b"col" | b"colOff" | b"row" | b"rowOff" => active_marker_field = None,
+                    b"from" | b"to" => active_marker = None,
+                    _ => {}
+                }
+                if active_anchor.is_some() {
+                    if anchor_kind_for(local_name).is_some() && active_anchor_depth == 1 {
+                        if let Some(anchor) = active_anchor.take() {
+                            anchors.push(anchor);
+                        }
+                        active_marker = None;
+                        active_marker_field = None;
+                    } else {
+                        active_anchor_depth = active_anchor_depth.saturating_sub(1);
                     }
                 }
             }
@@ -14043,6 +14321,7 @@ fn parse_drawing_part_summary(
     }
 
     Ok(DrawingPartSummary {
+        anchors,
         chart_relationship_ids,
         chart_relationships,
     })
@@ -17134,7 +17413,8 @@ mod tests {
 
     use super::{
         BorderSummary, COMMENTS_RELATIONSHIP_TYPE, CellData, ChartSupportRelationshipBinding,
-        CommentPartSummary, DxfSummary, FileFormat, FillSummary, FontSummary,
+        CommentPartSummary, DrawingAnchorKind, DrawingAnchorSummary, DrawingCellMarkerSummary,
+        DrawingPointSummary, DrawingSizeSummary, DxfSummary, FileFormat, FillSummary, FontSummary,
         HYPERLINK_RELATIONSHIP_TYPE, OpcPackage, STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE,
         VML_DRAWING_RELATIONSHIP_TYPE, WORKBOOK_RELS_PART_NAME, WorksheetCommentSummary,
         WorksheetData, WorksheetHyperlinkBinding, WorksheetHyperlinkSummary,
@@ -17869,6 +18149,28 @@ mod tests {
             drawing_support.chart_part_uris,
             vec!["xl/charts/chart2.xml".to_string()]
         );
+        let drawing_summary = drawing_support
+            .drawing_summaries
+            .get("xl/drawings/drawing2.xml")
+            .expect("drawing summary");
+        assert_eq!(
+            drawing_summary.anchors,
+            vec![DrawingAnchorSummary {
+                kind: DrawingAnchorKind::Absolute,
+                edit_as: None,
+                from: None,
+                to: None,
+                position: Some(DrawingPointSummary {
+                    x: Some(0),
+                    y: Some(0),
+                }),
+                extents: Some(DrawingSizeSummary {
+                    cx: Some(5_486_400),
+                    cy: Some(3_200_400),
+                }),
+                chart_relationship_ids: vec!["rIdChart2".to_string()],
+            }]
+        );
         let chart_summary = drawing_support
             .chart_summaries
             .get("xl/charts/chart2.xml")
@@ -18046,6 +18348,32 @@ mod tests {
                 .expect("drawing summary")
                 .chart_relationship_ids,
             vec!["rIdChart1".to_string()]
+        );
+        assert_eq!(
+            drawing_support
+                .drawing_summaries
+                .get("xl/drawings/drawing1.xml")
+                .expect("drawing summary")
+                .anchors,
+            vec![DrawingAnchorSummary {
+                kind: DrawingAnchorKind::TwoCell,
+                edit_as: None,
+                from: Some(DrawingCellMarkerSummary {
+                    col: Some(0),
+                    col_offset: Some(0),
+                    row: Some(0),
+                    row_offset: Some(0),
+                }),
+                to: Some(DrawingCellMarkerSummary {
+                    col: Some(6),
+                    col_offset: Some(0),
+                    row: Some(12),
+                    row_offset: Some(0),
+                }),
+                position: None,
+                extents: None,
+                chart_relationship_ids: vec!["rIdChart1".to_string()],
+            }]
         );
         let chart_summary = drawing_support
             .chart_summaries
