@@ -1,11 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Write};
 
-use excel_model::{CellData, DefinedNameTable, WorkbookState, WorksheetData};
+use excel_model::{
+    CellData, ChartModel, ChartObjectModel, ChartSheetBinding, ChartSourceExpr, ChartType,
+    DefinedNameTable, DrawingModel, DrawingObjectModel, SeriesModel, WorkbookState, WorksheetData,
+};
 use office_common::{
-    CellError, CellValue, DefinedName, DefinedNameId, FileFormat, FormulaSource, LoadOptions,
-    NameScope, NameValidationMode, OmError, OmErrorCode, OmResult, OpaquePart, SaveOptions,
-    SheetId, SheetKind, SheetVisibility, StyleId, WorkbookId, WorkbookModel, WorksheetModel,
+    AbsoluteAnchor, CellError, CellMarker, CellValue, ChartId, ChartObjectId, DefinedName,
+    DefinedNameId, DrawingAnchor, DrawingId, DrawingObjectId, Emu, FileFormat, FormulaSource,
+    LoadOptions, NameScope, NameValidationMode, ObjectPlacement, OmError, OmErrorCode, OmResult,
+    OpaquePart, PointEmu, SaveOptions, SheetId, SheetKind, SheetVisibility, SizeEmu, StyleId,
+    TwoCellAnchor, WorkbookId, WorkbookModel, WorksheetModel,
 };
 use office_opc::OpcPackage;
 use quick_xml::escape::partial_escape;
@@ -756,6 +761,8 @@ impl XlsxCodec {
             })
             .collect();
         let support_parts = collect_workbook_support_parts(&relationship_entries, &package)?;
+        let (charts, drawings, chart_sheets) =
+            build_chart_model_overlay(WorkbookId(0), &worksheets, &sheet_drawing_support_parts)?;
         let state = WorkbookState {
             model: WorkbookModel {
                 id: WorkbookId(0),
@@ -767,9 +774,9 @@ impl XlsxCodec {
             worksheets,
             worksheet_data,
             defined_names,
-            charts: BTreeMap::new(),
-            drawings: BTreeMap::new(),
-            chart_sheets: BTreeMap::new(),
+            charts,
+            drawings,
+            chart_sheets,
             opaque_parts,
         };
         ensure_workbook_style_ids_are_valid(&state, &support_parts)?;
@@ -2499,6 +2506,242 @@ fn collect_sheet_drawing_support_parts(
         chart_support_part_source_bytes,
         chart_summaries,
     })
+}
+
+fn build_chart_model_overlay(
+    workbook_id: WorkbookId,
+    worksheets: &[WorksheetModel],
+    sheet_drawing_support_parts: &BTreeMap<SheetId, SheetDrawingSupportParts>,
+) -> OmResult<(
+    BTreeMap<ChartId, ChartModel>,
+    BTreeMap<DrawingId, DrawingModel>,
+    BTreeMap<SheetId, ChartSheetBinding>,
+)> {
+    let mut charts = BTreeMap::new();
+    let mut drawings = BTreeMap::new();
+    let mut chart_sheets = BTreeMap::new();
+    let mut chart_ids_by_part_uri = BTreeMap::<String, ChartId>::new();
+    let mut next_chart_id = 1u64;
+    let mut next_drawing_id = 1u64;
+    let mut next_drawing_object_id = 1u64;
+
+    for (sheet_id, support_parts) in sheet_drawing_support_parts {
+        for chart_part_uri in &support_parts.chart_part_uris {
+            if chart_ids_by_part_uri.contains_key(chart_part_uri) {
+                continue;
+            }
+            let chart_id = ChartId(next_chart_id);
+            next_chart_id += 1;
+            let summary = support_parts.chart_summaries.get(chart_part_uri);
+            chart_ids_by_part_uri.insert(chart_part_uri.clone(), chart_id);
+            charts.insert(
+                chart_id,
+                ChartModel {
+                    id: chart_id,
+                    workbook_id,
+                    chart_type: chart_type_from_summary(summary),
+                    series: chart_series_from_summary(summary),
+                    title: None,
+                    legend: None,
+                    axes: Vec::new(),
+                    raw_part_uri: Some(chart_part_uri.clone()),
+                    dirty: false,
+                },
+            );
+        }
+
+        for drawing_part_uri in &support_parts.drawing_part_uris {
+            let Some(drawing_summary) = support_parts.drawing_summaries.get(drawing_part_uri)
+            else {
+                continue;
+            };
+            let drawing_id = DrawingId(next_drawing_id);
+            next_drawing_id += 1;
+            let mut objects = Vec::new();
+            for (anchor_index, anchor_summary) in drawing_summary.anchors.iter().enumerate() {
+                if anchor_summary.chart_relationship_ids.is_empty() {
+                    objects.push(DrawingObjectModel::UnsupportedRaw {
+                        id: DrawingObjectId(next_drawing_object_id),
+                        raw_part_uri: Some(drawing_part_uri.clone()),
+                    });
+                    next_drawing_object_id += 1;
+                    continue;
+                }
+
+                for chart_relationship_id in &anchor_summary.chart_relationship_ids {
+                    let Some(chart_relationship) =
+                        drawing_summary
+                            .chart_relationships
+                            .iter()
+                            .find(|relationship| {
+                                relationship.relationship_id == *chart_relationship_id
+                            })
+                    else {
+                        continue;
+                    };
+                    let Some(chart_id) = chart_ids_by_part_uri.get(&chart_relationship.target)
+                    else {
+                        continue;
+                    };
+                    objects.push(DrawingObjectModel::ChartFrame(ChartObjectModel {
+                        id: ChartObjectId(next_drawing_object_id),
+                        workbook_id,
+                        host_sheet_id: *sheet_id,
+                        chart_id: *chart_id,
+                        name: format!("Chart {}", next_drawing_object_id),
+                        anchor: drawing_anchor_from_summary(anchor_summary),
+                        placement: object_placement_from_anchor(anchor_summary),
+                        z_order: u32::try_from(anchor_index).ok(),
+                        raw_binding: Some(format!("{drawing_part_uri}#{chart_relationship_id}")),
+                        dirty: false,
+                    }));
+                    next_drawing_object_id += 1;
+                }
+            }
+            drawings.insert(
+                drawing_id,
+                DrawingModel {
+                    id: drawing_id,
+                    workbook_id,
+                    host_sheet_id: *sheet_id,
+                    objects,
+                    raw_part_uri: Some(drawing_part_uri.clone()),
+                    dirty: false,
+                },
+            );
+        }
+    }
+
+    for worksheet in worksheets {
+        if worksheet.kind != SheetKind::ChartSheet {
+            continue;
+        }
+        let Some(support_parts) = sheet_drawing_support_parts.get(&worksheet.id) else {
+            continue;
+        };
+        let Some(chart_part_uri) = support_parts.chart_part_uris.first() else {
+            continue;
+        };
+        let Some(chart_id) = chart_ids_by_part_uri.get(chart_part_uri).copied() else {
+            continue;
+        };
+        let drawing_id = drawings
+            .iter()
+            .find(|(_, drawing)| drawing.host_sheet_id == worksheet.id)
+            .map(|(drawing_id, _)| *drawing_id);
+        chart_sheets.insert(
+            worksheet.id,
+            ChartSheetBinding {
+                sheet_id: worksheet.id,
+                chart_id,
+                drawing_id,
+                raw_part_uri: worksheet.part_uri.clone(),
+            },
+        );
+    }
+
+    Ok((charts, drawings, chart_sheets))
+}
+
+fn chart_type_from_summary(summary: Option<&ChartPartSummary>) -> ChartType {
+    let Some(summary) = summary else {
+        return ChartType::Unknown;
+    };
+    match summary.chart_type_names.first().map(String::as_str) {
+        Some("barChart") => ChartType::Bar,
+        Some("lineChart") => ChartType::Line,
+        Some("scatterChart") => ChartType::Scatter,
+        Some("pieChart") => ChartType::Pie,
+        Some(chart_type_name) => ChartType::Unsupported(chart_type_name.to_string()),
+        None => ChartType::Unknown,
+    }
+}
+
+fn chart_series_from_summary(summary: Option<&ChartPartSummary>) -> Vec<SeriesModel> {
+    summary
+        .into_iter()
+        .flat_map(|summary| summary.formula_refs.iter())
+        .enumerate()
+        .map(|(index, reference)| SeriesModel {
+            name: None,
+            x_values: None,
+            values: Some(ChartSourceExpr {
+                raw: FormulaSource {
+                    text: reference.clone(),
+                    is_r1c1: false,
+                },
+                resolved: None,
+                cache: None,
+                dirty: false,
+            }),
+            order: u32::try_from(index).ok(),
+        })
+        .collect()
+}
+
+fn drawing_anchor_from_summary(summary: &DrawingAnchorSummary) -> Option<DrawingAnchor> {
+    match summary.kind {
+        DrawingAnchorKind::TwoCell => {
+            let from = cell_marker_from_summary(summary.from.as_ref()?)?;
+            let to = cell_marker_from_summary(summary.to.as_ref()?)?;
+            Some(DrawingAnchor::TwoCell(TwoCellAnchor {
+                from,
+                to,
+                edit_as: summary.edit_as.clone(),
+            }))
+        }
+        DrawingAnchorKind::OneCell => {
+            let from = cell_marker_from_summary(summary.from.as_ref()?)?;
+            let extents = size_from_summary(summary.extents.as_ref()?)?;
+            Some(DrawingAnchor::OneCell(office_common::OneCellAnchor {
+                from,
+                extents,
+            }))
+        }
+        DrawingAnchorKind::Absolute => {
+            let position = point_from_summary(summary.position.as_ref()?)?;
+            let extents = size_from_summary(summary.extents.as_ref()?)?;
+            Some(DrawingAnchor::Absolute(AbsoluteAnchor {
+                position,
+                extents,
+            }))
+        }
+    }
+}
+
+fn cell_marker_from_summary(summary: &DrawingCellMarkerSummary) -> Option<CellMarker> {
+    Some(CellMarker {
+        col_zero_based: u32::try_from(summary.col?).ok()?,
+        col_offset: Emu(summary.col_offset.unwrap_or_default()),
+        row_zero_based: u32::try_from(summary.row?).ok()?,
+        row_offset: Emu(summary.row_offset.unwrap_or_default()),
+    })
+}
+
+fn point_from_summary(summary: &DrawingPointSummary) -> Option<PointEmu> {
+    Some(PointEmu {
+        x: Emu(summary.x?),
+        y: Emu(summary.y?),
+    })
+}
+
+fn size_from_summary(summary: &DrawingSizeSummary) -> Option<SizeEmu> {
+    Some(SizeEmu {
+        cx: Emu(summary.cx?),
+        cy: Emu(summary.cy?),
+    })
+}
+
+fn object_placement_from_anchor(summary: &DrawingAnchorSummary) -> ObjectPlacement {
+    match summary.kind {
+        DrawingAnchorKind::TwoCell => match summary.edit_as.as_deref() {
+            Some("oneCell") => ObjectPlacement::MoveOnly,
+            Some("absolute") => ObjectPlacement::FreeFloating,
+            _ => ObjectPlacement::MoveAndSize,
+        },
+        DrawingAnchorKind::OneCell => ObjectPlacement::MoveOnly,
+        DrawingAnchorKind::Absolute => ObjectPlacement::FreeFloating,
+    }
 }
 
 fn worksheet_relationships_part_uri(worksheet_part_uri: &str) -> Option<String> {
@@ -17426,9 +17669,11 @@ mod tests {
         compute_dimension_ref_with_preserved, parse_shared_strings, parse_workbook,
         parse_workbook_relationships, parse_worksheet_cells, rewrite_worksheet_xml,
     };
+    use excel_model::{ChartType, DrawingObjectModel};
     use office_common::{
-        CellError, CellValue, FormulaSource, LoadOptions as CommonLoadOptions, NameScope,
-        NameValidationMode, OmErrorCode, SheetId, SheetKind, SheetVisibility, StyleId, WorkbookId,
+        CellError, CellValue, DrawingAnchor, Emu, FormulaSource, LoadOptions as CommonLoadOptions,
+        NameScope, NameValidationMode, ObjectPlacement, OmErrorCode, SheetId, SheetKind,
+        SheetVisibility, StyleId, WorkbookId,
     };
     use office_opc::{CompressionMethod, OpcPart};
 
@@ -18186,6 +18431,57 @@ mod tests {
             chart_summary.formula_refs,
             vec!["Sheet1!$A$1:$A$3".to_string()]
         );
+        assert_eq!(loaded.state.charts.len(), 1);
+        let (chart_id, chart_model) = loaded.state.charts.iter().next().expect("chart model");
+        assert_eq!(chart_model.chart_type, ChartType::Line);
+        assert_eq!(
+            chart_model.raw_part_uri.as_deref(),
+            Some("xl/charts/chart2.xml")
+        );
+        assert_eq!(
+            chart_model.series[0]
+                .values
+                .as_ref()
+                .expect("chart source")
+                .raw
+                .text,
+            "Sheet1!$A$1:$A$3"
+        );
+        let chart_sheet = loaded
+            .state
+            .chart_sheet(sheet_id)
+            .expect("chart sheet binding");
+        assert_eq!(chart_sheet.chart_id, *chart_id);
+        assert_eq!(
+            chart_sheet.raw_part_uri.as_deref(),
+            Some("xl/chartsheets/sheet1.xml")
+        );
+        let drawing_id = chart_sheet.drawing_id.expect("chart sheet drawing id");
+        let drawing = loaded
+            .state
+            .drawings
+            .get(&drawing_id)
+            .expect("chart sheet drawing model");
+        assert_eq!(
+            drawing.raw_part_uri.as_deref(),
+            Some("xl/drawings/drawing2.xml")
+        );
+        let DrawingObjectModel::ChartFrame(chart_object) = &drawing.objects[0] else {
+            panic!("expected chart frame");
+        };
+        assert_eq!(chart_object.chart_id, *chart_id);
+        assert_eq!(chart_object.placement, ObjectPlacement::FreeFloating);
+        assert_eq!(
+            chart_object.raw_binding.as_deref(),
+            Some("xl/drawings/drawing2.xml#rIdChart2")
+        );
+        let Some(DrawingAnchor::Absolute(anchor)) = &chart_object.anchor else {
+            panic!("expected absolute anchor");
+        };
+        assert_eq!(anchor.position.x, Emu(0));
+        assert_eq!(anchor.position.y, Emu(0));
+        assert_eq!(anchor.extents.cx, Emu(5_486_400));
+        assert_eq!(anchor.extents.cy, Emu(3_200_400));
 
         let saved = codec
             .save(&loaded, office_common::SaveOptions::default())
@@ -18437,6 +18733,52 @@ mod tests {
                 .expect("chart colors bytes"),
             &chart_colors_xml
         );
+        assert_eq!(loaded.state.charts.len(), 1);
+        let (chart_id, chart_model) = loaded.state.charts.iter().next().expect("chart model");
+        assert_eq!(chart_model.chart_type, ChartType::Bar);
+        assert_eq!(
+            chart_model.raw_part_uri.as_deref(),
+            Some("xl/charts/chart1.xml")
+        );
+        assert_eq!(
+            chart_model.series[0]
+                .values
+                .as_ref()
+                .expect("chart source")
+                .raw
+                .text,
+            "Sheet1!$A$1:$C$1"
+        );
+        assert_eq!(loaded.state.drawings.len(), 1);
+        let drawing = loaded
+            .state
+            .drawings
+            .values()
+            .next()
+            .expect("drawing model");
+        assert_eq!(
+            drawing.raw_part_uri.as_deref(),
+            Some("xl/drawings/drawing1.xml")
+        );
+        assert_eq!(drawing.objects.len(), 1);
+        let DrawingObjectModel::ChartFrame(chart_object) = &drawing.objects[0] else {
+            panic!("expected chart frame");
+        };
+        assert_eq!(chart_object.chart_id, *chart_id);
+        assert_eq!(chart_object.name, "Chart 1");
+        assert_eq!(chart_object.placement, ObjectPlacement::MoveAndSize);
+        assert_eq!(
+            chart_object.raw_binding.as_deref(),
+            Some("xl/drawings/drawing1.xml#rIdChart1")
+        );
+        let Some(DrawingAnchor::TwoCell(anchor)) = &chart_object.anchor else {
+            panic!("expected two-cell anchor");
+        };
+        assert_eq!(anchor.from.col_zero_based, 0);
+        assert_eq!(anchor.from.row_zero_based, 0);
+        assert_eq!(anchor.to.col_zero_based, 6);
+        assert_eq!(anchor.to.row_zero_based, 12);
+        assert_eq!(anchor.from.col_offset, Emu(0));
 
         let saved = codec
             .save(&loaded, office_common::SaveOptions::default())
