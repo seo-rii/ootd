@@ -50,7 +50,7 @@ pub struct LoadedXlsxWorkbook {
     pub detected_format: FileFormat,
     pub support_parts: WorkbookSupportParts,
     pub worksheet_support_parts: BTreeMap<SheetId, WorksheetSupportParts>,
-    pub worksheet_drawing_support_parts: BTreeMap<SheetId, WorksheetDrawingSupportParts>,
+    pub sheet_drawing_support_parts: BTreeMap<SheetId, SheetDrawingSupportParts>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -545,8 +545,8 @@ pub struct WorksheetSupportParts {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct WorksheetDrawingSupportParts {
-    pub worksheet_part_uri: Option<String>,
+pub struct SheetDrawingSupportParts {
+    pub sheet_part_uri: Option<String>,
     pub relationships_part_uri: Option<String>,
     pub drawing_relationship_ids: Vec<String>,
     pub drawing_relationships: Vec<WorksheetRelationshipBinding>,
@@ -564,7 +564,7 @@ pub struct WorksheetDrawingSupportParts {
     pub chart_summaries: BTreeMap<String, ChartPartSummary>,
 }
 
-impl WorksheetDrawingSupportParts {
+impl SheetDrawingSupportParts {
     pub fn is_empty(&self) -> bool {
         self.drawing_relationship_ids.is_empty()
             && self.drawing_part_uris.is_empty()
@@ -663,7 +663,7 @@ impl XlsxCodec {
             .unwrap_or_default();
         let mut worksheet_data = BTreeMap::new();
         let mut worksheet_support_parts = BTreeMap::new();
-        let mut worksheet_drawing_support_parts = BTreeMap::new();
+        let mut sheet_drawing_support_parts = BTreeMap::new();
 
         for worksheet in &worksheets {
             if let Some(part_uri) = worksheet.part_uri.as_deref() {
@@ -681,25 +681,28 @@ impl XlsxCodec {
                             ..WorksheetData::default()
                         },
                     );
-                    continue;
+                } else {
+                    worksheet_data.insert(
+                        worksheet.id,
+                        WorksheetData {
+                            cells: parse_worksheet_cells(
+                                sheet_part.bytes.as_slice(),
+                                &shared_strings,
+                            )?,
+                            source_xml: sheet_part.bytes.clone(),
+                            dirty: false,
+                            dirty_cells: Default::default(),
+                        },
+                    );
+                    worksheet_support_parts.insert(
+                        worksheet.id,
+                        collect_worksheet_support_parts(part_uri, &package)?,
+                    );
                 }
-                worksheet_data.insert(
-                    worksheet.id,
-                    WorksheetData {
-                        cells: parse_worksheet_cells(sheet_part.bytes.as_slice(), &shared_strings)?,
-                        source_xml: sheet_part.bytes.clone(),
-                        dirty: false,
-                        dirty_cells: Default::default(),
-                    },
-                );
-                worksheet_support_parts.insert(
-                    worksheet.id,
-                    collect_worksheet_support_parts(part_uri, &package)?,
-                );
                 let drawing_support_parts =
-                    collect_worksheet_drawing_support_parts(part_uri, &package)?;
+                    collect_sheet_drawing_support_parts(part_uri, &package)?;
                 if !drawing_support_parts.is_empty() {
-                    worksheet_drawing_support_parts.insert(worksheet.id, drawing_support_parts);
+                    sheet_drawing_support_parts.insert(worksheet.id, drawing_support_parts);
                 }
             }
         }
@@ -735,7 +738,7 @@ impl XlsxCodec {
             detected_format,
             support_parts,
             worksheet_support_parts,
-            worksheet_drawing_support_parts,
+            sheet_drawing_support_parts,
         })
     }
 
@@ -2223,50 +2226,48 @@ fn collect_worksheet_support_parts(
     Ok(support_parts)
 }
 
-fn collect_worksheet_drawing_support_parts(
-    worksheet_part_uri: &str,
+fn collect_sheet_drawing_support_parts(
+    sheet_part_uri: &str,
     package: &OpcPackage,
-) -> OmResult<WorksheetDrawingSupportParts> {
-    let worksheet_part = package.part(worksheet_part_uri).ok_or_else(|| {
+) -> OmResult<SheetDrawingSupportParts> {
+    let sheet_part = package.part(sheet_part_uri).ok_or_else(|| {
         OmError::new(
             OmErrorCode::NotFound,
-            format!("worksheet part is missing: {worksheet_part_uri}"),
+            format!("sheet part is missing: {sheet_part_uri}"),
         )
     })?;
     let drawing_relationship_ids =
-        parse_worksheet_relationship_ids(worksheet_part.bytes.as_slice(), b"drawing")?;
-    let Some(relationships_part_uri) = worksheet_relationships_part_uri(worksheet_part_uri) else {
+        parse_worksheet_relationship_ids(sheet_part.bytes.as_slice(), b"drawing")?;
+    let Some(relationships_part_uri) = worksheet_relationships_part_uri(sheet_part_uri) else {
         if drawing_relationship_ids.is_empty() {
-            return Ok(WorksheetDrawingSupportParts {
-                worksheet_part_uri: Some(worksheet_part_uri.to_string()),
+            return Ok(SheetDrawingSupportParts {
+                sheet_part_uri: Some(sheet_part_uri.to_string()),
                 drawing_relationship_ids,
-                ..WorksheetDrawingSupportParts::default()
+                ..SheetDrawingSupportParts::default()
             });
         }
         return Err(OmError::new(
             OmErrorCode::InvalidState,
-            format!(
-                "worksheet drawing relationships part cannot be resolved: {worksheet_part_uri}"
-            ),
+            format!("sheet drawing relationships part cannot be resolved: {sheet_part_uri}"),
         ));
     };
     if !package.contains(&relationships_part_uri) {
         if drawing_relationship_ids.is_empty() {
-            return Ok(WorksheetDrawingSupportParts {
-                worksheet_part_uri: Some(worksheet_part_uri.to_string()),
+            return Ok(SheetDrawingSupportParts {
+                sheet_part_uri: Some(sheet_part_uri.to_string()),
                 drawing_relationship_ids,
-                ..WorksheetDrawingSupportParts::default()
+                ..SheetDrawingSupportParts::default()
             });
         }
         return Err(OmError::new(
             OmErrorCode::InvalidState,
             format!(
-                "explicit worksheet drawing relationships part is missing: {relationships_part_uri}"
+                "explicit sheet drawing relationships part is missing: {relationships_part_uri}"
             ),
         ));
     }
 
-    let base_segments = worksheet_part_uri
+    let base_segments = sheet_part_uri
         .rsplit_once('/')
         .map(|(parent, _)| {
             parent
@@ -2294,9 +2295,7 @@ fn collect_worksheet_drawing_support_parts(
             .ok_or_else(|| {
                 OmError::new(
                     OmErrorCode::InvalidState,
-                    format!(
-                        "explicit worksheet drawing relationship is missing: {relationship_id}"
-                    ),
+                    format!("explicit sheet drawing relationship is missing: {relationship_id}"),
                 )
             })?;
         drawing_relationships.push(WorksheetRelationshipBinding {
@@ -2440,8 +2439,8 @@ fn collect_worksheet_drawing_support_parts(
         chart_summaries.insert(chart_part_uri.clone(), chart_summary);
     }
 
-    Ok(WorksheetDrawingSupportParts {
-        worksheet_part_uri: Some(worksheet_part_uri.to_string()),
+    Ok(SheetDrawingSupportParts {
+        sheet_part_uri: Some(sheet_part_uri.to_string()),
         relationships_part_uri: Some(relationships_part_uri),
         drawing_relationship_ids,
         drawing_relationships,
@@ -17758,6 +17757,148 @@ mod tests {
     }
 
     #[test]
+    fn load_collects_chartsheet_drawing_inventory_and_clean_save_preserves_parts() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        let workbook_rels_xml = std::str::from_utf8(
+            package
+                .part(WORKBOOK_RELS_PART_NAME)
+                .expect("workbook rels")
+                .bytes
+                .as_slice(),
+        )
+        .expect("workbook rels utf8")
+        .replace(
+            r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml""#,
+            r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet" Target="chartsheets/sheet1.xml""#,
+        );
+        package
+            .replace_part_bytes(WORKBOOK_RELS_PART_NAME, workbook_rels_xml.into_bytes())
+            .expect("replace workbook rels");
+        package
+            .add_part(OpcPart {
+                name: "xl/chartsheets/sheet1.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <drawing r:id="rIdChartSheetDrawing"/>
+</chartsheet>"#
+                    .to_vec(),
+            })
+            .expect("add chartsheet part");
+        package
+            .add_part(OpcPart {
+                name: "xl/chartsheets/_rels/sheet1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdChartSheetDrawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing2.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            })
+            .expect("add chartsheet rels");
+        package
+            .add_part(OpcPart {
+                name: "xl/drawings/drawing2.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <xdr:absoluteAnchor>
+    <xdr:pos x="0" y="0"/>
+    <xdr:ext cx="5486400" cy="3200400"/>
+    <xdr:graphicFrame><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart2"/></a:graphicData></a:graphic></xdr:graphicFrame>
+    <xdr:clientData/>
+  </xdr:absoluteAnchor>
+</xdr:wsDr>"#
+                    .to_vec(),
+            })
+            .expect("add drawing");
+        package
+            .add_part(OpcPart {
+                name: "xl/drawings/_rels/drawing2.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdChart2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart2.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            })
+            .expect("add drawing rels");
+        let chart_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart><c:plotArea><c:lineChart><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numRef><c:f>Sheet1!$A$1:$A$3</c:f></c:numRef></c:val></c:ser></c:lineChart></c:plotArea></c:chart>
+</c:chartSpace>"#
+            .to_vec();
+        package
+            .add_part(OpcPart {
+                name: "xl/charts/chart2.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: chart_xml.clone(),
+            })
+            .expect("add chart");
+        let bytes = package.to_bytes().expect("package bytes");
+
+        let loaded = codec
+            .load(bytes.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook with chart sheet drawing");
+        let sheet_id = loaded.state.worksheets[0].id;
+        assert_eq!(loaded.state.worksheets[0].kind, SheetKind::ChartSheet);
+        let drawing_support = loaded
+            .sheet_drawing_support_parts
+            .get(&sheet_id)
+            .expect("chartsheet drawing support");
+
+        assert_eq!(
+            drawing_support.sheet_part_uri.as_deref(),
+            Some("xl/chartsheets/sheet1.xml")
+        );
+        assert_eq!(
+            drawing_support.drawing_relationship_ids,
+            vec!["rIdChartSheetDrawing".to_string()]
+        );
+        assert_eq!(
+            drawing_support.drawing_part_uris,
+            vec!["xl/drawings/drawing2.xml".to_string()]
+        );
+        assert_eq!(
+            drawing_support.chart_part_uris,
+            vec!["xl/charts/chart2.xml".to_string()]
+        );
+        let chart_summary = drawing_support
+            .chart_summaries
+            .get("xl/charts/chart2.xml")
+            .expect("chart summary");
+        assert_eq!(
+            chart_summary.chart_type_names,
+            vec!["lineChart".to_string()]
+        );
+        assert_eq!(
+            chart_summary.formula_refs,
+            vec!["Sheet1!$A$1:$A$3".to_string()]
+        );
+
+        let saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("clean save");
+        let saved_package = OpcPackage::from_bytes(saved.as_slice()).expect("saved package");
+        assert_eq!(
+            saved_package
+                .part("xl/charts/chart2.xml")
+                .expect("saved chart")
+                .bytes,
+            chart_xml
+        );
+        assert!(saved_package.contains("xl/chartsheets/_rels/sheet1.xml.rels"));
+        assert!(saved_package.contains("xl/drawings/drawing2.xml"));
+        assert!(saved_package.contains("xl/drawings/_rels/drawing2.xml.rels"));
+    }
+
+    #[test]
     fn load_collects_embedded_chart_drawing_inventory_and_clean_save_preserves_parts() {
         let codec = XlsxCodec;
         let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
@@ -17882,7 +18023,7 @@ mod tests {
             .expect("load workbook with embedded chart");
         let sheet_id = loaded.state.worksheets[0].id;
         let drawing_support = loaded
-            .worksheet_drawing_support_parts
+            .sheet_drawing_support_parts
             .get(&sheet_id)
             .expect("drawing support");
 
