@@ -767,6 +767,9 @@ impl XlsxCodec {
             worksheets,
             worksheet_data,
             defined_names,
+            charts: BTreeMap::new(),
+            drawings: BTreeMap::new(),
+            chart_sheets: BTreeMap::new(),
             opaque_parts,
         };
         ensure_workbook_style_ids_are_valid(&state, &support_parts)?;

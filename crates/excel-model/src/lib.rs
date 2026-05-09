@@ -1,13 +1,19 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use office_common::{
-    CellValue, DefinedName, DefinedNameId, FormulaSource, NameScope, NameValidationMode, OmArray,
-    OmError, OmErrorCode, OmResult, OmValue, OpaquePart, RangeRef, Rect, SheetId, SheetScope,
-    StyleId, WorkbookId, WorkbookModel, WorksheetModel,
+    CellValue, ChartId, DefinedName, DefinedNameId, DrawingId, FormulaSource, NameScope,
+    NameValidationMode, OmArray, OmError, OmErrorCode, OmResult, OmValue, OpaquePart, RangeRef,
+    Rect, SheetId, SheetScope, StyleId, WorkbookId, WorkbookModel, WorksheetModel,
 };
 
+mod charts;
 mod names;
 
+pub use charts::{
+    AxisModel, ChartCacheKind, ChartCacheSnapshot, ChartModel, ChartObjectModel, ChartSheetBinding,
+    ChartSourceExpr, ChartText, ChartType, DrawingModel, DrawingObjectModel, LegendModel,
+    SeriesModel,
+};
 pub use names::DefinedNameTable;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -31,6 +37,9 @@ pub struct WorkbookState {
     pub worksheets: Vec<WorksheetModel>,
     pub worksheet_data: BTreeMap<SheetId, WorksheetData>,
     pub defined_names: DefinedNameTable,
+    pub charts: BTreeMap<ChartId, ChartModel>,
+    pub drawings: BTreeMap<DrawingId, DrawingModel>,
+    pub chart_sheets: BTreeMap<SheetId, ChartSheetBinding>,
     pub opaque_parts: Vec<OpaquePart>,
 }
 
@@ -65,6 +74,34 @@ impl WorkbookState {
 
     pub fn defined_names_mut(&mut self) -> &mut DefinedNameTable {
         &mut self.defined_names
+    }
+
+    pub fn charts(&self) -> &BTreeMap<ChartId, ChartModel> {
+        &self.charts
+    }
+
+    pub fn charts_mut(&mut self) -> &mut BTreeMap<ChartId, ChartModel> {
+        &mut self.charts
+    }
+
+    pub fn drawings(&self) -> &BTreeMap<DrawingId, DrawingModel> {
+        &self.drawings
+    }
+
+    pub fn drawings_mut(&mut self) -> &mut BTreeMap<DrawingId, DrawingModel> {
+        &mut self.drawings
+    }
+
+    pub fn chart_sheets(&self) -> &BTreeMap<SheetId, ChartSheetBinding> {
+        &self.chart_sheets
+    }
+
+    pub fn chart_sheets_mut(&mut self) -> &mut BTreeMap<SheetId, ChartSheetBinding> {
+        &mut self.chart_sheets
+    }
+
+    pub fn chart_sheet(&self, sheet_id: SheetId) -> Option<&ChartSheetBinding> {
+        self.chart_sheets.get(&sheet_id)
     }
 
     pub fn add_defined_name(
@@ -459,13 +496,17 @@ impl WorkbookState {
 
 #[cfg(test)]
 mod tests {
-    use super::{CellData, DefinedNameTable, WorkbookState, WorksheetData};
+    use super::{
+        CellData, ChartModel, ChartObjectModel, ChartSheetBinding, ChartType, DefinedNameTable,
+        DrawingModel, DrawingObjectModel, WorkbookState, WorksheetData,
+    };
     use std::collections::{BTreeMap, BTreeSet};
 
     use office_common::{
-        CellValue, FileFormat, FormulaSource, NameScope, NameValidationMode, ObjectHandle, OmArray,
-        OmErrorCode, OmValue, RangeRef, Rect, SheetId, SheetKind, SheetScope, SheetVisibility,
-        StyleId, WorkbookId, WorkbookModel, WorksheetModel,
+        CellValue, ChartId, ChartObjectId, DrawingId, FileFormat, FormulaSource, NameScope,
+        NameValidationMode, ObjectHandle, ObjectPlacement, OmArray, OmErrorCode, OmValue, RangeRef,
+        Rect, SheetId, SheetKind, SheetScope, SheetVisibility, StyleId, WorkbookId, WorkbookModel,
+        WorksheetModel,
     };
 
     fn sample_state() -> WorkbookState {
@@ -515,6 +556,9 @@ mod tests {
                 },
             )]),
             defined_names: DefinedNameTable::default(),
+            charts: BTreeMap::new(),
+            drawings: BTreeMap::new(),
+            chart_sheets: BTreeMap::new(),
             opaque_parts: Vec::new(),
         }
     }
@@ -524,6 +568,79 @@ mod tests {
             text: text.to_string(),
             is_r1c1: false,
         }
+    }
+
+    #[test]
+    fn workbook_state_tracks_chart_models_drawings_and_chart_sheet_bindings() {
+        let mut state = sample_state();
+        let workbook_id = state.model.id;
+        let sheet_id = state.worksheets[0].id;
+        let chart_id = ChartId(11);
+        let drawing_id = DrawingId(12);
+
+        state.charts_mut().insert(
+            chart_id,
+            ChartModel {
+                id: chart_id,
+                workbook_id,
+                chart_type: ChartType::Bar,
+                series: Vec::new(),
+                title: None,
+                legend: None,
+                axes: Vec::new(),
+                raw_part_uri: Some("xl/charts/chart1.xml".to_string()),
+                dirty: false,
+            },
+        );
+        state.drawings_mut().insert(
+            drawing_id,
+            DrawingModel {
+                id: drawing_id,
+                workbook_id,
+                host_sheet_id: sheet_id,
+                objects: vec![DrawingObjectModel::ChartFrame(ChartObjectModel {
+                    id: ChartObjectId(21),
+                    workbook_id,
+                    host_sheet_id: sheet_id,
+                    chart_id,
+                    name: "Chart 1".to_string(),
+                    anchor: None,
+                    placement: ObjectPlacement::Unknown,
+                    z_order: Some(0),
+                    raw_binding: Some("xl/drawings/drawing1.xml#rIdChart1".to_string()),
+                    dirty: false,
+                })],
+                raw_part_uri: Some("xl/drawings/drawing1.xml".to_string()),
+                dirty: false,
+            },
+        );
+        state.chart_sheets_mut().insert(
+            sheet_id,
+            ChartSheetBinding {
+                sheet_id,
+                chart_id,
+                drawing_id: Some(drawing_id),
+                raw_part_uri: Some("xl/chartsheets/sheet1.xml".to_string()),
+            },
+        );
+
+        assert_eq!(
+            state.charts().get(&chart_id).expect("chart").chart_type,
+            ChartType::Bar
+        );
+        assert_eq!(
+            state
+                .drawings()
+                .get(&drawing_id)
+                .expect("drawing")
+                .objects
+                .len(),
+            1
+        );
+        assert_eq!(
+            state.chart_sheet(sheet_id).expect("chart sheet").chart_id,
+            chart_id
+        );
     }
 
     #[test]

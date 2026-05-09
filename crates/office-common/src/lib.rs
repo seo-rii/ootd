@@ -80,6 +80,36 @@ pub struct SheetId(pub u64);
 pub struct StyleId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ChartId(pub u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ChartObjectId(pub u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct DrawingId(pub u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct DrawingObjectId(pub u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct Emu(pub i64);
+
+impl Emu {
+    pub fn to_points(self) -> Points {
+        Points(self.0 as f64 / 12_700.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Points(pub f64);
+
+impl Points {
+    pub fn to_emu(self) -> Emu {
+        Emu((self.0 * 12_700.0).round() as i64)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ObjectHandle(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -322,6 +352,62 @@ impl SheetKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ObjectPlacement {
+    MoveAndSize,
+    MoveOnly,
+    FreeFloating,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DrawingAnchor {
+    TwoCell(TwoCellAnchor),
+    OneCell(OneCellAnchor),
+    Absolute(AbsoluteAnchor),
+    UnsupportedRaw,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TwoCellAnchor {
+    pub from: CellMarker,
+    pub to: CellMarker,
+    pub edit_as: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OneCellAnchor {
+    pub from: CellMarker,
+    pub extents: SizeEmu,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AbsoluteAnchor {
+    pub position: PointEmu,
+    pub extents: SizeEmu,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CellMarker {
+    pub col_zero_based: u32,
+    pub col_offset: Emu,
+    pub row_zero_based: u32,
+    pub row_offset: Emu,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PointEmu {
+    pub x: Emu,
+    pub y: Emu,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SizeEmu {
+    pub cx: Emu,
+    pub cy: Emu,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorksheetModel {
     pub id: SheetId,
@@ -413,8 +499,8 @@ impl OmError {
 #[cfg(test)]
 mod tests {
     use super::{
-        CellValue, ExcelProfile, LoadOptions, ObjectHandle, OmArray, OmErrorCode, OmValue,
-        RangeRef, Rect, SaveOptions, SheetId, SheetScope, WorkbookId,
+        CellValue, Emu, ExcelProfile, LoadOptions, ObjectHandle, OmArray, OmErrorCode, OmValue,
+        Points, RangeRef, Rect, SaveOptions, SheetId, SheetScope, WorkbookId,
     };
 
     #[test]
@@ -508,5 +594,11 @@ mod tests {
         assert!(load.read_calc_chain);
         assert_eq!(save.profile, ExcelProfile::Excel365);
         assert!(save.lossless);
+    }
+
+    #[test]
+    fn emu_and_points_convert_with_excel_geometry_scale() {
+        assert_eq!(Emu(12_700).to_points(), Points(1.0));
+        assert_eq!(Points(1.5).to_emu(), Emu(19_050));
     }
 }
