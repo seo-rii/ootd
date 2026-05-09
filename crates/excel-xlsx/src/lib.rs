@@ -627,10 +627,19 @@ pub struct DrawingSizeSummary {
 pub struct ChartPartSummary {
     pub root_name: Option<String>,
     pub chart_type_names: Vec<String>,
+    pub series: Vec<ChartSeriesSummary>,
     pub formula_refs: Vec<String>,
     pub has_extension_list: bool,
     pub relationships_part_uri: Option<String>,
     pub support_relationships: Vec<ChartSupportRelationshipBinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ChartSeriesSummary {
+    pub name_ref: Option<String>,
+    pub category_ref: Option<String>,
+    pub values_ref: Option<String>,
+    pub order: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2658,22 +2667,42 @@ fn chart_type_from_summary(summary: Option<&ChartPartSummary>) -> ChartType {
 }
 
 fn chart_series_from_summary(summary: Option<&ChartPartSummary>) -> Vec<SeriesModel> {
+    let Some(summary) = summary else {
+        return Vec::new();
+    };
+
+    let source_from_ref = |reference: &String| ChartSourceExpr {
+        raw: FormulaSource {
+            text: reference.clone(),
+            is_r1c1: false,
+        },
+        resolved: None,
+        cache: None,
+        dirty: false,
+    };
+
+    if !summary.series.is_empty() {
+        return summary
+            .series
+            .iter()
+            .enumerate()
+            .map(|(index, series)| SeriesModel {
+                name: series.name_ref.as_ref().map(source_from_ref),
+                x_values: series.category_ref.as_ref().map(source_from_ref),
+                values: series.values_ref.as_ref().map(source_from_ref),
+                order: series.order.or_else(|| u32::try_from(index).ok()),
+            })
+            .collect();
+    }
+
     summary
-        .into_iter()
-        .flat_map(|summary| summary.formula_refs.iter())
+        .formula_refs
+        .iter()
         .enumerate()
         .map(|(index, reference)| SeriesModel {
             name: None,
             x_values: None,
-            values: Some(ChartSourceExpr {
-                raw: FormulaSource {
-                    text: reference.clone(),
-                    is_r1c1: false,
-                },
-                resolved: None,
-                cache: None,
-                dirty: false,
-            }),
+            values: Some(source_from_ref(reference)),
             order: u32::try_from(index).ok(),
         })
         .collect()
@@ -14574,23 +14603,71 @@ fn parse_drawing_part_summary(
 }
 
 fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum ChartSeriesFormulaSlot {
+        Name,
+        Category,
+        Values,
+    }
+
     let mut reader = Reader::from_reader(Cursor::new(chart_xml));
     reader.config_mut().trim_text(false);
     let mut buffer = Vec::new();
     let mut root_name = None;
     let mut chart_type_names = Vec::new();
+    let mut series = Vec::new();
     let mut formula_refs = Vec::new();
     let mut has_extension_list = false;
     let mut formula_text = None::<String>;
     let mut formula_depth = 0usize;
+    let mut formula_series_slot = None::<ChartSeriesFormulaSlot>;
+    let mut active_series = None::<ChartSeriesSummary>;
+    let mut element_path = Vec::<String>::new();
+
+    let parse_u32_val_attr = |element: &BytesStart<'_>,
+                              reader: &Reader<Cursor<&[u8]>>,
+                              context: &str|
+     -> OmResult<Option<u32>> {
+        for attr in element.attributes() {
+            let attr = attr.map_err(xml_error)?;
+            if attr.key.as_ref() != b"val" {
+                continue;
+            }
+            let value = attr
+                .decode_and_unescape_value(reader.decoder())
+                .map_err(xml_error)?
+                .into_owned();
+            return value.trim().parse::<u32>().map(Some).map_err(|error| {
+                OmError::new(
+                    OmErrorCode::Parse,
+                    format!("chart {context} value must be an unsigned integer: {value}: {error}"),
+                )
+            });
+        }
+        Ok(None)
+    };
+
+    let detect_series_formula_slot = |path: &[String]| -> Option<ChartSeriesFormulaSlot> {
+        let series_position = path.iter().rposition(|name| name == "ser")?;
+        for name in path.iter().skip(series_position + 1).rev() {
+            match name.as_str() {
+                "tx" => return Some(ChartSeriesFormulaSlot::Name),
+                "cat" | "xVal" => return Some(ChartSeriesFormulaSlot::Category),
+                "val" | "yVal" => return Some(ChartSeriesFormulaSlot::Values),
+                _ => {}
+            }
+        }
+        None
+    };
 
     loop {
         match reader.read_event_into(&mut buffer) {
             Ok(Event::Start(element)) => {
                 let element_name = element.name();
                 let local_name = xml_local_name(element_name.as_ref());
+                let local_name_text = String::from_utf8_lossy(local_name).into_owned();
                 if root_name.is_none() {
-                    root_name = Some(String::from_utf8_lossy(local_name).into_owned());
+                    root_name = Some(local_name_text.clone());
                 }
                 if local_name.ends_with(b"Chart") && local_name != b"chart" {
                     let name = String::from_utf8_lossy(local_name).into_owned();
@@ -14601,12 +14678,25 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 if local_name == b"extLst" {
                     has_extension_list = true;
                 }
+                if local_name == b"ser" && active_series.is_none() {
+                    active_series = Some(ChartSeriesSummary::default());
+                }
+                if local_name == b"order"
+                    && let Some(active_series) = active_series.as_mut()
+                    && let Some(order) = parse_u32_val_attr(&element, &reader, "series order")?
+                {
+                    active_series.order = Some(order);
+                }
                 if local_name == b"f" {
                     formula_text = Some(String::new());
                     formula_depth = 1;
+                    formula_series_slot = active_series
+                        .as_ref()
+                        .and_then(|_| detect_series_formula_slot(&element_path));
                 } else if formula_depth > 0 {
                     formula_depth += 1;
                 }
+                element_path.push(local_name_text);
             }
             Ok(Event::Empty(element)) => {
                 let element_name = element.name();
@@ -14623,6 +14713,12 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 if local_name == b"extLst" {
                     has_extension_list = true;
                 }
+                if local_name == b"order"
+                    && let Some(active_series) = active_series.as_mut()
+                    && let Some(order) = parse_u32_val_attr(&element, &reader, "series order")?
+                {
+                    active_series.order = Some(order);
+                }
             }
             Ok(Event::Text(text)) if formula_text.is_some() => {
                 if let Some(value) = &mut formula_text {
@@ -14635,14 +14731,49 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
             }
             Ok(Event::End(element)) if formula_depth > 0 => {
-                if xml_local_name(element.name().as_ref()) == b"f" && formula_depth == 1 {
+                let element_name = element.name();
+                let local_name = xml_local_name(element_name.as_ref());
+                if local_name == b"f" && formula_depth == 1 {
                     if let Some(value) = formula_text.take()
                         && !value.is_empty()
                     {
+                        if let (Some(slot), Some(active_series)) =
+                            (formula_series_slot, active_series.as_mut())
+                        {
+                            match slot {
+                                ChartSeriesFormulaSlot::Name => {
+                                    if active_series.name_ref.is_none() {
+                                        active_series.name_ref = Some(value.clone());
+                                    }
+                                }
+                                ChartSeriesFormulaSlot::Category => {
+                                    if active_series.category_ref.is_none() {
+                                        active_series.category_ref = Some(value.clone());
+                                    }
+                                }
+                                ChartSeriesFormulaSlot::Values => {
+                                    if active_series.values_ref.is_none() {
+                                        active_series.values_ref = Some(value.clone());
+                                    }
+                                }
+                            }
+                        }
                         formula_refs.push(value);
                     }
+                    formula_series_slot = None;
                 }
                 formula_depth -= 1;
+                element_path.pop();
+            }
+            Ok(Event::End(element)) => {
+                let element_name = element.name();
+                let local_name = xml_local_name(element_name.as_ref());
+                if local_name == b"ser"
+                    && let Some(active_series) = active_series.take()
+                {
+                    series.push(active_series);
+                }
+                element_path.pop();
             }
             Ok(Event::Eof) => break,
             Ok(_) => {}
@@ -14654,6 +14785,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     Ok(ChartPartSummary {
         root_name,
         chart_type_names,
+        series,
         formula_refs,
         has_extension_list,
         relationships_part_uri: None,
@@ -17658,13 +17790,13 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::{
-        BorderSummary, COMMENTS_RELATIONSHIP_TYPE, CellData, ChartSupportRelationshipBinding,
-        CommentPartSummary, DrawingAnchorKind, DrawingAnchorSummary, DrawingCellMarkerSummary,
-        DrawingPointSummary, DrawingSizeSummary, DxfSummary, FileFormat, FillSummary, FontSummary,
-        HYPERLINK_RELATIONSHIP_TYPE, OpcPackage, STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE,
-        VML_DRAWING_RELATIONSHIP_TYPE, WORKBOOK_RELS_PART_NAME, WorksheetCommentSummary,
-        WorksheetData, WorksheetHyperlinkBinding, WorksheetHyperlinkSummary,
-        WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec,
+        BorderSummary, COMMENTS_RELATIONSHIP_TYPE, CellData, ChartSeriesSummary,
+        ChartSupportRelationshipBinding, CommentPartSummary, DrawingAnchorKind,
+        DrawingAnchorSummary, DrawingCellMarkerSummary, DrawingPointSummary, DrawingSizeSummary,
+        DxfSummary, FileFormat, FillSummary, FontSummary, HYPERLINK_RELATIONSHIP_TYPE, OpcPackage,
+        STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE, VML_DRAWING_RELATIONSHIP_TYPE,
+        WORKBOOK_RELS_PART_NAME, WorksheetCommentSummary, WorksheetData, WorksheetHyperlinkBinding,
+        WorksheetHyperlinkSummary, WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec,
         collect_support_part_dimension_coords, compute_dimension_ref,
         compute_dimension_ref_with_preserved, parse_shared_strings, parse_workbook,
         parse_workbook_relationships, parse_worksheet_cells, rewrite_worksheet_xml,
@@ -18566,6 +18698,8 @@ mod tests {
       <c:barChart>
         <c:ser>
           <c:idx val="0"/><c:order val="0"/>
+          <c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx>
+          <c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat>
           <c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f><c:numCache><c:ptCount val="3"/></c:numCache></c:numRef></c:val>
         </c:ser>
       </c:barChart>
@@ -18682,7 +18816,20 @@ mod tests {
         assert_eq!(chart_summary.chart_type_names, vec!["barChart".to_string()]);
         assert_eq!(
             chart_summary.formula_refs,
-            vec!["Sheet1!$A$1:$C$1".to_string()]
+            vec![
+                "Sheet1!$C$1".to_string(),
+                "Sheet1!$A$1:$B$1".to_string(),
+                "Sheet1!$A$1:$C$1".to_string()
+            ]
+        );
+        assert_eq!(
+            chart_summary.series,
+            vec![ChartSeriesSummary {
+                name_ref: Some("Sheet1!$C$1".to_string()),
+                category_ref: Some("Sheet1!$A$1:$B$1".to_string()),
+                values_ref: Some("Sheet1!$A$1:$C$1".to_string()),
+                order: Some(0),
+            }]
         );
         assert!(chart_summary.has_extension_list);
         assert_eq!(
@@ -18739,6 +18886,24 @@ mod tests {
         assert_eq!(
             chart_model.raw_part_uri.as_deref(),
             Some("xl/charts/chart1.xml")
+        );
+        assert_eq!(
+            chart_model.series[0]
+                .name
+                .as_ref()
+                .expect("chart name source")
+                .raw
+                .text,
+            "Sheet1!$C$1"
+        );
+        assert_eq!(
+            chart_model.series[0]
+                .x_values
+                .as_ref()
+                .expect("chart x values source")
+                .raw
+                .text,
+            "Sheet1!$A$1:$B$1"
         );
         assert_eq!(
             chart_model.series[0]

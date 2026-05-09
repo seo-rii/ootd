@@ -62107,7 +62107,15 @@ mod tests {
             runtime
                 .dispatch_get(series, "Name", &[])
                 .expect("Series.Name"),
-            OmValue::Empty
+            OmValue::Text("=Sheet1!$C$1".to_string())
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "XValues", &[])
+                    .expect("Series.XValues")
+            ),
+            "=Sheet1!$A$1:$B$1"
         );
         assert_eq!(
             expect_text(
@@ -62115,7 +62123,7 @@ mod tests {
                     .dispatch_get(series, "Formula", &[])
                     .expect("Series.Formula")
             ),
-            "=SERIES(,,Sheet1!$A$1:$C$1,1)"
+            "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$B$1,Sheet1!$A$1:$C$1,1)"
         );
         let series_by_chart_property = expect_object_handle(
             runtime
@@ -66275,7 +66283,7 @@ mod tests {
                 compression: CompressionMethod::Stored,
                 bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
-  <c:chart><c:plotArea><c:barChart><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart>
+  <c:chart><c:plotArea><c:barChart><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart>
 </c:chartSpace>"#
                     .to_vec(),
             })
