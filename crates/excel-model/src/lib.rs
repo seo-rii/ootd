@@ -13,7 +13,7 @@ mod names;
 pub use charts::{
     AxisModel, ChartAxisKind, ChartCacheKind, ChartCacheSnapshot, ChartLegendPosition, ChartModel,
     ChartObjectModel, ChartSheetBinding, ChartSourceExpr, ChartText, ChartType, DrawingModel,
-    DrawingObjectModel, LegendModel, SeriesModel,
+    DrawingObjectModel, LegendModel, SeriesModel, resolve_chart_source_reference,
 };
 pub use names::DefinedNameTable;
 

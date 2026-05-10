@@ -5,15 +5,14 @@ use excel_model::{
     AxisModel, CellData, ChartAxisKind, ChartCacheKind, ChartCacheSnapshot, ChartLegendPosition,
     ChartModel, ChartObjectModel, ChartSheetBinding, ChartSourceExpr, ChartText, ChartType,
     DefinedNameTable, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState,
-    WorksheetData,
+    WorksheetData, resolve_chart_source_reference,
 };
 use office_common::{
     AbsoluteAnchor, CellError, CellMarker, CellValue, ChartId, ChartObjectId, DefinedName,
     DefinedNameId, DrawingAnchor, DrawingId, DrawingObjectId, Emu, FileFormat, FormulaSource,
     LoadOptions, NameScope, NameValidationMode, ObjectPlacement, OmError, OmErrorCode, OmResult,
-    OpaquePart, PointEmu, RangeArea, RangeSet, Rect, ReferenceTarget, SaveOptions, SheetId,
-    SheetKind, SheetScope, SheetVisibility, SizeEmu, StyleId, TwoCellAnchor, WorkbookId,
-    WorkbookModel, WorksheetModel,
+    OpaquePart, PointEmu, SaveOptions, SheetId, SheetKind, SheetVisibility, SizeEmu, StyleId,
+    TwoCellAnchor, WorkbookId, WorkbookModel, WorksheetModel,
 };
 use office_opc::OpcPackage;
 use quick_xml::escape::partial_escape;
@@ -46,8 +45,6 @@ const COMMENTS_RELATIONSHIP_TYPE: &str =
 const VML_DRAWING_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing";
 const WORKBOOK_RELS_PART_NAME: &str = "xl/_rels/workbook.xml.rels";
-const EXCEL_MAX_ROW_INDEX: u32 = 1_048_576;
-const EXCEL_MAX_COLUMN_INDEX: u32 = 16_384;
 
 type ThemeExtLevel8Names = Vec<Vec<Vec<Vec<Vec<Vec<Vec<Vec<String>>>>>>>>;
 type ThemeExtLevel8AttrMaps = Vec<Vec<Vec<Vec<Vec<Vec<Vec<Vec<BTreeMap<String, String>>>>>>>>>;
@@ -3094,7 +3091,7 @@ fn chart_series_from_summary(
             text: reference.clone(),
             is_r1c1: false,
         },
-        resolved: chart_source_reference_target(reference, workbook_id, worksheets),
+        resolved: resolve_chart_source_reference(reference, workbook_id, None, worksheets),
         cache: cache.map(|summary| ChartCacheSnapshot {
             kind: match summary.kind {
                 ChartCacheKindSummary::Number => ChartCacheKind::Number,
@@ -3142,247 +3139,6 @@ fn chart_series_from_summary(
             order: u32::try_from(index).ok(),
         })
         .collect()
-}
-
-fn chart_source_reference_target(
-    reference: &str,
-    workbook_id: WorkbookId,
-    worksheets: &[WorksheetModel],
-) -> Option<ReferenceTarget> {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum ChartA1Endpoint {
-        Cell(u32, u32),
-        Row(u32),
-        Column(u32),
-    }
-
-    let parse_column_label_a1 = |input: &str| -> Option<u32> {
-        let normalized = input.trim().replace('$', "").to_ascii_uppercase();
-        if normalized.is_empty() || !normalized.chars().all(|ch| ch.is_ascii_alphabetic()) {
-            return None;
-        }
-
-        let mut col = 0u32;
-        for ch in normalized.bytes() {
-            col = col.checked_mul(26)?.checked_add((ch - b'A' + 1) as u32)?;
-        }
-        if col == 0 || col > EXCEL_MAX_COLUMN_INDEX {
-            return None;
-        }
-        Some(col)
-    };
-
-    let parse_cell_a1 = |input: &str| -> Option<(u32, u32)> {
-        let trimmed = input.trim();
-        let mut letters = String::new();
-        let mut digits = String::new();
-        for ch in trimmed.chars() {
-            if ch == '$' {
-                continue;
-            }
-            if ch.is_ascii_alphabetic() && digits.is_empty() {
-                letters.push(ch.to_ascii_uppercase());
-            } else if ch.is_ascii_digit() {
-                digits.push(ch);
-            } else {
-                return None;
-            }
-        }
-        if letters.is_empty() || digits.is_empty() {
-            return None;
-        }
-
-        let col = parse_column_label_a1(&letters)?;
-        let row = digits.parse::<u32>().ok()?;
-        if row == 0 || row > EXCEL_MAX_ROW_INDEX {
-            return None;
-        }
-        Some((row, col))
-    };
-
-    let parse_a1_endpoint = |input: &str| -> Option<ChartA1Endpoint> {
-        let normalized = input.trim().replace('$', "");
-        if normalized.is_empty() {
-            return None;
-        }
-        if normalized.chars().all(|ch| ch.is_ascii_digit()) {
-            let row = normalized.parse::<u32>().ok()?;
-            if row == 0 || row > EXCEL_MAX_ROW_INDEX {
-                return None;
-            }
-            return Some(ChartA1Endpoint::Row(row));
-        }
-        if normalized.chars().all(|ch| ch.is_ascii_alphabetic()) {
-            return Some(ChartA1Endpoint::Column(parse_column_label_a1(input)?));
-        }
-
-        let (row, col) = parse_cell_a1(input)?;
-        Some(ChartA1Endpoint::Cell(row, col))
-    };
-
-    let parse_rect_a1 = |input: &str| -> Option<Rect> {
-        let input = input.trim();
-        let mut parts = input.split(':');
-        let first = parts.next()?;
-        let second = parts.next();
-        if parts.next().is_some() {
-            return None;
-        }
-        let first = parse_a1_endpoint(first)?;
-        let Some(second) = second else {
-            return match first {
-                ChartA1Endpoint::Cell(row, col) => Some(Rect::single_cell(row, col)),
-                ChartA1Endpoint::Row(_) | ChartA1Endpoint::Column(_) => None,
-            };
-        };
-        let second = parse_a1_endpoint(second)?;
-        match (first, second) {
-            (
-                ChartA1Endpoint::Cell(first_row, first_col),
-                ChartA1Endpoint::Cell(second_row, second_col),
-            ) => Some(Rect {
-                row_first: first_row.min(second_row),
-                row_last: first_row.max(second_row),
-                col_first: first_col.min(second_col),
-                col_last: first_col.max(second_col),
-            }),
-            (ChartA1Endpoint::Row(first_row), ChartA1Endpoint::Row(second_row)) => Some(Rect {
-                row_first: first_row.min(second_row),
-                row_last: first_row.max(second_row),
-                col_first: 1,
-                col_last: EXCEL_MAX_COLUMN_INDEX,
-            }),
-            (ChartA1Endpoint::Column(first_col), ChartA1Endpoint::Column(second_col)) => {
-                Some(Rect {
-                    row_first: 1,
-                    row_last: EXCEL_MAX_ROW_INDEX,
-                    col_first: first_col.min(second_col),
-                    col_last: first_col.max(second_col),
-                })
-            }
-            _ => None,
-        }
-    };
-
-    let reference = reference.trim();
-    let reference = reference.strip_prefix('=').unwrap_or(reference).trim();
-    if reference.is_empty() || reference.contains('[') || reference.contains(']') {
-        return None;
-    }
-
-    let mut parts = Vec::new();
-    let mut start = 0usize;
-    let mut in_quote = false;
-    let mut chars = reference.char_indices().peekable();
-    while let Some((index, ch)) = chars.next() {
-        match ch {
-            '\'' => {
-                if in_quote && chars.peek().is_some_and(|(_, next)| *next == '\'') {
-                    chars.next();
-                } else {
-                    in_quote = !in_quote;
-                }
-            }
-            ',' if !in_quote => {
-                let part = reference[start..index].trim();
-                if part.is_empty() {
-                    return None;
-                }
-                parts.push(part);
-                start = index + ch.len_utf8();
-            }
-            _ => {}
-        }
-    }
-    if in_quote {
-        return None;
-    }
-
-    let part = reference[start..].trim();
-    if part.is_empty() {
-        return None;
-    }
-    parts.push(part);
-
-    let mut areas = Vec::new();
-    for part in parts {
-        let part = part.trim();
-        let mut in_quote = false;
-        let mut separator = None;
-        let mut chars = part.char_indices().peekable();
-        while let Some((index, ch)) = chars.next() {
-            match ch {
-                '\'' => {
-                    if in_quote && chars.peek().is_some_and(|(_, next)| *next == '\'') {
-                        chars.next();
-                    } else {
-                        in_quote = !in_quote;
-                    }
-                }
-                '!' if !in_quote => separator = Some(index),
-                _ => {}
-            }
-        }
-        if in_quote {
-            return None;
-        }
-
-        let separator = separator?;
-        let sheet = part[..separator].trim();
-        let area_reference = part[separator + 1..].trim();
-        if sheet.is_empty() || area_reference.is_empty() {
-            return None;
-        }
-
-        let sheet_name = if sheet.starts_with('\'') {
-            let mut output = String::new();
-            let mut chars = sheet.char_indices().peekable();
-            let (_, first) = chars.next()?;
-            if first != '\'' {
-                return None;
-            }
-
-            let mut parsed = None;
-            while let Some((index, ch)) = chars.next() {
-                if ch == '\'' {
-                    if chars.peek().is_some_and(|(_, next)| *next == '\'') {
-                        chars.next();
-                        output.push('\'');
-                    } else if sheet[index + ch.len_utf8()..].trim().is_empty() {
-                        parsed = Some(output);
-                        break;
-                    } else {
-                        return None;
-                    }
-                } else {
-                    output.push(ch);
-                }
-            }
-            parsed?
-        } else {
-            if sheet.contains('\'') {
-                return None;
-            }
-            sheet.to_string()
-        };
-        if sheet_name.is_empty()
-            || sheet_name.contains('[')
-            || sheet_name.contains(']')
-            || sheet_name.contains(':')
-        {
-            return None;
-        }
-
-        let sheet_id = worksheets
-            .iter()
-            .find(|worksheet| worksheet.name.eq_ignore_ascii_case(&sheet_name))
-            .map(|worksheet| worksheet.id)?;
-        let rect = parse_rect_a1(area_reference)?;
-        areas.push(RangeArea::new(SheetScope::Single(sheet_id), rect).ok()?);
-    }
-    RangeSet::new(workbook_id, areas)
-        .ok()
-        .map(ReferenceTarget::Range)
 }
 
 fn drawing_anchor_from_summary(summary: &DrawingAnchorSummary) -> Option<DrawingAnchor> {
@@ -18723,7 +18479,9 @@ mod tests {
         compute_dimension_ref_with_preserved, parse_shared_strings, parse_workbook,
         parse_workbook_relationships, parse_worksheet_cells, rewrite_worksheet_xml,
     };
-    use excel_model::{ChartCacheKind, ChartType, DrawingObjectModel};
+    use excel_model::{
+        ChartCacheKind, ChartType, DrawingObjectModel, resolve_chart_source_reference,
+    };
     use office_common::{
         CellError, CellValue, DrawingAnchor, Emu, FormulaSource, LoadOptions as CommonLoadOptions,
         NameScope, NameValidationMode, ObjectPlacement, OmErrorCode, Rect, ReferenceTarget,
@@ -19985,7 +19743,7 @@ mod tests {
     }
 
     #[test]
-    fn chart_source_reference_target_resolves_quoted_multi_area_sources() {
+    fn resolve_chart_source_reference_resolves_quoted_multi_area_sources() {
         let worksheets = vec![WorksheetModel {
             id: SheetId(7),
             workbook_id: WorkbookId(3),
@@ -19996,9 +19754,10 @@ mod tests {
             part_uri: None,
         }];
 
-        let target = super::chart_source_reference_target(
+        let target = resolve_chart_source_reference(
             "'Data 2026'!$A$1:$A$3,'Data 2026'!$C$1",
             WorkbookId(3),
+            None,
             &worksheets,
         )
         .expect("chart source target");
@@ -20021,10 +19780,11 @@ mod tests {
         assert_eq!(range.areas()[1].scope, SheetScope::Single(SheetId(7)));
         assert_eq!(range.areas()[1].rect, Rect::single_cell(1, 3));
         assert!(
-            super::chart_source_reference_target(
+            resolve_chart_source_reference(
                 "[External.xlsx]Data 2026!$A$1",
                 WorkbookId(3),
-                &worksheets,
+                None,
+                &worksheets
             )
             .is_none()
         );

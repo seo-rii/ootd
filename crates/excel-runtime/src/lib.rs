@@ -1,7 +1,7 @@
 use excel_model::{
     AxisModel, ChartAxisKind, ChartLegendPosition, ChartModel, ChartObjectModel, ChartSheetBinding,
     ChartSourceExpr, ChartText, ChartType, DrawingModel, DrawingObjectModel, LegendModel,
-    SeriesModel, WorkbookState, WorksheetData,
+    SeriesModel, WorkbookState, WorksheetData, resolve_chart_source_reference,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
@@ -2843,96 +2843,26 @@ impl ExcelRuntime {
                         "Series.{member} does not accept index arguments"
                     )));
                 }
-                macro_rules! resolved_chart_source_target {
-                    ($raw_text:expr) => {{
-                        let source_reference = $raw_text.trim();
-                        let mut resolved = None;
-                        if let Ok(parts) = split_reference_union_text(source_reference) {
-                            let mut areas = Vec::with_capacity(parts.len());
-                            let mut parse_failed = false;
-                            for part in parts {
-                                let Some((sheet_qualifier, a1_reference)) = part.rsplit_once('!')
-                                else {
-                                    parse_failed = true;
-                                    break;
-                                };
-                                let sheet_qualifier = sheet_qualifier.trim();
-                                let sheet_name = if sheet_qualifier.starts_with('\'') {
-                                    if !sheet_qualifier.ends_with('\'') || sheet_qualifier.len() < 2
-                                    {
-                                        parse_failed = true;
-                                        break;
-                                    }
-                                    sheet_qualifier[1..sheet_qualifier.len() - 1].replace("''", "'")
-                                } else {
-                                    if sheet_qualifier.contains('\'') {
-                                        parse_failed = true;
-                                        break;
-                                    }
-                                    sheet_qualifier.to_string()
-                                };
-                                let (source_workbook, source_sheet_name) = match self
-                                    .resolve_application_reference_sheet_qualifier(
-                                        workbook,
-                                        &sheet_name,
-                                    ) {
-                                    Ok(resolved) => resolved,
-                                    Err(_) => {
-                                        parse_failed = true;
-                                        break;
-                                    }
-                                };
-                                if source_workbook != workbook {
-                                    parse_failed = true;
-                                    break;
-                                }
-                                let Some(source_sheet_name) = source_sheet_name else {
-                                    parse_failed = true;
-                                    break;
-                                };
-                                let sheet_id = match self.runtime_workbook(workbook) {
-                                    Ok(runtime) => runtime
-                                        .loaded
-                                        .state
-                                        .worksheets
-                                        .iter()
-                                        .find(|worksheet| {
-                                            worksheet.name.eq_ignore_ascii_case(&source_sheet_name)
-                                        })
-                                        .map(|worksheet| worksheet.id),
-                                    Err(_) => None,
-                                };
-                                let Some(sheet_id) = sheet_id else {
-                                    parse_failed = true;
-                                    break;
-                                };
-                                let Ok(rect) = parse_rect_a1(a1_reference) else {
-                                    parse_failed = true;
-                                    break;
-                                };
-                                let Ok(area) = RangeArea::new(SheetScope::Single(sheet_id), rect)
-                                else {
-                                    parse_failed = true;
-                                    break;
-                                };
-                                areas.push(area);
-                            }
-                            if !parse_failed
-                                && let Ok(workbook_model) = self.workbook_model(workbook)
-                                && let Ok(range) = RangeSet::new(workbook_model.id, areas)
-                            {
-                                resolved = Some(ReferenceTarget::Range(range));
-                            }
-                        }
-                        resolved
-                    }};
-                }
+                let chart_source_workbook = self.workbook_model(workbook)?;
+                let chart_source_workbook_id = chart_source_workbook.id;
+                let chart_source_workbook_display_name = chart_source_workbook.display_name.clone();
+                let chart_source_worksheets = self
+                    .runtime_workbook(workbook)?
+                    .loaded
+                    .state
+                    .worksheets
+                    .clone();
                 match member {
                     "Name" | "Values" | "XValues" => {
                         let source = match value {
                             OmValue::Text(text) => {
                                 let raw_text = text.trim_start_matches('=').to_string();
-                                let resolved = resolved_chart_source_target!(raw_text);
+                                let resolved = resolve_chart_source_reference(
+                                    &raw_text,
+                                    chart_source_workbook_id,
+                                    Some(&chart_source_workbook_display_name),
+                                    &chart_source_worksheets,
+                                );
                                 Some(ChartSourceExpr {
                                     raw: FormulaSource {
                                         text: raw_text,
@@ -3099,7 +3029,12 @@ impl ExcelRuntime {
                                     None
                                 } else {
                                     let raw_text = text.trim_start_matches('=').to_string();
-                                    let resolved = resolved_chart_source_target!(raw_text);
+                                    let resolved = resolve_chart_source_reference(
+                                        &raw_text,
+                                        chart_source_workbook_id,
+                                        Some(&chart_source_workbook_display_name),
+                                        &chart_source_worksheets,
+                                    );
                                     Some(ChartSourceExpr {
                                         raw: FormulaSource {
                                             text: raw_text,
@@ -68120,6 +68055,56 @@ mod tests {
                 }
             );
         }
+        let workbook_qualified_values = {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state before qualified string source setter");
+            format!("=[{}]Sheet1!$B$1:$B$3", state.model.display_name.as_str())
+        };
+        runtime
+            .dispatch_set(
+                series,
+                "Values",
+                OmValue::Text(workbook_qualified_values.clone()),
+                &[],
+            )
+            .expect("set Series.Values with workbook qualifier");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Values", &[])
+                .expect("Series.Values after workbook-qualified set"),
+            OmValue::Text(workbook_qualified_values)
+        );
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after workbook-qualified source setter");
+            let sheet_id = state.worksheets[0].id;
+            let chart = state.charts.values().next().expect("chart model");
+            let values = chart.series[0].values.as_ref().expect("series values");
+            let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
+                panic!("workbook-qualified Series.Values should resolve to a range");
+            };
+            assert_eq!(range.workbook_id(), state.model.id);
+            assert_eq!(range.areas()[0].scope, SheetScope::Single(sheet_id));
+            assert_eq!(
+                range.areas()[0].rect,
+                Rect {
+                    row_first: 1,
+                    row_last: 3,
+                    col_first: 2,
+                    col_last: 2,
+                }
+            );
+        }
+        runtime
+            .dispatch_set(
+                series,
+                "Values",
+                OmValue::Text("=Sheet1!$B$1:$B$3".to_string()),
+                &[],
+            )
+            .expect("restore unqualified Series.Values");
         runtime
             .dispatch_set(
                 worksheet,
