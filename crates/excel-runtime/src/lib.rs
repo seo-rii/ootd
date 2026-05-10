@@ -532,7 +532,29 @@ impl ExcelRuntime {
         template: RuntimeSheetTemplate,
     ) -> OmResult<WorkbookHandle> {
         let workbook = self.create_workbook()?;
-        if template != RuntimeSheetTemplate::Worksheet {
+        if template == RuntimeSheetTemplate::Chart {
+            let original_sheet_id = self
+                .runtime_workbook(workbook)?
+                .loaded
+                .state
+                .worksheets
+                .first()
+                .map(|worksheet| worksheet.id)
+                .ok_or_else(|| {
+                    OmError::new(OmErrorCode::InvalidState, "workbook has no worksheets")
+                })?;
+            self.add_worksheet(
+                workbook,
+                &[
+                    OmValue::Missing,
+                    OmValue::Number(1.0),
+                    OmValue::Missing,
+                    OmValue::Number(f64::from(XL_SHEET_TYPE_CHART)),
+                ],
+            )?;
+            self.delete_worksheet(workbook, original_sheet_id, false)?;
+            self.runtime_workbook_mut(workbook)?.dirty = false;
+        } else if template != RuntimeSheetTemplate::Worksheet {
             let runtime = self.runtime_workbook_mut(workbook)?;
             let sheet_name = unique_worksheet_name_with_prefix(
                 &runtime.loaded.state.worksheets,
@@ -57257,6 +57279,38 @@ mod tests {
                     ),
                     f64::from(super::XL_SHEET_TYPE_CHART)
                 );
+                let saved = runtime
+                    .save_workbook(
+                        office_common::WorkbookHandle(workbook),
+                        SaveWorkbookSpec {
+                            format: FileFormat::Xlsx,
+                            profile: ExcelProfile::Excel365,
+                            lossless: true,
+                        },
+                    )
+                    .expect("save chart template workbook");
+                let saved_package =
+                    OpcPackage::from_bytes(&saved).expect("saved chart template package");
+                let reopened = ExcelRuntime::new()
+                    .codec
+                    .load(&saved, LoadOptions::default())
+                    .expect("reopen chart template workbook");
+                assert!(saved_package.contains("xl/chartsheets/sheet1.xml"));
+                assert!(saved_package.contains("xl/chartsheets/_rels/sheet1.xml.rels"));
+                assert!(saved_package.contains("xl/drawings/drawing1.xml"));
+                assert!(saved_package.contains("xl/drawings/_rels/drawing1.xml.rels"));
+                assert!(saved_package.contains("xl/charts/chart1.xml"));
+                assert!(!saved_package.contains("xl/worksheets/sheet1.xml"));
+                assert_eq!(reopened.state.worksheets.len(), 1);
+                assert_eq!(
+                    reopened.state.worksheets[0].kind,
+                    office_common::SheetKind::ChartSheet
+                );
+                assert_eq!(
+                    reopened.state.worksheets[0].part_uri.as_deref(),
+                    Some("xl/chartsheets/sheet1.xml")
+                );
+                assert_eq!(reopened.state.chart_sheets.len(), 1);
             }
             assert!(expect_bool(
                 runtime
