@@ -62974,6 +62974,77 @@ mod tests {
                 .dispatch_get(workbook.0, "Saved", &[])
                 .expect("Workbook.Saved after chart geometry set")
         ));
+        let saved_with_geometry = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with chart geometry");
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved_with_geometry,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook with chart geometry");
+        let reopened_worksheets = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[])
+                .expect("reopened Workbook.Worksheets"),
+        );
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened Worksheets.Item(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_object, "Left", &[])
+                    .expect("reopened ChartObject.Left")
+            ),
+            8.0
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_object, "Top", &[])
+                    .expect("reopened ChartObject.Top")
+            ),
+            9.0
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_object, "Width", &[])
+                    .expect("reopened ChartObject.Width")
+            ),
+            120.0
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_object, "Height", &[])
+                    .expect("reopened ChartObject.Height")
+            ),
+            70.0
+        );
         runtime
             .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
             .expect("clear chart placement dirty state");

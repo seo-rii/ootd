@@ -1218,6 +1218,364 @@ impl XlsxCodec {
             invalidate_calc_chain_artifacts(&mut package)?;
         }
 
+        for drawing in workbook.state.drawings.values() {
+            if !drawing.dirty {
+                continue;
+            }
+            let dirty_chart_objects = drawing
+                .objects
+                .iter()
+                .filter_map(|object| match object {
+                    DrawingObjectModel::ChartFrame(chart_object)
+                        if chart_object.dirty && chart_object.anchor.is_some() =>
+                    {
+                        Some(chart_object)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            if dirty_chart_objects.is_empty() {
+                continue;
+            }
+            let Some(drawing_part_uri) = drawing.raw_part_uri.as_deref() else {
+                continue;
+            };
+            let Some(source_bytes) = package
+                .part(drawing_part_uri)
+                .map(|part| part.bytes.clone())
+            else {
+                continue;
+            };
+
+            #[derive(Clone, Copy)]
+            enum ActiveMarker {
+                From,
+                To,
+            }
+
+            #[derive(Clone, Copy)]
+            enum ActiveMarkerField {
+                Col,
+                ColOffset,
+                Row,
+                RowOffset,
+            }
+
+            let rewrite_position_or_ext_element =
+                |element: &BytesStart<'_>,
+                 decoder: quick_xml::encoding::Decoder,
+                 chart_object: &ChartObjectModel|
+                 -> OmResult<Option<BytesStart<'static>>> {
+                    let element_name = element.name();
+                    let local_name = xml_local_name(element_name.as_ref());
+                    let replacements = match (chart_object.anchor.as_ref(), local_name) {
+                        (Some(DrawingAnchor::Absolute(anchor)), b"pos") => vec![
+                            ("x".to_string(), anchor.position.x.0.to_string()),
+                            ("y".to_string(), anchor.position.y.0.to_string()),
+                        ],
+                        (Some(DrawingAnchor::Absolute(anchor)), b"ext") => vec![
+                            ("cx".to_string(), anchor.extents.cx.0.to_string()),
+                            ("cy".to_string(), anchor.extents.cy.0.to_string()),
+                        ],
+                        (Some(DrawingAnchor::OneCell(anchor)), b"ext") => vec![
+                            ("cx".to_string(), anchor.extents.cx.0.to_string()),
+                            ("cy".to_string(), anchor.extents.cy.0.to_string()),
+                        ],
+                        _ => return Ok(None),
+                    };
+                    let mut rewritten = BytesStart::new(
+                        String::from_utf8_lossy(element.name().as_ref()).into_owned(),
+                    );
+                    let mut written_replacements = BTreeSet::new();
+                    for attr in element.attributes() {
+                        let attr = attr.map_err(xml_error)?;
+                        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+                        if let Some((_, value)) =
+                            replacements.iter().find(|(candidate, _)| candidate == &key)
+                        {
+                            rewritten.push_attribute((key.as_str(), value.as_str()));
+                            written_replacements.insert(key);
+                            continue;
+                        }
+                        let value = attr
+                            .decode_and_unescape_value(decoder)
+                            .map_err(xml_error)?
+                            .into_owned();
+                        rewritten.push_attribute((key.as_str(), value.as_str()));
+                    }
+                    for (key, value) in replacements {
+                        if !written_replacements.contains(&key) {
+                            rewritten.push_attribute((key.as_str(), value.as_str()));
+                        }
+                    }
+                    Ok(Some(rewritten))
+                };
+
+            let mut reader = Reader::from_reader(Cursor::new(source_bytes.as_slice()));
+            reader.config_mut().trim_text(false);
+            let mut writer = Writer::new(Cursor::new(Vec::new()));
+            let mut buffer = Vec::new();
+            let mut anchor_index = 0usize;
+            let mut active_chart_object_index = None::<usize>;
+            let mut active_anchor_depth = 0usize;
+            let mut active_marker = None::<ActiveMarker>;
+            let mut active_marker_field = None::<ActiveMarkerField>;
+
+            loop {
+                match reader.read_event_into(&mut buffer) {
+                    Ok(Event::Start(element)) => {
+                        let element_name = element.name();
+                        let local_name = xml_local_name(element_name.as_ref());
+                        let is_anchor = matches!(
+                            local_name,
+                            b"twoCellAnchor" | b"oneCellAnchor" | b"absoluteAnchor"
+                        );
+                        if active_anchor_depth == 0 && is_anchor {
+                            active_chart_object_index =
+                                dirty_chart_objects.iter().position(|chart_object| {
+                                    chart_object.z_order == u32::try_from(anchor_index).ok()
+                                });
+                            active_anchor_depth = 1;
+                            if let Some(chart_object_index) = active_chart_object_index {
+                                let chart_object = dirty_chart_objects[chart_object_index];
+                                if matches!(chart_object.anchor, Some(DrawingAnchor::TwoCell(_)))
+                                    && local_name == b"twoCellAnchor"
+                                {
+                                    let mut rewritten = BytesStart::new(
+                                        String::from_utf8_lossy(element.name().as_ref())
+                                            .into_owned(),
+                                    );
+                                    let mut wrote_edit_as = false;
+                                    for attr in element.attributes() {
+                                        let attr = attr.map_err(xml_error)?;
+                                        let key =
+                                            String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+                                        if key == "editAs" {
+                                            match chart_object.placement {
+                                                ObjectPlacement::MoveOnly => {
+                                                    rewritten.push_attribute(("editAs", "oneCell"));
+                                                    wrote_edit_as = true;
+                                                }
+                                                ObjectPlacement::FreeFloating => {
+                                                    rewritten
+                                                        .push_attribute(("editAs", "absolute"));
+                                                    wrote_edit_as = true;
+                                                }
+                                                ObjectPlacement::MoveAndSize
+                                                | ObjectPlacement::Unknown => {}
+                                            }
+                                            continue;
+                                        }
+                                        let value = attr
+                                            .decode_and_unescape_value(reader.decoder())
+                                            .map_err(xml_error)?
+                                            .into_owned();
+                                        rewritten.push_attribute((key.as_str(), value.as_str()));
+                                    }
+                                    if !wrote_edit_as {
+                                        match chart_object.placement {
+                                            ObjectPlacement::MoveOnly => {
+                                                rewritten.push_attribute(("editAs", "oneCell"));
+                                            }
+                                            ObjectPlacement::FreeFloating => {
+                                                rewritten.push_attribute(("editAs", "absolute"));
+                                            }
+                                            ObjectPlacement::MoveAndSize
+                                            | ObjectPlacement::Unknown => {}
+                                        }
+                                    }
+                                    writer
+                                        .write_event(Event::Start(rewritten))
+                                        .map_err(xml_error)?;
+                                } else {
+                                    writer
+                                        .write_event(Event::Start(element.into_owned()))
+                                        .map_err(xml_error)?;
+                                }
+                            } else {
+                                writer
+                                    .write_event(Event::Start(element.into_owned()))
+                                    .map_err(xml_error)?;
+                            }
+                        } else {
+                            if active_anchor_depth > 0 {
+                                active_anchor_depth += 1;
+                                match local_name {
+                                    b"from" => active_marker = Some(ActiveMarker::From),
+                                    b"to" => active_marker = Some(ActiveMarker::To),
+                                    b"col" => active_marker_field = Some(ActiveMarkerField::Col),
+                                    b"colOff" => {
+                                        active_marker_field = Some(ActiveMarkerField::ColOffset)
+                                    }
+                                    b"row" => active_marker_field = Some(ActiveMarkerField::Row),
+                                    b"rowOff" => {
+                                        active_marker_field = Some(ActiveMarkerField::RowOffset)
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            if let Some(chart_object_index) = active_chart_object_index {
+                                let chart_object = dirty_chart_objects[chart_object_index];
+                                if let Some(rewritten) = rewrite_position_or_ext_element(
+                                    &element,
+                                    reader.decoder(),
+                                    chart_object,
+                                )? {
+                                    writer
+                                        .write_event(Event::Start(rewritten))
+                                        .map_err(xml_error)?;
+                                } else {
+                                    writer
+                                        .write_event(Event::Start(element.into_owned()))
+                                        .map_err(xml_error)?;
+                                }
+                            } else {
+                                writer
+                                    .write_event(Event::Start(element.into_owned()))
+                                    .map_err(xml_error)?;
+                            }
+                        }
+                    }
+                    Ok(Event::Empty(element)) => {
+                        let element_name = element.name();
+                        let local_name = xml_local_name(element_name.as_ref());
+                        let is_anchor = matches!(
+                            local_name,
+                            b"twoCellAnchor" | b"oneCellAnchor" | b"absoluteAnchor"
+                        );
+                        if active_anchor_depth == 0 && is_anchor {
+                            anchor_index += 1;
+                            writer
+                                .write_event(Event::Empty(element.into_owned()))
+                                .map_err(xml_error)?;
+                            buffer.clear();
+                            continue;
+                        }
+                        if let Some(chart_object_index) = active_chart_object_index {
+                            let chart_object = dirty_chart_objects[chart_object_index];
+                            if let Some(rewritten) = rewrite_position_or_ext_element(
+                                &element,
+                                reader.decoder(),
+                                chart_object,
+                            )? {
+                                writer
+                                    .write_event(Event::Empty(rewritten))
+                                    .map_err(xml_error)?;
+                            } else {
+                                writer
+                                    .write_event(Event::Empty(element.into_owned()))
+                                    .map_err(xml_error)?;
+                            }
+                        } else {
+                            writer
+                                .write_event(Event::Empty(element.into_owned()))
+                                .map_err(xml_error)?;
+                        }
+                    }
+                    Ok(Event::Text(text)) => {
+                        let replacement = if let Some(chart_object_index) =
+                            active_chart_object_index
+                        {
+                            let chart_object = dirty_chart_objects[chart_object_index];
+                            match (
+                                chart_object.anchor.as_ref(),
+                                active_marker,
+                                active_marker_field,
+                            ) {
+                                (
+                                    Some(DrawingAnchor::OneCell(anchor)),
+                                    Some(ActiveMarker::From),
+                                    Some(field),
+                                ) => Some(match field {
+                                    ActiveMarkerField::Col => {
+                                        anchor.from.col_zero_based.to_string()
+                                    }
+                                    ActiveMarkerField::ColOffset => {
+                                        anchor.from.col_offset.0.to_string()
+                                    }
+                                    ActiveMarkerField::Row => {
+                                        anchor.from.row_zero_based.to_string()
+                                    }
+                                    ActiveMarkerField::RowOffset => {
+                                        anchor.from.row_offset.0.to_string()
+                                    }
+                                }),
+                                (
+                                    Some(DrawingAnchor::TwoCell(anchor)),
+                                    Some(marker),
+                                    Some(field),
+                                ) => {
+                                    let marker = match marker {
+                                        ActiveMarker::From => anchor.from,
+                                        ActiveMarker::To => anchor.to,
+                                    };
+                                    Some(match field {
+                                        ActiveMarkerField::Col => marker.col_zero_based.to_string(),
+                                        ActiveMarkerField::ColOffset => {
+                                            marker.col_offset.0.to_string()
+                                        }
+                                        ActiveMarkerField::Row => marker.row_zero_based.to_string(),
+                                        ActiveMarkerField::RowOffset => {
+                                            marker.row_offset.0.to_string()
+                                        }
+                                    })
+                                }
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        };
+                        if let Some(replacement) = replacement {
+                            writer
+                                .write_event(Event::Text(BytesText::new(&replacement)))
+                                .map_err(xml_error)?;
+                        } else {
+                            writer
+                                .write_event(Event::Text(text.into_owned()))
+                                .map_err(xml_error)?;
+                        }
+                    }
+                    Ok(Event::End(element)) => {
+                        let element_name = element.name();
+                        let local_name = xml_local_name(element_name.as_ref()).to_vec();
+                        writer
+                            .write_event(Event::End(element.into_owned()))
+                            .map_err(xml_error)?;
+                        if active_anchor_depth > 0 {
+                            match local_name.as_slice() {
+                                b"col" | b"colOff" | b"row" | b"rowOff" => {
+                                    active_marker_field = None;
+                                }
+                                b"from" | b"to" => {
+                                    active_marker = None;
+                                }
+                                _ => {}
+                            }
+                            if matches!(
+                                local_name.as_slice(),
+                                b"twoCellAnchor" | b"oneCellAnchor" | b"absoluteAnchor"
+                            ) && active_anchor_depth == 1
+                            {
+                                active_anchor_depth = 0;
+                                active_chart_object_index = None;
+                                active_marker = None;
+                                active_marker_field = None;
+                                anchor_index += 1;
+                            } else {
+                                active_anchor_depth = active_anchor_depth.saturating_sub(1);
+                            }
+                        }
+                    }
+                    Ok(Event::Eof) => break,
+                    Ok(event) => writer.write_event(event.into_owned()).map_err(xml_error)?,
+                    Err(error) => return Err(xml_error(error)),
+                }
+                buffer.clear();
+            }
+
+            package.replace_part_bytes(drawing_part_uri, writer.into_inner().into_inner())?;
+        }
+
         ensure_support_parts_present(&package, &workbook.support_parts)?;
         ensure_worksheet_support_parts_present(&package, &workbook.worksheet_support_parts)?;
 
