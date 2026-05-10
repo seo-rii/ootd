@@ -7,10 +7,10 @@ use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_j
 use office_common::{
     CellError, CellValue, ChartId, ChartObjectId, DefinedNameId, DrawingAnchor, ExcelProfile,
     FileFormat, FormulaSource, GetRangeValuesSpec, LoadOptions, NameScope, NameValidationMode,
-    ObjectHandle, OmArray, OmError, OmErrorCode, OmResult, OmValue, OpaquePart, OpenWorkbookSpec,
-    RangeArea, RangeHandle, RangeRef, RangeSet, Rect, SaveOptions, SaveWorkbookSpec,
-    SetRangeValuesSpec, SheetId, SheetKind, SheetScope, SheetVisibility, WorkbookHandle,
-    WorkbookId, WorkbookModel, WorksheetHandle, WorksheetModel,
+    ObjectHandle, ObjectPlacement, OmArray, OmError, OmErrorCode, OmResult, OmValue, OpaquePart,
+    OpenWorkbookSpec, RangeArea, RangeHandle, RangeRef, RangeSet, Rect, SaveOptions,
+    SaveWorkbookSpec, SetRangeValuesSpec, SheetId, SheetKind, SheetScope, SheetVisibility,
+    WorkbookHandle, WorkbookId, WorkbookModel, WorksheetHandle, WorksheetModel,
 };
 use office_idl::{AccessMode, SupportState};
 use office_opc::{CompressionMethod, OpcPackage, OpcPart};
@@ -43,6 +43,9 @@ const XL_LINE: i32 = 4;
 const XL_PIE: i32 = 5;
 const XL_BAR_CLUSTERED: i32 = 57;
 const XL_XY_SCATTER: i32 = -4169;
+const XL_MOVE_AND_SIZE: i32 = 1;
+const XL_MOVE: i32 = 2;
+const XL_FREE_FLOATING: i32 = 3;
 const XL_WBA_TEMPLATE_WORKSHEET: i32 = -4167;
 const XL_WBA_TEMPLATE_CHART: i32 = -4109;
 const XL_WBA_TEMPLATE_EXCEL4_MACRO_SHEET: i32 = 3;
@@ -4376,6 +4379,7 @@ impl ExcelRuntime {
                         "ChartObject",
                         "Name"
                             | "Chart"
+                            | "Placement"
                             | "Left"
                             | "Top"
                             | "Width"
@@ -6150,6 +6154,11 @@ impl ExcelRuntime {
                     self.register_chart_handle(workbook, chart_id),
                 ))
             }
+            "Placement" => Ok(OmValue::Number(f64::from(chart_object_placement_value(
+                &self
+                    .chart_object_model(workbook, chart_object_id)?
+                    .placement,
+            )?))),
             "Left" | "Top" | "Width" | "Height" => {
                 Ok(OmValue::Number(Self::chart_object_geometry_value(
                     self.chart_object_model(workbook, chart_object_id)?,
@@ -11649,6 +11658,17 @@ fn chart_type_to_excel_value(chart_type: &ChartType) -> OmResult<i32> {
         ChartType::Unsupported(name) => Err(OmError::unsupported(format!(
             "Chart.ChartType is unavailable for unsupported chart type {name}"
         ))),
+    }
+}
+
+fn chart_object_placement_value(placement: &ObjectPlacement) -> OmResult<i32> {
+    match placement {
+        ObjectPlacement::MoveAndSize => Ok(XL_MOVE_AND_SIZE),
+        ObjectPlacement::MoveOnly => Ok(XL_MOVE),
+        ObjectPlacement::FreeFloating => Ok(XL_FREE_FLOATING),
+        ObjectPlacement::Unknown => Err(OmError::unsupported(
+            "ChartObject.Placement is unavailable for unknown drawing placement",
+        )),
     }
 }
 
@@ -62229,6 +62249,14 @@ mod tests {
                     .expect("ChartObject.Height")
             ),
             50.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_object, "Placement", &[])
+                    .expect("ChartObject.Placement")
+            ),
+            f64::from(super::XL_FREE_FLOATING)
         );
 
         let chart = expect_object_handle(
