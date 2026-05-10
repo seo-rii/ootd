@@ -889,10 +889,43 @@ impl ExcelRuntime {
                             )
                         })
                         .unwrap_or_default();
+                    let chart_has_axes = !matches!(chart.chart_type, ChartType::Pie);
+                    let mut chart_group_axis_refs = String::new();
+                    let mut axes_xml = String::new();
+                    if chart_has_axes {
+                        for (axis_index, axis) in chart.axes.iter().enumerate() {
+                            let axis_id = axis
+                                .raw_id
+                                .clone()
+                                .unwrap_or_else(|| ((axis_index + 1) * 10).to_string());
+                            let escaped_axis_id = partial_escape(&axis_id).to_string();
+                            chart_group_axis_refs
+                                .push_str(&format!(r#"<c:axId val="{escaped_axis_id}"/>"#));
+                            let axis_tag = match axis.kind {
+                                ChartAxisKind::Category => "catAx",
+                                ChartAxisKind::Value => "valAx",
+                                ChartAxisKind::Date => "dateAx",
+                                ChartAxisKind::Series => "serAx",
+                            };
+                            let axis_title_xml = axis
+                                .title
+                                .as_ref()
+                                .map(|title| {
+                                    let title_text = partial_escape(&title.text).to_string();
+                                    format!(
+                                        r#"<c:title><c:tx><c:rich><a:p><a:r><a:t>{title_text}</a:t></a:r></a:p></c:rich></c:tx></c:title>"#
+                                    )
+                                })
+                                .unwrap_or_default();
+                            axes_xml.push_str(&format!(
+                                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{axis_title_xml}</c:{axis_tag}>"#
+                            ));
+                        }
+                    }
                     let chart_xml = format!(
                         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{series_xml}</c:{chart_group_name}></c:plotArea>{legend_xml}</c:chart>
+  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{series_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}</c:chart>
 </c:chartSpace>"#
                     );
                     loaded.package.add_part(OpcPart {
@@ -2239,8 +2272,6 @@ impl ExcelRuntime {
             | RuntimeObjectKind::ChartArea { .. }
             | RuntimeObjectKind::PlotArea { .. }
             | RuntimeObjectKind::Axes { .. }
-            | RuntimeObjectKind::Axis { .. }
-            | RuntimeObjectKind::AxisTitle { .. }
             | RuntimeObjectKind::SeriesCollection { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
             ))),
@@ -2294,7 +2325,13 @@ impl ExcelRuntime {
                                     OmError::new(OmErrorCode::NotFound, "chart not found")
                                 })?;
                         if chart.chart_type != chart_type {
+                            let chart_type_has_axes = !matches!(chart_type, ChartType::Pie);
                             chart.chart_type = chart_type;
+                            if chart_type_has_axes && chart.axes.is_empty() {
+                                chart.axes = default_chart_axes();
+                            } else if !chart_type_has_axes && !chart.axes.is_empty() {
+                                chart.axes.clear();
+                            }
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -2511,6 +2548,121 @@ impl ExcelRuntime {
                     }
                     _ => Err(OmError::unsupported(format!(
                         "Legend.{member} is not writable"
+                    ))),
+                }
+            }
+            RuntimeObjectKind::Axis {
+                workbook,
+                chart_id,
+                axis_index,
+            } => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "Axis.{member} does not accept index arguments"
+                    )));
+                }
+                match member {
+                    "HasTitle" => {
+                        let OmValue::Bool(has_title) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Axis.HasTitle expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let axis = chart
+                            .axes
+                            .get_mut(axis_index)
+                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
+                        let changed = if has_title {
+                            if axis.title.is_none() {
+                                axis.title = Some(ChartText {
+                                    text: String::new(),
+                                });
+                                true
+                            } else {
+                                false
+                            }
+                        } else if axis.title.is_some() {
+                            axis.title = None;
+                            true
+                        } else {
+                            false
+                        };
+                        if changed {
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "Axis.{member} is not writable"
+                    ))),
+                }
+            }
+            RuntimeObjectKind::AxisTitle {
+                workbook,
+                chart_id,
+                axis_index,
+            } => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "AxisTitle.{member} does not accept index arguments"
+                    )));
+                }
+                match member {
+                    "Text" | "Caption" => {
+                        let OmValue::Text(text) = value else {
+                            return Err(OmError::type_mismatch(
+                                "AxisTitle.Text expects a text value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let axis = chart
+                            .axes
+                            .get_mut(axis_index)
+                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
+                        let title = axis.title.as_mut().ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "axis title not found")
+                        })?;
+                        if title.text != text {
+                            title.text = text;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "AxisTitle.{member} is not writable"
                     ))),
                 }
             }
@@ -7559,7 +7711,7 @@ impl ExcelRuntime {
                             series: Vec::new(),
                             title: None,
                             legend: None,
-                            axes: Vec::new(),
+                            axes: default_chart_axes(),
                             raw_part_uri: None,
                             dirty: true,
                         },
@@ -13461,6 +13613,21 @@ fn chart_type_to_excel_value(chart_type: &ChartType) -> OmResult<i32> {
             "Chart.ChartType is unavailable for unsupported chart type {name}"
         ))),
     }
+}
+
+fn default_chart_axes() -> Vec<AxisModel> {
+    vec![
+        AxisModel {
+            raw_id: Some("10".to_string()),
+            kind: ChartAxisKind::Category,
+            title: None,
+        },
+        AxisModel {
+            raw_id: Some("20".to_string()),
+            kind: ChartAxisKind::Value,
+            title: None,
+        },
+    ]
 }
 
 fn chart_object_placement_value(placement: &ObjectPlacement) -> OmResult<i32> {
@@ -64651,6 +64818,52 @@ mod tests {
             ),
             f64::from(super::XL_LINE)
         );
+        let axes = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Axes", &[])
+                .expect("Chart.Axes after add"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(axes, "Count", &[])
+                    .expect("Axes.Count after add")
+            ),
+            2.0
+        );
+        let category_axis = expect_object_handle(
+            runtime
+                .dispatch_invoke(axes, "Item", &[OmValue::Number(1.0)])
+                .expect("Axes.Item(1) after add"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis, "HasTitle", &[])
+                .expect("Axis.HasTitle before set"),
+            OmValue::Bool(false)
+        );
+        runtime
+            .dispatch_set(category_axis, "HasTitle", OmValue::Bool(true), &[])
+            .expect("set Axis.HasTitle");
+        let axis_title = expect_object_handle(
+            runtime
+                .dispatch_get(category_axis, "AxisTitle", &[])
+                .expect("Axis.AxisTitle after HasTitle"),
+        );
+        runtime
+            .dispatch_set(
+                axis_title,
+                "Text",
+                OmValue::Text("Quarter".to_string()),
+                &[],
+            )
+            .expect("set AxisTitle.Text");
+        assert_eq!(
+            runtime
+                .dispatch_get(axis_title, "Caption", &[])
+                .expect("AxisTitle.Caption after set"),
+            OmValue::Text("Quarter".to_string())
+        );
         runtime
             .dispatch_set(chart, "HasTitle", OmValue::Bool(true), &[])
             .expect("set Chart.HasTitle");
@@ -64777,6 +64990,41 @@ mod tests {
                     .expect("reopened Chart.ChartType")
             ),
             f64::from(super::XL_LINE)
+        );
+        let reopened_axes = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "Axes", &[])
+                .expect("reopened Chart.Axes"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_axes, "Count", &[])
+                    .expect("reopened Axes.Count")
+            ),
+            2.0
+        );
+        let reopened_category_axis = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_axes, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened Axes.Item(1)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_category_axis, "HasTitle", &[])
+                .expect("reopened Axis.HasTitle"),
+            OmValue::Bool(true)
+        );
+        let reopened_axis_title = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_category_axis, "AxisTitle", &[])
+                .expect("reopened Axis.AxisTitle"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_axis_title, "Text", &[])
+                .expect("reopened AxisTitle.Text"),
+            OmValue::Text("Quarter".to_string())
         );
         assert_eq!(
             reopened_runtime
