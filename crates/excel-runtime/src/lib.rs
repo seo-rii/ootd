@@ -9569,9 +9569,20 @@ impl ExcelRuntime {
             "Add" if collection_kind != RuntimeSheetCollectionKind::Charts => {
                 Ok(OmValue::Object(self.add_worksheet(workbook, args)?.0))
             }
-            "Add" => Err(OmError::unsupported(
-                "Charts.Add is not implemented as a method",
-            )),
+            "Add" => {
+                if args.len() > 3 {
+                    return Err(OmError::invalid_argument(
+                        "Charts.Add accepts at most Before, After, and Count arguments",
+                    ));
+                }
+                let add_args = [
+                    args.first().cloned().unwrap_or(OmValue::Missing),
+                    args.get(1).cloned().unwrap_or(OmValue::Missing),
+                    args.get(2).cloned().unwrap_or(OmValue::Missing),
+                    OmValue::Number(f64::from(XL_SHEET_TYPE_CHART)),
+                ];
+                Ok(OmValue::Object(self.add_worksheet(workbook, &add_args)?.0))
+            }
             "Item" => self.resolve_sheet_collection_item(workbook, collection_kind, args),
             _ => Err(OmError::unsupported(format!(
                 "{collection_name}.{member} is not implemented as a method"
@@ -64776,6 +64787,124 @@ mod tests {
             .drawing_id
             .expect("reopened chart sheet drawing binding");
         assert!(reopened.state.drawings.contains_key(&drawing_id));
+    }
+
+    #[test]
+    fn charts_add_creates_chart_sheet_parts_and_roundtrips() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("Workbook.Sheets"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Count", &[])
+                    .expect("Charts.Count before Add")
+            ),
+            0.0
+        );
+
+        let chart_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(charts, "Add", &[])
+                .expect("Charts.Add"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(chart_sheet, "Name", &[])
+                    .expect("Charts.Add sheet name")
+            ),
+            "Chart1"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_sheet, "Type", &[])
+                    .expect("Charts.Add sheet type")
+            ),
+            f64::from(super::XL_SHEET_TYPE_CHART)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Count", &[])
+                    .expect("Charts.Count after Add")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(worksheets, "Count", &[])
+                    .expect("Worksheets.Count after Charts.Add")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheets, "Count", &[])
+                    .expect("Sheets.Count after Charts.Add")
+            ),
+            2.0
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after Charts.Add");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved Charts.Add package");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen Charts.Add workbook");
+
+        assert!(saved_package.contains("xl/chartsheets/sheet1.xml"));
+        assert!(saved_package.contains("xl/chartsheets/_rels/sheet1.xml.rels"));
+        assert!(saved_package.contains("xl/drawings/drawing1.xml"));
+        assert!(saved_package.contains("xl/drawings/_rels/drawing1.xml.rels"));
+        assert!(saved_package.contains("xl/charts/chart1.xml"));
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .map(|worksheet| worksheet.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["Chart1".to_string(), "Sheet1".to_string()]
+        );
+        assert_eq!(
+            reopened.state.worksheets[0].kind,
+            office_common::SheetKind::ChartSheet
+        );
+        assert_eq!(reopened.state.chart_sheets.len(), 1);
     }
 
     #[test]
