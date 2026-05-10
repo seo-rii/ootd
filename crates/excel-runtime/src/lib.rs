@@ -5226,6 +5226,19 @@ impl ExcelRuntime {
                     && runtime
                         .loaded
                         .state
+                        .charts
+                        .values()
+                        .all(|chart| !chart.dirty)
+                    && runtime.loaded.state.drawings.values().all(|drawing| {
+                        !drawing.dirty
+                            && drawing.objects.iter().all(|object| match object {
+                                DrawingObjectModel::ChartFrame(chart_object) => !chart_object.dirty,
+                                DrawingObjectModel::UnsupportedRaw { .. } => true,
+                            })
+                    })
+                    && runtime
+                        .loaded
+                        .state
                         .worksheet_data
                         .values()
                         .all(|worksheet| !worksheet.dirty)
@@ -10692,6 +10705,17 @@ impl ExcelRuntime {
             worksheet.dirty_cells.clear();
         }
         runtime.loaded.state.defined_names.mark_clean();
+        for chart in runtime.loaded.state.charts.values_mut() {
+            chart.dirty = false;
+        }
+        for drawing in runtime.loaded.state.drawings.values_mut() {
+            drawing.dirty = false;
+            for object in &mut drawing.objects {
+                if let DrawingObjectModel::ChartFrame(chart_object) = object {
+                    chart_object.dirty = false;
+                }
+            }
+        }
         Ok(())
     }
 
