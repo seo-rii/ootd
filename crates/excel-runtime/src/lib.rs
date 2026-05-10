@@ -15,6 +15,7 @@ use office_common::{
 };
 use office_idl::{AccessMode, SupportState};
 use office_opc::{CompressionMethod, OpcPackage, OpcPart};
+use quick_xml::escape::partial_escape;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 use regex::{Regex, RegexBuilder};
@@ -171,6 +172,13 @@ const WORKBOOK_XLTX_CONTENT_TYPE: &str =
 const WORKBOOK_XLTM_CONTENT_TYPE: &str = "application/vnd.ms-excel.template.macroEnabled.main+xml";
 const WORKSHEET_PART_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
+const DRAWING_PART_CONTENT_TYPE: &str = "application/vnd.openxmlformats-officedocument.drawing+xml";
+const CHART_PART_CONTENT_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
+const DRAWING_RELATIONSHIP_TYPE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing";
+const CHART_RELATIONSHIP_TYPE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
 const VBA_PROJECT_PART_NAME: &str = "xl/vbaProject.bin";
 const VBA_PROJECT_CONTENT_TYPE: &str = "application/vnd.ms-office.vbaProject";
 const VBA_PROJECT_RELATIONSHIP_TYPE: &str =
@@ -632,7 +640,452 @@ impl ExcelRuntime {
         spec: SaveWorkbookSpec,
     ) -> OmResult<Vec<u8>> {
         let runtime = self.runtime_workbook(workbook)?;
-        let loaded = self.loaded_workbook_for_save_format(runtime, spec.format)?;
+        let mut loaded = self.loaded_workbook_for_save_format(runtime, spec.format)?;
+        let drawing_ids_to_materialize = loaded
+            .state
+            .drawings
+            .iter()
+            .filter_map(|(drawing_id, drawing)| {
+                (drawing.raw_part_uri.is_none()
+                    && drawing.objects.iter().any(|object| match object {
+                        DrawingObjectModel::ChartFrame(chart_object) => loaded
+                            .state
+                            .charts
+                            .get(&chart_object.chart_id)
+                            .is_some_and(|chart| chart.raw_part_uri.is_none()),
+                        DrawingObjectModel::UnsupportedRaw { .. } => false,
+                    }))
+                .then_some(*drawing_id)
+            })
+            .collect::<Vec<_>>();
+        if !drawing_ids_to_materialize.is_empty() {
+            let mut used_part_names = loaded
+                .package
+                .parts()
+                .iter()
+                .map(|part| part.name.clone())
+                .collect::<BTreeSet<_>>();
+            let mut content_types_xml = loaded
+                .package
+                .part(CONTENT_TYPES_PART_NAME)
+                .ok_or_else(|| {
+                    OmError::new(
+                        OmErrorCode::Parse,
+                        format!("workbook package is missing {CONTENT_TYPES_PART_NAME}"),
+                    )
+                })?
+                .bytes
+                .clone();
+
+            for drawing_id in drawing_ids_to_materialize {
+                let host_sheet_id = loaded
+                    .state
+                    .drawings
+                    .get(&drawing_id)
+                    .map(|drawing| drawing.host_sheet_id)
+                    .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "drawing not found"))?;
+                let worksheet_part_uri = loaded
+                    .state
+                    .worksheets
+                    .iter()
+                    .find(|worksheet| worksheet.id == host_sheet_id)
+                    .and_then(|worksheet| worksheet.part_uri.clone())
+                    .ok_or_else(|| {
+                        OmError::new(
+                            OmErrorCode::InvalidState,
+                            "worksheet for chart drawing is missing a part uri",
+                        )
+                    })?;
+                let drawing_part_uri = next_available_sequential_part_uri(
+                    &mut used_part_names,
+                    "xl/drawings/drawing",
+                    ".xml",
+                );
+                let drawing_rels_part_uri =
+                    if let Some((prefix, file_name)) = drawing_part_uri.rsplit_once('/') {
+                        format!("{prefix}/_rels/{file_name}.rels")
+                    } else {
+                        format!("_rels/{drawing_part_uri}.rels")
+                    };
+                used_part_names.insert(drawing_rels_part_uri.clone());
+                let worksheet_rels_part_uri =
+                    worksheet_relationships_part_uri_for(worksheet_part_uri.as_str());
+
+                let chart_object_plans = loaded
+                    .state
+                    .drawings
+                    .get(&drawing_id)
+                    .expect("drawing id collected above")
+                    .objects
+                    .iter()
+                    .filter_map(|object| match object {
+                        DrawingObjectModel::ChartFrame(chart_object) => loaded
+                            .state
+                            .charts
+                            .get(&chart_object.chart_id)
+                            .filter(|chart| chart.raw_part_uri.is_none())
+                            .map(|_| (chart_object.id, chart_object.chart_id)),
+                        DrawingObjectModel::UnsupportedRaw { .. } => None,
+                    })
+                    .collect::<Vec<_>>();
+                let mut chart_part_uris_by_chart_id = BTreeMap::new();
+                for (_, chart_id) in &chart_object_plans {
+                    let chart_part_uri = next_available_sequential_part_uri(
+                        &mut used_part_names,
+                        "xl/charts/chart",
+                        ".xml",
+                    );
+                    chart_part_uris_by_chart_id.insert(*chart_id, chart_part_uri);
+                }
+
+                let mut chart_relationships_xml = String::from(
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+"#,
+                );
+                let mut chart_relationship_ids_by_object_id = BTreeMap::new();
+                for (index, (chart_object_id, chart_id)) in chart_object_plans.iter().enumerate() {
+                    let relationship_id = format!("rId{}", index + 1);
+                    let chart_part_uri = chart_part_uris_by_chart_id
+                        .get(chart_id)
+                        .expect("chart part uri inserted above");
+                    chart_relationship_ids_by_object_id
+                        .insert(*chart_object_id, relationship_id.clone());
+                    chart_relationships_xml.push_str(&format!(
+                        r#"  <Relationship Id="{}" Type="{}" Target="{}"/>
+"#,
+                        relationship_id,
+                        CHART_RELATIONSHIP_TYPE,
+                        relative_relationship_target(&drawing_part_uri, chart_part_uri)
+                    ));
+                }
+                chart_relationships_xml.push_str("</Relationships>");
+
+                let mut drawing_xml = String::from(
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+"#,
+                );
+                {
+                    let drawing = loaded
+                        .state
+                        .drawings
+                        .get(&drawing_id)
+                        .expect("drawing id collected above");
+                    for object in &drawing.objects {
+                        let DrawingObjectModel::ChartFrame(chart_object) = object else {
+                            continue;
+                        };
+                        let Some(relationship_id) =
+                            chart_relationship_ids_by_object_id.get(&chart_object.id)
+                        else {
+                            continue;
+                        };
+                        let Some(DrawingAnchor::Absolute(anchor)) = chart_object.anchor.as_ref()
+                        else {
+                            return Err(OmError::unsupported(
+                                "saving newly added chart objects currently requires an absolute anchor",
+                            ));
+                        };
+                        let escaped_name = partial_escape(chart_object.name.as_str()).to_string();
+                        drawing_xml.push_str(&format!(
+                            r#"  <xdr:absoluteAnchor>
+    <xdr:pos x="{}" y="{}"/>
+    <xdr:ext cx="{}" cy="{}"/>
+    <xdr:graphicFrame>
+      <xdr:nvGraphicFramePr><xdr:cNvPr id="{}" name="{}"/></xdr:nvGraphicFramePr>
+      <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="{}"/></a:graphicData></a:graphic>
+    </xdr:graphicFrame>
+    <xdr:clientData/>
+  </xdr:absoluteAnchor>
+"#,
+                            anchor.position.x.0,
+                            anchor.position.y.0,
+                            anchor.extents.cx.0,
+                            anchor.extents.cy.0,
+                            chart_object.id.0,
+                            escaped_name,
+                            relationship_id
+                        ));
+                    }
+                }
+                drawing_xml.push_str("</xdr:wsDr>");
+
+                for (chart_id, chart_part_uri) in &chart_part_uris_by_chart_id {
+                    let chart = loaded
+                        .state
+                        .charts
+                        .get_mut(chart_id)
+                        .expect("chart id came from model");
+                    chart.raw_part_uri = Some(chart_part_uri.clone());
+                    loaded.package.add_part(OpcPart {
+                        name: chart_part_uri.clone(),
+                        content_type: Some(CHART_PART_CONTENT_TYPE.to_string()),
+                        compression: CompressionMethod::Stored,
+                        bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <c:chart><c:plotArea><c:barChart/></c:plotArea></c:chart>
+</c:chartSpace>"#
+                            .to_vec(),
+                    })?;
+                    content_types_xml = append_content_type_override_if_missing(
+                        content_types_xml.as_slice(),
+                        chart_part_uri,
+                        CHART_PART_CONTENT_TYPE,
+                    )?;
+                }
+                loaded.package.add_part(OpcPart {
+                    name: drawing_part_uri.clone(),
+                    content_type: Some(DRAWING_PART_CONTENT_TYPE.to_string()),
+                    compression: CompressionMethod::Stored,
+                    bytes: drawing_xml.into_bytes(),
+                })?;
+                loaded.package.add_part(OpcPart {
+                    name: drawing_rels_part_uri.clone(),
+                    content_type: Some(RELATIONSHIPS_PART_CONTENT_TYPE.to_string()),
+                    compression: CompressionMethod::Stored,
+                    bytes: chart_relationships_xml.into_bytes(),
+                })?;
+                content_types_xml = append_content_type_override_if_missing(
+                    content_types_xml.as_slice(),
+                    drawing_part_uri.as_str(),
+                    DRAWING_PART_CONTENT_TYPE,
+                )?;
+
+                let worksheet_relationship_id = if let Some(existing_rels) = loaded
+                    .package
+                    .part(worksheet_rels_part_uri.as_str())
+                    .map(|part| part.bytes.clone())
+                {
+                    let mut used_relationship_ids = BTreeSet::new();
+                    let mut reader = Reader::from_reader(Cursor::new(existing_rels.as_slice()));
+                    reader.config_mut().trim_text(false);
+                    let mut buffer = Vec::new();
+                    loop {
+                        match reader.read_event_into(&mut buffer) {
+                            Ok(Event::Start(element)) | Ok(Event::Empty(element))
+                                if xml_local_name(element.name().as_ref()) == b"Relationship" =>
+                            {
+                                for attr in element.attributes() {
+                                    let attr = attr.map_err(runtime_xml_error)?;
+                                    if attr.key.as_ref() == b"Id" {
+                                        used_relationship_ids.insert(
+                                            attr.decode_and_unescape_value(reader.decoder())
+                                                .map_err(runtime_xml_error)?
+                                                .into_owned(),
+                                        );
+                                    }
+                                }
+                            }
+                            Ok(Event::Eof) => break,
+                            Ok(_) => {}
+                            Err(error) => return Err(runtime_xml_error(error)),
+                        }
+                        buffer.clear();
+                    }
+                    let relationship_id = (1..)
+                        .map(|index| format!("rId{index}"))
+                        .find(|candidate| !used_relationship_ids.contains(candidate))
+                        .expect("relationship id search");
+                    let mut relationship = BytesStart::new("Relationship");
+                    relationship.push_attribute(("Id", relationship_id.as_str()));
+                    relationship.push_attribute(("Type", DRAWING_RELATIONSHIP_TYPE));
+                    relationship.push_attribute((
+                        "Target",
+                        relative_relationship_target(&worksheet_part_uri, &drawing_part_uri)
+                            .as_str(),
+                    ));
+                    let updated_rels = append_empty_xml_child_before_container_end(
+                        existing_rels.as_slice(),
+                        b"Relationships",
+                        relationship,
+                    )?;
+                    loaded
+                        .package
+                        .replace_part_bytes(worksheet_rels_part_uri.as_str(), updated_rels)?;
+                    relationship_id
+                } else {
+                    let relationship_id = "rId1".to_string();
+                    let target =
+                        relative_relationship_target(&worksheet_part_uri, &drawing_part_uri);
+                    loaded.package.add_part(OpcPart {
+                        name: worksheet_rels_part_uri.clone(),
+                        content_type: Some(RELATIONSHIPS_PART_CONTENT_TYPE.to_string()),
+                        compression: CompressionMethod::Stored,
+                        bytes: format!(
+                            r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="{relationship_id}" Type="{DRAWING_RELATIONSHIP_TYPE}" Target="{target}"/>
+</Relationships>"#
+                        )
+                        .into_bytes(),
+                    })?;
+                    relationship_id
+                };
+
+                let worksheet_xml = loaded
+                    .package
+                    .part(worksheet_part_uri.as_str())
+                    .ok_or_else(|| {
+                        OmError::new(
+                            OmErrorCode::Parse,
+                            format!("worksheet part is missing: {worksheet_part_uri}"),
+                        )
+                    })?
+                    .bytes
+                    .clone();
+                let mut reader = Reader::from_reader(Cursor::new(worksheet_xml.as_slice()));
+                reader.config_mut().trim_text(false);
+                let mut writer = Writer::new(Cursor::new(Vec::new()));
+                let mut buffer = Vec::new();
+                let mut drawing_element_seen = false;
+                let mut worksheet_root_seen = false;
+                loop {
+                    match reader.read_event_into(&mut buffer) {
+                        Ok(Event::Start(element))
+                            if xml_local_name(element.name().as_ref()) == b"worksheet" =>
+                        {
+                            worksheet_root_seen = true;
+                            let mut rewritten = BytesStart::new(
+                                String::from_utf8_lossy(element.name().as_ref()).into_owned(),
+                            );
+                            let mut has_relationship_namespace = false;
+                            for attr in element.attributes() {
+                                let attr = attr.map_err(runtime_xml_error)?;
+                                let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+                                let value = attr
+                                    .decode_and_unescape_value(reader.decoder())
+                                    .map_err(runtime_xml_error)?
+                                    .into_owned();
+                                if key == "xmlns:r" {
+                                    has_relationship_namespace = true;
+                                }
+                                rewritten.push_attribute((key.as_str(), value.as_str()));
+                            }
+                            if !has_relationship_namespace {
+                                rewritten.push_attribute((
+                                    "xmlns:r",
+                                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+                                ));
+                            }
+                            writer
+                                .write_event(Event::Start(rewritten))
+                                .map_err(runtime_xml_error)?;
+                        }
+                        Ok(Event::Empty(element))
+                            if xml_local_name(element.name().as_ref()) == b"worksheet" =>
+                        {
+                            worksheet_root_seen = true;
+                            let mut rewritten = BytesStart::new(
+                                String::from_utf8_lossy(element.name().as_ref()).into_owned(),
+                            );
+                            let mut has_relationship_namespace = false;
+                            for attr in element.attributes() {
+                                let attr = attr.map_err(runtime_xml_error)?;
+                                let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+                                let value = attr
+                                    .decode_and_unescape_value(reader.decoder())
+                                    .map_err(runtime_xml_error)?
+                                    .into_owned();
+                                if key == "xmlns:r" {
+                                    has_relationship_namespace = true;
+                                }
+                                rewritten.push_attribute((key.as_str(), value.as_str()));
+                            }
+                            if !has_relationship_namespace {
+                                rewritten.push_attribute((
+                                    "xmlns:r",
+                                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+                                ));
+                            }
+                            writer
+                                .write_event(Event::Start(rewritten))
+                                .map_err(runtime_xml_error)?;
+                            let mut drawing_element = BytesStart::new("drawing");
+                            drawing_element
+                                .push_attribute(("r:id", worksheet_relationship_id.as_str()));
+                            writer
+                                .write_event(Event::Empty(drawing_element))
+                                .map_err(runtime_xml_error)?;
+                            writer
+                                .write_event(Event::End(BytesEnd::new("worksheet")))
+                                .map_err(runtime_xml_error)?;
+                            drawing_element_seen = true;
+                        }
+                        Ok(Event::Start(element))
+                            if xml_local_name(element.name().as_ref()) == b"drawing" =>
+                        {
+                            drawing_element_seen = true;
+                            writer
+                                .write_event(Event::Start(element.into_owned()))
+                                .map_err(runtime_xml_error)?;
+                        }
+                        Ok(Event::Empty(element))
+                            if xml_local_name(element.name().as_ref()) == b"drawing" =>
+                        {
+                            drawing_element_seen = true;
+                            writer
+                                .write_event(Event::Empty(element.into_owned()))
+                                .map_err(runtime_xml_error)?;
+                        }
+                        Ok(Event::End(element))
+                            if xml_local_name(element.name().as_ref()) == b"worksheet" =>
+                        {
+                            if !drawing_element_seen {
+                                let mut drawing_element = BytesStart::new("drawing");
+                                drawing_element
+                                    .push_attribute(("r:id", worksheet_relationship_id.as_str()));
+                                writer
+                                    .write_event(Event::Empty(drawing_element))
+                                    .map_err(runtime_xml_error)?;
+                                drawing_element_seen = true;
+                            }
+                            writer
+                                .write_event(Event::End(element.into_owned()))
+                                .map_err(runtime_xml_error)?;
+                        }
+                        Ok(Event::Eof) => break,
+                        Ok(event) => writer
+                            .write_event(event.into_owned())
+                            .map_err(runtime_xml_error)?,
+                        Err(error) => return Err(runtime_xml_error(error)),
+                    }
+                    buffer.clear();
+                }
+                if !worksheet_root_seen {
+                    return Err(OmError::new(
+                        OmErrorCode::Parse,
+                        format!("worksheet root was not found in {worksheet_part_uri}"),
+                    ));
+                }
+                loaded.package.replace_part_bytes(
+                    worksheet_part_uri.as_str(),
+                    writer.into_inner().into_inner(),
+                )?;
+
+                let drawing = loaded
+                    .state
+                    .drawings
+                    .get_mut(&drawing_id)
+                    .expect("drawing id collected above");
+                drawing.raw_part_uri = Some(drawing_part_uri.clone());
+                for object in &mut drawing.objects {
+                    let DrawingObjectModel::ChartFrame(chart_object) = object else {
+                        continue;
+                    };
+                    if let Some(relationship_id) =
+                        chart_relationship_ids_by_object_id.get(&chart_object.id)
+                    {
+                        chart_object.raw_binding =
+                            Some(format!("{drawing_part_uri}#{relationship_id}"));
+                    }
+                }
+            }
+
+            loaded
+                .package
+                .replace_part_bytes(CONTENT_TYPES_PART_NAME, content_types_xml)?;
+        }
         self.codec.save(
             &loaded,
             SaveOptions {
@@ -63669,6 +64122,69 @@ mod tests {
                 .dispatch_get(workbook.0, "Saved", &[])
                 .expect("Workbook.Saved after ChartObjects.Add")
         ));
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after ChartObjects.Add");
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after ChartObjects.Add");
+        let reopened_worksheets = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[])
+                .expect("reopened Workbook.Worksheets"),
+        );
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened Worksheets.Item(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_objects, "Count", &[])
+                    .expect("reopened ChartObjects.Count")
+            ),
+            1.0
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_object, "Width", &[])
+                    .expect("reopened ChartObject.Width")
+            ),
+            240.0
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_object, "Height", &[])
+                    .expect("reopened ChartObject.Height")
+            ),
+            160.0
+        );
 
         let invalid_width = runtime
             .dispatch_invoke(
