@@ -1,6 +1,7 @@
 use excel_model::{
     AxisModel, ChartAxisKind, ChartLegendPosition, ChartModel, ChartObjectModel, ChartSourceExpr,
-    ChartType, DrawingModel, DrawingObjectModel, SeriesModel, WorkbookState, WorksheetData,
+    ChartText, ChartType, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel,
+    WorkbookState, WorksheetData,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
@@ -859,10 +860,39 @@ impl ExcelRuntime {
                             ));
                         }
                     };
+                    let title_xml = chart
+                        .title
+                        .as_ref()
+                        .map(|title| {
+                            let title_text = partial_escape(&title.text).to_string();
+                            format!(
+                                r#"<c:title><c:tx><c:rich><a:p><a:r><a:t>{title_text}</a:t></a:r></a:p></c:rich></c:tx></c:title>"#
+                            )
+                        })
+                        .unwrap_or_default();
+                    let legend_xml = chart
+                        .legend
+                        .as_ref()
+                        .filter(|legend| legend.visible)
+                        .map(|legend| {
+                            let legend_position =
+                                match legend.position.unwrap_or(ChartLegendPosition::Right) {
+                                    ChartLegendPosition::Bottom => "b",
+                                    ChartLegendPosition::Corner => "tr",
+                                    ChartLegendPosition::Custom => "cust",
+                                    ChartLegendPosition::Left => "l",
+                                    ChartLegendPosition::Right => "r",
+                                    ChartLegendPosition::Top => "t",
+                                };
+                            format!(
+                                r#"<c:legend><c:legendPos val="{legend_position}"/></c:legend>"#
+                            )
+                        })
+                        .unwrap_or_default();
                     let chart_xml = format!(
                         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart><c:plotArea><c:{chart_group_name}>{series_xml}</c:{chart_group_name}></c:plotArea></c:chart>
+  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{series_xml}</c:{chart_group_name}></c:plotArea>{legend_xml}</c:chart>
 </c:chartSpace>"#
                     );
                     loaded.package.add_part(OpcPart {
@@ -2208,8 +2238,6 @@ impl ExcelRuntime {
             RuntimeObjectKind::ChartObjects { .. }
             | RuntimeObjectKind::ChartArea { .. }
             | RuntimeObjectKind::PlotArea { .. }
-            | RuntimeObjectKind::ChartTitle { .. }
-            | RuntimeObjectKind::Legend { .. }
             | RuntimeObjectKind::Axes { .. }
             | RuntimeObjectKind::Axis { .. }
             | RuntimeObjectKind::AxisTitle { .. }
@@ -2272,8 +2300,217 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
+                    "HasTitle" => {
+                        let OmValue::Bool(has_title) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Chart.HasTitle expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let changed = if has_title {
+                            if chart.title.is_none() {
+                                chart.title = Some(ChartText {
+                                    text: String::new(),
+                                });
+                                true
+                            } else {
+                                false
+                            }
+                        } else if chart.title.is_some() {
+                            chart.title = None;
+                            true
+                        } else {
+                            false
+                        };
+                        if changed {
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "HasLegend" => {
+                        let OmValue::Bool(has_legend) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Chart.HasLegend expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let changed = if has_legend {
+                            match chart.legend.as_mut() {
+                                Some(legend) if legend.visible => false,
+                                Some(legend) => {
+                                    legend.visible = true;
+                                    if legend.position.is_none() {
+                                        legend.position = Some(ChartLegendPosition::Right);
+                                    }
+                                    true
+                                }
+                                None => {
+                                    chart.legend = Some(LegendModel {
+                                        visible: true,
+                                        position: Some(ChartLegendPosition::Right),
+                                    });
+                                    true
+                                }
+                            }
+                        } else if chart.legend.is_some() {
+                            chart.legend = None;
+                            true
+                        } else {
+                            false
+                        };
+                        if changed {
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     _ => Err(OmError::unsupported(format!(
                         "Chart.{member} is not writable"
+                    ))),
+                }
+            }
+            RuntimeObjectKind::ChartTitle { workbook, chart_id } => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "ChartTitle.{member} does not accept index arguments"
+                    )));
+                }
+                match member {
+                    "Text" | "Caption" => {
+                        let OmValue::Text(text) = value else {
+                            return Err(OmError::type_mismatch(
+                                "ChartTitle.Text expects a text value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let title = chart.title.as_mut().ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "chart title not found")
+                        })?;
+                        if title.text != text {
+                            title.text = text;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "ChartTitle.{member} is not writable"
+                    ))),
+                }
+            }
+            RuntimeObjectKind::Legend { workbook, chart_id } => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "Legend.{member} does not accept index arguments"
+                    )));
+                }
+                match member {
+                    "Position" => {
+                        let OmValue::Number(number) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Legend.Position expects an XlLegendPosition numeric value",
+                            ));
+                        };
+                        if !number.is_finite()
+                            || number.fract() != 0.0
+                            || number < i32::MIN as f64
+                            || number > i32::MAX as f64
+                        {
+                            return Err(OmError::invalid_argument(
+                                "Legend.Position expects an integral XlLegendPosition value",
+                            ));
+                        }
+                        let position = match number as i32 {
+                            XL_LEGEND_POSITION_BOTTOM => ChartLegendPosition::Bottom,
+                            XL_LEGEND_POSITION_CORNER => ChartLegendPosition::Corner,
+                            XL_LEGEND_POSITION_CUSTOM => ChartLegendPosition::Custom,
+                            XL_LEGEND_POSITION_LEFT => ChartLegendPosition::Left,
+                            XL_LEGEND_POSITION_RIGHT => ChartLegendPosition::Right,
+                            XL_LEGEND_POSITION_TOP => ChartLegendPosition::Top,
+                            _ => {
+                                return Err(OmError::invalid_argument(
+                                    "Legend.Position supports bottom, corner, custom, left, right, and top",
+                                ));
+                            }
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let legend = chart
+                            .legend
+                            .as_mut()
+                            .filter(|legend| legend.visible)
+                            .ok_or_else(|| {
+                                OmError::new(OmErrorCode::NotFound, "chart legend not found")
+                            })?;
+                        if legend.position != Some(position) {
+                            legend.position = Some(position);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "Legend.{member} is not writable"
                     ))),
                 }
             }
@@ -64414,6 +64651,52 @@ mod tests {
             ),
             f64::from(super::XL_LINE)
         );
+        runtime
+            .dispatch_set(chart, "HasTitle", OmValue::Bool(true), &[])
+            .expect("set Chart.HasTitle");
+        let chart_title = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartTitle", &[])
+                .expect("Chart.ChartTitle after HasTitle"),
+        );
+        runtime
+            .dispatch_set(
+                chart_title,
+                "Text",
+                OmValue::Text("Pipeline".to_string()),
+                &[],
+            )
+            .expect("set ChartTitle.Text");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_title, "Caption", &[])
+                .expect("ChartTitle.Caption after set"),
+            OmValue::Text("Pipeline".to_string())
+        );
+        runtime
+            .dispatch_set(chart, "HasLegend", OmValue::Bool(true), &[])
+            .expect("set Chart.HasLegend");
+        let legend = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Legend", &[])
+                .expect("Chart.Legend after HasLegend"),
+        );
+        runtime
+            .dispatch_set(
+                legend,
+                "Position",
+                OmValue::Number(f64::from(super::XL_LEGEND_POSITION_LEFT)),
+                &[],
+            )
+            .expect("set Legend.Position");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(legend, "Position", &[])
+                    .expect("Legend.Position after set")
+            ),
+            f64::from(super::XL_LEGEND_POSITION_LEFT)
+        );
         assert!(!expect_bool(
             runtime
                 .dispatch_get(workbook.0, "Saved", &[])
@@ -64494,6 +64777,42 @@ mod tests {
                     .expect("reopened Chart.ChartType")
             ),
             f64::from(super::XL_LINE)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "HasTitle", &[])
+                .expect("reopened Chart.HasTitle"),
+            OmValue::Bool(true)
+        );
+        let reopened_chart_title = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "ChartTitle", &[])
+                .expect("reopened Chart.ChartTitle"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart_title, "Text", &[])
+                .expect("reopened ChartTitle.Text"),
+            OmValue::Text("Pipeline".to_string())
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "HasLegend", &[])
+                .expect("reopened Chart.HasLegend"),
+            OmValue::Bool(true)
+        );
+        let reopened_legend = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "Legend", &[])
+                .expect("reopened Chart.Legend"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_legend, "Position", &[])
+                    .expect("reopened Legend.Position")
+            ),
+            f64::from(super::XL_LEGEND_POSITION_LEFT)
         );
 
         let invalid_width = runtime
