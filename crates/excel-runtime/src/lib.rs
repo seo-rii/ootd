@@ -5188,6 +5188,83 @@ impl ExcelRuntime {
             RuntimeObjectKind::ChartObjects { workbook, sheet_id } => {
                 self.dispatch_invoke_chart_objects(workbook, sheet_id, member, args)
             }
+            RuntimeObjectKind::Chart { workbook, chart_id } => match member {
+                "SetSourceData" => {
+                    if args.is_empty() || args.len() > 2 {
+                        return Err(OmError::invalid_argument(
+                            "Chart.SetSourceData expects Source and optional PlotBy arguments",
+                        ));
+                    }
+                    validate_optional_integer_arg(args, 1, "Chart.SetSourceData PlotBy")?;
+                    let source_formula = match &args[0] {
+                        OmValue::Object(handle) => match self.runtime_object(*handle)? {
+                            RuntimeObjectKind::Range {
+                                workbook: range_workbook,
+                                range,
+                                ..
+                            } => {
+                                if range_workbook != workbook {
+                                    return Err(OmError::unsupported(
+                                        "Chart.SetSourceData cross-workbook ranges are not supported",
+                                    ));
+                                }
+                                let (sheet_id, rect) = Self::range_set_single_area(&range)?;
+                                let worksheet_name =
+                                    self.worksheet_model(workbook, sheet_id)?.name.clone();
+                                format!(
+                                    "{}{}",
+                                    formula_sheet_address_qualifier(&worksheet_name),
+                                    format_rect_address_with_flags(rect, true, true)
+                                )
+                            }
+                            _ => {
+                                return Err(OmError::type_mismatch(
+                                    "Chart.SetSourceData Source expects a Range object",
+                                ));
+                            }
+                        },
+                        _ => {
+                            return Err(OmError::type_mismatch(
+                                "Chart.SetSourceData Source expects a Range object",
+                            ));
+                        }
+                    };
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    let chart = runtime
+                        .loaded
+                        .state
+                        .charts
+                        .get_mut(&chart_id)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    chart.series.clear();
+                    chart.series.push(SeriesModel {
+                        name: None,
+                        x_values: None,
+                        values: Some(ChartSourceExpr {
+                            raw: FormulaSource {
+                                text: source_formula,
+                                is_r1c1: false,
+                            },
+                            resolved: None,
+                            cache: None,
+                            dirty: true,
+                        }),
+                        order: Some(0),
+                    });
+                    chart.dirty = true;
+                    runtime.dirty = true;
+                    Ok(OmValue::Empty)
+                }
+                _ => Err(OmError::unsupported(format!(
+                    "Chart.{member} is not implemented as a method"
+                ))),
+            },
             RuntimeObjectKind::Axes { workbook, chart_id } => {
                 self.dispatch_invoke_axes(workbook, chart_id, member, args)
             }
@@ -5195,7 +5272,6 @@ impl ExcelRuntime {
                 self.dispatch_invoke_series_collection(workbook, chart_id, member, args)
             }
             RuntimeObjectKind::ChartObject { .. }
-            | RuntimeObjectKind::Chart { .. }
             | RuntimeObjectKind::ChartArea { .. }
             | RuntimeObjectKind::PlotArea { .. }
             | RuntimeObjectKind::ChartTitle { .. }
@@ -64497,6 +64573,146 @@ mod tests {
                 .dispatch_get(reopened_series, "XValues", &[])
                 .expect("reopened Series.XValues"),
             OmValue::Text("=Sheet1!$A$1:$A$3".to_string())
+        );
+    }
+
+    #[test]
+    fn chart_set_source_data_uses_range_source_for_first_series() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let source_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        runtime
+            .dispatch_invoke(chart, "SetSourceData", &[OmValue::Object(source_range)])
+            .expect("Chart.SetSourceData");
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection.Count")
+            ),
+            1.0
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Values", &[])
+                .expect("Series.Values"),
+            OmValue::Text("=Sheet1!$A$1:$B$3".to_string())
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after Chart.SetSourceData");
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after Chart.SetSourceData");
+        let reopened_worksheets = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[])
+                .expect("reopened Workbook.Worksheets"),
+        );
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened Worksheets.Item(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_series, "Values", &[])
+                .expect("reopened Series.Values"),
+            OmValue::Text("=Sheet1!$A$1:$B$3".to_string())
         );
     }
 
