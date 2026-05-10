@@ -5781,6 +5781,36 @@ impl ExcelRuntime {
                 self.dispatch_invoke_chart_objects(workbook, sheet_id, member, args)
             }
             RuntimeObjectKind::Chart { workbook, chart_id } => match member {
+                "Activate" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "Chart.Activate does not accept arguments",
+                        ));
+                    }
+                    let Some(sheet_id) = self.chart_sheet_id_for_chart(workbook, chart_id)? else {
+                        return Err(OmError::unsupported(
+                            "Chart.Activate for embedded charts is not implemented",
+                        ));
+                    };
+                    self.ensure_worksheet_visible(workbook, sheet_id, "Chart.Activate")?;
+                    self.set_selection(workbook, sheet_id, Rect::single_cell(1, 1));
+                    Ok(OmValue::Empty)
+                }
+                "Delete" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "Chart.Delete does not accept arguments",
+                        ));
+                    }
+                    let Some(sheet_id) = self.chart_sheet_id_for_chart(workbook, chart_id)? else {
+                        return Err(OmError::unsupported(
+                            "Chart.Delete for embedded charts is not implemented",
+                        ));
+                    };
+                    Ok(OmValue::Bool(
+                        self.delete_worksheet(workbook, sheet_id, true)?,
+                    ))
+                }
                 "SetSourceData" => {
                     if args.is_empty() || args.len() > 2 {
                         return Err(OmError::invalid_argument(
@@ -6082,6 +6112,8 @@ impl ExcelRuntime {
                             | "SeriesCollection"
                             | "Application"
                             | "Parent"
+                            | "Activate"
+                            | "Delete"
                     )
                     | ("ChartArea", "Application" | "Parent")
                     | ("PlotArea", "Application" | "Parent")
@@ -11983,6 +12015,21 @@ impl ExcelRuntime {
             .charts
             .get(&chart_id)
             .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))
+    }
+
+    fn chart_sheet_id_for_chart(
+        &self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+    ) -> OmResult<Option<SheetId>> {
+        self.chart_model(workbook, chart_id)?;
+        Ok(self
+            .runtime_workbook(workbook)?
+            .loaded
+            .state
+            .chart_sheets
+            .iter()
+            .find_map(|(sheet_id, binding)| (binding.chart_id == chart_id).then_some(*sheet_id)))
     }
 
     fn series_model(
@@ -65468,6 +65515,156 @@ mod tests {
                     .expect("copied ActiveChart.Name")
             ),
             "Chart1"
+        );
+    }
+
+    #[test]
+    fn chart_sheet_chart_handle_activate_and_delete() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(charts, "Add", &[])
+                .expect("Charts.Add"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        runtime
+            .dispatch_invoke(worksheet, "Activate", &[])
+            .expect("Worksheet.Activate");
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "ActiveChart", &[])
+                .expect("ActiveChart after Worksheet.Activate"),
+            OmValue::Empty
+        );
+
+        runtime
+            .dispatch_invoke(chart, "Activate", &[])
+            .expect("Chart.Activate");
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveChart", &[])
+                .expect("ActiveChart after Chart.Activate"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_chart, "Name", &[])
+                    .expect("ActiveChart.Name")
+            ),
+            "Chart1"
+        );
+        runtime
+            .dispatch_set(application, "DisplayAlerts", OmValue::Bool(false), &[])
+            .expect("disable DisplayAlerts");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "Delete", &[])
+                .expect("Chart.Delete"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Count", &[])
+                    .expect("Charts.Count after Chart.Delete")
+            ),
+            0.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "ActiveChart", &[])
+                .expect("ActiveChart after Chart.Delete"),
+            OmValue::Empty
+        );
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after Chart.Delete");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved Chart.Delete package");
+        assert!(!saved_package.contains("xl/chartsheets/sheet1.xml"));
+        assert!(!saved_package.contains("xl/drawings/drawing1.xml"));
+        assert!(!saved_package.contains("xl/charts/chart1.xml"));
+    }
+
+    #[test]
+    fn embedded_chart_handle_activate_and_delete_are_explicitly_unsupported() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "Activate", &[])
+                .expect_err("embedded Chart.Activate should be unsupported")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "Delete", &[])
+                .expect_err("embedded Chart.Delete should be unsupported")
+                .code,
+            OmErrorCode::Unsupported
         );
     }
 
