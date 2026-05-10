@@ -449,6 +449,7 @@ pub struct ExcelRuntime {
     next_object_handle: u64,
     next_created_workbook_index: u64,
     active_workbook: Option<WorkbookHandle>,
+    active_chart: Option<(WorkbookHandle, ChartId)>,
     selection: Option<RuntimeSelection>,
     workbooks: BTreeMap<u64, RuntimeWorkbook>,
     objects: BTreeMap<u64, RuntimeObjectKind>,
@@ -493,6 +494,7 @@ impl ExcelRuntime {
             next_object_handle: FIRST_DYNAMIC_OBJECT_HANDLE_VALUE,
             next_created_workbook_index: 1,
             active_workbook: None,
+            active_chart: None,
             selection: None,
             workbooks: BTreeMap::new(),
             objects,
@@ -660,6 +662,7 @@ impl ExcelRuntime {
             },
         );
         self.active_workbook = Some(workbook_handle);
+        self.active_chart = None;
         self.selection = default_selection;
 
         Ok(workbook_handle)
@@ -1804,6 +1807,12 @@ impl ExcelRuntime {
                 .next_back()
                 .copied()
                 .map(|id| WorkbookHandle(ObjectHandle(id)));
+        }
+        if self
+            .active_chart
+            .is_some_and(|(chart_workbook, _)| chart_workbook == workbook)
+        {
+            self.active_chart = None;
         }
         if self
             .selection
@@ -6571,6 +6580,35 @@ impl ExcelRuntime {
             RuntimeObjectKind::ChartObjects { workbook, sheet_id } => {
                 self.dispatch_invoke_chart_objects(workbook, sheet_id, member, args)
             }
+            RuntimeObjectKind::ChartObject {
+                workbook,
+                chart_object_id,
+            } => match member {
+                "Activate" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "ChartObject.Activate does not accept arguments",
+                        ));
+                    }
+                    let chart_object = self.chart_object_model(workbook, chart_object_id)?.clone();
+                    self.chart_model(workbook, chart_object.chart_id)?;
+                    self.ensure_worksheet_visible(
+                        workbook,
+                        chart_object.host_sheet_id,
+                        "ChartObject.Activate",
+                    )?;
+                    self.set_selection(
+                        workbook,
+                        chart_object.host_sheet_id,
+                        Rect::single_cell(1, 1),
+                    );
+                    self.active_chart = Some((workbook, chart_object.chart_id));
+                    Ok(OmValue::Empty)
+                }
+                _ => Err(OmError::unsupported(format!(
+                    "ChartObject.{member} is not implemented as a method"
+                ))),
+            },
             RuntimeObjectKind::Chart { workbook, chart_id } => match member {
                 "Activate" => {
                     if !args.is_empty() {
@@ -6578,13 +6616,35 @@ impl ExcelRuntime {
                             "Chart.Activate does not accept arguments",
                         ));
                     }
-                    let Some(sheet_id) = self.chart_sheet_id_for_chart(workbook, chart_id)? else {
-                        return Err(OmError::unsupported(
-                            "Chart.Activate for embedded charts is not implemented",
-                        ));
+                    if let Some(sheet_id) = self.chart_sheet_id_for_chart(workbook, chart_id)? {
+                        self.ensure_worksheet_visible(workbook, sheet_id, "Chart.Activate")?;
+                        self.set_selection(workbook, sheet_id, Rect::single_cell(1, 1));
+                        return Ok(OmValue::Empty);
+                    };
+                    let Some(sheet_id) = self
+                        .runtime_workbook(workbook)?
+                        .loaded
+                        .state
+                        .drawings
+                        .values()
+                        .find_map(|drawing| {
+                            drawing
+                                .objects
+                                .iter()
+                                .any(|object| match object {
+                                    DrawingObjectModel::ChartFrame(chart_object) => {
+                                        chart_object.chart_id == chart_id
+                                    }
+                                    DrawingObjectModel::UnsupportedRaw { .. } => false,
+                                })
+                                .then_some(drawing.host_sheet_id)
+                        })
+                    else {
+                        return Err(OmError::new(OmErrorCode::NotFound, "chart not found"));
                     };
                     self.ensure_worksheet_visible(workbook, sheet_id, "Chart.Activate")?;
                     self.set_selection(workbook, sheet_id, Rect::single_cell(1, 1));
+                    self.active_chart = Some((workbook, chart_id));
                     Ok(OmValue::Empty)
                 }
                 "Delete" => {
@@ -6802,8 +6862,7 @@ impl ExcelRuntime {
                     ))),
                 }
             }
-            RuntimeObjectKind::ChartObject { .. }
-            | RuntimeObjectKind::ChartArea { .. }
+            RuntimeObjectKind::ChartArea { .. }
             | RuntimeObjectKind::PlotArea { .. }
             | RuntimeObjectKind::ChartTitle { .. }
             | RuntimeObjectKind::Legend { .. }
@@ -7038,6 +7097,16 @@ impl ExcelRuntime {
                 let Some(active_workbook) = self.active_workbook else {
                     return Ok(OmValue::Empty);
                 };
+                if let Some((chart_workbook, chart_id)) = self.active_chart {
+                    if chart_workbook == active_workbook
+                        && self.chart_model(chart_workbook, chart_id).is_ok()
+                    {
+                        return Ok(OmValue::Object(
+                            self.register_chart_handle(chart_workbook, chart_id),
+                        ));
+                    }
+                    self.active_chart = None;
+                }
                 let sheet_id = self.active_sheet_id(active_workbook)?;
                 let chart_id = self
                     .runtime_workbook(active_workbook)?
@@ -9763,8 +9832,8 @@ impl ExcelRuntime {
                         "Workbook.Activate does not accept arguments",
                     ));
                 }
-                self.active_workbook = Some(workbook);
-                self.selection = Some(self.default_selection(workbook)?);
+                let selection = self.default_selection(workbook)?;
+                self.set_selection(workbook, selection.sheet_id, selection.rect);
                 Ok(OmValue::Empty)
             }
             "Save" => {
@@ -12463,6 +12532,12 @@ impl ExcelRuntime {
         if deleted_was_active {
             self.set_selection(workbook, replacement_sheet_id, Rect::single_cell(1, 1));
         }
+        if let Some((chart_workbook, chart_id)) = self.active_chart
+            && chart_workbook == workbook
+            && self.chart_model(workbook, chart_id).is_err()
+        {
+            self.active_chart = None;
+        }
 
         Ok(true)
     }
@@ -13429,6 +13504,7 @@ impl ExcelRuntime {
 
     fn set_selection(&mut self, workbook: WorkbookHandle, sheet_id: SheetId, rect: Rect) {
         self.active_workbook = Some(workbook);
+        self.active_chart = None;
         self.selection = Some(RuntimeSelection {
             workbook,
             sheet_id,
@@ -66419,7 +66495,7 @@ mod tests {
     }
 
     #[test]
-    fn embedded_chart_handle_activate_and_delete_are_explicitly_unsupported() {
+    fn embedded_chart_activate_sets_active_chart_but_delete_stays_unsupported() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -66457,10 +66533,50 @@ mod tests {
 
         assert_eq!(
             runtime
-                .dispatch_invoke(chart, "Activate", &[])
-                .expect_err("embedded Chart.Activate should be unsupported")
-                .code,
-            OmErrorCode::Unsupported
+                .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                .expect("ActiveChart before embedded activation"),
+            OmValue::Empty
+        );
+        runtime
+            .dispatch_invoke(chart_object, "Activate", &[])
+            .expect("ChartObject.Activate");
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                .expect("ActiveChart after ChartObject.Activate"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_chart, "Name", &[])
+                    .expect("ActiveChart.Name after ChartObject.Activate")
+            ),
+            "Embedded Revenue Chart"
+        );
+        runtime
+            .dispatch_invoke(worksheet, "Activate", &[])
+            .expect("Worksheet.Activate clears embedded ActiveChart");
+        assert_eq!(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                .expect("ActiveChart after Worksheet.Activate"),
+            OmValue::Empty
+        );
+        runtime
+            .dispatch_invoke(chart, "Activate", &[])
+            .expect("embedded Chart.Activate");
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                .expect("ActiveChart after embedded Chart.Activate"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_chart, "Name", &[])
+                    .expect("ActiveChart.Name after embedded Chart.Activate")
+            ),
+            "Embedded Revenue Chart"
         );
         assert_eq!(
             runtime
