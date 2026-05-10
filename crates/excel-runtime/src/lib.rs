@@ -10,9 +10,9 @@ use office_common::{
     DrawingId, ExcelProfile, FileFormat, FormulaSource, GetRangeValuesSpec, LoadOptions, NameScope,
     NameValidationMode, ObjectHandle, ObjectPlacement, OmArray, OmError, OmErrorCode, OmResult,
     OmValue, OpaquePart, OpenWorkbookSpec, PointEmu, RangeArea, RangeHandle, RangeRef, RangeSet,
-    Rect, SaveOptions, SaveWorkbookSpec, SetRangeValuesSpec, SheetId, SheetKind, SheetScope,
-    SheetVisibility, SizeEmu, WorkbookHandle, WorkbookId, WorkbookModel, WorksheetHandle,
-    WorksheetModel,
+    Rect, ReferenceTarget, SaveOptions, SaveWorkbookSpec, SetRangeValuesSpec, SheetId, SheetKind,
+    SheetScope, SheetVisibility, SizeEmu, WorkbookHandle, WorkbookId, WorkbookModel,
+    WorksheetHandle, WorksheetModel,
 };
 use office_idl::{AccessMode, SupportState};
 use office_opc::{CompressionMethod, OpcPackage, OpcPart};
@@ -2611,19 +2611,12 @@ impl ExcelRuntime {
                                     let (sheet_id, rect) = Self::range_set_single_area(&range)?;
                                     let worksheet_name =
                                         self.worksheet_model(workbook, sheet_id)?.name.clone();
-                                    Some(ChartSourceExpr {
-                                        raw: FormulaSource {
-                                            text: format!(
-                                                "{}{}",
-                                                formula_sheet_address_qualifier(&worksheet_name),
-                                                format_rect_address_with_flags(rect, true, true)
-                                            ),
-                                            is_r1c1: false,
-                                        },
-                                        resolved: None,
-                                        cache: None,
-                                        dirty: true,
-                                    })
+                                    Some(chart_source_expr_for_range(
+                                        range.workbook_id(),
+                                        sheet_id,
+                                        rect,
+                                        &worksheet_name,
+                                    )?)
                                 }
                                 _ => {
                                     return Err(OmError::type_mismatch(format!(
@@ -6326,36 +6319,28 @@ impl ExcelRuntime {
                         .worksheet_model(workbook, source_sheet_id)?
                         .name
                         .clone();
-                    let source_formula = |rect: Rect| {
-                        format!(
-                            "{}{}",
-                            formula_sheet_address_qualifier(&worksheet_name),
-                            format_rect_address_with_flags(rect, true, true)
-                        )
-                    };
+                    let workbook_id = self.workbook_model(workbook)?.id;
                     let mut new_series = Vec::new();
                     match plot_by {
                         Some(XL_PLOT_BY_ROWS) => {
                             for (index, row) in
                                 (source_rect.row_first..=source_rect.row_last).enumerate()
                             {
+                                let values_rect = Rect {
+                                    row_first: row,
+                                    row_last: row,
+                                    col_first: source_rect.col_first,
+                                    col_last: source_rect.col_last,
+                                };
                                 new_series.push(SeriesModel {
                                     name: None,
                                     x_values: None,
-                                    values: Some(ChartSourceExpr {
-                                        raw: FormulaSource {
-                                            text: source_formula(Rect {
-                                                row_first: row,
-                                                row_last: row,
-                                                col_first: source_rect.col_first,
-                                                col_last: source_rect.col_last,
-                                            }),
-                                            is_r1c1: false,
-                                        },
-                                        resolved: None,
-                                        cache: None,
-                                        dirty: true,
-                                    }),
+                                    values: Some(chart_source_expr_for_range(
+                                        workbook_id,
+                                        source_sheet_id,
+                                        values_rect,
+                                        &worksheet_name,
+                                    )?),
                                     order: u32::try_from(index).ok(),
                                 });
                             }
@@ -6364,23 +6349,21 @@ impl ExcelRuntime {
                             for (index, col) in
                                 (source_rect.col_first..=source_rect.col_last).enumerate()
                             {
+                                let values_rect = Rect {
+                                    row_first: source_rect.row_first,
+                                    row_last: source_rect.row_last,
+                                    col_first: col,
+                                    col_last: col,
+                                };
                                 new_series.push(SeriesModel {
                                     name: None,
                                     x_values: None,
-                                    values: Some(ChartSourceExpr {
-                                        raw: FormulaSource {
-                                            text: source_formula(Rect {
-                                                row_first: source_rect.row_first,
-                                                row_last: source_rect.row_last,
-                                                col_first: col,
-                                                col_last: col,
-                                            }),
-                                            is_r1c1: false,
-                                        },
-                                        resolved: None,
-                                        cache: None,
-                                        dirty: true,
-                                    }),
+                                    values: Some(chart_source_expr_for_range(
+                                        workbook_id,
+                                        source_sheet_id,
+                                        values_rect,
+                                        &worksheet_name,
+                                    )?),
                                     order: u32::try_from(index).ok(),
                                 });
                             }
@@ -6390,15 +6373,12 @@ impl ExcelRuntime {
                             new_series.push(SeriesModel {
                                 name: None,
                                 x_values: None,
-                                values: Some(ChartSourceExpr {
-                                    raw: FormulaSource {
-                                        text: source_formula(source_rect),
-                                        is_r1c1: false,
-                                    },
-                                    resolved: None,
-                                    cache: None,
-                                    dirty: true,
-                                }),
+                                values: Some(chart_source_expr_for_range(
+                                    workbook_id,
+                                    source_sheet_id,
+                                    source_rect,
+                                    &worksheet_name,
+                                )?),
                                 order: Some(0),
                             });
                         }
@@ -14971,6 +14951,31 @@ fn chart_object_placement_value(placement: &ObjectPlacement) -> OmResult<i32> {
             "ChartObject.Placement is unavailable for unknown drawing placement",
         )),
     }
+}
+
+fn chart_source_expr_for_range(
+    workbook_id: WorkbookId,
+    sheet_id: SheetId,
+    rect: Rect,
+    worksheet_name: &str,
+) -> OmResult<ChartSourceExpr> {
+    Ok(ChartSourceExpr {
+        raw: FormulaSource {
+            text: format!(
+                "{}{}",
+                formula_sheet_address_qualifier(worksheet_name),
+                format_rect_address_with_flags(rect, true, true)
+            ),
+            is_r1c1: false,
+        },
+        resolved: Some(ReferenceTarget::Range(RangeSet::single_rect(
+            workbook_id,
+            sheet_id,
+            rect,
+        )?)),
+        cache: None,
+        dirty: true,
+    })
 }
 
 fn chart_source_expr_text(source: Option<&excel_model::ChartSourceExpr>) -> Option<String> {
@@ -36110,7 +36115,7 @@ mod tests {
     use office_common::{
         CellError, CellValue, ExcelProfile, FileFormat, GetRangeValuesSpec, LoadOptions,
         ObjectHandle, OmArray, OmErrorCode, OmValue, OpenWorkbookSpec, RangeRef, Rect,
-        SaveWorkbookSpec, SetRangeValuesSpec, StyleId, WorkbookId,
+        ReferenceTarget, SaveWorkbookSpec, SetRangeValuesSpec, SheetScope, StyleId, WorkbookId,
     };
     use office_opc::{CompressionMethod, OpcPackage, OpcPart};
 
@@ -67718,6 +67723,29 @@ mod tests {
             ),
             "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1)"
         );
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after Range series setters");
+            let sheet_id = state.worksheets[0].id;
+            let chart = state.charts.values().next().expect("chart model");
+            let values = chart.series[0].values.as_ref().expect("series values");
+            let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
+                panic!("series values should keep a resolved range");
+            };
+            assert_eq!(range.workbook_id(), state.model.id);
+            assert_eq!(range.areas().len(), 1);
+            assert_eq!(range.areas()[0].scope, SheetScope::Single(sheet_id));
+            assert_eq!(
+                range.areas()[0].rect,
+                Rect {
+                    row_first: 1,
+                    row_last: 3,
+                    col_first: 2,
+                    col_last: 2,
+                }
+            );
+        }
 
         let saved = runtime
             .save_workbook(
@@ -68362,6 +68390,29 @@ mod tests {
                 .expect("Series.Values"),
             OmValue::Text("=Sheet1!$A$1:$B$3".to_string())
         );
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after Chart.SetSourceData");
+            let sheet_id = state.worksheets[0].id;
+            let chart = state.charts.values().next().expect("chart model");
+            let values = chart.series[0].values.as_ref().expect("series values");
+            let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
+                panic!("SetSourceData values should keep a resolved range");
+            };
+            assert_eq!(range.workbook_id(), state.model.id);
+            assert_eq!(range.areas().len(), 1);
+            assert_eq!(range.areas()[0].scope, SheetScope::Single(sheet_id));
+            assert_eq!(
+                range.areas()[0].rect,
+                Rect {
+                    row_first: 1,
+                    row_last: 3,
+                    col_first: 1,
+                    col_last: 2,
+                }
+            );
+        }
 
         let saved = runtime
             .save_workbook(
