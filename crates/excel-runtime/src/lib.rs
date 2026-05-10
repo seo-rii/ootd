@@ -10529,6 +10529,11 @@ impl ExcelRuntime {
         target_workbook: WorkbookHandle,
         insertion_index: usize,
     ) -> OmResult<WorksheetHandle> {
+        if self.worksheet_model(workbook, sheet_id)?.kind == SheetKind::ChartSheet {
+            return Err(OmError::unsupported(
+                "Worksheet.Copy placement targets for chart sheets are not implemented",
+            ));
+        }
         let snapshot = self.spawn_single_sheet_workbook_from_source(
             workbook,
             sheet_id,
@@ -65285,6 +65290,184 @@ mod tests {
         assert_unsupported!(
             runtime.dispatch_invoke(application, "Goto", &[OmValue::Text("A1".to_string())]),
             "Application.Goto should be unsupported on an active chart sheet"
+        );
+    }
+
+    #[test]
+    fn chart_sheet_copy_and_move_guard_uncloned_placement_paths() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        runtime
+            .dispatch_invoke(charts, "Add", &[])
+            .expect("Charts.Add");
+        let chart_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after Charts.Add"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart_sheet,
+                    "Copy",
+                    &[OmValue::Missing, OmValue::Object(worksheet)]
+                )
+                .expect_err("chart sheet placement Copy should be unsupported")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        runtime
+            .dispatch_invoke(
+                chart_sheet,
+                "Move",
+                &[OmValue::Missing, OmValue::Object(worksheet)],
+            )
+            .expect("chart sheet same-workbook Move should reorder sheet entries");
+        let sheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("Workbook.Sheets"),
+        );
+        let moved_chart_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(sheets, "Item", &[OmValue::Number(2.0)])
+                .expect("Sheets.Item(2)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(moved_chart_sheet, "Name", &[])
+                    .expect("moved chart sheet name")
+            ),
+            "Chart1"
+        );
+
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Workbooks", &[])
+                .expect("Application.Workbooks"),
+        );
+        let other_workbook = expect_object_handle(
+            runtime
+                .dispatch_invoke(workbooks, "Add", &[])
+                .expect("Workbooks.Add"),
+        );
+        let other_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("other workbook active sheet"),
+        );
+        assert_ne!(other_workbook, workbook.0);
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart_sheet,
+                    "Move",
+                    &[OmValue::Missing, OmValue::Object(other_sheet)]
+                )
+                .expect_err("chart sheet cross-workbook Move should be unsupported")
+                .code,
+            OmErrorCode::Unsupported
+        );
+    }
+
+    #[test]
+    fn chart_sheet_copy_without_targets_creates_chart_sheet_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        runtime
+            .dispatch_invoke(charts, "Add", &[])
+            .expect("Charts.Add");
+        let chart_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after Charts.Add"),
+        );
+
+        runtime
+            .dispatch_invoke(chart_sheet, "Copy", &[])
+            .expect("chart sheet Copy without targets");
+        let copied_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("copied ActiveWorkbook"),
+        );
+        assert_ne!(copied_workbook, workbook.0);
+        let copied_sheets = expect_object_handle(
+            runtime
+                .dispatch_get(copied_workbook, "Sheets", &[])
+                .expect("copied Workbook.Sheets"),
+        );
+        let copied_charts = expect_object_handle(
+            runtime
+                .dispatch_get(copied_workbook, "Charts", &[])
+                .expect("copied Workbook.Charts"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_sheets, "Count", &[])
+                    .expect("copied Sheets.Count")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_charts, "Count", &[])
+                    .expect("copied Charts.Count")
+            ),
+            1.0
+        );
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveChart", &[])
+                .expect("copied ActiveChart"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_chart, "Name", &[])
+                    .expect("copied ActiveChart.Name")
+            ),
+            "Chart1"
         );
     }
 
