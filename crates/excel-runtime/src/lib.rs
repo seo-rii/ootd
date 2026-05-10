@@ -6771,11 +6771,7 @@ impl ExcelRuntime {
                 }
             }
             "ChartObjects" => {
-                if self.worksheet_model(workbook, sheet_id)?.kind != SheetKind::Worksheet {
-                    return Err(OmError::unsupported(
-                        "Worksheet.ChartObjects is only available on worksheets",
-                    ));
-                }
+                self.ensure_grid_worksheet(workbook, sheet_id, "Worksheet.ChartObjects")?;
                 let handle = self.register_chart_objects_handle(workbook, sheet_id);
                 if args.is_empty() {
                     Ok(OmValue::Object(handle))
@@ -6856,12 +6852,14 @@ impl ExcelRuntime {
                         "Worksheet.UsedRange does not accept arguments",
                     ));
                 }
+                self.ensure_grid_worksheet(workbook, sheet_id, "Worksheet.UsedRange")?;
                 let rect = self.used_range_rect(workbook, sheet_id)?;
                 Ok(OmValue::Object(
                     self.register_range_handle(workbook, sheet_id, rect).0,
                 ))
             }
             "Cells" => {
+                self.ensure_grid_worksheet(workbook, sheet_id, "Worksheet.Cells")?;
                 let rect = match args {
                     [] | [OmValue::Missing] | [OmValue::Empty] | [OmValue::Null] => Rect {
                         row_first: 1,
@@ -6879,6 +6877,7 @@ impl ExcelRuntime {
                 ))
             }
             "Rows" => {
+                self.ensure_grid_worksheet(workbook, sheet_id, "Worksheet.Rows")?;
                 let rect = match args {
                     [] | [OmValue::Missing] | [OmValue::Empty] | [OmValue::Null] => Rect {
                         row_first: 1,
@@ -6961,6 +6960,7 @@ impl ExcelRuntime {
                 ))
             }
             "Columns" => {
+                self.ensure_grid_worksheet(workbook, sheet_id, "Worksheet.Columns")?;
                 let rect = match args {
                     [] | [OmValue::Missing] | [OmValue::Empty] | [OmValue::Null] => Rect {
                         row_first: 1,
@@ -7719,6 +7719,11 @@ impl ExcelRuntime {
                         "Name.RefersToRange cross-workbook references are not supported",
                     ));
                 }
+                self.ensure_range_set_targets_grid_worksheets(
+                    target_workbook,
+                    &range,
+                    "Name.RefersToRange",
+                )?;
                 Ok(OmValue::Object(
                     self.register_range_set_handle(workbook, range).0,
                 ))
@@ -9262,6 +9267,7 @@ impl ExcelRuntime {
                     return Err(OmError::invalid_state("application has no active workbook"));
                 };
                 let sheet_id = self.active_sheet_id(active_workbook)?;
+                self.ensure_grid_worksheet(active_workbook, sheet_id, "Application.Evaluate")?;
                 self.evaluate_formula_expression(
                     active_workbook,
                     sheet_id,
@@ -9298,7 +9304,9 @@ impl ExcelRuntime {
                             )
                         })?,
                     Some(OmValue::Text(reference)) => {
-                        self.resolve_application_reference_text(reference)?
+                        let (workbook, sheet_id, rect) =
+                            self.resolve_application_reference_text(reference)?;
+                        (workbook, sheet_id, rect)
                     }
                     Some(OmValue::Object(handle)) => match self.runtime_object(*handle)? {
                         RuntimeObjectKind::Range {
@@ -9320,6 +9328,7 @@ impl ExcelRuntime {
                     }
                 };
 
+                self.ensure_grid_worksheet(workbook, sheet_id, "Application.Goto")?;
                 self.set_selection(workbook, sheet_id, rect);
                 self.last_goto_selection = Some(RuntimeSelection {
                     workbook,
@@ -9331,6 +9340,11 @@ impl ExcelRuntime {
             "Range" => match args {
                 [OmValue::Text(reference)] => {
                     let (workbook, range) = self.resolve_application_range_text(reference)?;
+                    self.ensure_range_set_targets_grid_worksheets(
+                        workbook,
+                        &range,
+                        "Application.Range",
+                    )?;
                     let (sheet_id, rect) = Self::range_set_first_area(&range)?;
                     self.remember_selection(workbook, sheet_id, rect);
                     Ok(OmValue::Object(
@@ -11154,6 +11168,7 @@ impl ExcelRuntime {
         self.focus_member_supported("Worksheet", member, false)?;
         match member {
             "Range" => {
+                self.ensure_grid_worksheet(workbook, sheet_id, "Worksheet.Range")?;
                 if let [OmValue::Text(reference)] = args {
                     let range = self.resolve_worksheet_range_text(workbook, sheet_id, reference)?;
                     let (_, rect) = Self::range_set_first_area(&range)?;
@@ -11311,10 +11326,12 @@ impl ExcelRuntime {
                         "Worksheet.Calculate does not accept arguments",
                     ));
                 }
+                self.ensure_grid_worksheet(workbook, sheet_id, "Worksheet.Calculate")?;
                 self.calculate_sheet_formulas(workbook, sheet_id, None)?;
                 Ok(OmValue::Empty)
             }
             "Evaluate" => {
+                self.ensure_grid_worksheet(workbook, sheet_id, "Worksheet.Evaluate")?;
                 let expression = coerce_evaluate_expression_arg(args, "Worksheet.Evaluate")?;
                 self.evaluate_formula_expression(
                     workbook,
@@ -11324,6 +11341,7 @@ impl ExcelRuntime {
                 )
             }
             "Cells" => {
+                self.ensure_grid_worksheet(workbook, sheet_id, "Worksheet.Cells")?;
                 let (row, col) = parse_cells_args(args)?;
                 let rect = Rect::single_cell(row, col);
                 self.remember_selection(workbook, sheet_id, rect);
@@ -12127,6 +12145,41 @@ impl ExcelRuntime {
                 OmErrorCode::InvalidState,
                 format!("{operation} cannot target a hidden worksheet"),
             ));
+        }
+        Ok(())
+    }
+
+    fn ensure_grid_worksheet(
+        &self,
+        workbook: WorkbookHandle,
+        sheet_id: SheetId,
+        operation: &str,
+    ) -> OmResult<()> {
+        if self.worksheet_model(workbook, sheet_id)?.kind != SheetKind::Worksheet {
+            return Err(OmError::unsupported(format!(
+                "{operation} is only available on worksheets"
+            )));
+        }
+        Ok(())
+    }
+
+    fn ensure_range_set_targets_grid_worksheets(
+        &self,
+        workbook: WorkbookHandle,
+        range: &RangeSet,
+        operation: &str,
+    ) -> OmResult<()> {
+        for area in range.areas() {
+            match area.scope {
+                SheetScope::Single(sheet_id) => {
+                    self.ensure_grid_worksheet(workbook, sheet_id, operation)?
+                }
+                SheetScope::Multi3D { .. } => {
+                    return Err(OmError::unsupported(format!(
+                        "{operation} does not support 3D sheet ranges"
+                    )));
+                }
+            }
         }
         Ok(())
     }
@@ -65127,6 +65180,112 @@ mod tests {
             office_common::SheetKind::ChartSheet
         );
         assert_eq!(reopened.state.chart_sheets.len(), 1);
+    }
+
+    #[test]
+    fn chart_sheet_rejects_worksheet_grid_apis() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        runtime
+            .dispatch_invoke(charts, "Add", &[])
+            .expect("Charts.Add");
+        let chart_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after Charts.Add"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_sheet, "Type", &[])
+                    .expect("chart sheet type")
+            ),
+            f64::from(super::XL_SHEET_TYPE_CHART)
+        );
+
+        macro_rules! assert_unsupported {
+            ($expr:expr, $label:literal) => {
+                assert_eq!($expr.expect_err($label).code, OmErrorCode::Unsupported);
+            };
+        }
+
+        assert_unsupported!(
+            runtime.dispatch_get(chart_sheet, "ChartObjects", &[]),
+            "chart sheet ChartObjects should be unsupported"
+        );
+        assert_unsupported!(
+            runtime.dispatch_get(chart_sheet, "UsedRange", &[]),
+            "chart sheet UsedRange should be unsupported"
+        );
+        assert_unsupported!(
+            runtime.dispatch_get(chart_sheet, "Cells", &[]),
+            "chart sheet Cells property should be unsupported"
+        );
+        assert_unsupported!(
+            runtime.dispatch_get(chart_sheet, "Rows", &[]),
+            "chart sheet Rows should be unsupported"
+        );
+        assert_unsupported!(
+            runtime.dispatch_get(chart_sheet, "Columns", &[]),
+            "chart sheet Columns should be unsupported"
+        );
+        assert_unsupported!(
+            runtime.dispatch_invoke(chart_sheet, "Range", &[OmValue::Text("A1".to_string())]),
+            "chart sheet Range should be unsupported"
+        );
+        assert_unsupported!(
+            runtime.dispatch_invoke(
+                chart_sheet,
+                "Cells",
+                &[OmValue::Number(1.0), OmValue::Number(1.0)]
+            ),
+            "chart sheet Cells method should be unsupported"
+        );
+        assert_unsupported!(
+            runtime.dispatch_invoke(chart_sheet, "Calculate", &[]),
+            "chart sheet Calculate should be unsupported"
+        );
+        assert_unsupported!(
+            runtime.dispatch_invoke(chart_sheet, "Evaluate", &[OmValue::Text("1+1".to_string())]),
+            "chart sheet Evaluate should be unsupported"
+        );
+        assert_unsupported!(
+            runtime.dispatch_get(application, "Cells", &[]),
+            "Application.Cells should be unsupported on an active chart sheet"
+        );
+        assert_unsupported!(
+            runtime.dispatch_get(application, "Rows", &[]),
+            "Application.Rows should be unsupported on an active chart sheet"
+        );
+        assert_unsupported!(
+            runtime.dispatch_get(application, "Columns", &[]),
+            "Application.Columns should be unsupported on an active chart sheet"
+        );
+        assert_unsupported!(
+            runtime.dispatch_invoke(application, "Range", &[OmValue::Text("A1".to_string())]),
+            "Application.Range should be unsupported on an active chart sheet"
+        );
+        assert_unsupported!(
+            runtime.dispatch_invoke(application, "Evaluate", &[OmValue::Text("1+1".to_string())]),
+            "Application.Evaluate should be unsupported on an active chart sheet"
+        );
+        assert_unsupported!(
+            runtime.dispatch_invoke(application, "Goto", &[OmValue::Text("A1".to_string())]),
+            "Application.Goto should be unsupported on an active chart sheet"
+        );
     }
 
     #[test]
