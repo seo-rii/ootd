@@ -360,6 +360,14 @@ enum RuntimeObjectKind {
         workbook: WorkbookHandle,
         chart_id: ChartId,
     },
+    ChartArea {
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+    },
+    PlotArea {
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+    },
     ChartTitle {
         workbook: WorkbookHandle,
         chart_id: ChartId,
@@ -898,6 +906,10 @@ impl ExcelRuntime {
             RuntimeObjectKind::Chart { workbook, chart_id } => {
                 self.dispatch_get_chart(workbook, chart_id, member, args)
             }
+            RuntimeObjectKind::ChartArea { workbook, chart_id } => self
+                .dispatch_get_chart_child_container("ChartArea", workbook, chart_id, member, args),
+            RuntimeObjectKind::PlotArea { workbook, chart_id } => self
+                .dispatch_get_chart_child_container("PlotArea", workbook, chart_id, member, args),
             RuntimeObjectKind::ChartTitle { workbook, chart_id } => {
                 self.dispatch_get_chart_title(workbook, chart_id, member, args)
             }
@@ -1361,6 +1373,8 @@ impl ExcelRuntime {
             RuntimeObjectKind::ChartObjects { .. }
             | RuntimeObjectKind::ChartObject { .. }
             | RuntimeObjectKind::Chart { .. }
+            | RuntimeObjectKind::ChartArea { .. }
+            | RuntimeObjectKind::PlotArea { .. }
             | RuntimeObjectKind::ChartTitle { .. }
             | RuntimeObjectKind::Legend { .. }
             | RuntimeObjectKind::Axes { .. }
@@ -4360,6 +4374,8 @@ impl ExcelRuntime {
             }
             RuntimeObjectKind::ChartObject { .. }
             | RuntimeObjectKind::Chart { .. }
+            | RuntimeObjectKind::ChartArea { .. }
+            | RuntimeObjectKind::PlotArea { .. }
             | RuntimeObjectKind::ChartTitle { .. }
             | RuntimeObjectKind::Legend { .. }
             | RuntimeObjectKind::Axis { .. }
@@ -4434,6 +4450,8 @@ impl ExcelRuntime {
                     | (
                         "Chart",
                         "ChartType"
+                            | "ChartArea"
+                            | "PlotArea"
                             | "HasTitle"
                             | "ChartTitle"
                             | "HasLegend"
@@ -4443,6 +4461,8 @@ impl ExcelRuntime {
                             | "Application"
                             | "Parent"
                     )
+                    | ("ChartArea", "Application" | "Parent")
+                    | ("PlotArea", "Application" | "Parent")
                     | ("ChartTitle", "Text" | "Caption" | "Application" | "Parent")
                     | ("Legend", "Position" | "Application" | "Parent")
                     | ("Axes", "Count" | "Item" | "Application" | "Parent")
@@ -6255,6 +6275,26 @@ impl ExcelRuntime {
                     &self.chart_model(workbook, chart_id)?.chart_type,
                 )?)))
             }
+            "ChartArea" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Chart.ChartArea does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Object(self.register_object(
+                    RuntimeObjectKind::ChartArea { workbook, chart_id },
+                )))
+            }
+            "PlotArea" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Chart.PlotArea does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Object(self.register_object(
+                    RuntimeObjectKind::PlotArea { workbook, chart_id },
+                )))
+            }
             "HasTitle" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(
@@ -6346,6 +6386,32 @@ impl ExcelRuntime {
             }
             _ => Err(OmError::unsupported(format!(
                 "Chart.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_get_chart_child_container(
+        &mut self,
+        surface: &str,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        if !args.is_empty() {
+            return Err(OmError::invalid_argument(format!(
+                "{surface}.{member} does not accept arguments"
+            )));
+        }
+        self.chart_model(workbook, chart_id)?;
+
+        match member {
+            "Application" => Ok(OmValue::Object(self.root_application())),
+            "Parent" => Ok(OmValue::Object(
+                self.register_chart_handle(workbook, chart_id),
+            )),
+            _ => Err(OmError::unsupported(format!(
+                "{surface}.{member} is not implemented"
             ))),
         }
     }
@@ -11966,6 +12032,8 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         | RuntimeObjectKind::ChartObjects { workbook, .. }
         | RuntimeObjectKind::ChartObject { workbook, .. }
         | RuntimeObjectKind::Chart { workbook, .. }
+        | RuntimeObjectKind::ChartArea { workbook, .. }
+        | RuntimeObjectKind::PlotArea { workbook, .. }
         | RuntimeObjectKind::ChartTitle { workbook, .. }
         | RuntimeObjectKind::Legend { workbook, .. }
         | RuntimeObjectKind::Axes { workbook, .. }
@@ -62529,6 +62597,50 @@ mod tests {
                 runtime
                     .dispatch_get(chart, "ChartType", &[])
                     .expect("Chart.ChartType")
+            ),
+            f64::from(super::XL_BAR_CLUSTERED)
+        );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("Chart.ChartArea"),
+        );
+        assert_eq!(
+            expect_object_handle(
+                runtime
+                    .dispatch_get(chart_area, "Application", &[])
+                    .expect("ChartArea.Application")
+            ),
+            runtime.root_application()
+        );
+        let chart_area_parent = expect_object_handle(
+            runtime
+                .dispatch_get(chart_area, "Parent", &[])
+                .expect("ChartArea.Parent"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_area_parent, "ChartType", &[])
+                    .expect("ChartArea.Parent.ChartType")
+            ),
+            f64::from(super::XL_BAR_CLUSTERED)
+        );
+        let plot_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "PlotArea", &[])
+                .expect("Chart.PlotArea"),
+        );
+        let plot_area_parent = expect_object_handle(
+            runtime
+                .dispatch_get(plot_area, "Parent", &[])
+                .expect("PlotArea.Parent"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(plot_area_parent, "ChartType", &[])
+                    .expect("PlotArea.Parent.ChartType")
             ),
             f64::from(super::XL_BAR_CLUSTERED)
         );
