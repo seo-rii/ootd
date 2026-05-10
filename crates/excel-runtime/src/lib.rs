@@ -1,7 +1,7 @@
 use excel_model::{
-    AxisModel, ChartAxisKind, ChartLegendPosition, ChartModel, ChartObjectModel, ChartSourceExpr,
-    ChartText, ChartType, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel,
-    WorkbookState, WorksheetData,
+    AxisModel, ChartAxisKind, ChartLegendPosition, ChartModel, ChartObjectModel, ChartSheetBinding,
+    ChartSourceExpr, ChartText, ChartType, DrawingModel, DrawingObjectModel, LegendModel,
+    SeriesModel, WorkbookState, WorksheetData,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
@@ -175,9 +175,15 @@ const WORKBOOK_XLTX_CONTENT_TYPE: &str =
 const WORKBOOK_XLTM_CONTENT_TYPE: &str = "application/vnd.ms-excel.template.macroEnabled.main+xml";
 const WORKSHEET_PART_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
+const CHARTSHEET_PART_CONTENT_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml";
 const DRAWING_PART_CONTENT_TYPE: &str = "application/vnd.openxmlformats-officedocument.drawing+xml";
 const CHART_PART_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
+const WORKSHEET_RELATIONSHIP_TYPE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet";
+const CHARTSHEET_RELATIONSHIP_TYPE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet";
 const DRAWING_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing";
 const CHART_RELATIONSHIP_TYPE: &str =
@@ -644,115 +650,6 @@ impl ExcelRuntime {
     ) -> OmResult<Vec<u8>> {
         let runtime = self.runtime_workbook(workbook)?;
         let mut loaded = self.loaded_workbook_for_save_format(runtime, spec.format)?;
-        let serialize_chart_xml = |chart: &ChartModel| -> OmResult<Vec<u8>> {
-            let mut series_xml = String::new();
-            for (series_index, series) in chart.series.iter().enumerate() {
-                let order = series.order.unwrap_or(series_index as u32);
-                series_xml.push_str(&format!(
-                    r#"<c:ser><c:idx val="{}"/><c:order val="{}"/>"#,
-                    series_index, order
-                ));
-                if let Some(name) = series.name.as_ref() {
-                    let formula = partial_escape(name.raw.text.trim_start_matches('=')).to_string();
-                    series_xml.push_str(&format!(
-                        r#"<c:tx><c:strRef><c:f>{formula}</c:f></c:strRef></c:tx>"#
-                    ));
-                }
-                if let Some(x_values) = series.x_values.as_ref() {
-                    let formula =
-                        partial_escape(x_values.raw.text.trim_start_matches('=')).to_string();
-                    series_xml.push_str(&format!(
-                        r#"<c:cat><c:strRef><c:f>{formula}</c:f></c:strRef></c:cat>"#
-                    ));
-                }
-                if let Some(values) = series.values.as_ref() {
-                    let formula =
-                        partial_escape(values.raw.text.trim_start_matches('=')).to_string();
-                    series_xml.push_str(&format!(
-                        r#"<c:val><c:numRef><c:f>{formula}</c:f></c:numRef></c:val>"#
-                    ));
-                }
-                series_xml.push_str("</c:ser>");
-            }
-            let chart_group_name = match chart.chart_type {
-                ChartType::Bar => "barChart",
-                ChartType::Line => "lineChart",
-                ChartType::Scatter => "scatterChart",
-                ChartType::Pie => "pieChart",
-                ChartType::Unknown | ChartType::Unsupported(_) => {
-                    return Err(OmError::unsupported(
-                        "saving dirty charts requires a supported chart type",
-                    ));
-                }
-            };
-            let title_xml = chart
-                .title
-                .as_ref()
-                .map(|title| {
-                    let title_text = partial_escape(&title.text).to_string();
-                    format!(
-                        r#"<c:title><c:tx><c:rich><a:p><a:r><a:t>{title_text}</a:t></a:r></a:p></c:rich></c:tx></c:title>"#
-                    )
-                })
-                .unwrap_or_default();
-            let legend_xml = chart
-                .legend
-                .as_ref()
-                .filter(|legend| legend.visible)
-                .map(|legend| {
-                    let legend_position =
-                        match legend.position.unwrap_or(ChartLegendPosition::Right) {
-                            ChartLegendPosition::Bottom => "b",
-                            ChartLegendPosition::Corner => "tr",
-                            ChartLegendPosition::Custom => "cust",
-                            ChartLegendPosition::Left => "l",
-                            ChartLegendPosition::Right => "r",
-                            ChartLegendPosition::Top => "t",
-                        };
-                    format!(r#"<c:legend><c:legendPos val="{legend_position}"/></c:legend>"#)
-                })
-                .unwrap_or_default();
-            let chart_has_axes = !matches!(chart.chart_type, ChartType::Pie);
-            let mut chart_group_axis_refs = String::new();
-            let mut axes_xml = String::new();
-            if chart_has_axes {
-                for (axis_index, axis) in chart.axes.iter().enumerate() {
-                    let axis_id = axis
-                        .raw_id
-                        .clone()
-                        .unwrap_or_else(|| ((axis_index + 1) * 10).to_string());
-                    let escaped_axis_id = partial_escape(&axis_id).to_string();
-                    chart_group_axis_refs
-                        .push_str(&format!(r#"<c:axId val="{escaped_axis_id}"/>"#));
-                    let axis_tag = match axis.kind {
-                        ChartAxisKind::Category => "catAx",
-                        ChartAxisKind::Value => "valAx",
-                        ChartAxisKind::Date => "dateAx",
-                        ChartAxisKind::Series => "serAx",
-                    };
-                    let axis_title_xml = axis
-                        .title
-                        .as_ref()
-                        .map(|title| {
-                            let title_text = partial_escape(&title.text).to_string();
-                            format!(
-                                r#"<c:title><c:tx><c:rich><a:p><a:r><a:t>{title_text}</a:t></a:r></a:p></c:rich></c:tx></c:title>"#
-                            )
-                        })
-                        .unwrap_or_default();
-                    axes_xml.push_str(&format!(
-                        r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{axis_title_xml}</c:{axis_tag}>"#
-                    ));
-                }
-            }
-            Ok(format!(
-                r#"<?xml version="1.0" encoding="UTF-8"?>
-<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{series_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}</c:chart>
-</c:chartSpace>"#
-            )
-            .into_bytes())
-        };
         let drawing_ids_to_materialize = loaded
             .state
             .drawings
@@ -934,7 +831,7 @@ impl ExcelRuntime {
                         name: chart_part_uri.clone(),
                         content_type: Some(CHART_PART_CONTENT_TYPE.to_string()),
                         compression: CompressionMethod::Stored,
-                        bytes: serialize_chart_xml(chart)?,
+                        bytes: serialize_chart_model_xml(chart)?,
                     })?;
                     content_types_xml = append_content_type_override_if_missing(
                         content_types_xml.as_slice(),
@@ -1223,7 +1120,7 @@ impl ExcelRuntime {
             }
             loaded
                 .package
-                .replace_part_bytes(chart_part_uri.as_str(), serialize_chart_xml(chart)?)?;
+                .replace_part_bytes(chart_part_uri.as_str(), serialize_chart_model_xml(chart)?)?;
         }
         self.codec.save(
             &loaded,
@@ -10072,15 +9969,6 @@ impl ExcelRuntime {
                         .unwrap_or(0)
                         + 1,
                 );
-                let worksheet_part_index = (1..)
-                    .find(|index| {
-                        let part_uri = format!("xl/worksheets/sheet{index}.xml");
-                        !runtime.loaded.package.contains(part_uri.as_str())
-                    })
-                    .expect("worksheet part index");
-                let part_uri = format!("xl/worksheets/sheet{worksheet_part_index}.xml");
-                let relationship_target = format!("worksheets/sheet{worksheet_part_index}.xml");
-
                 let mut used_relationship_ids = BTreeSet::new();
                 let mut reader = Reader::from_reader(Cursor::new(workbook_rels_xml.as_slice()));
                 reader.config_mut().trim_text(true);
@@ -10113,21 +10001,228 @@ impl ExcelRuntime {
                     .map(|index| format!("rId{index}"))
                     .find(|candidate| !used_relationship_ids.contains(candidate))
                     .expect("workbook relationship id");
-                let worksheet_xml = blank_worksheet_xml_bytes();
-
-                runtime.loaded.package.replace_part_bytes(
-                    CONTENT_TYPES_PART_NAME,
-                    append_empty_xml_child_before_container_end(
-                        content_types_xml.as_slice(),
-                        b"Types",
-                        {
-                            let mut element = BytesStart::new("Override");
-                            element.push_attribute(("PartName", format!("/{part_uri}").as_str()));
-                            element.push_attribute(("ContentType", WORKSHEET_PART_CONTENT_TYPE));
-                            element
-                        },
-                    )?,
+                let sheet_kind = sheet_template.sheet_kind();
+                let mut used_part_names = runtime
+                    .loaded
+                    .package
+                    .parts()
+                    .iter()
+                    .map(|part| part.name.clone())
+                    .collect::<BTreeSet<_>>();
+                let (part_uri, sheet_part_content_type, workbook_relationship_type) =
+                    if sheet_template == RuntimeSheetTemplate::Chart {
+                        (
+                            next_available_sequential_part_uri(
+                                &mut used_part_names,
+                                "xl/chartsheets/sheet",
+                                ".xml",
+                            ),
+                            CHARTSHEET_PART_CONTENT_TYPE,
+                            CHARTSHEET_RELATIONSHIP_TYPE,
+                        )
+                    } else {
+                        (
+                            next_available_sequential_part_uri(
+                                &mut used_part_names,
+                                "xl/worksheets/sheet",
+                                ".xml",
+                            ),
+                            WORKSHEET_PART_CONTENT_TYPE,
+                            WORKSHEET_RELATIONSHIP_TYPE,
+                        )
+                    };
+                let relationship_target = part_uri
+                    .strip_prefix("xl/")
+                    .unwrap_or(part_uri.as_str())
+                    .to_string();
+                let mut content_types_xml = append_content_type_override_if_missing(
+                    content_types_xml.as_slice(),
+                    part_uri.as_str(),
+                    sheet_part_content_type,
                 )?;
+
+                let mut chart_sheet_assets = None;
+                let sheet_xml = if sheet_template == RuntimeSheetTemplate::Chart {
+                    let chart_id = ChartId(
+                        runtime
+                            .loaded
+                            .state
+                            .charts
+                            .keys()
+                            .map(|chart_id| chart_id.0)
+                            .max()
+                            .unwrap_or_default()
+                            + 1,
+                    );
+                    let drawing_id = DrawingId(
+                        runtime
+                            .loaded
+                            .state
+                            .drawings
+                            .keys()
+                            .map(|drawing_id| drawing_id.0)
+                            .max()
+                            .unwrap_or_default()
+                            + 1,
+                    );
+                    let chart_object_id = ChartObjectId(
+                        runtime
+                            .loaded
+                            .state
+                            .drawings
+                            .values()
+                            .flat_map(|drawing| drawing.objects.iter())
+                            .filter_map(|object| match object {
+                                DrawingObjectModel::ChartFrame(chart_object) => {
+                                    Some(chart_object.id.0)
+                                }
+                                DrawingObjectModel::UnsupportedRaw { id, .. } => Some(id.0),
+                            })
+                            .max()
+                            .unwrap_or_default()
+                            + 1,
+                    );
+                    let drawing_part_uri = next_available_sequential_part_uri(
+                        &mut used_part_names,
+                        "xl/drawings/drawing",
+                        ".xml",
+                    );
+                    let drawing_rels_part_uri =
+                        worksheet_relationships_part_uri_for(drawing_part_uri.as_str());
+                    used_part_names.insert(drawing_rels_part_uri.clone());
+                    let chart_part_uri = next_available_sequential_part_uri(
+                        &mut used_part_names,
+                        "xl/charts/chart",
+                        ".xml",
+                    );
+                    let chartsheet_rels_part_uri =
+                        worksheet_relationships_part_uri_for(part_uri.as_str());
+                    used_part_names.insert(chartsheet_rels_part_uri.clone());
+                    let sheet_drawing_relationship_id = "rId1";
+                    let drawing_chart_relationship_id = "rId1";
+                    let chart_object_name = "Chart 1";
+                    let escaped_chart_object_name = partial_escape(chart_object_name).to_string();
+                    let chart = ChartModel {
+                        id: chart_id,
+                        workbook_id: runtime.loaded.state.model.id,
+                        chart_type: ChartType::Bar,
+                        series: Vec::new(),
+                        title: None,
+                        legend: None,
+                        axes: default_chart_axes(),
+                        raw_part_uri: Some(chart_part_uri.clone()),
+                        dirty: false,
+                    };
+                    let drawing = DrawingModel {
+                        id: drawing_id,
+                        workbook_id: runtime.loaded.state.model.id,
+                        host_sheet_id: sheet_id,
+                        objects: vec![DrawingObjectModel::ChartFrame(ChartObjectModel {
+                            id: chart_object_id,
+                            workbook_id: runtime.loaded.state.model.id,
+                            host_sheet_id: sheet_id,
+                            chart_id,
+                            name: chart_object_name.to_string(),
+                            anchor: Some(DrawingAnchor::Absolute(AbsoluteAnchor {
+                                position: PointEmu {
+                                    x: office_common::Emu(0),
+                                    y: office_common::Emu(0),
+                                },
+                                extents: SizeEmu {
+                                    cx: office_common::Emu(5_486_400),
+                                    cy: office_common::Emu(3_200_400),
+                                },
+                            })),
+                            placement: ObjectPlacement::FreeFloating,
+                            z_order: Some(0),
+                            raw_binding: Some(format!(
+                                "{drawing_part_uri}#{drawing_chart_relationship_id}"
+                            )),
+                            dirty: false,
+                        })],
+                        raw_part_uri: Some(drawing_part_uri.clone()),
+                        dirty: false,
+                    };
+
+                    runtime.loaded.package.add_part(OpcPart {
+                        name: chartsheet_rels_part_uri,
+                        content_type: Some(RELATIONSHIPS_PART_CONTENT_TYPE.to_string()),
+                        compression: worksheet_compression,
+                        bytes: format!(
+                            r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="{sheet_drawing_relationship_id}" Type="{DRAWING_RELATIONSHIP_TYPE}" Target="{}"/>
+</Relationships>"#,
+                            relative_relationship_target(&part_uri, &drawing_part_uri)
+                        )
+                        .into_bytes(),
+                    })?;
+                    runtime.loaded.package.add_part(OpcPart {
+                        name: drawing_rels_part_uri,
+                        content_type: Some(RELATIONSHIPS_PART_CONTENT_TYPE.to_string()),
+                        compression: worksheet_compression,
+                        bytes: format!(
+                            r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="{drawing_chart_relationship_id}" Type="{CHART_RELATIONSHIP_TYPE}" Target="{}"/>
+</Relationships>"#,
+                            relative_relationship_target(&drawing_part_uri, &chart_part_uri)
+                        )
+                        .into_bytes(),
+                    })?;
+                    runtime.loaded.package.add_part(OpcPart {
+                        name: drawing_part_uri.clone(),
+                        content_type: Some(DRAWING_PART_CONTENT_TYPE.to_string()),
+                        compression: worksheet_compression,
+                        bytes: format!(
+                            r#"<?xml version="1.0" encoding="UTF-8"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <xdr:absoluteAnchor>
+    <xdr:pos x="0" y="0"/>
+    <xdr:ext cx="5486400" cy="3200400"/>
+    <xdr:graphicFrame>
+      <xdr:nvGraphicFramePr><xdr:cNvPr id="{}" name="{escaped_chart_object_name}"/></xdr:nvGraphicFramePr>
+      <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="{drawing_chart_relationship_id}"/></a:graphicData></a:graphic>
+    </xdr:graphicFrame>
+    <xdr:clientData/>
+  </xdr:absoluteAnchor>
+</xdr:wsDr>"#,
+                            chart_object_id.0
+                        )
+                        .into_bytes(),
+                    })?;
+                    runtime.loaded.package.add_part(OpcPart {
+                        name: chart_part_uri.clone(),
+                        content_type: Some(CHART_PART_CONTENT_TYPE.to_string()),
+                        compression: worksheet_compression,
+                        bytes: serialize_chart_model_xml(&chart)?,
+                    })?;
+                    content_types_xml = append_content_type_override_if_missing(
+                        content_types_xml.as_slice(),
+                        drawing_part_uri.as_str(),
+                        DRAWING_PART_CONTENT_TYPE,
+                    )?;
+                    content_types_xml = append_content_type_override_if_missing(
+                        content_types_xml.as_slice(),
+                        chart_part_uri.as_str(),
+                        CHART_PART_CONTENT_TYPE,
+                    )?;
+                    chart_sheet_assets = Some((chart, drawing));
+                    format!(
+                        r#"<?xml version="1.0" encoding="UTF-8"?>
+<chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <drawing r:id="{sheet_drawing_relationship_id}"/>
+</chartsheet>"#
+                    )
+                    .into_bytes()
+                } else {
+                    blank_worksheet_xml_bytes()
+                };
+
+                runtime
+                    .loaded
+                    .package
+                    .replace_part_bytes(CONTENT_TYPES_PART_NAME, content_types_xml)?;
                 runtime.loaded.package.replace_part_bytes(
                     WORKBOOK_PART_NAME,
                     insert_sheet_into_workbook_xml(
@@ -10144,10 +10239,7 @@ impl ExcelRuntime {
                     {
                         let mut element = BytesStart::new("Relationship");
                         element.push_attribute(("Id", relationship_id.as_str()));
-                        element.push_attribute((
-                            "Type",
-                            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet",
-                        ));
+                        element.push_attribute(("Type", workbook_relationship_type));
                         element.push_attribute(("Target", relationship_target.as_str()));
                         element
                     },
@@ -10169,10 +10261,25 @@ impl ExcelRuntime {
                 }
                 runtime.loaded.package.add_part(OpcPart {
                     name: part_uri.clone(),
-                    content_type: Some(WORKSHEET_PART_CONTENT_TYPE.to_string()),
+                    content_type: Some(sheet_part_content_type.to_string()),
                     compression: worksheet_compression,
-                    bytes: worksheet_xml.clone(),
+                    bytes: sheet_xml.clone(),
                 })?;
+                if let Some((chart, drawing)) = chart_sheet_assets {
+                    let chart_id = chart.id;
+                    let drawing_id = drawing.id;
+                    runtime.loaded.state.charts.insert(chart_id, chart);
+                    runtime.loaded.state.drawings.insert(drawing_id, drawing);
+                    runtime.loaded.state.chart_sheets.insert(
+                        sheet_id,
+                        ChartSheetBinding {
+                            sheet_id,
+                            chart_id,
+                            drawing_id: Some(drawing_id),
+                            raw_part_uri: Some(part_uri.clone()),
+                        },
+                    );
+                }
 
                 runtime.loaded.state.worksheets.insert(
                     insertion_index.min(runtime.loaded.state.worksheets.len()),
@@ -10180,7 +10287,7 @@ impl ExcelRuntime {
                         id: sheet_id,
                         workbook_id: runtime.loaded.state.model.id,
                         name: worksheet_name,
-                        kind: sheet_template.sheet_kind(),
+                        kind: sheet_kind,
                         visibility: SheetVisibility::Visible,
                         relationship_id: Some(relationship_id),
                         part_uri: Some(part_uri.clone()),
@@ -10189,36 +10296,38 @@ impl ExcelRuntime {
                 runtime.loaded.state.worksheet_data.insert(
                     sheet_id,
                     WorksheetData {
-                        source_xml: worksheet_xml,
+                        source_xml: sheet_xml,
                         ..WorksheetData::default()
                     },
                 );
-                runtime.loaded.worksheet_support_parts.insert(
-                    sheet_id,
-                    WorksheetSupportParts {
-                        worksheet_part_uri: Some(part_uri),
-                        relationships_part_uri: None,
-                        relationships_part_source_bytes: None,
-                        relationships_summary: None,
-                        hyperlinks_part_summary: None,
-                        comment_part_uris: Vec::new(),
-                        comment_anchor_refs: BTreeMap::new(),
-                        comment_part_source_bytes: BTreeMap::new(),
-                        comment_summaries: BTreeMap::new(),
-                        vml_drawing_part_uris: Vec::new(),
-                        vml_drawing_part_source_bytes: BTreeMap::new(),
-                        vml_drawing_summaries: BTreeMap::new(),
-                        hyperlink_summaries: Vec::new(),
-                        hyperlink_refs: Vec::new(),
-                        hyperlink_bindings: Vec::new(),
-                        hyperlink_relationship_ids: Vec::new(),
-                        legacy_drawing_relationships: Vec::new(),
-                        legacy_drawing_relationship_ids: Vec::new(),
-                        legacy_drawing_summaries: Vec::new(),
-                        comment_relationships: Vec::new(),
-                        comment_relationship_ids: Vec::new(),
-                    },
-                );
+                if sheet_kind != SheetKind::ChartSheet {
+                    runtime.loaded.worksheet_support_parts.insert(
+                        sheet_id,
+                        WorksheetSupportParts {
+                            worksheet_part_uri: Some(part_uri),
+                            relationships_part_uri: None,
+                            relationships_part_source_bytes: None,
+                            relationships_summary: None,
+                            hyperlinks_part_summary: None,
+                            comment_part_uris: Vec::new(),
+                            comment_anchor_refs: BTreeMap::new(),
+                            comment_part_source_bytes: BTreeMap::new(),
+                            comment_summaries: BTreeMap::new(),
+                            vml_drawing_part_uris: Vec::new(),
+                            vml_drawing_part_source_bytes: BTreeMap::new(),
+                            vml_drawing_summaries: BTreeMap::new(),
+                            hyperlink_summaries: Vec::new(),
+                            hyperlink_refs: Vec::new(),
+                            hyperlink_bindings: Vec::new(),
+                            hyperlink_relationship_ids: Vec::new(),
+                            legacy_drawing_relationships: Vec::new(),
+                            legacy_drawing_relationship_ids: Vec::new(),
+                            legacy_drawing_summaries: Vec::new(),
+                            comment_relationships: Vec::new(),
+                            comment_relationship_ids: Vec::new(),
+                        },
+                    );
+                }
                 runtime.dirty = true;
 
                 sheet_id
@@ -13941,6 +14050,112 @@ fn blank_worksheet_xml_bytes() -> Vec<u8> {
   <sheetData/>
 </worksheet>"#
         .to_vec()
+}
+
+fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
+    let mut series_xml = String::new();
+    for (series_index, series) in chart.series.iter().enumerate() {
+        let order = series.order.unwrap_or(series_index as u32);
+        series_xml.push_str(&format!(
+            r#"<c:ser><c:idx val="{}"/><c:order val="{}"/>"#,
+            series_index, order
+        ));
+        if let Some(name) = series.name.as_ref() {
+            let formula = partial_escape(name.raw.text.trim_start_matches('=')).to_string();
+            series_xml.push_str(&format!(
+                r#"<c:tx><c:strRef><c:f>{formula}</c:f></c:strRef></c:tx>"#
+            ));
+        }
+        if let Some(x_values) = series.x_values.as_ref() {
+            let formula = partial_escape(x_values.raw.text.trim_start_matches('=')).to_string();
+            series_xml.push_str(&format!(
+                r#"<c:cat><c:strRef><c:f>{formula}</c:f></c:strRef></c:cat>"#
+            ));
+        }
+        if let Some(values) = series.values.as_ref() {
+            let formula = partial_escape(values.raw.text.trim_start_matches('=')).to_string();
+            series_xml.push_str(&format!(
+                r#"<c:val><c:numRef><c:f>{formula}</c:f></c:numRef></c:val>"#
+            ));
+        }
+        series_xml.push_str("</c:ser>");
+    }
+    let chart_group_name = match chart.chart_type {
+        ChartType::Bar => "barChart",
+        ChartType::Line => "lineChart",
+        ChartType::Scatter => "scatterChart",
+        ChartType::Pie => "pieChart",
+        ChartType::Unknown | ChartType::Unsupported(_) => {
+            return Err(OmError::unsupported(
+                "saving dirty charts requires a supported chart type",
+            ));
+        }
+    };
+    let title_xml = chart
+        .title
+        .as_ref()
+        .map(|title| {
+            let title_text = partial_escape(&title.text).to_string();
+            format!(
+                r#"<c:title><c:tx><c:rich><a:p><a:r><a:t>{title_text}</a:t></a:r></a:p></c:rich></c:tx></c:title>"#
+            )
+        })
+        .unwrap_or_default();
+    let legend_xml = chart
+        .legend
+        .as_ref()
+        .filter(|legend| legend.visible)
+        .map(|legend| {
+            let legend_position = match legend.position.unwrap_or(ChartLegendPosition::Right) {
+                ChartLegendPosition::Bottom => "b",
+                ChartLegendPosition::Corner => "tr",
+                ChartLegendPosition::Custom => "cust",
+                ChartLegendPosition::Left => "l",
+                ChartLegendPosition::Right => "r",
+                ChartLegendPosition::Top => "t",
+            };
+            format!(r#"<c:legend><c:legendPos val="{legend_position}"/></c:legend>"#)
+        })
+        .unwrap_or_default();
+    let chart_has_axes = !matches!(chart.chart_type, ChartType::Pie);
+    let mut chart_group_axis_refs = String::new();
+    let mut axes_xml = String::new();
+    if chart_has_axes {
+        for (axis_index, axis) in chart.axes.iter().enumerate() {
+            let axis_id = axis
+                .raw_id
+                .clone()
+                .unwrap_or_else(|| ((axis_index + 1) * 10).to_string());
+            let escaped_axis_id = partial_escape(&axis_id).to_string();
+            chart_group_axis_refs.push_str(&format!(r#"<c:axId val="{escaped_axis_id}"/>"#));
+            let axis_tag = match axis.kind {
+                ChartAxisKind::Category => "catAx",
+                ChartAxisKind::Value => "valAx",
+                ChartAxisKind::Date => "dateAx",
+                ChartAxisKind::Series => "serAx",
+            };
+            let axis_title_xml = axis
+                .title
+                .as_ref()
+                .map(|title| {
+                    let title_text = partial_escape(&title.text).to_string();
+                    format!(
+                        r#"<c:title><c:tx><c:rich><a:p><a:r><a:t>{title_text}</a:t></a:r></a:p></c:rich></c:tx></c:title>"#
+                    )
+                })
+                .unwrap_or_default();
+            axes_xml.push_str(&format!(
+                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{axis_title_xml}</c:{axis_tag}>"#
+            ));
+        }
+    }
+    Ok(format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{series_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}</c:chart>
+</c:chartSpace>"#
+    )
+    .into_bytes())
 }
 
 fn chart_type_to_excel_value(chart_type: &ChartType) -> OmResult<i32> {
@@ -64453,11 +64668,17 @@ mod tests {
                 },
             )
             .expect("save workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved workbook package");
         let reopened = ExcelRuntime::new()
             .codec
             .load(&saved, LoadOptions::default())
             .expect("reopen saved workbook");
 
+        assert!(saved_package.contains("xl/chartsheets/sheet1.xml"));
+        assert!(saved_package.contains("xl/chartsheets/_rels/sheet1.xml.rels"));
+        assert!(saved_package.contains("xl/drawings/drawing1.xml"));
+        assert!(saved_package.contains("xl/drawings/_rels/drawing1.xml.rels"));
+        assert!(saved_package.contains("xl/charts/chart1.xml"));
         assert_eq!(
             reopened
                 .state
@@ -64472,6 +64693,35 @@ mod tests {
                 "IntlMacro1".to_string()
             ]
         );
+        let reopened_chart_sheet = reopened
+            .state
+            .worksheets
+            .iter()
+            .find(|worksheet| worksheet.name == "Chart1")
+            .expect("reopened chart sheet");
+        assert_eq!(
+            reopened_chart_sheet.kind,
+            office_common::SheetKind::ChartSheet
+        );
+        assert_eq!(
+            reopened_chart_sheet.part_uri.as_deref(),
+            Some("xl/chartsheets/sheet1.xml")
+        );
+        let chart_sheet_binding = reopened
+            .state
+            .chart_sheets
+            .get(&reopened_chart_sheet.id)
+            .expect("reopened chart sheet binding");
+        let chart = reopened
+            .state
+            .charts
+            .get(&chart_sheet_binding.chart_id)
+            .expect("reopened chart model");
+        assert_eq!(chart.chart_type, excel_model::ChartType::Bar);
+        let drawing_id = chart_sheet_binding
+            .drawing_id
+            .expect("reopened chart sheet drawing binding");
+        assert!(reopened.state.drawings.contains_key(&drawing_id));
     }
 
     #[test]
