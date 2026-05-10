@@ -7668,6 +7668,43 @@ impl ExcelRuntime {
                     index - 1,
                 )))
             }
+            "NewSeries" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "SeriesCollection.NewSeries does not accept arguments",
+                    ));
+                }
+                let series_index = {
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    let chart = runtime
+                        .loaded
+                        .state
+                        .charts
+                        .get_mut(&chart_id)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    let series_index = chart.series.len();
+                    chart.series.push(SeriesModel {
+                        name: None,
+                        x_values: None,
+                        values: None,
+                        order: u32::try_from(series_index).ok(),
+                    });
+                    chart.dirty = true;
+                    runtime.dirty = true;
+                    series_index
+                };
+                Ok(OmValue::Object(self.register_series_handle(
+                    workbook,
+                    chart_id,
+                    series_index,
+                )))
+            }
             _ => Err(OmError::unsupported(format!(
                 "SeriesCollection.{member} is not implemented as a method"
             ))),
@@ -64199,6 +64236,47 @@ mod tests {
             )
             .expect_err("negative ChartObjects.Add width should fail");
         assert_eq!(invalid_width.code, OmErrorCode::InvalidArgument);
+
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection before NewSeries"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection.Count before NewSeries")
+            ),
+            0.0
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection.Count after NewSeries")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series, "PlotOrder", &[])
+                    .expect("Series.PlotOrder after NewSeries")
+            ),
+            1.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Values", &[])
+                .expect("Series.Values after NewSeries"),
+            OmValue::Empty
+        );
     }
 
     #[test]
