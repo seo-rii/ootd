@@ -2187,17 +2187,83 @@ impl ExcelRuntime {
                                 "worksheet name {new_name:?} is already in use"
                             )));
                         }
-                        let worksheet = runtime
+                        let worksheet_index = runtime
                             .loaded
                             .state
                             .worksheets
-                            .iter_mut()
-                            .find(|worksheet| worksheet.id == sheet_id)
+                            .iter()
+                            .position(|worksheet| worksheet.id == sheet_id)
                             .ok_or_else(|| {
                                 OmError::new(OmErrorCode::NotFound, "unknown worksheet")
                             })?;
-                        if worksheet.name != new_name {
-                            worksheet.name = new_name;
+                        if runtime.loaded.state.worksheets[worksheet_index].name != new_name {
+                            runtime.loaded.state.worksheets[worksheet_index].name =
+                                new_name.clone();
+                            let workbook_id = runtime.loaded.state.model.id;
+                            let sheet_names = runtime
+                                .loaded
+                                .state
+                                .worksheets
+                                .iter()
+                                .map(|worksheet| (worksheet.id, worksheet.name.clone()))
+                                .collect::<BTreeMap<_, _>>();
+                            let update_chart_source =
+                                |source: &mut Option<ChartSourceExpr>| -> OmResult<bool> {
+                                    let Some(source) = source.as_mut() else {
+                                        return Ok(false);
+                                    };
+                                    let Some(ReferenceTarget::Range(range)) =
+                                        source.resolved.as_ref()
+                                    else {
+                                        return Ok(false);
+                                    };
+                                    if range.workbook_id() != workbook_id {
+                                        return Ok(false);
+                                    }
+                                    let mut references_renamed_sheet = false;
+                                    let mut parts = Vec::with_capacity(range.areas().len());
+                                    for area in range.areas() {
+                                        let SheetScope::Single(area_sheet_id) = area.scope else {
+                                            return Ok(false);
+                                        };
+                                        if area_sheet_id == sheet_id {
+                                            references_renamed_sheet = true;
+                                        }
+                                        let sheet_name =
+                                            sheet_names.get(&area_sheet_id).ok_or_else(|| {
+                                                OmError::new(
+                                                    OmErrorCode::InvalidState,
+                                                    "chart source references an unknown sheet",
+                                                )
+                                            })?;
+                                        parts.push(format!(
+                                            "{}{}",
+                                            formula_sheet_address_qualifier(sheet_name),
+                                            format_rect_address_with_flags(area.rect, true, true)
+                                        ));
+                                    }
+                                    if !references_renamed_sheet {
+                                        return Ok(false);
+                                    }
+                                    let rewritten = parts.join(",");
+                                    if source.raw.text == rewritten {
+                                        return Ok(false);
+                                    }
+                                    source.raw.text = rewritten;
+                                    source.dirty = true;
+                                    Ok(true)
+                                };
+                            for chart in runtime.loaded.state.charts.values_mut() {
+                                let mut chart_changed = false;
+                                for series in &mut chart.series {
+                                    chart_changed |= update_chart_source(&mut series.name)?;
+                                    chart_changed |= update_chart_source(&mut series.x_values)?;
+                                    chart_changed |= update_chart_source(&mut series.values)?;
+                                }
+                                if chart_changed {
+                                    chart.dirty = true;
+                                }
+                            }
                             runtime.dirty = true;
                         }
                         Ok(())
@@ -68413,6 +68479,20 @@ mod tests {
                 }
             );
         }
+        runtime
+            .dispatch_set(
+                worksheet,
+                "Name",
+                OmValue::Text("Data 2026".to_string()),
+                &[],
+            )
+            .expect("rename chart source worksheet");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Values", &[])
+                .expect("Series.Values after source sheet rename"),
+            OmValue::Text("='Data 2026'!$A$1:$B$3".to_string())
+        );
 
         let saved = runtime
             .save_workbook(
@@ -68472,7 +68552,7 @@ mod tests {
             reopened_runtime
                 .dispatch_get(reopened_series, "Values", &[])
                 .expect("reopened Series.Values"),
-            OmValue::Text("=Sheet1!$A$1:$B$3".to_string())
+            OmValue::Text("='Data 2026'!$A$1:$B$3".to_string())
         );
     }
 
