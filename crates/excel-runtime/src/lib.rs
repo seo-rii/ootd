@@ -4439,6 +4439,7 @@ impl ExcelRuntime {
                         "ChartObject",
                         "Name"
                             | "Chart"
+                            | "Index"
                             | "Placement"
                             | "Left"
                             | "Top"
@@ -6230,6 +6231,18 @@ impl ExcelRuntime {
                 Ok(OmValue::Object(
                     self.register_chart_handle(workbook, chart_id),
                 ))
+            }
+            "Index" => {
+                let sheet_id = self
+                    .chart_object_model(workbook, chart_object_id)?
+                    .host_sheet_id;
+                let index = self
+                    .chart_object_entries_for_sheet(workbook, sheet_id)?
+                    .iter()
+                    .position(|(candidate_id, _)| *candidate_id == chart_object_id)
+                    .map(|index| index + 1)
+                    .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart object not found"))?;
+                Ok(OmValue::Number(index as f64))
             }
             "Placement" => Ok(OmValue::Number(f64::from(chart_object_placement_value(
                 &self
@@ -62565,6 +62578,14 @@ mod tests {
                     .expect("ChartObject.Name by property")
             ),
             "Embedded Revenue Chart"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_object, "Index", &[])
+                    .expect("ChartObject.Index")
+            ),
+            1.0
         );
         assert_eq!(
             expect_number(
