@@ -6382,6 +6382,26 @@ impl ExcelRuntime {
                         "Chart.Parent does not accept arguments",
                     ));
                 }
+                let embedded_parent = self
+                    .runtime_workbook(workbook)?
+                    .loaded
+                    .state
+                    .drawings
+                    .values()
+                    .flat_map(|drawing| drawing.objects.iter())
+                    .find_map(|object| match object {
+                        DrawingObjectModel::ChartFrame(chart_object)
+                            if chart_object.chart_id == chart_id =>
+                        {
+                            Some(chart_object.id)
+                        }
+                        _ => None,
+                    });
+                if let Some(chart_object_id) = embedded_parent {
+                    return Ok(OmValue::Object(
+                        self.register_chart_object_handle(workbook, chart_object_id),
+                    ));
+                }
                 Ok(OmValue::Object(workbook.0))
             }
             _ => Err(OmError::unsupported(format!(
@@ -62599,6 +62619,19 @@ mod tests {
                     .expect("Chart.ChartType")
             ),
             f64::from(super::XL_BAR_CLUSTERED)
+        );
+        let chart_parent = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Parent", &[])
+                .expect("Chart.Parent"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(chart_parent, "Name", &[])
+                    .expect("Chart.Parent.Name")
+            ),
+            "Embedded Revenue Chart"
         );
         let chart_area = expect_object_handle(
             runtime
