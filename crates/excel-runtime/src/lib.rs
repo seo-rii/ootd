@@ -644,6 +644,115 @@ impl ExcelRuntime {
     ) -> OmResult<Vec<u8>> {
         let runtime = self.runtime_workbook(workbook)?;
         let mut loaded = self.loaded_workbook_for_save_format(runtime, spec.format)?;
+        let serialize_chart_xml = |chart: &ChartModel| -> OmResult<Vec<u8>> {
+            let mut series_xml = String::new();
+            for (series_index, series) in chart.series.iter().enumerate() {
+                let order = series.order.unwrap_or(series_index as u32);
+                series_xml.push_str(&format!(
+                    r#"<c:ser><c:idx val="{}"/><c:order val="{}"/>"#,
+                    series_index, order
+                ));
+                if let Some(name) = series.name.as_ref() {
+                    let formula = partial_escape(name.raw.text.trim_start_matches('=')).to_string();
+                    series_xml.push_str(&format!(
+                        r#"<c:tx><c:strRef><c:f>{formula}</c:f></c:strRef></c:tx>"#
+                    ));
+                }
+                if let Some(x_values) = series.x_values.as_ref() {
+                    let formula =
+                        partial_escape(x_values.raw.text.trim_start_matches('=')).to_string();
+                    series_xml.push_str(&format!(
+                        r#"<c:cat><c:strRef><c:f>{formula}</c:f></c:strRef></c:cat>"#
+                    ));
+                }
+                if let Some(values) = series.values.as_ref() {
+                    let formula =
+                        partial_escape(values.raw.text.trim_start_matches('=')).to_string();
+                    series_xml.push_str(&format!(
+                        r#"<c:val><c:numRef><c:f>{formula}</c:f></c:numRef></c:val>"#
+                    ));
+                }
+                series_xml.push_str("</c:ser>");
+            }
+            let chart_group_name = match chart.chart_type {
+                ChartType::Bar => "barChart",
+                ChartType::Line => "lineChart",
+                ChartType::Scatter => "scatterChart",
+                ChartType::Pie => "pieChart",
+                ChartType::Unknown | ChartType::Unsupported(_) => {
+                    return Err(OmError::unsupported(
+                        "saving dirty charts requires a supported chart type",
+                    ));
+                }
+            };
+            let title_xml = chart
+                .title
+                .as_ref()
+                .map(|title| {
+                    let title_text = partial_escape(&title.text).to_string();
+                    format!(
+                        r#"<c:title><c:tx><c:rich><a:p><a:r><a:t>{title_text}</a:t></a:r></a:p></c:rich></c:tx></c:title>"#
+                    )
+                })
+                .unwrap_or_default();
+            let legend_xml = chart
+                .legend
+                .as_ref()
+                .filter(|legend| legend.visible)
+                .map(|legend| {
+                    let legend_position =
+                        match legend.position.unwrap_or(ChartLegendPosition::Right) {
+                            ChartLegendPosition::Bottom => "b",
+                            ChartLegendPosition::Corner => "tr",
+                            ChartLegendPosition::Custom => "cust",
+                            ChartLegendPosition::Left => "l",
+                            ChartLegendPosition::Right => "r",
+                            ChartLegendPosition::Top => "t",
+                        };
+                    format!(r#"<c:legend><c:legendPos val="{legend_position}"/></c:legend>"#)
+                })
+                .unwrap_or_default();
+            let chart_has_axes = !matches!(chart.chart_type, ChartType::Pie);
+            let mut chart_group_axis_refs = String::new();
+            let mut axes_xml = String::new();
+            if chart_has_axes {
+                for (axis_index, axis) in chart.axes.iter().enumerate() {
+                    let axis_id = axis
+                        .raw_id
+                        .clone()
+                        .unwrap_or_else(|| ((axis_index + 1) * 10).to_string());
+                    let escaped_axis_id = partial_escape(&axis_id).to_string();
+                    chart_group_axis_refs
+                        .push_str(&format!(r#"<c:axId val="{escaped_axis_id}"/>"#));
+                    let axis_tag = match axis.kind {
+                        ChartAxisKind::Category => "catAx",
+                        ChartAxisKind::Value => "valAx",
+                        ChartAxisKind::Date => "dateAx",
+                        ChartAxisKind::Series => "serAx",
+                    };
+                    let axis_title_xml = axis
+                        .title
+                        .as_ref()
+                        .map(|title| {
+                            let title_text = partial_escape(&title.text).to_string();
+                            format!(
+                                r#"<c:title><c:tx><c:rich><a:p><a:r><a:t>{title_text}</a:t></a:r></a:p></c:rich></c:tx></c:title>"#
+                            )
+                        })
+                        .unwrap_or_default();
+                    axes_xml.push_str(&format!(
+                        r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{axis_title_xml}</c:{axis_tag}>"#
+                    ));
+                }
+            }
+            Ok(format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{series_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}</c:chart>
+</c:chartSpace>"#
+            )
+            .into_bytes())
+        };
         let drawing_ids_to_materialize = loaded
             .state
             .drawings
@@ -821,120 +930,11 @@ impl ExcelRuntime {
                         .get_mut(chart_id)
                         .expect("chart id came from model");
                     chart.raw_part_uri = Some(chart_part_uri.clone());
-                    let mut series_xml = String::new();
-                    for (series_index, series) in chart.series.iter().enumerate() {
-                        let order = series.order.unwrap_or(series_index as u32);
-                        series_xml.push_str(&format!(
-                            r#"<c:ser><c:idx val="{}"/><c:order val="{}"/>"#,
-                            series_index, order
-                        ));
-                        if let Some(name) = series.name.as_ref() {
-                            let formula =
-                                partial_escape(name.raw.text.trim_start_matches('=')).to_string();
-                            series_xml.push_str(&format!(
-                                r#"<c:tx><c:strRef><c:f>{formula}</c:f></c:strRef></c:tx>"#
-                            ));
-                        }
-                        if let Some(x_values) = series.x_values.as_ref() {
-                            let formula = partial_escape(x_values.raw.text.trim_start_matches('='))
-                                .to_string();
-                            series_xml.push_str(&format!(
-                                r#"<c:cat><c:strRef><c:f>{formula}</c:f></c:strRef></c:cat>"#
-                            ));
-                        }
-                        if let Some(values) = series.values.as_ref() {
-                            let formula =
-                                partial_escape(values.raw.text.trim_start_matches('=')).to_string();
-                            series_xml.push_str(&format!(
-                                r#"<c:val><c:numRef><c:f>{formula}</c:f></c:numRef></c:val>"#
-                            ));
-                        }
-                        series_xml.push_str("</c:ser>");
-                    }
-                    let chart_group_name = match chart.chart_type {
-                        ChartType::Bar => "barChart",
-                        ChartType::Line => "lineChart",
-                        ChartType::Scatter => "scatterChart",
-                        ChartType::Pie => "pieChart",
-                        ChartType::Unknown | ChartType::Unsupported(_) => {
-                            return Err(OmError::unsupported(
-                                "saving newly added charts requires a supported chart type",
-                            ));
-                        }
-                    };
-                    let title_xml = chart
-                        .title
-                        .as_ref()
-                        .map(|title| {
-                            let title_text = partial_escape(&title.text).to_string();
-                            format!(
-                                r#"<c:title><c:tx><c:rich><a:p><a:r><a:t>{title_text}</a:t></a:r></a:p></c:rich></c:tx></c:title>"#
-                            )
-                        })
-                        .unwrap_or_default();
-                    let legend_xml = chart
-                        .legend
-                        .as_ref()
-                        .filter(|legend| legend.visible)
-                        .map(|legend| {
-                            let legend_position =
-                                match legend.position.unwrap_or(ChartLegendPosition::Right) {
-                                    ChartLegendPosition::Bottom => "b",
-                                    ChartLegendPosition::Corner => "tr",
-                                    ChartLegendPosition::Custom => "cust",
-                                    ChartLegendPosition::Left => "l",
-                                    ChartLegendPosition::Right => "r",
-                                    ChartLegendPosition::Top => "t",
-                                };
-                            format!(
-                                r#"<c:legend><c:legendPos val="{legend_position}"/></c:legend>"#
-                            )
-                        })
-                        .unwrap_or_default();
-                    let chart_has_axes = !matches!(chart.chart_type, ChartType::Pie);
-                    let mut chart_group_axis_refs = String::new();
-                    let mut axes_xml = String::new();
-                    if chart_has_axes {
-                        for (axis_index, axis) in chart.axes.iter().enumerate() {
-                            let axis_id = axis
-                                .raw_id
-                                .clone()
-                                .unwrap_or_else(|| ((axis_index + 1) * 10).to_string());
-                            let escaped_axis_id = partial_escape(&axis_id).to_string();
-                            chart_group_axis_refs
-                                .push_str(&format!(r#"<c:axId val="{escaped_axis_id}"/>"#));
-                            let axis_tag = match axis.kind {
-                                ChartAxisKind::Category => "catAx",
-                                ChartAxisKind::Value => "valAx",
-                                ChartAxisKind::Date => "dateAx",
-                                ChartAxisKind::Series => "serAx",
-                            };
-                            let axis_title_xml = axis
-                                .title
-                                .as_ref()
-                                .map(|title| {
-                                    let title_text = partial_escape(&title.text).to_string();
-                                    format!(
-                                        r#"<c:title><c:tx><c:rich><a:p><a:r><a:t>{title_text}</a:t></a:r></a:p></c:rich></c:tx></c:title>"#
-                                    )
-                                })
-                                .unwrap_or_default();
-                            axes_xml.push_str(&format!(
-                                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{axis_title_xml}</c:{axis_tag}>"#
-                            ));
-                        }
-                    }
-                    let chart_xml = format!(
-                        r#"<?xml version="1.0" encoding="UTF-8"?>
-<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{series_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}</c:chart>
-</c:chartSpace>"#
-                    );
                     loaded.package.add_part(OpcPart {
                         name: chart_part_uri.clone(),
                         content_type: Some(CHART_PART_CONTENT_TYPE.to_string()),
                         compression: CompressionMethod::Stored,
-                        bytes: chart_xml.into_bytes(),
+                        bytes: serialize_chart_xml(chart)?,
                     })?;
                     content_types_xml = append_content_type_override_if_missing(
                         content_types_xml.as_slice(),
@@ -1193,6 +1193,37 @@ impl ExcelRuntime {
             loaded
                 .package
                 .replace_part_bytes(CONTENT_TYPES_PART_NAME, content_types_xml)?;
+        }
+        let dirty_chart_part_uris = loaded
+            .state
+            .charts
+            .iter()
+            .filter_map(|(chart_id, chart)| {
+                (chart.dirty)
+                    .then(|| {
+                        chart
+                            .raw_part_uri
+                            .clone()
+                            .map(|part_uri| (*chart_id, part_uri))
+                    })
+                    .flatten()
+            })
+            .collect::<Vec<_>>();
+        for (chart_id, chart_part_uri) in dirty_chart_part_uris {
+            let chart = loaded
+                .state
+                .charts
+                .get(&chart_id)
+                .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+            if !loaded.package.contains(chart_part_uri.as_str()) {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!("dirty chart part is missing: {chart_part_uri}"),
+                ));
+            }
+            loaded
+                .package
+                .replace_part_bytes(chart_part_uri.as_str(), serialize_chart_xml(chart)?)?;
         }
         self.codec.save(
             &loaded,
@@ -64864,6 +64895,139 @@ mod tests {
                     .expect("Series.Values from Chart.SeriesCollection(1)")
             ),
             "=Sheet1!$A$1:$C$1"
+        );
+    }
+
+    #[test]
+    fn loaded_chart_content_setters_persist_on_save() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_title = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartTitle", &[])
+                .expect("Chart.ChartTitle"),
+        );
+        runtime
+            .dispatch_set(
+                chart_title,
+                "Text",
+                OmValue::Text("Updated Revenue".to_string()),
+                &[],
+            )
+            .expect("set loaded ChartTitle.Text");
+        let legend = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Legend", &[])
+                .expect("Chart.Legend"),
+        );
+        runtime
+            .dispatch_set(
+                legend,
+                "Position",
+                OmValue::Number(f64::from(super::XL_LEGEND_POSITION_LEFT)),
+                &[],
+            )
+            .expect("set loaded Legend.Position");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after loaded chart edits");
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after loaded chart edits");
+        let reopened_worksheets = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[])
+                .expect("reopened Workbook.Worksheets"),
+        );
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened Worksheets.Item(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_chart_title = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "ChartTitle", &[])
+                .expect("reopened Chart.ChartTitle"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart_title, "Text", &[])
+                .expect("reopened ChartTitle.Text"),
+            OmValue::Text("Updated Revenue".to_string())
+        );
+        let reopened_legend = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "Legend", &[])
+                .expect("reopened Chart.Legend"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_legend, "Position", &[])
+                    .expect("reopened Legend.Position")
+            ),
+            f64::from(super::XL_LEGEND_POSITION_LEFT)
         );
     }
 
