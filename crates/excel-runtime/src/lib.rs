@@ -8094,6 +8094,42 @@ impl ExcelRuntime {
         args: &[OmValue],
     ) -> OmResult<OmValue> {
         match member {
+            "Name" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Chart.Name does not accept arguments",
+                    ));
+                }
+                let state = &self.runtime_workbook(workbook)?.loaded.state;
+                if let Some(worksheet) = state.worksheets.iter().find(|worksheet| {
+                    state
+                        .chart_sheets
+                        .get(&worksheet.id)
+                        .is_some_and(|binding| binding.chart_id == chart_id)
+                }) {
+                    return Ok(OmValue::Text(worksheet.name.clone()));
+                }
+                if let Some(name) = state.drawings.values().find_map(|drawing| {
+                    (state.worksheets.iter().any(|worksheet| {
+                        worksheet.id == drawing.host_sheet_id
+                            && worksheet.kind == SheetKind::Worksheet
+                    }))
+                    .then(|| {
+                        drawing.objects.iter().find_map(|object| match object {
+                            DrawingObjectModel::ChartFrame(chart_object)
+                                if chart_object.chart_id == chart_id =>
+                            {
+                                Some(chart_object.name.clone())
+                            }
+                            _ => None,
+                        })
+                    })
+                    .flatten()
+                }) {
+                    return Ok(OmValue::Text(name));
+                }
+                Err(OmError::new(OmErrorCode::NotFound, "chart not found"))
+            }
             "ChartType" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(
@@ -8211,21 +8247,23 @@ impl ExcelRuntime {
                         "Chart.Parent does not accept arguments",
                     ));
                 }
-                let embedded_parent = self
-                    .runtime_workbook(workbook)?
-                    .loaded
-                    .state
-                    .drawings
-                    .values()
-                    .flat_map(|drawing| drawing.objects.iter())
-                    .find_map(|object| match object {
+                let state = &self.runtime_workbook(workbook)?.loaded.state;
+                let embedded_parent = state.drawings.values().find_map(|drawing| {
+                    if !state.worksheets.iter().any(|worksheet| {
+                        worksheet.id == drawing.host_sheet_id
+                            && worksheet.kind == SheetKind::Worksheet
+                    }) {
+                        return None;
+                    }
+                    drawing.objects.iter().find_map(|object| match object {
                         DrawingObjectModel::ChartFrame(chart_object)
                             if chart_object.chart_id == chart_id =>
                         {
                             Some(chart_object.id)
                         }
                         _ => None,
-                    });
+                    })
+                });
                 if let Some(chart_object_id) = embedded_parent {
                     return Ok(OmValue::Object(
                         self.register_chart_object_handle(workbook, chart_object_id),
@@ -9581,7 +9619,31 @@ impl ExcelRuntime {
                     args.get(2).cloned().unwrap_or(OmValue::Missing),
                     OmValue::Number(f64::from(XL_SHEET_TYPE_CHART)),
                 ];
-                Ok(OmValue::Object(self.add_worksheet(workbook, &add_args)?.0))
+                let added_sheet = self.add_worksheet(workbook, &add_args)?;
+                let RuntimeObjectKind::Worksheet { sheet_id, .. } =
+                    self.runtime_object(added_sheet.0)?
+                else {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        "Charts.Add did not create a chart sheet",
+                    ));
+                };
+                let chart_id = self
+                    .runtime_workbook(workbook)?
+                    .loaded
+                    .state
+                    .chart_sheets
+                    .get(&sheet_id)
+                    .map(|binding| binding.chart_id)
+                    .ok_or_else(|| {
+                        OmError::new(
+                            OmErrorCode::InvalidState,
+                            "Charts.Add created a sheet without a chart binding",
+                        )
+                    })?;
+                Ok(OmValue::Object(
+                    self.register_chart_handle(workbook, chart_id),
+                ))
             }
             "Item" => self.resolve_sheet_collection_item(workbook, collection_kind, args),
             _ => Err(OmError::unsupported(format!(
@@ -11555,6 +11617,25 @@ impl ExcelRuntime {
                 format!("{collection_name} item not found"),
             )
         })?;
+
+        if collection_kind == RuntimeSheetCollectionKind::Charts {
+            let chart_id = self
+                .runtime_workbook(workbook)?
+                .loaded
+                .state
+                .chart_sheets
+                .get(&sheet_id)
+                .map(|binding| binding.chart_id)
+                .ok_or_else(|| {
+                    OmError::new(
+                        OmErrorCode::InvalidState,
+                        "chart sheet is missing a chart binding",
+                    )
+                })?;
+            return Ok(OmValue::Object(
+                self.register_chart_handle(workbook, chart_id),
+            ));
+        }
 
         Ok(OmValue::Object(
             self.register_worksheet_handle(workbook, sheet_id).0,
@@ -64824,7 +64905,7 @@ mod tests {
             0.0
         );
 
-        let chart_sheet = expect_object_handle(
+        let chart = expect_object_handle(
             runtime
                 .dispatch_invoke(charts, "Add", &[])
                 .expect("Charts.Add"),
@@ -64832,16 +64913,35 @@ mod tests {
         assert_eq!(
             expect_text(
                 runtime
-                    .dispatch_get(chart_sheet, "Name", &[])
-                    .expect("Charts.Add sheet name")
+                    .dispatch_get(chart, "Name", &[])
+                    .expect("Charts.Add chart name")
             ),
             "Chart1"
         );
         assert_eq!(
             expect_number(
                 runtime
-                    .dispatch_get(chart_sheet, "Type", &[])
-                    .expect("Charts.Add sheet type")
+                    .dispatch_get(chart, "ChartType", &[])
+                    .expect("Charts.Add chart type")
+            ),
+            f64::from(super::XL_BAR_CLUSTERED)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "Parent", &[])
+                .expect("Charts.Add chart parent"),
+            OmValue::Object(workbook.0)
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet after Charts.Add"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(active_sheet, "Type", &[])
+                    .expect("active chart sheet type")
             ),
             f64::from(super::XL_SHEET_TYPE_CHART)
         );
