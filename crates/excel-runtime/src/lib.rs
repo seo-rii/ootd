@@ -5782,14 +5782,58 @@ impl ExcelRuntime {
             RuntimeObjectKind::SeriesCollection { workbook, chart_id } => {
                 self.dispatch_invoke_series_collection(workbook, chart_id, member, args)
             }
+            RuntimeObjectKind::Series {
+                workbook,
+                chart_id,
+                series_index,
+            } => {
+                match member {
+                    "Delete" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "Series.Delete does not accept arguments",
+                            ));
+                        }
+                        {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            if series_index >= chart.series.len() {
+                                return Err(OmError::new(
+                                    OmErrorCode::NotFound,
+                                    "series not found",
+                                ));
+                            }
+                            chart.series.remove(series_index);
+                            for (index, series) in chart.series.iter_mut().enumerate() {
+                                series.order = u32::try_from(index).ok();
+                            }
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        self.objects.remove(&handle.0);
+                        self.stale_objects.insert(handle.0);
+                        Ok(OmValue::Empty)
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "Series.{member} is not implemented as a method"
+                    ))),
+                }
+            }
             RuntimeObjectKind::ChartObject { .. }
             | RuntimeObjectKind::ChartArea { .. }
             | RuntimeObjectKind::PlotArea { .. }
             | RuntimeObjectKind::ChartTitle { .. }
             | RuntimeObjectKind::Legend { .. }
             | RuntimeObjectKind::Axis { .. }
-            | RuntimeObjectKind::AxisTitle { .. }
-            | RuntimeObjectKind::Series { .. } => Err(OmError::unsupported(format!(
+            | RuntimeObjectKind::AxisTitle { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not implemented as a method for this object handle"
             ))),
         }
@@ -65471,6 +65515,178 @@ mod tests {
                 reopened_runtime
                     .dispatch_get(reopened_second_series, "PlotOrder", &[])
                     .expect("reopened second Series.PlotOrder")
+            ),
+            1.0
+        );
+    }
+
+    #[test]
+    fn chart_series_delete_removes_series_and_roundtrips() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let first_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries first"),
+        );
+        let _second_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries second"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection.Count before delete")
+            ),
+            2.0
+        );
+        runtime
+            .dispatch_invoke(first_series, "Delete", &[])
+            .expect("Series.Delete");
+        assert_eq!(
+            runtime
+                .dispatch_get(first_series, "PlotOrder", &[])
+                .expect_err("deleted series handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection.Count after delete")
+            ),
+            1.0
+        );
+        let remaining_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1) after delete"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(remaining_series, "PlotOrder", &[])
+                    .expect("remaining Series.PlotOrder")
+            ),
+            1.0
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after Series.Delete");
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after Series.Delete");
+        let reopened_worksheets = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[])
+                .expect("reopened Workbook.Worksheets"),
+        );
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened Worksheets.Item(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_series_collection, "Count", &[])
+                    .expect("reopened SeriesCollection.Count")
+            ),
+            1.0
+        );
+        let reopened_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_series, "PlotOrder", &[])
+                    .expect("reopened Series.PlotOrder")
             ),
             1.0
         );
