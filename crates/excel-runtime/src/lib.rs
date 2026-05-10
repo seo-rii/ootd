@@ -1370,8 +1370,279 @@ impl ExcelRuntime {
                     "member {member} is not writable for this object handle"
                 )))
             }
+            RuntimeObjectKind::ChartObject {
+                workbook,
+                chart_object_id,
+            } => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "ChartObject.{member} does not accept index arguments"
+                    )));
+                }
+
+                match member {
+                    "Placement" => {
+                        let OmValue::Number(number) = value else {
+                            return Err(OmError::type_mismatch(
+                                "ChartObject.Placement expects an XlPlacement numeric value",
+                            ));
+                        };
+                        if !number.is_finite()
+                            || number.fract() != 0.0
+                            || number < i32::MIN as f64
+                            || number > i32::MAX as f64
+                        {
+                            return Err(OmError::invalid_argument(
+                                "ChartObject.Placement expects an integral XlPlacement value",
+                            ));
+                        }
+                        let new_placement = match number as i32 {
+                            XL_MOVE_AND_SIZE => ObjectPlacement::MoveAndSize,
+                            XL_MOVE => ObjectPlacement::MoveOnly,
+                            XL_FREE_FLOATING => ObjectPlacement::FreeFloating,
+                            _ => {
+                                return Err(OmError::invalid_argument(
+                                    "ChartObject.Placement supports xlMoveAndSize, xlMove, and xlFreeFloating",
+                                ));
+                            }
+                        };
+
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let mut found = false;
+                        let mut workbook_dirty = false;
+                        for drawing in runtime.loaded.state.drawings.values_mut() {
+                            for object in &mut drawing.objects {
+                                let DrawingObjectModel::ChartFrame(chart_object) = object else {
+                                    continue;
+                                };
+                                if chart_object.id != chart_object_id {
+                                    continue;
+                                }
+                                found = true;
+                                if chart_object.placement != new_placement {
+                                    chart_object.placement = new_placement;
+                                    chart_object.dirty = true;
+                                    drawing.dirty = true;
+                                    workbook_dirty = true;
+                                }
+                                break;
+                            }
+                            if found {
+                                break;
+                            }
+                        }
+                        if workbook_dirty {
+                            runtime.dirty = true;
+                        }
+                        if found {
+                            Ok(())
+                        } else {
+                            Err(OmError::new(
+                                OmErrorCode::NotFound,
+                                "chart object not found",
+                            ))
+                        }
+                    }
+                    "Left" | "Top" | "Width" | "Height" => {
+                        let OmValue::Number(number) = value else {
+                            return Err(OmError::type_mismatch(format!(
+                                "ChartObject.{member} expects a numeric points value"
+                            )));
+                        };
+                        if !number.is_finite()
+                            || number < i64::MIN as f64 / 12_700.0
+                            || number > i64::MAX as f64 / 12_700.0
+                            || matches!(member, "Width" | "Height") && number < 0.0
+                        {
+                            return Err(OmError::invalid_argument(format!(
+                                "ChartObject.{member} expects a finite points value{}",
+                                if matches!(member, "Width" | "Height") {
+                                    " greater than or equal to zero"
+                                } else {
+                                    ""
+                                }
+                            )));
+                        }
+                        let new_emu = office_common::Points(number).to_emu();
+
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let mut found = false;
+                        let mut workbook_dirty = false;
+                        for drawing in runtime.loaded.state.drawings.values_mut() {
+                            for object in &mut drawing.objects {
+                                let DrawingObjectModel::ChartFrame(chart_object) = object else {
+                                    continue;
+                                };
+                                if chart_object.id != chart_object_id {
+                                    continue;
+                                }
+                                found = true;
+                                let Some(anchor) = chart_object.anchor.as_mut() else {
+                                    return Err(OmError::unsupported(
+                                        "ChartObject geometry is unavailable for unsupported drawing anchors",
+                                    ));
+                                };
+                                let changed = match (anchor, member) {
+                                    (DrawingAnchor::Absolute(anchor), "Left") => {
+                                        let changed = anchor.position.x != new_emu;
+                                        anchor.position.x = new_emu;
+                                        changed
+                                    }
+                                    (DrawingAnchor::Absolute(anchor), "Top") => {
+                                        let changed = anchor.position.y != new_emu;
+                                        anchor.position.y = new_emu;
+                                        changed
+                                    }
+                                    (DrawingAnchor::Absolute(anchor), "Width") => {
+                                        let changed = anchor.extents.cx != new_emu;
+                                        anchor.extents.cx = new_emu;
+                                        changed
+                                    }
+                                    (DrawingAnchor::Absolute(anchor), "Height") => {
+                                        let changed = anchor.extents.cy != new_emu;
+                                        anchor.extents.cy = new_emu;
+                                        changed
+                                    }
+                                    (DrawingAnchor::OneCell(anchor), "Left") => {
+                                        let changed = anchor.from.col_offset != new_emu;
+                                        anchor.from.col_offset = new_emu;
+                                        changed
+                                    }
+                                    (DrawingAnchor::OneCell(anchor), "Top") => {
+                                        let changed = anchor.from.row_offset != new_emu;
+                                        anchor.from.row_offset = new_emu;
+                                        changed
+                                    }
+                                    (DrawingAnchor::OneCell(anchor), "Width") => {
+                                        let changed = anchor.extents.cx != new_emu;
+                                        anchor.extents.cx = new_emu;
+                                        changed
+                                    }
+                                    (DrawingAnchor::OneCell(anchor), "Height") => {
+                                        let changed = anchor.extents.cy != new_emu;
+                                        anchor.extents.cy = new_emu;
+                                        changed
+                                    }
+                                    (DrawingAnchor::TwoCell(anchor), "Left") => {
+                                        let width = (anchor.to.col_offset.0
+                                            - anchor.from.col_offset.0)
+                                            .max(0);
+                                        let to_col_offset = office_common::Emu(
+                                            new_emu.0.checked_add(width).ok_or_else(|| {
+                                                OmError::invalid_argument(
+                                                    "ChartObject.Left plus current width exceeds EMU bounds",
+                                                )
+                                            })?,
+                                        );
+                                        let changed = anchor.from.col_offset != new_emu
+                                            || anchor.to.col_offset != to_col_offset;
+                                        anchor.from.col_offset = new_emu;
+                                        anchor.to.col_offset = to_col_offset;
+                                        changed
+                                    }
+                                    (DrawingAnchor::TwoCell(anchor), "Top") => {
+                                        let height = (anchor.to.row_offset.0
+                                            - anchor.from.row_offset.0)
+                                            .max(0);
+                                        let to_row_offset = office_common::Emu(
+                                            new_emu.0.checked_add(height).ok_or_else(|| {
+                                                OmError::invalid_argument(
+                                                    "ChartObject.Top plus current height exceeds EMU bounds",
+                                                )
+                                            })?,
+                                        );
+                                        let changed = anchor.from.row_offset != new_emu
+                                            || anchor.to.row_offset != to_row_offset;
+                                        anchor.from.row_offset = new_emu;
+                                        anchor.to.row_offset = to_row_offset;
+                                        changed
+                                    }
+                                    (DrawingAnchor::TwoCell(anchor), "Width") => {
+                                        let to_col_offset = office_common::Emu(
+                                            anchor
+                                                .from
+                                                .col_offset
+                                                .0
+                                                .checked_add(new_emu.0)
+                                                .ok_or_else(|| {
+                                                    OmError::invalid_argument(
+                                                        "ChartObject.Width exceeds EMU bounds",
+                                                    )
+                                                })?,
+                                        );
+                                        let changed = anchor.to.col_offset != to_col_offset;
+                                        anchor.to.col_offset = to_col_offset;
+                                        changed
+                                    }
+                                    (DrawingAnchor::TwoCell(anchor), "Height") => {
+                                        let to_row_offset = office_common::Emu(
+                                            anchor
+                                                .from
+                                                .row_offset
+                                                .0
+                                                .checked_add(new_emu.0)
+                                                .ok_or_else(|| {
+                                                    OmError::invalid_argument(
+                                                        "ChartObject.Height exceeds EMU bounds",
+                                                    )
+                                                })?,
+                                        );
+                                        let changed = anchor.to.row_offset != to_row_offset;
+                                        anchor.to.row_offset = to_row_offset;
+                                        changed
+                                    }
+                                    (DrawingAnchor::UnsupportedRaw, _) => {
+                                        return Err(OmError::unsupported(
+                                            "ChartObject geometry is unavailable for unsupported drawing anchors",
+                                        ));
+                                    }
+                                    (_, _) => {
+                                        return Err(OmError::unsupported(format!(
+                                            "ChartObject.{member} geometry is not supported"
+                                        )));
+                                    }
+                                };
+                                if changed {
+                                    chart_object.dirty = true;
+                                    drawing.dirty = true;
+                                    workbook_dirty = true;
+                                }
+                                break;
+                            }
+                            if found {
+                                break;
+                            }
+                        }
+                        if workbook_dirty {
+                            runtime.dirty = true;
+                        }
+                        if found {
+                            Ok(())
+                        } else {
+                            Err(OmError::new(
+                                OmErrorCode::NotFound,
+                                "chart object not found",
+                            ))
+                        }
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "ChartObject.{member} is not writable"
+                    ))),
+                }
+            }
             RuntimeObjectKind::ChartObjects { .. }
-            | RuntimeObjectKind::ChartObject { .. }
             | RuntimeObjectKind::Chart { .. }
             | RuntimeObjectKind::ChartArea { .. }
             | RuntimeObjectKind::PlotArea { .. }
@@ -62627,6 +62898,86 @@ mod tests {
             ),
             f64::from(super::XL_FREE_FLOATING)
         );
+        runtime
+            .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
+            .expect("clear chart dirty state");
+        runtime
+            .dispatch_set(chart_object, "Left", OmValue::Number(8.0), &[])
+            .expect("set ChartObject.Left");
+        runtime
+            .dispatch_set(chart_object, "Top", OmValue::Number(9.0), &[])
+            .expect("set ChartObject.Top");
+        runtime
+            .dispatch_set(chart_object, "Width", OmValue::Number(120.0), &[])
+            .expect("set ChartObject.Width");
+        runtime
+            .dispatch_set(chart_object, "Height", OmValue::Number(70.0), &[])
+            .expect("set ChartObject.Height");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_object, "Left", &[])
+                    .expect("ChartObject.Left after set")
+            ),
+            8.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_object, "Top", &[])
+                    .expect("ChartObject.Top after set")
+            ),
+            9.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_object, "Width", &[])
+                    .expect("ChartObject.Width after set")
+            ),
+            120.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_object, "Height", &[])
+                    .expect("ChartObject.Height after set")
+            ),
+            70.0
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after chart geometry set")
+        ));
+        runtime
+            .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
+            .expect("clear chart placement dirty state");
+        runtime
+            .dispatch_set(
+                chart_object,
+                "Placement",
+                OmValue::Number(f64::from(super::XL_MOVE)),
+                &[],
+            )
+            .expect("set ChartObject.Placement");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_object, "Placement", &[])
+                    .expect("ChartObject.Placement after set")
+            ),
+            f64::from(super::XL_MOVE)
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after chart placement set")
+        ));
+        let invalid_height = runtime
+            .dispatch_set(chart_object, "Height", OmValue::Number(-1.0), &[])
+            .expect_err("negative ChartObject.Height should fail");
+        assert_eq!(invalid_height.code, OmErrorCode::InvalidArgument);
 
         let chart = expect_object_handle(
             runtime
