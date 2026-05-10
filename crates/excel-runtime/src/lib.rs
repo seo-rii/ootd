@@ -6048,6 +6048,7 @@ impl ExcelRuntime {
             && matches!(
                 (surface, member),
                 ("Application" | "Workbook" | "Worksheet", "Names")
+                    | ("Application", "ActiveChart")
                     | ("Worksheet", "ChartObjects")
                     | ("Names", "Count" | "Item" | "Add" | "Application" | "Parent")
                     | (
@@ -6222,6 +6223,24 @@ impl ExcelRuntime {
                 Ok(OmValue::Object(
                     self.register_worksheet_handle(active_workbook, sheet_id).0,
                 ))
+            }
+            "ActiveChart" => {
+                let Some(active_workbook) = self.active_workbook else {
+                    return Ok(OmValue::Empty);
+                };
+                let sheet_id = self.active_sheet_id(active_workbook)?;
+                let chart_id = self
+                    .runtime_workbook(active_workbook)?
+                    .loaded
+                    .state
+                    .chart_sheets
+                    .get(&sheet_id)
+                    .map(|binding| binding.chart_id);
+                Ok(chart_id
+                    .map(|chart_id| {
+                        OmValue::Object(self.register_chart_handle(active_workbook, chart_id))
+                    })
+                    .unwrap_or(OmValue::Empty))
             }
             "ActiveCell" => {
                 let Some(active_workbook) = self.active_workbook else {
@@ -64988,6 +65007,12 @@ mod tests {
             ),
             0.0
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                .expect("ActiveChart before Charts.Add"),
+            OmValue::Empty
+        );
 
         let chart = expect_object_handle(
             runtime
@@ -65009,6 +65034,19 @@ mod tests {
                     .expect("Charts.Add chart type")
             ),
             f64::from(super::XL_BAR_CLUSTERED)
+        );
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                .expect("ActiveChart after Charts.Add"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_chart, "Name", &[])
+                    .expect("ActiveChart.Name after Charts.Add")
+            ),
+            "Chart1"
         );
         assert_eq!(
             runtime
