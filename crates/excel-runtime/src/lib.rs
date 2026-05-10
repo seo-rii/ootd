@@ -4457,7 +4457,13 @@ impl ExcelRuntime {
                     )
                     | (
                         "Series",
-                        "Name" | "Values" | "XValues" | "Formula" | "Application" | "Parent"
+                        "Name"
+                            | "Values"
+                            | "XValues"
+                            | "Formula"
+                            | "PlotOrder"
+                            | "Application"
+                            | "Parent"
                     )
             )
         {
@@ -6674,6 +6680,10 @@ impl ExcelRuntime {
                 .map(OmValue::Text)
                 .unwrap_or(OmValue::Empty)),
             "Formula" => Ok(OmValue::Text(series_formula_text(series, series_index))),
+            "PlotOrder" => Ok(OmValue::Number(f64::from(series_plot_order(
+                series,
+                series_index,
+            )))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(
                 self.register_series_collection_handle(workbook, chart_id),
@@ -11932,11 +11942,15 @@ fn series_formula_text(series: &SeriesModel, series_index: usize) -> String {
     let name = formula_arg_text(series.name.as_ref()).unwrap_or_default();
     let x_values = formula_arg_text(series.x_values.as_ref()).unwrap_or_default();
     let values = formula_arg_text(series.values.as_ref()).unwrap_or_default();
-    let order = series
+    let order = series_plot_order(series, series_index);
+    format!("=SERIES({name},{x_values},{values},{order})")
+}
+
+fn series_plot_order(series: &SeriesModel, series_index: usize) -> u32 {
+    series
         .order
         .map(|order| order + 1)
-        .unwrap_or((series_index + 1) as u32);
-    format!("=SERIES({name},{x_values},{values},{order})")
+        .unwrap_or((series_index + 1) as u32)
 }
 
 fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
@@ -62712,6 +62726,14 @@ mod tests {
                     .expect("Series.Formula")
             ),
             "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$B$1,Sheet1!$A$1:$C$1,1)"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series, "PlotOrder", &[])
+                    .expect("Series.PlotOrder")
+            ),
+            1.0
         );
         let series_by_chart_property = expect_object_handle(
             runtime
