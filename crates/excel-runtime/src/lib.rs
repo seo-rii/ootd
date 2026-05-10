@@ -1,6 +1,6 @@
 use excel_model::{
-    ChartModel, ChartObjectModel, ChartType, DrawingObjectModel, SeriesModel, WorkbookState,
-    WorksheetData,
+    ChartAxisKind, ChartModel, ChartObjectModel, ChartType, DrawingObjectModel, SeriesModel,
+    WorkbookState, WorksheetData,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
@@ -43,6 +43,9 @@ const XL_LINE: i32 = 4;
 const XL_PIE: i32 = 5;
 const XL_BAR_CLUSTERED: i32 = 57;
 const XL_XY_SCATTER: i32 = -4169;
+const XL_CATEGORY: i32 = 1;
+const XL_VALUE: i32 = 2;
+const XL_SERIES_AXIS: i32 = 3;
 const XL_MOVE_AND_SIZE: i32 = 1;
 const XL_MOVE: i32 = 2;
 const XL_FREE_FLOATING: i32 = 3;
@@ -4425,7 +4428,7 @@ impl ExcelRuntime {
                     | ("ChartTitle", "Text" | "Caption" | "Application" | "Parent")
                     | ("Legend", "Application" | "Parent")
                     | ("Axes", "Count" | "Item" | "Application" | "Parent")
-                    | ("Axis", "Application" | "Parent")
+                    | ("Axis", "Type" | "Application" | "Parent")
                     | (
                         "SeriesCollection",
                         "Count" | "Item" | "Application" | "Parent"
@@ -6444,11 +6447,19 @@ impl ExcelRuntime {
                 "Axis.{member} does not accept arguments"
             )));
         }
-        if axis_index >= self.chart_model(workbook, chart_id)?.axes.len() {
-            return Err(OmError::new(OmErrorCode::NotFound, "axis not found"));
-        }
+        let axis_kind = self
+            .chart_model(workbook, chart_id)?
+            .axes
+            .get(axis_index)
+            .map(|axis| axis.kind)
+            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
 
         match member {
+            "Type" => Ok(OmValue::Number(f64::from(match axis_kind {
+                ChartAxisKind::Category | ChartAxisKind::Date => XL_CATEGORY,
+                ChartAxisKind::Value => XL_VALUE,
+                ChartAxisKind::Series => XL_SERIES_AXIS,
+            }))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(
                 self.register_chart_handle(workbook, chart_id),
@@ -62451,6 +62462,18 @@ mod tests {
                     .expect("Axis.Application")
             ),
             runtime.root_application()
+        );
+        assert_eq!(
+            expect_number(runtime.dispatch_get(axis, "Type", &[]).expect("Axis.Type")),
+            f64::from(super::XL_CATEGORY)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(axis_by_chart_property, "Type", &[])
+                    .expect("Axis.Type for value axis")
+            ),
+            f64::from(super::XL_VALUE)
         );
         let axis_parent = expect_object_handle(
             runtime

@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Write};
 
 use excel_model::{
-    AxisModel, CellData, ChartCacheKind, ChartCacheSnapshot, ChartModel, ChartObjectModel,
-    ChartSheetBinding, ChartSourceExpr, ChartText, ChartType, DefinedNameTable, DrawingModel,
-    DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
+    AxisModel, CellData, ChartAxisKind, ChartCacheKind, ChartCacheSnapshot, ChartModel,
+    ChartObjectModel, ChartSheetBinding, ChartSourceExpr, ChartText, ChartType, DefinedNameTable,
+    DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
 };
 use office_common::{
     AbsoluteAnchor, CellError, CellMarker, CellValue, ChartId, ChartObjectId, DefinedName,
@@ -631,12 +631,18 @@ pub struct ChartPartSummary {
     pub chart_type_names: Vec<String>,
     pub title_text: Option<String>,
     pub has_legend: bool,
-    pub axis_ids: Vec<String>,
+    pub axes: Vec<ChartAxisSummary>,
     pub series: Vec<ChartSeriesSummary>,
     pub formula_refs: Vec<String>,
     pub has_extension_list: bool,
     pub relationships_part_uri: Option<String>,
     pub support_relationships: Vec<ChartSupportRelationshipBinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChartAxisSummary {
+    pub raw_id: Option<String>,
+    pub kind: ChartAxisKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -2581,9 +2587,10 @@ fn build_chart_model_overlay(
                         .map(|_| LegendModel { visible: true }),
                     axes: summary
                         .into_iter()
-                        .flat_map(|summary| summary.axis_ids.iter())
-                        .map(|axis_id| AxisModel {
-                            raw_id: Some(axis_id.clone()),
+                        .flat_map(|summary| summary.axes.iter())
+                        .map(|axis| AxisModel {
+                            raw_id: axis.raw_id.clone(),
+                            kind: axis.kind,
                         })
                         .collect(),
                     raw_part_uri: Some(chart_part_uri.clone()),
@@ -14688,7 +14695,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut title_text = None::<String>;
     let mut title_text_depth = 0usize;
     let mut has_legend = false;
-    let mut axis_ids = Vec::new();
+    let mut axes = Vec::new();
     let mut series = Vec::new();
     let mut formula_refs = Vec::new();
     let mut has_extension_list = false;
@@ -14782,14 +14789,22 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     has_legend = true;
                 }
                 if local_name == b"axId"
-                    && matches!(
-                        element_path.last().map(String::as_str),
-                        Some("catAx" | "valAx" | "dateAx" | "serAx")
-                    )
+                    && let Some(kind) = match element_path.last().map(String::as_str) {
+                        Some("catAx") => Some(ChartAxisKind::Category),
+                        Some("valAx") => Some(ChartAxisKind::Value),
+                        Some("dateAx") => Some(ChartAxisKind::Date),
+                        Some("serAx") => Some(ChartAxisKind::Series),
+                        _ => None,
+                    }
                     && let Some(axis_id) = parse_string_val_attr(&element, &reader)?
-                    && axis_ids.iter().all(|existing| existing != &axis_id)
+                    && axes.iter().all(|existing: &ChartAxisSummary| {
+                        existing.raw_id.as_deref() != Some(axis_id.as_str())
+                    })
                 {
-                    axis_ids.push(axis_id);
+                    axes.push(ChartAxisSummary {
+                        raw_id: Some(axis_id),
+                        kind,
+                    });
                 }
                 if local_name == b"ser" && active_series.is_none() {
                     active_series = Some(ChartSeriesSummary::default());
@@ -14851,14 +14866,22 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     has_legend = true;
                 }
                 if local_name == b"axId"
-                    && matches!(
-                        element_path.last().map(String::as_str),
-                        Some("catAx" | "valAx" | "dateAx" | "serAx")
-                    )
+                    && let Some(kind) = match element_path.last().map(String::as_str) {
+                        Some("catAx") => Some(ChartAxisKind::Category),
+                        Some("valAx") => Some(ChartAxisKind::Value),
+                        Some("dateAx") => Some(ChartAxisKind::Date),
+                        Some("serAx") => Some(ChartAxisKind::Series),
+                        _ => None,
+                    }
                     && let Some(axis_id) = parse_string_val_attr(&element, &reader)?
-                    && axis_ids.iter().all(|existing| existing != &axis_id)
+                    && axes.iter().all(|existing: &ChartAxisSummary| {
+                        existing.raw_id.as_deref() != Some(axis_id.as_str())
+                    })
                 {
-                    axis_ids.push(axis_id);
+                    axes.push(ChartAxisSummary {
+                        raw_id: Some(axis_id),
+                        kind,
+                    });
                 }
                 if local_name == b"order"
                     && let Some(active_series) = active_series.as_mut()
@@ -14992,7 +15015,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         chart_type_names,
         title_text: title_text.filter(|text| !text.is_empty()),
         has_legend,
-        axis_ids,
+        axes,
         series,
         formula_refs,
         has_extension_list,
@@ -17998,14 +18021,14 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::{
-        BorderSummary, COMMENTS_RELATIONSHIP_TYPE, CellData, ChartCacheKindSummary,
-        ChartCacheSummary, ChartSeriesSummary, ChartSupportRelationshipBinding, CommentPartSummary,
-        DrawingAnchorKind, DrawingAnchorSummary, DrawingCellMarkerSummary, DrawingPointSummary,
-        DrawingSizeSummary, DxfSummary, FileFormat, FillSummary, FontSummary,
-        HYPERLINK_RELATIONSHIP_TYPE, OpcPackage, STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE,
-        VML_DRAWING_RELATIONSHIP_TYPE, WORKBOOK_RELS_PART_NAME, WorksheetCommentSummary,
-        WorksheetData, WorksheetHyperlinkBinding, WorksheetHyperlinkSummary,
-        WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec,
+        BorderSummary, COMMENTS_RELATIONSHIP_TYPE, CellData, ChartAxisKind, ChartAxisSummary,
+        ChartCacheKindSummary, ChartCacheSummary, ChartSeriesSummary,
+        ChartSupportRelationshipBinding, CommentPartSummary, DrawingAnchorKind,
+        DrawingAnchorSummary, DrawingCellMarkerSummary, DrawingPointSummary, DrawingSizeSummary,
+        DxfSummary, FileFormat, FillSummary, FontSummary, HYPERLINK_RELATIONSHIP_TYPE, OpcPackage,
+        STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE, VML_DRAWING_RELATIONSHIP_TYPE,
+        WORKBOOK_RELS_PART_NAME, WorksheetCommentSummary, WorksheetData, WorksheetHyperlinkBinding,
+        WorksheetHyperlinkSummary, WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec,
         collect_support_part_dimension_coords, compute_dimension_ref,
         compute_dimension_ref_with_preserved, parse_shared_strings, parse_workbook,
         parse_workbook_relationships, parse_worksheet_cells, rewrite_worksheet_xml,
@@ -19033,8 +19056,17 @@ mod tests {
         assert_eq!(chart_summary.title_text.as_deref(), Some("Revenue Trend"));
         assert!(chart_summary.has_legend);
         assert_eq!(
-            chart_summary.axis_ids,
-            vec!["10".to_string(), "20".to_string()]
+            chart_summary.axes,
+            vec![
+                ChartAxisSummary {
+                    raw_id: Some("10".to_string()),
+                    kind: ChartAxisKind::Category,
+                },
+                ChartAxisSummary {
+                    raw_id: Some("20".to_string()),
+                    kind: ChartAxisKind::Value,
+                }
+            ]
         );
         assert_eq!(
             chart_summary.formula_refs,
@@ -19120,9 +19152,12 @@ mod tests {
             chart_model
                 .axes
                 .iter()
-                .map(|axis| axis.raw_id.as_deref())
+                .map(|axis| (axis.raw_id.as_deref(), axis.kind))
                 .collect::<Vec<_>>(),
-            vec![Some("10"), Some("20")]
+            vec![
+                (Some("10"), ChartAxisKind::Category),
+                (Some("20"), ChartAxisKind::Value)
+            ]
         );
         assert_eq!(
             chart_model.raw_part_uri.as_deref(),

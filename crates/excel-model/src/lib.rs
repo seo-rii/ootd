@@ -10,9 +10,9 @@ mod charts;
 mod names;
 
 pub use charts::{
-    AxisModel, ChartCacheKind, ChartCacheSnapshot, ChartModel, ChartObjectModel, ChartSheetBinding,
-    ChartSourceExpr, ChartText, ChartType, DrawingModel, DrawingObjectModel, LegendModel,
-    SeriesModel,
+    AxisModel, ChartAxisKind, ChartCacheKind, ChartCacheSnapshot, ChartModel, ChartObjectModel,
+    ChartSheetBinding, ChartSourceExpr, ChartText, ChartType, DrawingModel, DrawingObjectModel,
+    LegendModel, SeriesModel,
 };
 pub use names::DefinedNameTable;
 

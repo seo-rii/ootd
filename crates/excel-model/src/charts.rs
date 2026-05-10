@@ -70,6 +70,15 @@ pub struct LegendModel {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AxisModel {
     pub raw_id: Option<String>,
+    pub kind: ChartAxisKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartAxisKind {
+    Category,
+    Value,
+    Date,
+    Series,
 }
 
 #[derive(Debug, Clone, PartialEq)]
