@@ -848,10 +848,21 @@ impl ExcelRuntime {
                         }
                         series_xml.push_str("</c:ser>");
                     }
+                    let chart_group_name = match chart.chart_type {
+                        ChartType::Bar => "barChart",
+                        ChartType::Line => "lineChart",
+                        ChartType::Scatter => "scatterChart",
+                        ChartType::Pie => "pieChart",
+                        ChartType::Unknown | ChartType::Unsupported(_) => {
+                            return Err(OmError::unsupported(
+                                "saving newly added charts requires a supported chart type",
+                            ));
+                        }
+                    };
                     let chart_xml = format!(
                         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart><c:plotArea><c:barChart>{series_xml}</c:barChart></c:plotArea></c:chart>
+  <c:chart><c:plotArea><c:{chart_group_name}>{series_xml}</c:{chart_group_name}></c:plotArea></c:chart>
 </c:chartSpace>"#
                     );
                     loaded.package.add_part(OpcPart {
@@ -2195,7 +2206,6 @@ impl ExcelRuntime {
                 }
             }
             RuntimeObjectKind::ChartObjects { .. }
-            | RuntimeObjectKind::Chart { .. }
             | RuntimeObjectKind::ChartArea { .. }
             | RuntimeObjectKind::PlotArea { .. }
             | RuntimeObjectKind::ChartTitle { .. }
@@ -2206,6 +2216,67 @@ impl ExcelRuntime {
             | RuntimeObjectKind::SeriesCollection { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
             ))),
+            RuntimeObjectKind::Chart { workbook, chart_id } => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "Chart.{member} does not accept index arguments"
+                    )));
+                }
+                match member {
+                    "ChartType" => {
+                        let OmValue::Number(number) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Chart.ChartType expects an XlChartType numeric value",
+                            ));
+                        };
+                        if !number.is_finite()
+                            || number.fract() != 0.0
+                            || number < i32::MIN as f64
+                            || number > i32::MAX as f64
+                        {
+                            return Err(OmError::invalid_argument(
+                                "Chart.ChartType expects an integral XlChartType value",
+                            ));
+                        }
+                        let chart_type = match number as i32 {
+                            XL_BAR_CLUSTERED => ChartType::Bar,
+                            XL_LINE => ChartType::Line,
+                            XL_XY_SCATTER => ChartType::Scatter,
+                            XL_PIE => ChartType::Pie,
+                            _ => {
+                                return Err(OmError::unsupported(
+                                    "Chart.ChartType supports bar, line, scatter, and pie chart types",
+                                ));
+                            }
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        if chart.chart_type != chart_type {
+                            chart.chart_type = chart_type;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "Chart.{member} is not writable"
+                    ))),
+                }
+            }
             RuntimeObjectKind::WorkbooksCollection
             | RuntimeObjectKind::WorksheetsCollection { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
@@ -64327,6 +64398,22 @@ mod tests {
             ),
             f64::from(super::XL_BAR_CLUSTERED)
         );
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_LINE)),
+                &[],
+            )
+            .expect("set Chart.ChartType");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "ChartType", &[])
+                    .expect("Chart.ChartType after set")
+            ),
+            f64::from(super::XL_LINE)
+        );
         assert!(!expect_bool(
             runtime
                 .dispatch_get(workbook.0, "Saved", &[])
@@ -64394,6 +64481,19 @@ mod tests {
                     .expect("reopened ChartObject.Height")
             ),
             160.0
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart, "ChartType", &[])
+                    .expect("reopened Chart.ChartType")
+            ),
+            f64::from(super::XL_LINE)
         );
 
         let invalid_width = runtime
