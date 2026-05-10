@@ -1,6 +1,6 @@
 use excel_model::{
-    ChartAxisKind, ChartModel, ChartObjectModel, ChartType, DrawingObjectModel, SeriesModel,
-    WorkbookState, WorksheetData,
+    AxisModel, ChartAxisKind, ChartModel, ChartObjectModel, ChartType, DrawingObjectModel,
+    SeriesModel, WorkbookState, WorksheetData,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
@@ -367,6 +367,11 @@ enum RuntimeObjectKind {
         chart_id: ChartId,
     },
     Axis {
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        axis_index: usize,
+    },
+    AxisTitle {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         axis_index: usize,
@@ -901,6 +906,11 @@ impl ExcelRuntime {
                 chart_id,
                 axis_index,
             } => self.dispatch_get_axis(workbook, chart_id, axis_index, member, args),
+            RuntimeObjectKind::AxisTitle {
+                workbook,
+                chart_id,
+                axis_index,
+            } => self.dispatch_get_axis_title(workbook, chart_id, axis_index, member, args),
             RuntimeObjectKind::SeriesCollection { workbook, chart_id } => {
                 self.dispatch_get_series_collection(workbook, chart_id, member, args)
             }
@@ -1349,6 +1359,7 @@ impl ExcelRuntime {
             | RuntimeObjectKind::Legend { .. }
             | RuntimeObjectKind::Axes { .. }
             | RuntimeObjectKind::Axis { .. }
+            | RuntimeObjectKind::AxisTitle { .. }
             | RuntimeObjectKind::SeriesCollection { .. }
             | RuntimeObjectKind::Series { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
@@ -4346,6 +4357,7 @@ impl ExcelRuntime {
             | RuntimeObjectKind::ChartTitle { .. }
             | RuntimeObjectKind::Legend { .. }
             | RuntimeObjectKind::Axis { .. }
+            | RuntimeObjectKind::AxisTitle { .. }
             | RuntimeObjectKind::Series { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not implemented as a method for this object handle"
             ))),
@@ -4428,7 +4440,11 @@ impl ExcelRuntime {
                     | ("ChartTitle", "Text" | "Caption" | "Application" | "Parent")
                     | ("Legend", "Application" | "Parent")
                     | ("Axes", "Count" | "Item" | "Application" | "Parent")
-                    | ("Axis", "Type" | "Application" | "Parent")
+                    | (
+                        "Axis",
+                        "Type" | "HasTitle" | "AxisTitle" | "Application" | "Parent"
+                    )
+                    | ("AxisTitle", "Text" | "Caption" | "Application" | "Parent")
                     | (
                         "SeriesCollection",
                         "Count" | "Item" | "Application" | "Parent"
@@ -6447,25 +6463,68 @@ impl ExcelRuntime {
                 "Axis.{member} does not accept arguments"
             )));
         }
-        let axis_kind = self
-            .chart_model(workbook, chart_id)?
-            .axes
-            .get(axis_index)
-            .map(|axis| axis.kind)
-            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
+        let axis = self.axis_model(workbook, chart_id, axis_index)?;
 
         match member {
-            "Type" => Ok(OmValue::Number(f64::from(match axis_kind {
+            "Type" => Ok(OmValue::Number(f64::from(match axis.kind {
                 ChartAxisKind::Category | ChartAxisKind::Date => XL_CATEGORY,
                 ChartAxisKind::Value => XL_VALUE,
                 ChartAxisKind::Series => XL_SERIES_AXIS,
             }))),
+            "HasTitle" => Ok(OmValue::Bool(axis.title.is_some())),
+            "AxisTitle" => {
+                if axis.title.is_none() {
+                    return Err(OmError::new(OmErrorCode::NotFound, "axis title not found"));
+                }
+                Ok(OmValue::Object(self.register_object(
+                    RuntimeObjectKind::AxisTitle {
+                        workbook,
+                        chart_id,
+                        axis_index,
+                    },
+                )))
+            }
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(
                 self.register_chart_handle(workbook, chart_id),
             )),
             _ => Err(OmError::unsupported(format!(
                 "Axis.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_get_axis_title(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        axis_index: usize,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        if !args.is_empty() {
+            return Err(OmError::invalid_argument(format!(
+                "AxisTitle.{member} does not accept arguments"
+            )));
+        }
+        let title = self
+            .axis_model(workbook, chart_id, axis_index)?
+            .title
+            .as_ref()
+            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis title not found"))?;
+
+        match member {
+            "Text" | "Caption" => Ok(OmValue::Text(title.text.clone())),
+            "Application" => Ok(OmValue::Object(self.root_application())),
+            "Parent" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::Axis {
+                    workbook,
+                    chart_id,
+                    axis_index,
+                },
+            ))),
+            _ => Err(OmError::unsupported(format!(
+                "AxisTitle.{member} is not implemented"
             ))),
         }
     }
@@ -9532,6 +9591,18 @@ impl ExcelRuntime {
             .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "series not found"))
     }
 
+    fn axis_model(
+        &self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        axis_index: usize,
+    ) -> OmResult<&AxisModel> {
+        self.chart_model(workbook, chart_id)?
+            .axes
+            .get(axis_index)
+            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))
+    }
+
     fn chart_object_geometry_value(chart_object: &ChartObjectModel, member: &str) -> OmResult<f64> {
         let Some(anchor) = chart_object.anchor.as_ref() else {
             return Err(OmError::unsupported(
@@ -11871,6 +11942,7 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         | RuntimeObjectKind::Legend { workbook, .. }
         | RuntimeObjectKind::Axes { workbook, .. }
         | RuntimeObjectKind::Axis { workbook, .. }
+        | RuntimeObjectKind::AxisTitle { workbook, .. }
         | RuntimeObjectKind::SeriesCollection { workbook, .. }
         | RuntimeObjectKind::Series { workbook, .. } => Some(workbook),
     }
@@ -62475,6 +62547,38 @@ mod tests {
             ),
             f64::from(super::XL_VALUE)
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(axis, "HasTitle", &[])
+                .expect("Axis.HasTitle"),
+            OmValue::Bool(true)
+        );
+        let axis_title = expect_object_handle(
+            runtime
+                .dispatch_get(axis, "AxisTitle", &[])
+                .expect("Axis.AxisTitle"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(axis_title, "Text", &[])
+                    .expect("AxisTitle.Text")
+            ),
+            "Quarter"
+        );
+        let axis_title_parent = expect_object_handle(
+            runtime
+                .dispatch_get(axis_title, "Parent", &[])
+                .expect("AxisTitle.Parent"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(axis_title_parent, "Type", &[])
+                    .expect("AxisTitle.Parent.Type")
+            ),
+            f64::from(super::XL_CATEGORY)
+        );
         let axis_parent = expect_object_handle(
             runtime
                 .dispatch_get(axis_by_chart_property, "Parent", &[])
@@ -66745,7 +66849,7 @@ mod tests {
                 compression: CompressionMethod::Stored,
                 bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val></c:ser></c:barChart><c:catAx><c:axId val="10"/></c:catAx><c:valAx><c:axId val="20"/></c:valAx></c:plotArea><c:legend><c:legendPos val="r"/></c:legend></c:chart>
+  <c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val></c:ser></c:barChart><c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx><c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx></c:plotArea><c:legend><c:legendPos val="r"/></c:legend></c:chart>
 </c:chartSpace>"#
                     .to_vec(),
             })

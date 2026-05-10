@@ -71,6 +71,7 @@ pub struct LegendModel {
 pub struct AxisModel {
     pub raw_id: Option<String>,
     pub kind: ChartAxisKind,
+    pub title: Option<ChartText>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

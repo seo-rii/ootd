@@ -643,6 +643,7 @@ pub struct ChartPartSummary {
 pub struct ChartAxisSummary {
     pub raw_id: Option<String>,
     pub kind: ChartAxisKind,
+    pub title_text: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -2591,6 +2592,10 @@ fn build_chart_model_overlay(
                         .map(|axis| AxisModel {
                             raw_id: axis.raw_id.clone(),
                             kind: axis.kind,
+                            title: axis
+                                .title_text
+                                .as_ref()
+                                .map(|text| ChartText { text: text.clone() }),
                         })
                         .collect(),
                     raw_part_uri: Some(chart_part_uri.clone()),
@@ -14705,6 +14710,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut active_cache = None::<(ChartSeriesFormulaSlot, ChartCacheKindSummary, Option<u32>)>;
     let mut active_cache_depth = 0usize;
     let mut active_series = None::<ChartSeriesSummary>;
+    let mut active_axis_index = None::<usize>;
+    let mut active_axis_depth = 0usize;
+    let mut axis_title_text_depth = 0usize;
     let mut element_path = Vec::<String>::new();
 
     let parse_u32_val_attr = |element: &BytesStart<'_>,
@@ -14788,23 +14796,29 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 if local_name == b"legend" {
                     has_legend = true;
                 }
-                if local_name == b"axId"
-                    && let Some(kind) = match element_path.last().map(String::as_str) {
-                        Some("catAx") => Some(ChartAxisKind::Category),
-                        Some("valAx") => Some(ChartAxisKind::Value),
-                        Some("dateAx") => Some(ChartAxisKind::Date),
-                        Some("serAx") => Some(ChartAxisKind::Series),
-                        _ => None,
-                    }
-                    && let Some(axis_id) = parse_string_val_attr(&element, &reader)?
-                    && axes.iter().all(|existing: &ChartAxisSummary| {
-                        existing.raw_id.as_deref() != Some(axis_id.as_str())
-                    })
-                {
+                if let Some(kind) = match local_name {
+                    b"catAx" => Some(ChartAxisKind::Category),
+                    b"valAx" => Some(ChartAxisKind::Value),
+                    b"dateAx" => Some(ChartAxisKind::Date),
+                    b"serAx" => Some(ChartAxisKind::Series),
+                    _ => None,
+                } {
                     axes.push(ChartAxisSummary {
-                        raw_id: Some(axis_id),
+                        raw_id: None,
                         kind,
+                        title_text: None,
                     });
+                    active_axis_index = Some(axes.len() - 1);
+                    active_axis_depth = 1;
+                } else if active_axis_index.is_some() {
+                    active_axis_depth += 1;
+                }
+                if local_name == b"axId"
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(axis_id) = parse_string_val_attr(&element, &reader)?
+                    && axes[axis_index].raw_id.is_none()
+                {
+                    axes[axis_index].raw_id = Some(axis_id);
                 }
                 if local_name == b"ser" && active_series.is_none() {
                     active_series = Some(ChartSeriesSummary::default());
@@ -14840,10 +14854,17 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     formula_depth += 1;
                 }
                 if local_name == b"t" && element_path.iter().any(|name| name == "title") {
-                    title_text.get_or_insert_with(String::new);
-                    title_text_depth = 1;
+                    if let Some(axis_index) = active_axis_index {
+                        axes[axis_index].title_text.get_or_insert_with(String::new);
+                        axis_title_text_depth = 1;
+                    } else {
+                        title_text.get_or_insert_with(String::new);
+                        title_text_depth = 1;
+                    }
                 } else if title_text_depth > 0 {
                     title_text_depth += 1;
+                } else if axis_title_text_depth > 0 {
+                    axis_title_text_depth += 1;
                 }
                 element_path.push(local_name_text);
             }
@@ -14866,22 +14887,11 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     has_legend = true;
                 }
                 if local_name == b"axId"
-                    && let Some(kind) = match element_path.last().map(String::as_str) {
-                        Some("catAx") => Some(ChartAxisKind::Category),
-                        Some("valAx") => Some(ChartAxisKind::Value),
-                        Some("dateAx") => Some(ChartAxisKind::Date),
-                        Some("serAx") => Some(ChartAxisKind::Series),
-                        _ => None,
-                    }
+                    && let Some(axis_index) = active_axis_index
                     && let Some(axis_id) = parse_string_val_attr(&element, &reader)?
-                    && axes.iter().all(|existing: &ChartAxisSummary| {
-                        existing.raw_id.as_deref() != Some(axis_id.as_str())
-                    })
+                    && axes[axis_index].raw_id.is_none()
                 {
-                    axes.push(ChartAxisSummary {
-                        raw_id: Some(axis_id),
-                        kind,
-                    });
+                    axes[axis_index].raw_id = Some(axis_id);
                 }
                 if local_name == b"order"
                     && let Some(active_series) = active_series.as_mut()
@@ -14922,6 +14932,12 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 {
                     title_text.push_str(&text_value);
                 }
+                if axis_title_text_depth > 0
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(title_text) = &mut axes[axis_index].title_text
+                {
+                    title_text.push_str(&text_value);
+                }
             }
             Ok(Event::CData(text)) => {
                 let text_value = text.xml_content().map_err(xml_error)?;
@@ -14930,6 +14946,12 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
                 if title_text_depth > 0
                     && let Some(title_text) = &mut title_text
+                {
+                    title_text.push_str(&text_value);
+                }
+                if axis_title_text_depth > 0
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(title_text) = &mut axes[axis_index].title_text
                 {
                     title_text.push_str(&text_value);
                 }
@@ -14970,6 +14992,12 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 if title_text_depth > 0 {
                     title_text_depth -= 1;
                 }
+                if axis_title_text_depth > 0 {
+                    axis_title_text_depth -= 1;
+                }
+                if active_axis_depth > 0 {
+                    active_axis_depth -= 1;
+                }
                 element_path.pop();
             }
             Ok(Event::End(element)) => {
@@ -15000,6 +15028,27 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
                 if title_text_depth > 0 {
                     title_text_depth -= 1;
+                }
+                if axis_title_text_depth > 0 {
+                    axis_title_text_depth -= 1;
+                }
+                if active_axis_depth > 0 {
+                    if active_axis_depth == 1
+                        && matches!(local_name, b"catAx" | b"valAx" | b"dateAx" | b"serAx")
+                    {
+                        if let Some(axis_index) = active_axis_index
+                            && axes[axis_index]
+                                .title_text
+                                .as_ref()
+                                .is_some_and(|text| text.is_empty())
+                        {
+                            axes[axis_index].title_text = None;
+                        }
+                        active_axis_index = None;
+                        active_axis_depth = 0;
+                    } else {
+                        active_axis_depth -= 1;
+                    }
                 }
                 element_path.pop();
             }
@@ -18938,8 +18987,8 @@ mod tests {
           <c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f><c:numCache><c:ptCount val="3"/></c:numCache></c:numRef></c:val>
         </c:ser>
       </c:barChart>
-      <c:catAx><c:axId val="10"/></c:catAx>
-      <c:valAx><c:axId val="20"/></c:valAx>
+      <c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx>
+      <c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx>
     </c:plotArea>
     <c:legend><c:legendPos val="r"/></c:legend>
   </c:chart>
@@ -19061,10 +19110,12 @@ mod tests {
                 ChartAxisSummary {
                     raw_id: Some("10".to_string()),
                     kind: ChartAxisKind::Category,
+                    title_text: Some("Quarter".to_string()),
                 },
                 ChartAxisSummary {
                     raw_id: Some("20".to_string()),
                     kind: ChartAxisKind::Value,
+                    title_text: Some("Revenue".to_string()),
                 }
             ]
         );
@@ -19152,11 +19203,15 @@ mod tests {
             chart_model
                 .axes
                 .iter()
-                .map(|axis| (axis.raw_id.as_deref(), axis.kind))
+                .map(|axis| (
+                    axis.raw_id.as_deref(),
+                    axis.kind,
+                    axis.title.as_ref().map(|title| title.text.as_str())
+                ))
                 .collect::<Vec<_>>(),
             vec![
-                (Some("10"), ChartAxisKind::Category),
-                (Some("20"), ChartAxisKind::Value)
+                (Some("10"), ChartAxisKind::Category, Some("Quarter")),
+                (Some("20"), ChartAxisKind::Value, Some("Revenue"))
             ]
         );
         assert_eq!(
