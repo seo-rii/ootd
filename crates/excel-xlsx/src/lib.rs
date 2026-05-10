@@ -2,9 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Write};
 
 use excel_model::{
-    AxisModel, CellData, ChartAxisKind, ChartCacheKind, ChartCacheSnapshot, ChartModel,
-    ChartObjectModel, ChartSheetBinding, ChartSourceExpr, ChartText, ChartType, DefinedNameTable,
-    DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
+    AxisModel, CellData, ChartAxisKind, ChartCacheKind, ChartCacheSnapshot, ChartLegendPosition,
+    ChartModel, ChartObjectModel, ChartSheetBinding, ChartSourceExpr, ChartText, ChartType,
+    DefinedNameTable, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState,
+    WorksheetData,
 };
 use office_common::{
     AbsoluteAnchor, CellError, CellMarker, CellValue, ChartId, ChartObjectId, DefinedName,
@@ -631,6 +632,7 @@ pub struct ChartPartSummary {
     pub chart_type_names: Vec<String>,
     pub title_text: Option<String>,
     pub has_legend: bool,
+    pub legend_position: Option<ChartLegendPosition>,
     pub axes: Vec<ChartAxisSummary>,
     pub series: Vec<ChartSeriesSummary>,
     pub formula_refs: Vec<String>,
@@ -2583,9 +2585,12 @@ fn build_chart_model_overlay(
                     title: summary
                         .and_then(|summary| summary.title_text.as_ref())
                         .map(|text| ChartText { text: text.clone() }),
-                    legend: summary
-                        .filter(|summary| summary.has_legend)
-                        .map(|_| LegendModel { visible: true }),
+                    legend: summary.filter(|summary| summary.has_legend).map(|summary| {
+                        LegendModel {
+                            visible: true,
+                            position: summary.legend_position,
+                        }
+                    }),
                     axes: summary
                         .into_iter()
                         .flat_map(|summary| summary.axes.iter())
@@ -14700,6 +14705,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut title_text = None::<String>;
     let mut title_text_depth = 0usize;
     let mut has_legend = false;
+    let mut legend_position = None;
     let mut axes = Vec::new();
     let mut series = Vec::new();
     let mut formula_refs = Vec::new();
@@ -14796,6 +14802,20 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 if local_name == b"legend" {
                     has_legend = true;
                 }
+                if local_name == b"legendPos"
+                    && element_path.last().is_some_and(|name| name == "legend")
+                    && let Some(value) = parse_string_val_attr(&element, &reader)?
+                {
+                    legend_position = match value.as_str() {
+                        "b" => Some(ChartLegendPosition::Bottom),
+                        "tr" => Some(ChartLegendPosition::Corner),
+                        "cust" => Some(ChartLegendPosition::Custom),
+                        "l" => Some(ChartLegendPosition::Left),
+                        "r" => Some(ChartLegendPosition::Right),
+                        "t" => Some(ChartLegendPosition::Top),
+                        _ => legend_position,
+                    };
+                }
                 if let Some(kind) = match local_name {
                     b"catAx" => Some(ChartAxisKind::Category),
                     b"valAx" => Some(ChartAxisKind::Value),
@@ -14885,6 +14905,20 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
                 if local_name == b"legend" {
                     has_legend = true;
+                }
+                if local_name == b"legendPos"
+                    && element_path.last().is_some_and(|name| name == "legend")
+                    && let Some(value) = parse_string_val_attr(&element, &reader)?
+                {
+                    legend_position = match value.as_str() {
+                        "b" => Some(ChartLegendPosition::Bottom),
+                        "tr" => Some(ChartLegendPosition::Corner),
+                        "cust" => Some(ChartLegendPosition::Custom),
+                        "l" => Some(ChartLegendPosition::Left),
+                        "r" => Some(ChartLegendPosition::Right),
+                        "t" => Some(ChartLegendPosition::Top),
+                        _ => legend_position,
+                    };
                 }
                 if local_name == b"axId"
                     && let Some(axis_index) = active_axis_index
@@ -15064,6 +15098,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         chart_type_names,
         title_text: title_text.filter(|text| !text.is_empty()),
         has_legend,
+        legend_position,
         axes,
         series,
         formula_refs,
@@ -18071,7 +18106,7 @@ mod tests {
 
     use super::{
         BorderSummary, COMMENTS_RELATIONSHIP_TYPE, CellData, ChartAxisKind, ChartAxisSummary,
-        ChartCacheKindSummary, ChartCacheSummary, ChartSeriesSummary,
+        ChartCacheKindSummary, ChartCacheSummary, ChartLegendPosition, ChartSeriesSummary,
         ChartSupportRelationshipBinding, CommentPartSummary, DrawingAnchorKind,
         DrawingAnchorSummary, DrawingCellMarkerSummary, DrawingPointSummary, DrawingSizeSummary,
         DxfSummary, FileFormat, FillSummary, FontSummary, HYPERLINK_RELATIONSHIP_TYPE, OpcPackage,
@@ -19105,6 +19140,10 @@ mod tests {
         assert_eq!(chart_summary.title_text.as_deref(), Some("Revenue Trend"));
         assert!(chart_summary.has_legend);
         assert_eq!(
+            chart_summary.legend_position,
+            Some(ChartLegendPosition::Right)
+        );
+        assert_eq!(
             chart_summary.axes,
             vec![
                 ChartAxisSummary {
@@ -19198,7 +19237,9 @@ mod tests {
             chart_model.title.as_ref().expect("chart title").text,
             "Revenue Trend"
         );
-        assert!(chart_model.legend.as_ref().expect("chart legend").visible);
+        let legend_model = chart_model.legend.as_ref().expect("chart legend");
+        assert!(legend_model.visible);
+        assert_eq!(legend_model.position, Some(ChartLegendPosition::Right));
         assert_eq!(
             chart_model
                 .axes

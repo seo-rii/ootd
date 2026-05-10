@@ -65,6 +65,17 @@ pub struct ChartText {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LegendModel {
     pub visible: bool,
+    pub position: Option<ChartLegendPosition>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartLegendPosition {
+    Bottom,
+    Corner,
+    Custom,
+    Left,
+    Right,
+    Top,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -1,6 +1,6 @@
 use excel_model::{
-    AxisModel, ChartAxisKind, ChartModel, ChartObjectModel, ChartType, DrawingObjectModel,
-    SeriesModel, WorkbookState, WorksheetData,
+    AxisModel, ChartAxisKind, ChartLegendPosition, ChartModel, ChartObjectModel, ChartType,
+    DrawingObjectModel, SeriesModel, WorkbookState, WorksheetData,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
@@ -46,6 +46,12 @@ const XL_XY_SCATTER: i32 = -4169;
 const XL_CATEGORY: i32 = 1;
 const XL_VALUE: i32 = 2;
 const XL_SERIES_AXIS: i32 = 3;
+const XL_LEGEND_POSITION_BOTTOM: i32 = -4107;
+const XL_LEGEND_POSITION_CORNER: i32 = 2;
+const XL_LEGEND_POSITION_CUSTOM: i32 = -4161;
+const XL_LEGEND_POSITION_LEFT: i32 = -4131;
+const XL_LEGEND_POSITION_RIGHT: i32 = -4152;
+const XL_LEGEND_POSITION_TOP: i32 = -4160;
 const XL_MOVE_AND_SIZE: i32 = 1;
 const XL_MOVE: i32 = 2;
 const XL_FREE_FLOATING: i32 = 3;
@@ -4438,7 +4444,7 @@ impl ExcelRuntime {
                             | "Parent"
                     )
                     | ("ChartTitle", "Text" | "Caption" | "Application" | "Parent")
-                    | ("Legend", "Application" | "Parent")
+                    | ("Legend", "Position" | "Application" | "Parent")
                     | ("Axes", "Count" | "Item" | "Application" | "Parent")
                     | (
                         "Axis",
@@ -6350,19 +6356,27 @@ impl ExcelRuntime {
                 "Legend.{member} does not accept arguments"
             )));
         }
-        if !self
+        let legend = self
             .chart_model(workbook, chart_id)?
             .legend
             .as_ref()
-            .is_some_and(|legend| legend.visible)
-        {
-            return Err(OmError::new(
-                OmErrorCode::NotFound,
-                "chart legend not found",
-            ));
-        }
+            .filter(|legend| legend.visible)
+            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart legend not found"))?;
 
         match member {
+            "Position" => {
+                let position = legend.position.ok_or_else(|| {
+                    OmError::unsupported("Legend.Position is unavailable for unknown position")
+                })?;
+                Ok(OmValue::Number(f64::from(match position {
+                    ChartLegendPosition::Bottom => XL_LEGEND_POSITION_BOTTOM,
+                    ChartLegendPosition::Corner => XL_LEGEND_POSITION_CORNER,
+                    ChartLegendPosition::Custom => XL_LEGEND_POSITION_CUSTOM,
+                    ChartLegendPosition::Left => XL_LEGEND_POSITION_LEFT,
+                    ChartLegendPosition::Right => XL_LEGEND_POSITION_RIGHT,
+                    ChartLegendPosition::Top => XL_LEGEND_POSITION_TOP,
+                })))
+            }
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(
                 self.register_chart_handle(workbook, chart_id),
@@ -62629,6 +62643,14 @@ mod tests {
                     .expect("Legend.Application")
             ),
             runtime.root_application()
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(legend, "Position", &[])
+                    .expect("Legend.Position")
+            ),
+            f64::from(super::XL_LEGEND_POSITION_RIGHT)
         );
         let legend_parent = expect_object_handle(
             runtime
