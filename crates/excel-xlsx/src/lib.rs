@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Write};
 
 use excel_model::{
-    CellData, ChartModel, ChartObjectModel, ChartSheetBinding, ChartSourceExpr, ChartText,
-    ChartType, DefinedNameTable, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel,
-    WorkbookState, WorksheetData,
+    CellData, ChartCacheKind, ChartCacheSnapshot, ChartModel, ChartObjectModel, ChartSheetBinding,
+    ChartSourceExpr, ChartText, ChartType, DefinedNameTable, DrawingModel, DrawingObjectModel,
+    LegendModel, SeriesModel, WorkbookState, WorksheetData,
 };
 use office_common::{
     AbsoluteAnchor, CellError, CellMarker, CellValue, ChartId, ChartObjectId, DefinedName,
@@ -641,9 +641,27 @@ pub struct ChartPartSummary {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ChartSeriesSummary {
     pub name_ref: Option<String>,
+    pub name_cache: Option<ChartCacheSummary>,
     pub category_ref: Option<String>,
+    pub category_cache: Option<ChartCacheSummary>,
     pub values_ref: Option<String>,
+    pub values_cache: Option<ChartCacheSummary>,
     pub order: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChartCacheSummary {
+    pub kind: ChartCacheKindSummary,
+    pub point_count: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartCacheKindSummary {
+    Number,
+    String,
+    MultiLevelString,
+    Literal,
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2682,13 +2700,22 @@ fn chart_series_from_summary(summary: Option<&ChartPartSummary>) -> Vec<SeriesMo
         return Vec::new();
     };
 
-    let source_from_ref = |reference: &String| ChartSourceExpr {
+    let source_from_ref = |reference: &String, cache: Option<&ChartCacheSummary>| ChartSourceExpr {
         raw: FormulaSource {
             text: reference.clone(),
             is_r1c1: false,
         },
         resolved: None,
-        cache: None,
+        cache: cache.map(|summary| ChartCacheSnapshot {
+            kind: match summary.kind {
+                ChartCacheKindSummary::Number => ChartCacheKind::Number,
+                ChartCacheKindSummary::String => ChartCacheKind::String,
+                ChartCacheKindSummary::MultiLevelString => ChartCacheKind::MultiLevelString,
+                ChartCacheKindSummary::Literal => ChartCacheKind::Literal,
+                ChartCacheKindSummary::Unknown => ChartCacheKind::Unknown,
+            },
+            point_count: summary.point_count,
+        }),
         dirty: false,
     };
 
@@ -2698,9 +2725,18 @@ fn chart_series_from_summary(summary: Option<&ChartPartSummary>) -> Vec<SeriesMo
             .iter()
             .enumerate()
             .map(|(index, series)| SeriesModel {
-                name: series.name_ref.as_ref().map(source_from_ref),
-                x_values: series.category_ref.as_ref().map(source_from_ref),
-                values: series.values_ref.as_ref().map(source_from_ref),
+                name: series
+                    .name_ref
+                    .as_ref()
+                    .map(|reference| source_from_ref(reference, series.name_cache.as_ref())),
+                x_values: series
+                    .category_ref
+                    .as_ref()
+                    .map(|reference| source_from_ref(reference, series.category_cache.as_ref())),
+                values: series
+                    .values_ref
+                    .as_ref()
+                    .map(|reference| source_from_ref(reference, series.values_cache.as_ref())),
                 order: series.order.or_else(|| u32::try_from(index).ok()),
             })
             .collect();
@@ -2713,7 +2749,7 @@ fn chart_series_from_summary(summary: Option<&ChartPartSummary>) -> Vec<SeriesMo
         .map(|(index, reference)| SeriesModel {
             name: None,
             x_values: None,
-            values: Some(source_from_ref(reference)),
+            values: Some(source_from_ref(reference, None)),
             order: u32::try_from(index).ok(),
         })
         .collect()
@@ -14651,6 +14687,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut formula_text = None::<String>;
     let mut formula_depth = 0usize;
     let mut formula_series_slot = None::<ChartSeriesFormulaSlot>;
+    let mut active_cache = None::<(ChartSeriesFormulaSlot, ChartCacheKindSummary, Option<u32>)>;
+    let mut active_cache_depth = 0usize;
     let mut active_series = None::<ChartSeriesSummary>;
     let mut element_path = Vec::<String>::new();
 
@@ -14690,6 +14728,14 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         None
     };
 
+    let chart_cache_kind_for = |local_name: &[u8]| match local_name {
+        b"numCache" => Some(ChartCacheKindSummary::Number),
+        b"strCache" => Some(ChartCacheKindSummary::String),
+        b"multiLvlStrCache" => Some(ChartCacheKindSummary::MultiLevelString),
+        b"numLit" | b"strLit" => Some(ChartCacheKindSummary::Literal),
+        _ => None,
+    };
+
     loop {
         match reader.read_event_into(&mut buffer) {
             Ok(Event::Start(element)) => {
@@ -14719,6 +14765,21 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(order) = parse_u32_val_attr(&element, &reader, "series order")?
                 {
                     active_series.order = Some(order);
+                }
+                if active_cache_depth > 0 {
+                    active_cache_depth += 1;
+                } else if let Some(kind) = chart_cache_kind_for(local_name)
+                    && active_series.is_some()
+                    && let Some(slot) = detect_series_formula_slot(&element_path)
+                {
+                    active_cache = Some((slot, kind, None));
+                    active_cache_depth = 1;
+                }
+                if local_name == b"ptCount"
+                    && let Some((_, _, point_count)) = active_cache.as_mut()
+                {
+                    *point_count =
+                        parse_u32_val_attr(&element, &reader, "chart cache point count")?;
                 }
                 if local_name == b"f" {
                     formula_text = Some(String::new());
@@ -14760,6 +14821,28 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(order) = parse_u32_val_attr(&element, &reader, "series order")?
                 {
                     active_series.order = Some(order);
+                }
+                if local_name == b"ptCount"
+                    && let Some((_, _, point_count)) = active_cache.as_mut()
+                {
+                    *point_count =
+                        parse_u32_val_attr(&element, &reader, "chart cache point count")?;
+                } else if let Some(kind) = chart_cache_kind_for(local_name)
+                    && active_series.is_some()
+                    && let Some(slot) = detect_series_formula_slot(&element_path)
+                    && let Some(active_series) = active_series.as_mut()
+                {
+                    let cache = ChartCacheSummary {
+                        kind,
+                        point_count: None,
+                    };
+                    match slot {
+                        ChartSeriesFormulaSlot::Name => active_series.name_cache = Some(cache),
+                        ChartSeriesFormulaSlot::Category => {
+                            active_series.category_cache = Some(cache)
+                        }
+                        ChartSeriesFormulaSlot::Values => active_series.values_cache = Some(cache),
+                    }
                 }
             }
             Ok(Event::Text(text)) => {
@@ -14825,6 +14908,24 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
             Ok(Event::End(element)) => {
                 let element_name = element.name();
                 let local_name = xml_local_name(element_name.as_ref());
+                if active_cache_depth > 0 {
+                    if active_cache_depth == 1
+                        && let Some((slot, kind, point_count)) = active_cache.take()
+                        && let Some(active_series) = active_series.as_mut()
+                    {
+                        let cache = ChartCacheSummary { kind, point_count };
+                        match slot {
+                            ChartSeriesFormulaSlot::Name => active_series.name_cache = Some(cache),
+                            ChartSeriesFormulaSlot::Category => {
+                                active_series.category_cache = Some(cache)
+                            }
+                            ChartSeriesFormulaSlot::Values => {
+                                active_series.values_cache = Some(cache)
+                            }
+                        }
+                    }
+                    active_cache_depth = active_cache_depth.saturating_sub(1);
+                }
                 if local_name == b"ser"
                     && let Some(active_series) = active_series.take()
                 {
@@ -17852,18 +17953,19 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::{
-        BorderSummary, COMMENTS_RELATIONSHIP_TYPE, CellData, ChartSeriesSummary,
-        ChartSupportRelationshipBinding, CommentPartSummary, DrawingAnchorKind,
-        DrawingAnchorSummary, DrawingCellMarkerSummary, DrawingPointSummary, DrawingSizeSummary,
-        DxfSummary, FileFormat, FillSummary, FontSummary, HYPERLINK_RELATIONSHIP_TYPE, OpcPackage,
-        STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE, VML_DRAWING_RELATIONSHIP_TYPE,
-        WORKBOOK_RELS_PART_NAME, WorksheetCommentSummary, WorksheetData, WorksheetHyperlinkBinding,
-        WorksheetHyperlinkSummary, WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec,
+        BorderSummary, COMMENTS_RELATIONSHIP_TYPE, CellData, ChartCacheKindSummary,
+        ChartCacheSummary, ChartSeriesSummary, ChartSupportRelationshipBinding, CommentPartSummary,
+        DrawingAnchorKind, DrawingAnchorSummary, DrawingCellMarkerSummary, DrawingPointSummary,
+        DrawingSizeSummary, DxfSummary, FileFormat, FillSummary, FontSummary,
+        HYPERLINK_RELATIONSHIP_TYPE, OpcPackage, STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE,
+        VML_DRAWING_RELATIONSHIP_TYPE, WORKBOOK_RELS_PART_NAME, WorksheetCommentSummary,
+        WorksheetData, WorksheetHyperlinkBinding, WorksheetHyperlinkSummary,
+        WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec,
         collect_support_part_dimension_coords, compute_dimension_ref,
         compute_dimension_ref_with_preserved, parse_shared_strings, parse_workbook,
         parse_workbook_relationships, parse_worksheet_cells, rewrite_worksheet_xml,
     };
-    use excel_model::{ChartType, DrawingObjectModel};
+    use excel_model::{ChartCacheKind, ChartType, DrawingObjectModel};
     use office_common::{
         CellError, CellValue, DrawingAnchor, Emu, FormulaSource, LoadOptions as CommonLoadOptions,
         NameScope, NameValidationMode, ObjectPlacement, OmErrorCode, SheetId, SheetKind,
@@ -18895,8 +18997,14 @@ mod tests {
             chart_summary.series,
             vec![ChartSeriesSummary {
                 name_ref: Some("Sheet1!$C$1".to_string()),
+                name_cache: None,
                 category_ref: Some("Sheet1!$A$1:$B$1".to_string()),
+                category_cache: None,
                 values_ref: Some("Sheet1!$A$1:$C$1".to_string()),
+                values_cache: Some(ChartCacheSummary {
+                    kind: ChartCacheKindSummary::Number,
+                    point_count: Some(3),
+                }),
                 order: Some(0),
             }]
         );
@@ -18988,6 +19096,15 @@ mod tests {
                 .text,
             "Sheet1!$A$1:$C$1"
         );
+        let values_cache = chart_model.series[0]
+            .values
+            .as_ref()
+            .expect("chart source")
+            .cache
+            .as_ref()
+            .expect("chart values cache");
+        assert_eq!(values_cache.kind, ChartCacheKind::Number);
+        assert_eq!(values_cache.point_count, Some(3));
         assert_eq!(loaded.state.drawings.len(), 1);
         let drawing = loaded
             .state
