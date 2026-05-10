@@ -1113,6 +1113,424 @@ impl ExcelRuntime {
                 .package
                 .replace_part_bytes(CONTENT_TYPES_PART_NAME, content_types_xml)?;
         }
+        let existing_drawing_chart_object_plans = loaded
+            .state
+            .drawings
+            .iter()
+            .filter_map(|(drawing_id, drawing)| {
+                drawing.raw_part_uri.as_ref()?;
+                let chart_objects = drawing
+                    .objects
+                    .iter()
+                    .filter_map(|object| match object {
+                        DrawingObjectModel::ChartFrame(chart_object) => loaded
+                            .state
+                            .charts
+                            .get(&chart_object.chart_id)
+                            .filter(|chart| chart.raw_part_uri.is_none())
+                            .map(|_| chart_object.clone()),
+                        DrawingObjectModel::UnsupportedRaw { .. } => None,
+                    })
+                    .collect::<Vec<_>>();
+                (!chart_objects.is_empty()).then_some((*drawing_id, chart_objects))
+            })
+            .collect::<Vec<_>>();
+        if !existing_drawing_chart_object_plans.is_empty() {
+            let mut used_part_names = loaded
+                .package
+                .parts()
+                .iter()
+                .map(|part| part.name.clone())
+                .collect::<BTreeSet<_>>();
+            let mut content_types_xml = loaded
+                .package
+                .part(CONTENT_TYPES_PART_NAME)
+                .ok_or_else(|| {
+                    OmError::new(
+                        OmErrorCode::Parse,
+                        format!("workbook package is missing {CONTENT_TYPES_PART_NAME}"),
+                    )
+                })?
+                .bytes
+                .clone();
+
+            for (drawing_id, chart_objects) in existing_drawing_chart_object_plans {
+                let drawing_part_uri = loaded
+                    .state
+                    .drawings
+                    .get(&drawing_id)
+                    .and_then(|drawing| drawing.raw_part_uri.clone())
+                    .ok_or_else(|| {
+                        OmError::new(
+                            OmErrorCode::InvalidState,
+                            "existing drawing is missing a part uri",
+                        )
+                    })?;
+                let drawing_rels_part_uri =
+                    worksheet_relationships_part_uri_for(drawing_part_uri.as_str());
+                let mut used_relationship_ids = BTreeSet::new();
+                let existing_drawing_rels = loaded
+                    .package
+                    .part(drawing_rels_part_uri.as_str())
+                    .map(|part| (part.bytes.clone(), part.compression));
+                if let Some((relationships_xml, _)) = existing_drawing_rels.as_ref() {
+                    let mut reader = Reader::from_reader(Cursor::new(relationships_xml.as_slice()));
+                    reader.config_mut().trim_text(false);
+                    let mut buffer = Vec::new();
+                    loop {
+                        match reader.read_event_into(&mut buffer) {
+                            Ok(Event::Start(element)) | Ok(Event::Empty(element))
+                                if xml_local_name(element.name().as_ref()) == b"Relationship" =>
+                            {
+                                for attr in element.attributes() {
+                                    let attr = attr.map_err(runtime_xml_error)?;
+                                    if attr.key.as_ref() == b"Id" {
+                                        used_relationship_ids.insert(
+                                            attr.decode_and_unescape_value(reader.decoder())
+                                                .map_err(runtime_xml_error)?
+                                                .into_owned(),
+                                        );
+                                    }
+                                }
+                            }
+                            Ok(Event::Eof) => break,
+                            Ok(_) => {}
+                            Err(error) => return Err(runtime_xml_error(error)),
+                        }
+                        buffer.clear();
+                    }
+                }
+
+                let mut chart_relationship_ids_by_object_id = BTreeMap::new();
+                let mut chart_part_uris_by_chart_id = BTreeMap::new();
+                for chart_object in &chart_objects {
+                    let relationship_id = (1..)
+                        .map(|index| format!("rId{index}"))
+                        .find(|candidate| !used_relationship_ids.contains(candidate))
+                        .expect("drawing relationship id search");
+                    used_relationship_ids.insert(relationship_id.clone());
+                    chart_relationship_ids_by_object_id
+                        .insert(chart_object.id, relationship_id.clone());
+
+                    let chart_part_uri = next_available_sequential_part_uri(
+                        &mut used_part_names,
+                        "xl/charts/chart",
+                        ".xml",
+                    );
+                    chart_part_uris_by_chart_id.insert(chart_object.chart_id, chart_part_uri);
+                }
+
+                let mut updated_drawing_rels =
+                    if let Some((relationships_xml, _)) = existing_drawing_rels.as_ref() {
+                        let mut updated = relationships_xml.clone();
+                        for chart_object in &chart_objects {
+                            let relationship_id = chart_relationship_ids_by_object_id
+                                .get(&chart_object.id)
+                                .expect("relationship id inserted above");
+                            let chart_part_uri = chart_part_uris_by_chart_id
+                                .get(&chart_object.chart_id)
+                                .expect("chart part uri inserted above");
+                            let mut relationship = BytesStart::new("Relationship");
+                            relationship.push_attribute(("Id", relationship_id.as_str()));
+                            relationship.push_attribute(("Type", CHART_RELATIONSHIP_TYPE));
+                            relationship.push_attribute((
+                                "Target",
+                                relative_relationship_target(&drawing_part_uri, chart_part_uri)
+                                    .as_str(),
+                            ));
+                            updated = append_empty_xml_child_before_container_end(
+                                updated.as_slice(),
+                                b"Relationships",
+                                relationship,
+                            )?;
+                        }
+                        updated
+                    } else {
+                        let mut relationships_xml = String::from(
+                            r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+"#,
+                        );
+                        for chart_object in &chart_objects {
+                            let relationship_id = chart_relationship_ids_by_object_id
+                                .get(&chart_object.id)
+                                .expect("relationship id inserted above");
+                            let chart_part_uri = chart_part_uris_by_chart_id
+                                .get(&chart_object.chart_id)
+                                .expect("chart part uri inserted above");
+                            relationships_xml.push_str(&format!(
+                                r#"  <Relationship Id="{}" Type="{}" Target="{}"/>
+"#,
+                                relationship_id,
+                                CHART_RELATIONSHIP_TYPE,
+                                relative_relationship_target(&drawing_part_uri, chart_part_uri)
+                            ));
+                        }
+                        relationships_xml.push_str("</Relationships>");
+                        relationships_xml.into_bytes()
+                    };
+
+                if let Some((_, compression)) = existing_drawing_rels.as_ref() {
+                    let _ = compression;
+                    loaded.package.replace_part_bytes(
+                        drawing_rels_part_uri.as_str(),
+                        std::mem::take(&mut updated_drawing_rels),
+                    )?;
+                } else {
+                    loaded.package.add_part(OpcPart {
+                        name: drawing_rels_part_uri.clone(),
+                        content_type: Some(RELATIONSHIPS_PART_CONTENT_TYPE.to_string()),
+                        compression: CompressionMethod::Stored,
+                        bytes: updated_drawing_rels,
+                    })?;
+                }
+
+                for (chart_id, chart_part_uri) in &chart_part_uris_by_chart_id {
+                    let chart = loaded
+                        .state
+                        .charts
+                        .get_mut(chart_id)
+                        .expect("chart id came from model");
+                    chart.raw_part_uri = Some(chart_part_uri.clone());
+                    loaded.package.add_part(OpcPart {
+                        name: chart_part_uri.clone(),
+                        content_type: Some(CHART_PART_CONTENT_TYPE.to_string()),
+                        compression: CompressionMethod::Stored,
+                        bytes: serialize_chart_model_xml(chart)?,
+                    })?;
+                    content_types_xml = append_content_type_override_if_missing(
+                        content_types_xml.as_slice(),
+                        chart_part_uri,
+                        CHART_PART_CONTENT_TYPE,
+                    )?;
+                }
+
+                let drawing_xml = loaded
+                    .package
+                    .part(drawing_part_uri.as_str())
+                    .ok_or_else(|| {
+                        OmError::new(
+                            OmErrorCode::Parse,
+                            format!("drawing part is missing: {drawing_part_uri}"),
+                        )
+                    })?
+                    .bytes
+                    .clone();
+                let mut reader = Reader::from_reader(Cursor::new(drawing_xml.as_slice()));
+                reader.config_mut().trim_text(false);
+                let mut writer = Writer::new(Cursor::new(Vec::new()));
+                let mut buffer = Vec::new();
+                let mut drawing_root_seen = false;
+                let mut appended_chart_anchors = false;
+
+                let rewrite_drawing_root = |element: &BytesStart<'_>,
+                                            decoder: quick_xml::encoding::Decoder|
+                 -> OmResult<BytesStart<'static>> {
+                    let mut rewritten = BytesStart::new(
+                        String::from_utf8_lossy(element.name().as_ref()).into_owned(),
+                    );
+                    let mut namespaces = BTreeSet::new();
+                    for attr in element.attributes() {
+                        let attr = attr.map_err(runtime_xml_error)?;
+                        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+                        let value = attr
+                            .decode_and_unescape_value(decoder)
+                            .map_err(runtime_xml_error)?
+                            .into_owned();
+                        if key.starts_with("xmlns:") {
+                            namespaces.insert(key.clone());
+                        }
+                        rewritten.push_attribute((key.as_str(), value.as_str()));
+                    }
+                    for (key, value) in [
+                        (
+                            "xmlns:xdr",
+                            "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing",
+                        ),
+                        (
+                            "xmlns:a",
+                            "http://schemas.openxmlformats.org/drawingml/2006/main",
+                        ),
+                        (
+                            "xmlns:c",
+                            "http://schemas.openxmlformats.org/drawingml/2006/chart",
+                        ),
+                        (
+                            "xmlns:r",
+                            "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+                        ),
+                    ] {
+                        if !namespaces.contains(key) {
+                            rewritten.push_attribute((key, value));
+                        }
+                    }
+                    Ok(rewritten)
+                };
+                let write_chart_anchors = |writer: &mut Writer<Cursor<Vec<u8>>>| -> OmResult<()> {
+                    for chart_object in &chart_objects {
+                        let relationship_id = chart_relationship_ids_by_object_id
+                            .get(&chart_object.id)
+                            .expect("relationship id inserted above");
+                        let Some(DrawingAnchor::Absolute(anchor)) = chart_object.anchor.as_ref()
+                        else {
+                            return Err(OmError::unsupported(
+                                "saving newly added chart objects into existing drawings currently requires an absolute anchor",
+                            ));
+                        };
+                        writer
+                            .write_event(Event::Start(BytesStart::new("xdr:absoluteAnchor")))
+                            .map_err(runtime_xml_error)?;
+                        let position_x = anchor.position.x.0.to_string();
+                        let position_y = anchor.position.y.0.to_string();
+                        let mut position = BytesStart::new("xdr:pos");
+                        position.push_attribute(("x", position_x.as_str()));
+                        position.push_attribute(("y", position_y.as_str()));
+                        writer
+                            .write_event(Event::Empty(position))
+                            .map_err(runtime_xml_error)?;
+                        let extent_cx = anchor.extents.cx.0.to_string();
+                        let extent_cy = anchor.extents.cy.0.to_string();
+                        let mut extents = BytesStart::new("xdr:ext");
+                        extents.push_attribute(("cx", extent_cx.as_str()));
+                        extents.push_attribute(("cy", extent_cy.as_str()));
+                        writer
+                            .write_event(Event::Empty(extents))
+                            .map_err(runtime_xml_error)?;
+                        writer
+                            .write_event(Event::Start(BytesStart::new("xdr:graphicFrame")))
+                            .map_err(runtime_xml_error)?;
+                        writer
+                            .write_event(Event::Start(BytesStart::new("xdr:nvGraphicFramePr")))
+                            .map_err(runtime_xml_error)?;
+                        let mut non_visual = BytesStart::new("xdr:cNvPr");
+                        let chart_object_id = chart_object.id.0.to_string();
+                        let escaped_name = partial_escape(chart_object.name.as_str()).to_string();
+                        non_visual.push_attribute(("id", chart_object_id.as_str()));
+                        non_visual.push_attribute(("name", escaped_name.as_str()));
+                        writer
+                            .write_event(Event::Empty(non_visual))
+                            .map_err(runtime_xml_error)?;
+                        writer
+                            .write_event(Event::End(BytesEnd::new("xdr:nvGraphicFramePr")))
+                            .map_err(runtime_xml_error)?;
+                        writer
+                            .write_event(Event::Start(BytesStart::new("a:graphic")))
+                            .map_err(runtime_xml_error)?;
+                        let mut graphic_data = BytesStart::new("a:graphicData");
+                        graphic_data.push_attribute((
+                            "uri",
+                            "http://schemas.openxmlformats.org/drawingml/2006/chart",
+                        ));
+                        writer
+                            .write_event(Event::Start(graphic_data))
+                            .map_err(runtime_xml_error)?;
+                        let mut chart_reference = BytesStart::new("c:chart");
+                        chart_reference.push_attribute(("r:id", relationship_id.as_str()));
+                        writer
+                            .write_event(Event::Empty(chart_reference))
+                            .map_err(runtime_xml_error)?;
+                        writer
+                            .write_event(Event::End(BytesEnd::new("a:graphicData")))
+                            .map_err(runtime_xml_error)?;
+                        writer
+                            .write_event(Event::End(BytesEnd::new("a:graphic")))
+                            .map_err(runtime_xml_error)?;
+                        writer
+                            .write_event(Event::End(BytesEnd::new("xdr:graphicFrame")))
+                            .map_err(runtime_xml_error)?;
+                        writer
+                            .write_event(Event::Empty(BytesStart::new("xdr:clientData")))
+                            .map_err(runtime_xml_error)?;
+                        writer
+                            .write_event(Event::End(BytesEnd::new("xdr:absoluteAnchor")))
+                            .map_err(runtime_xml_error)?;
+                    }
+                    Ok(())
+                };
+
+                loop {
+                    match reader.read_event_into(&mut buffer) {
+                        Ok(Event::Start(element))
+                            if xml_local_name(element.name().as_ref()) == b"wsDr" =>
+                        {
+                            drawing_root_seen = true;
+                            writer
+                                .write_event(Event::Start(rewrite_drawing_root(
+                                    &element,
+                                    reader.decoder(),
+                                )?))
+                                .map_err(runtime_xml_error)?;
+                        }
+                        Ok(Event::Empty(element))
+                            if xml_local_name(element.name().as_ref()) == b"wsDr" =>
+                        {
+                            drawing_root_seen = true;
+                            let qualified_name =
+                                String::from_utf8_lossy(element.name().as_ref()).into_owned();
+                            writer
+                                .write_event(Event::Start(rewrite_drawing_root(
+                                    &element,
+                                    reader.decoder(),
+                                )?))
+                                .map_err(runtime_xml_error)?;
+                            write_chart_anchors(&mut writer)?;
+                            appended_chart_anchors = true;
+                            writer
+                                .write_event(Event::End(BytesEnd::new(qualified_name)))
+                                .map_err(runtime_xml_error)?;
+                        }
+                        Ok(Event::End(element))
+                            if xml_local_name(element.name().as_ref()) == b"wsDr" =>
+                        {
+                            if !appended_chart_anchors {
+                                write_chart_anchors(&mut writer)?;
+                                appended_chart_anchors = true;
+                            }
+                            writer
+                                .write_event(Event::End(element.into_owned()))
+                                .map_err(runtime_xml_error)?;
+                        }
+                        Ok(Event::Eof) => break,
+                        Ok(event) => writer
+                            .write_event(event.into_owned())
+                            .map_err(runtime_xml_error)?,
+                        Err(error) => return Err(runtime_xml_error(error)),
+                    }
+                    buffer.clear();
+                }
+                if !drawing_root_seen {
+                    return Err(OmError::new(
+                        OmErrorCode::Parse,
+                        format!("drawing root was not found in {drawing_part_uri}"),
+                    ));
+                }
+                loaded.package.replace_part_bytes(
+                    drawing_part_uri.as_str(),
+                    writer.into_inner().into_inner(),
+                )?;
+
+                let drawing = loaded
+                    .state
+                    .drawings
+                    .get_mut(&drawing_id)
+                    .expect("drawing id collected above");
+                for object in &mut drawing.objects {
+                    let DrawingObjectModel::ChartFrame(chart_object) = object else {
+                        continue;
+                    };
+                    if let Some(relationship_id) =
+                        chart_relationship_ids_by_object_id.get(&chart_object.id)
+                    {
+                        chart_object.raw_binding =
+                            Some(format!("{drawing_part_uri}#{relationship_id}"));
+                    }
+                }
+            }
+
+            loaded
+                .package
+                .replace_part_bytes(CONTENT_TYPES_PART_NAME, content_types_xml)?;
+        }
         let dirty_chart_part_uris = loaded
             .state
             .charts
@@ -66438,6 +66856,184 @@ mod tests {
                     .expect("reopened Legend.Position")
             ),
             f64::from(super::XL_LEGEND_POSITION_LEFT)
+        );
+    }
+
+    #[test]
+    fn chartobjects_add_persists_into_existing_drawing_part() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count before add")
+            ),
+            1.0
+        );
+        let new_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(24.0),
+                        OmValue::Number(30.0),
+                        OmValue::Number(180.0),
+                        OmValue::Number(90.0),
+                    ],
+                )
+                .expect("ChartObjects.Add into existing drawing"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(new_chart_object, "Name", &[])
+                    .expect("new ChartObject.Name")
+            ),
+            "Chart 2"
+        );
+        let new_chart = expect_object_handle(
+            runtime
+                .dispatch_get(new_chart_object, "Chart", &[])
+                .expect("new ChartObject.Chart"),
+        );
+        runtime
+            .dispatch_set(
+                new_chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_LINE)),
+                &[],
+            )
+            .expect("set new Chart.ChartType");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after adding chart to existing drawing");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved chart package");
+        assert!(saved_package.contains("xl/charts/chart1.xml"));
+        assert!(saved_package.contains("xl/charts/chart2.xml"));
+        let drawing_xml = String::from_utf8(
+            saved_package
+                .part("xl/drawings/drawing1.xml")
+                .expect("saved drawing part")
+                .bytes
+                .clone(),
+        )
+        .expect("drawing XML utf8");
+        assert!(drawing_xml.contains("Chart 2"));
+        let drawing_rels_xml = String::from_utf8(
+            saved_package
+                .part("xl/drawings/_rels/drawing1.xml.rels")
+                .expect("saved drawing relationships part")
+                .bytes
+                .clone(),
+        )
+        .expect("drawing relationships XML utf8");
+        assert!(drawing_rels_xml.contains("chart2.xml"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after adding chart to existing drawing");
+        let reopened_worksheets = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[])
+                .expect("reopened Workbook.Worksheets"),
+        );
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened Worksheets.Item(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_objects, "Count", &[])
+                    .expect("reopened ChartObjects.Count")
+            ),
+            2.0
+        );
+        let reopened_new_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(2.0)])
+                .expect("reopened ChartObjects.Item(2)"),
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(reopened_new_chart_object, "Name", &[])
+                    .expect("reopened new ChartObject.Name")
+            ),
+            "Chart 2"
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_new_chart_object, "Width", &[])
+                    .expect("reopened new ChartObject.Width")
+            ),
+            180.0
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_new_chart_object, "Height", &[])
+                    .expect("reopened new ChartObject.Height")
+            ),
+            90.0
+        );
+        let reopened_new_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_new_chart_object, "Chart", &[])
+                .expect("reopened new ChartObject.Chart"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_new_chart, "ChartType", &[])
+                    .expect("reopened new Chart.ChartType")
+            ),
+            f64::from(super::XL_LINE)
         );
     }
 
