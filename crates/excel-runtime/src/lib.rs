@@ -348,6 +348,10 @@ enum RuntimeObjectKind {
         workbook: WorkbookHandle,
         chart_id: ChartId,
     },
+    ChartTitle {
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+    },
     SeriesCollection {
         workbook: WorkbookHandle,
         chart_id: ChartId,
@@ -864,6 +868,9 @@ impl ExcelRuntime {
             RuntimeObjectKind::Chart { workbook, chart_id } => {
                 self.dispatch_get_chart(workbook, chart_id, member, args)
             }
+            RuntimeObjectKind::ChartTitle { workbook, chart_id } => {
+                self.dispatch_get_chart_title(workbook, chart_id, member, args)
+            }
             RuntimeObjectKind::SeriesCollection { workbook, chart_id } => {
                 self.dispatch_get_series_collection(workbook, chart_id, member, args)
             }
@@ -1308,6 +1315,7 @@ impl ExcelRuntime {
             RuntimeObjectKind::ChartObjects { .. }
             | RuntimeObjectKind::ChartObject { .. }
             | RuntimeObjectKind::Chart { .. }
+            | RuntimeObjectKind::ChartTitle { .. }
             | RuntimeObjectKind::SeriesCollection { .. }
             | RuntimeObjectKind::Series { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
@@ -4299,6 +4307,7 @@ impl ExcelRuntime {
             }
             RuntimeObjectKind::ChartObject { .. }
             | RuntimeObjectKind::Chart { .. }
+            | RuntimeObjectKind::ChartTitle { .. }
             | RuntimeObjectKind::Series { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not implemented as a method for this object handle"
             ))),
@@ -4367,8 +4376,15 @@ impl ExcelRuntime {
                     )
                     | (
                         "Chart",
-                        "ChartType" | "SeriesCollection" | "Application" | "Parent"
+                        "ChartType"
+                            | "HasTitle"
+                            | "ChartTitle"
+                            | "HasLegend"
+                            | "SeriesCollection"
+                            | "Application"
+                            | "Parent"
                     )
+                    | ("ChartTitle", "Text" | "Caption" | "Application" | "Parent")
                     | (
                         "SeriesCollection",
                         "Count" | "Item" | "Application" | "Parent"
@@ -6162,6 +6178,42 @@ impl ExcelRuntime {
                     &self.chart_model(workbook, chart_id)?.chart_type,
                 )?)))
             }
+            "HasTitle" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Chart.HasTitle does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Bool(
+                    self.chart_model(workbook, chart_id)?.title.is_some(),
+                ))
+            }
+            "ChartTitle" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Chart.ChartTitle does not accept arguments",
+                    ));
+                }
+                if self.chart_model(workbook, chart_id)?.title.is_none() {
+                    return Err(OmError::new(OmErrorCode::NotFound, "chart title not found"));
+                }
+                Ok(OmValue::Object(
+                    self.register_chart_title_handle(workbook, chart_id),
+                ))
+            }
+            "HasLegend" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Chart.HasLegend does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Bool(
+                    self.chart_model(workbook, chart_id)?
+                        .legend
+                        .as_ref()
+                        .is_some_and(|legend| legend.visible),
+                ))
+            }
             "SeriesCollection" => {
                 let handle = self.register_series_collection_handle(workbook, chart_id);
                 if args.is_empty() {
@@ -6188,6 +6240,36 @@ impl ExcelRuntime {
             }
             _ => Err(OmError::unsupported(format!(
                 "Chart.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_get_chart_title(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        if !args.is_empty() {
+            return Err(OmError::invalid_argument(format!(
+                "ChartTitle.{member} does not accept arguments"
+            )));
+        }
+        let title = self
+            .chart_model(workbook, chart_id)?
+            .title
+            .as_ref()
+            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart title not found"))?;
+
+        match member {
+            "Text" | "Caption" => Ok(OmValue::Text(title.text.clone())),
+            "Application" => Ok(OmValue::Object(self.root_application())),
+            "Parent" => Ok(OmValue::Object(
+                self.register_chart_handle(workbook, chart_id),
+            )),
+            _ => Err(OmError::unsupported(format!(
+                "ChartTitle.{member} is not implemented"
             ))),
         }
     }
@@ -9096,6 +9178,14 @@ impl ExcelRuntime {
         self.register_object(RuntimeObjectKind::Chart { workbook, chart_id })
     }
 
+    fn register_chart_title_handle(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+    ) -> ObjectHandle {
+        self.register_object(RuntimeObjectKind::ChartTitle { workbook, chart_id })
+    }
+
     fn register_series_collection_handle(
         &mut self,
         workbook: WorkbookHandle,
@@ -11524,6 +11614,7 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         | RuntimeObjectKind::ChartObjects { workbook, .. }
         | RuntimeObjectKind::ChartObject { workbook, .. }
         | RuntimeObjectKind::Chart { workbook, .. }
+        | RuntimeObjectKind::ChartTitle { workbook, .. }
         | RuntimeObjectKind::SeriesCollection { workbook, .. }
         | RuntimeObjectKind::Series { workbook, .. } => Some(workbook),
     }
@@ -62077,6 +62168,31 @@ mod tests {
             ),
             f64::from(super::XL_BAR_CLUSTERED)
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasTitle", &[])
+                .expect("Chart.HasTitle"),
+            OmValue::Bool(true)
+        );
+        let chart_title = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartTitle", &[])
+                .expect("Chart.ChartTitle"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(chart_title, "Text", &[])
+                    .expect("ChartTitle.Text")
+            ),
+            "Revenue Trend"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasLegend", &[])
+                .expect("Chart.HasLegend"),
+            OmValue::Bool(true)
+        );
         let series_collection = expect_object_handle(
             runtime
                 .dispatch_get(chart, "SeriesCollection", &[])
@@ -66282,8 +66398,8 @@ mod tests {
                 content_type: None,
                 compression: CompressionMethod::Stored,
                 bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
-<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
-  <c:chart><c:plotArea><c:barChart><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val></c:ser></c:barChart></c:plotArea><c:legend><c:legendPos val="r"/></c:legend></c:chart>
 </c:chartSpace>"#
                     .to_vec(),
             })

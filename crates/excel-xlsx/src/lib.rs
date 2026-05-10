@@ -2,8 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Write};
 
 use excel_model::{
-    CellData, ChartModel, ChartObjectModel, ChartSheetBinding, ChartSourceExpr, ChartType,
-    DefinedNameTable, DrawingModel, DrawingObjectModel, SeriesModel, WorkbookState, WorksheetData,
+    CellData, ChartModel, ChartObjectModel, ChartSheetBinding, ChartSourceExpr, ChartText,
+    ChartType, DefinedNameTable, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel,
+    WorkbookState, WorksheetData,
 };
 use office_common::{
     AbsoluteAnchor, CellError, CellMarker, CellValue, ChartId, ChartObjectId, DefinedName,
@@ -628,6 +629,8 @@ pub struct DrawingSizeSummary {
 pub struct ChartPartSummary {
     pub root_name: Option<String>,
     pub chart_type_names: Vec<String>,
+    pub title_text: Option<String>,
+    pub has_legend: bool,
     pub series: Vec<ChartSeriesSummary>,
     pub formula_refs: Vec<String>,
     pub has_extension_list: bool,
@@ -2551,8 +2554,12 @@ fn build_chart_model_overlay(
                     workbook_id,
                     chart_type: chart_type_from_summary(summary),
                     series: chart_series_from_summary(summary),
-                    title: None,
-                    legend: None,
+                    title: summary
+                        .and_then(|summary| summary.title_text.as_ref())
+                        .map(|text| ChartText { text: text.clone() }),
+                    legend: summary
+                        .filter(|summary| summary.has_legend)
+                        .map(|_| LegendModel { visible: true }),
                     axes: Vec::new(),
                     raw_part_uri: Some(chart_part_uri.clone()),
                     dirty: false,
@@ -14635,6 +14642,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut buffer = Vec::new();
     let mut root_name = None;
     let mut chart_type_names = Vec::new();
+    let mut title_text = None::<String>;
+    let mut title_text_depth = 0usize;
+    let mut has_legend = false;
     let mut series = Vec::new();
     let mut formula_refs = Vec::new();
     let mut has_extension_list = false;
@@ -14698,6 +14708,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 if local_name == b"extLst" {
                     has_extension_list = true;
                 }
+                if local_name == b"legend" {
+                    has_legend = true;
+                }
                 if local_name == b"ser" && active_series.is_none() {
                     active_series = Some(ChartSeriesSummary::default());
                 }
@@ -14716,6 +14729,12 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 } else if formula_depth > 0 {
                     formula_depth += 1;
                 }
+                if local_name == b"t" && element_path.iter().any(|name| name == "title") {
+                    title_text.get_or_insert_with(String::new);
+                    title_text_depth = 1;
+                } else if title_text_depth > 0 {
+                    title_text_depth += 1;
+                }
                 element_path.push(local_name_text);
             }
             Ok(Event::Empty(element)) => {
@@ -14733,6 +14752,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 if local_name == b"extLst" {
                     has_extension_list = true;
                 }
+                if local_name == b"legend" {
+                    has_legend = true;
+                }
                 if local_name == b"order"
                     && let Some(active_series) = active_series.as_mut()
                     && let Some(order) = parse_u32_val_attr(&element, &reader, "series order")?
@@ -14740,14 +14762,26 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     active_series.order = Some(order);
                 }
             }
-            Ok(Event::Text(text)) if formula_text.is_some() => {
+            Ok(Event::Text(text)) => {
+                let text_value = text.xml_content().map_err(xml_error)?;
                 if let Some(value) = &mut formula_text {
-                    value.push_str(&text.xml_content().map_err(xml_error)?);
+                    value.push_str(&text_value);
+                }
+                if title_text_depth > 0
+                    && let Some(title_text) = &mut title_text
+                {
+                    title_text.push_str(&text_value);
                 }
             }
-            Ok(Event::CData(text)) if formula_text.is_some() => {
+            Ok(Event::CData(text)) => {
+                let text_value = text.xml_content().map_err(xml_error)?;
                 if let Some(value) = &mut formula_text {
-                    value.push_str(&text.xml_content().map_err(xml_error)?);
+                    value.push_str(&text_value);
+                }
+                if title_text_depth > 0
+                    && let Some(title_text) = &mut title_text
+                {
+                    title_text.push_str(&text_value);
                 }
             }
             Ok(Event::End(element)) if formula_depth > 0 => {
@@ -14783,6 +14817,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     formula_series_slot = None;
                 }
                 formula_depth -= 1;
+                if title_text_depth > 0 {
+                    title_text_depth -= 1;
+                }
                 element_path.pop();
             }
             Ok(Event::End(element)) => {
@@ -14792,6 +14829,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(active_series) = active_series.take()
                 {
                     series.push(active_series);
+                }
+                if title_text_depth > 0 {
+                    title_text_depth -= 1;
                 }
                 element_path.pop();
             }
@@ -14805,6 +14845,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     Ok(ChartPartSummary {
         root_name,
         chart_type_names,
+        title_text: title_text.filter(|text| !text.is_empty()),
+        has_legend,
         series,
         formula_refs,
         has_extension_list,
@@ -18714,8 +18756,9 @@ mod tests {
             })
             .expect("add drawing rels");
         let chart_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
-<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
   <c:chart>
+    <c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title>
     <c:plotArea>
       <c:barChart>
         <c:ser>
@@ -18726,6 +18769,7 @@ mod tests {
         </c:ser>
       </c:barChart>
     </c:plotArea>
+    <c:legend><c:legendPos val="r"/></c:legend>
   </c:chart>
   <c:extLst><c:ext uri="urn:test"/></c:extLst>
 </c:chartSpace>"#
@@ -18837,6 +18881,8 @@ mod tests {
             .expect("chart summary");
         assert_eq!(chart_summary.root_name.as_deref(), Some("chartSpace"));
         assert_eq!(chart_summary.chart_type_names, vec!["barChart".to_string()]);
+        assert_eq!(chart_summary.title_text.as_deref(), Some("Revenue Trend"));
+        assert!(chart_summary.has_legend);
         assert_eq!(
             chart_summary.formula_refs,
             vec![
@@ -18906,6 +18952,11 @@ mod tests {
         assert_eq!(loaded.state.charts.len(), 1);
         let (chart_id, chart_model) = loaded.state.charts.iter().next().expect("chart model");
         assert_eq!(chart_model.chart_type, ChartType::Bar);
+        assert_eq!(
+            chart_model.title.as_ref().expect("chart title").text,
+            "Revenue Trend"
+        );
+        assert!(chart_model.legend.as_ref().expect("chart legend").visible);
         assert_eq!(
             chart_model.raw_part_uri.as_deref(),
             Some("xl/charts/chart1.xml")
