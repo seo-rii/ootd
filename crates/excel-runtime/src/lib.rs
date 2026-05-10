@@ -11444,6 +11444,79 @@ impl ExcelRuntime {
             let removed_worksheet = runtime.loaded.state.worksheets.remove(worksheet_index);
             runtime.loaded.state.worksheet_data.remove(&sheet_id);
             let removed_support_parts = runtime.loaded.worksheet_support_parts.remove(&sheet_id);
+            let removed_sheet_drawing_support_parts =
+                runtime.loaded.sheet_drawing_support_parts.remove(&sheet_id);
+            let removed_chart_sheet_binding = runtime.loaded.state.chart_sheets.remove(&sheet_id);
+            let removed_drawing_ids = runtime
+                .loaded
+                .state
+                .drawings
+                .iter()
+                .filter_map(|(drawing_id, drawing)| {
+                    (drawing.host_sheet_id == sheet_id).then_some(*drawing_id)
+                })
+                .collect::<Vec<_>>();
+            let mut removed_chart_ids = BTreeSet::new();
+            let mut drawing_chart_part_uris_to_remove = BTreeSet::<String>::new();
+            for drawing_id in removed_drawing_ids {
+                if let Some(drawing) = runtime.loaded.state.drawings.remove(&drawing_id) {
+                    if let Some(part_uri) = drawing.raw_part_uri {
+                        drawing_chart_part_uris_to_remove
+                            .insert(worksheet_relationships_part_uri_for(part_uri.as_str()));
+                        drawing_chart_part_uris_to_remove.insert(part_uri);
+                    }
+                    for object in drawing.objects {
+                        if let DrawingObjectModel::ChartFrame(chart_object) = object {
+                            removed_chart_ids.insert(chart_object.chart_id);
+                        }
+                    }
+                }
+            }
+            if let Some(binding) = removed_chart_sheet_binding {
+                removed_chart_ids.insert(binding.chart_id);
+            }
+            let removed_chart_ids = removed_chart_ids
+                .into_iter()
+                .filter(|chart_id| {
+                    !runtime
+                        .loaded
+                        .state
+                        .chart_sheets
+                        .values()
+                        .any(|binding| binding.chart_id == *chart_id)
+                        && !runtime.loaded.state.drawings.values().any(|drawing| {
+                            drawing.objects.iter().any(|object| match object {
+                                DrawingObjectModel::ChartFrame(chart_object) => {
+                                    chart_object.chart_id == *chart_id
+                                }
+                                DrawingObjectModel::UnsupportedRaw { .. } => false,
+                            })
+                        })
+                })
+                .collect::<Vec<_>>();
+            for chart_id in removed_chart_ids {
+                if let Some(chart) = runtime.loaded.state.charts.remove(&chart_id)
+                    && let Some(part_uri) = chart.raw_part_uri
+                {
+                    drawing_chart_part_uris_to_remove.insert(part_uri);
+                }
+            }
+            if let Some(support_parts) = removed_sheet_drawing_support_parts.as_ref() {
+                drawing_chart_part_uris_to_remove
+                    .extend(support_parts.drawing_part_uris.iter().cloned());
+                drawing_chart_part_uris_to_remove.extend(
+                    support_parts
+                        .drawing_relationships_part_uris
+                        .iter()
+                        .cloned(),
+                );
+                drawing_chart_part_uris_to_remove
+                    .extend(support_parts.chart_part_uris.iter().cloned());
+                drawing_chart_part_uris_to_remove
+                    .extend(support_parts.chart_relationships_part_uris.iter().cloned());
+                drawing_chart_part_uris_to_remove
+                    .extend(support_parts.chart_support_part_uris.iter().cloned());
+            }
 
             let workbook_xml = runtime
                 .loaded
@@ -11492,16 +11565,27 @@ impl ExcelRuntime {
                 )?;
             }
 
+            let mut package_parts_to_remove = BTreeSet::<String>::new();
             let mut content_type_overrides_to_strip = Vec::<String>::new();
             if let Some(part_uri) = removed_worksheet.part_uri.as_ref() {
-                runtime.loaded.package.remove_part(part_uri);
+                package_parts_to_remove.insert(part_uri.clone());
                 content_type_overrides_to_strip.push(part_uri.clone());
+                if removed_support_parts.is_none() {
+                    package_parts_to_remove.insert(worksheet_relationships_part_uri_for(part_uri));
+                }
             }
             if let Some(relationships_part_uri) = removed_support_parts
                 .as_ref()
                 .and_then(|support_parts| support_parts.relationships_part_uri.as_deref())
             {
-                runtime.loaded.package.remove_part(relationships_part_uri);
+                package_parts_to_remove.insert(relationships_part_uri.to_string());
+            }
+            for part_uri in drawing_chart_part_uris_to_remove {
+                package_parts_to_remove.insert(part_uri.clone());
+                content_type_overrides_to_strip.push(part_uri);
+            }
+            for part_uri in package_parts_to_remove {
+                runtime.loaded.package.remove_part(part_uri.as_str());
             }
             if !content_type_overrides_to_strip.is_empty()
                 && let Some(content_types_xml) = runtime
@@ -65005,6 +65089,93 @@ mod tests {
             office_common::SheetKind::ChartSheet
         );
         assert_eq!(reopened.state.chart_sheets.len(), 1);
+    }
+
+    #[test]
+    fn worksheet_delete_removes_chart_sheet_parts_and_bindings() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        runtime
+            .dispatch_invoke(charts, "Add", &[])
+            .expect("Charts.Add");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Count", &[])
+                    .expect("Charts.Count after Add")
+            ),
+            1.0
+        );
+        let chart_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after Charts.Add"),
+        );
+        runtime
+            .dispatch_set(application, "DisplayAlerts", OmValue::Bool(false), &[])
+            .expect("disable DisplayAlerts");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_sheet, "Delete", &[])
+                .expect("delete chart sheet"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Count", &[])
+                    .expect("Charts.Count after Delete")
+            ),
+            0.0
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after chart sheet delete");
+        let saved_package =
+            OpcPackage::from_bytes(&saved).expect("saved chart sheet delete package");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen chart sheet delete workbook");
+
+        assert!(!saved_package.contains("xl/chartsheets/sheet1.xml"));
+        assert!(!saved_package.contains("xl/chartsheets/_rels/sheet1.xml.rels"));
+        assert!(!saved_package.contains("xl/drawings/drawing1.xml"));
+        assert!(!saved_package.contains("xl/drawings/_rels/drawing1.xml.rels"));
+        assert!(!saved_package.contains("xl/charts/chart1.xml"));
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .map(|worksheet| worksheet.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["Sheet1".to_string()]
+        );
+        assert!(reopened.state.chart_sheets.is_empty());
+        assert!(reopened.state.drawings.is_empty());
+        assert!(reopened.state.charts.is_empty());
     }
 
     #[test]
