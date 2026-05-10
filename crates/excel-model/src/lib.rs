@@ -3,7 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use office_common::{
     CellValue, ChartId, DefinedName, DefinedNameId, DrawingId, FormulaSource, NameScope,
     NameValidationMode, OmArray, OmError, OmErrorCode, OmResult, OmValue, OpaquePart, RangeRef,
-    Rect, SheetId, SheetScope, StyleId, WorkbookId, WorkbookModel, WorksheetModel,
+    RangeSet, Rect, ReferenceTarget, SheetId, SheetScope, StyleId, WorkbookId, WorkbookModel,
+    WorksheetModel,
 };
 
 mod charts;
@@ -48,6 +49,30 @@ impl WorkbookState {
         self.model.id = workbook_id;
         for worksheet in &mut self.worksheets {
             worksheet.workbook_id = workbook_id;
+        }
+        for chart in self.charts.values_mut() {
+            chart.workbook_id = workbook_id;
+            for series in &mut chart.series {
+                for source in [&mut series.name, &mut series.x_values, &mut series.values]
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(ReferenceTarget::Range(range)) = source.resolved.as_mut()
+                        && let Ok(updated_range) =
+                            RangeSet::new(workbook_id, range.areas().to_vec())
+                    {
+                        *range = updated_range;
+                    }
+                }
+            }
+        }
+        for drawing in self.drawings.values_mut() {
+            drawing.workbook_id = workbook_id;
+            for object in &mut drawing.objects {
+                if let DrawingObjectModel::ChartFrame(chart_object) = object {
+                    chart_object.workbook_id = workbook_id;
+                }
+            }
         }
     }
 
@@ -497,16 +522,16 @@ impl WorkbookState {
 #[cfg(test)]
 mod tests {
     use super::{
-        CellData, ChartModel, ChartObjectModel, ChartSheetBinding, ChartType, DefinedNameTable,
-        DrawingModel, DrawingObjectModel, WorkbookState, WorksheetData,
+        CellData, ChartModel, ChartObjectModel, ChartSheetBinding, ChartSourceExpr, ChartType,
+        DefinedNameTable, DrawingModel, DrawingObjectModel, WorkbookState, WorksheetData,
     };
     use std::collections::{BTreeMap, BTreeSet};
 
     use office_common::{
         CellValue, ChartId, ChartObjectId, DrawingId, FileFormat, FormulaSource, NameScope,
         NameValidationMode, ObjectHandle, ObjectPlacement, OmArray, OmErrorCode, OmValue, RangeRef,
-        Rect, SheetId, SheetKind, SheetScope, SheetVisibility, StyleId, WorkbookId, WorkbookModel,
-        WorksheetModel,
+        RangeSet, Rect, ReferenceTarget, SheetId, SheetKind, SheetScope, SheetVisibility, StyleId,
+        WorkbookId, WorkbookModel, WorksheetModel,
     };
 
     fn sample_state() -> WorkbookState {
@@ -1104,11 +1129,85 @@ mod tests {
     #[test]
     fn assign_workbook_id_updates_model_and_worksheet_ownership() {
         let mut state = sample_state();
+        let sheet_id = state.worksheets[0].id;
+        let chart_id = ChartId(11);
+        let drawing_id = DrawingId(12);
+        state.charts.insert(
+            chart_id,
+            ChartModel {
+                id: chart_id,
+                workbook_id: state.model.id,
+                chart_type: ChartType::Bar,
+                series: vec![super::SeriesModel {
+                    name: None,
+                    x_values: None,
+                    values: Some(ChartSourceExpr {
+                        raw: formula_source("Sheet1!$A$1"),
+                        resolved: Some(ReferenceTarget::Range(
+                            RangeSet::single_rect(
+                                state.model.id,
+                                sheet_id,
+                                Rect::single_cell(1, 1),
+                            )
+                            .expect("range set"),
+                        )),
+                        cache: None,
+                        dirty: false,
+                    }),
+                    order: Some(0),
+                }],
+                title: None,
+                legend: None,
+                axes: Vec::new(),
+                raw_part_uri: Some("xl/charts/chart1.xml".to_string()),
+                dirty: false,
+            },
+        );
+        state.drawings.insert(
+            drawing_id,
+            DrawingModel {
+                id: drawing_id,
+                workbook_id: state.model.id,
+                host_sheet_id: sheet_id,
+                objects: vec![DrawingObjectModel::ChartFrame(ChartObjectModel {
+                    id: ChartObjectId(21),
+                    workbook_id: state.model.id,
+                    host_sheet_id: sheet_id,
+                    chart_id,
+                    name: "Chart 1".to_string(),
+                    anchor: None,
+                    placement: ObjectPlacement::Unknown,
+                    z_order: Some(0),
+                    raw_binding: None,
+                    dirty: false,
+                })],
+                raw_part_uri: Some("xl/drawings/drawing1.xml".to_string()),
+                dirty: false,
+            },
+        );
 
         state.assign_workbook_id(WorkbookId(99));
 
         assert_eq!(state.model.id, WorkbookId(99));
         assert_eq!(state.worksheets[0].workbook_id, WorkbookId(99));
+        let chart = state.charts.get(&chart_id).expect("chart");
+        assert_eq!(chart.workbook_id, WorkbookId(99));
+        let Some(ReferenceTarget::Range(range)) = chart.series[0]
+            .values
+            .as_ref()
+            .expect("values")
+            .resolved
+            .as_ref()
+        else {
+            panic!("expected range source");
+        };
+        assert_eq!(range.workbook_id(), WorkbookId(99));
+        let drawing = state.drawings.get(&drawing_id).expect("drawing");
+        assert_eq!(drawing.workbook_id, WorkbookId(99));
+        let DrawingObjectModel::ChartFrame(chart_object) = &drawing.objects[0] else {
+            panic!("expected chart object");
+        };
+        assert_eq!(chart_object.workbook_id, WorkbookId(99));
     }
 
     #[test]
