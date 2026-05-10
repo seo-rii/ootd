@@ -352,6 +352,10 @@ enum RuntimeObjectKind {
         workbook: WorkbookHandle,
         chart_id: ChartId,
     },
+    Legend {
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+    },
     SeriesCollection {
         workbook: WorkbookHandle,
         chart_id: ChartId,
@@ -871,6 +875,9 @@ impl ExcelRuntime {
             RuntimeObjectKind::ChartTitle { workbook, chart_id } => {
                 self.dispatch_get_chart_title(workbook, chart_id, member, args)
             }
+            RuntimeObjectKind::Legend { workbook, chart_id } => {
+                self.dispatch_get_legend(workbook, chart_id, member, args)
+            }
             RuntimeObjectKind::SeriesCollection { workbook, chart_id } => {
                 self.dispatch_get_series_collection(workbook, chart_id, member, args)
             }
@@ -1316,6 +1323,7 @@ impl ExcelRuntime {
             | RuntimeObjectKind::ChartObject { .. }
             | RuntimeObjectKind::Chart { .. }
             | RuntimeObjectKind::ChartTitle { .. }
+            | RuntimeObjectKind::Legend { .. }
             | RuntimeObjectKind::SeriesCollection { .. }
             | RuntimeObjectKind::Series { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
@@ -4308,6 +4316,7 @@ impl ExcelRuntime {
             RuntimeObjectKind::ChartObject { .. }
             | RuntimeObjectKind::Chart { .. }
             | RuntimeObjectKind::ChartTitle { .. }
+            | RuntimeObjectKind::Legend { .. }
             | RuntimeObjectKind::Series { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not implemented as a method for this object handle"
             ))),
@@ -4380,11 +4389,13 @@ impl ExcelRuntime {
                             | "HasTitle"
                             | "ChartTitle"
                             | "HasLegend"
+                            | "Legend"
                             | "SeriesCollection"
                             | "Application"
                             | "Parent"
                     )
                     | ("ChartTitle", "Text" | "Caption" | "Application" | "Parent")
+                    | ("Legend", "Application" | "Parent")
                     | (
                         "SeriesCollection",
                         "Count" | "Item" | "Application" | "Parent"
@@ -6214,6 +6225,27 @@ impl ExcelRuntime {
                         .is_some_and(|legend| legend.visible),
                 ))
             }
+            "Legend" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Chart.Legend does not accept arguments",
+                    ));
+                }
+                if !self
+                    .chart_model(workbook, chart_id)?
+                    .legend
+                    .as_ref()
+                    .is_some_and(|legend| legend.visible)
+                {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        "chart legend not found",
+                    ));
+                }
+                Ok(OmValue::Object(
+                    self.register_legend_handle(workbook, chart_id),
+                ))
+            }
             "SeriesCollection" => {
                 let handle = self.register_series_collection_handle(workbook, chart_id);
                 if args.is_empty() {
@@ -6240,6 +6272,41 @@ impl ExcelRuntime {
             }
             _ => Err(OmError::unsupported(format!(
                 "Chart.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_get_legend(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        if !args.is_empty() {
+            return Err(OmError::invalid_argument(format!(
+                "Legend.{member} does not accept arguments"
+            )));
+        }
+        if !self
+            .chart_model(workbook, chart_id)?
+            .legend
+            .as_ref()
+            .is_some_and(|legend| legend.visible)
+        {
+            return Err(OmError::new(
+                OmErrorCode::NotFound,
+                "chart legend not found",
+            ));
+        }
+
+        match member {
+            "Application" => Ok(OmValue::Object(self.root_application())),
+            "Parent" => Ok(OmValue::Object(
+                self.register_chart_handle(workbook, chart_id),
+            )),
+            _ => Err(OmError::unsupported(format!(
+                "Legend.{member} is not implemented"
             ))),
         }
     }
@@ -9186,6 +9253,14 @@ impl ExcelRuntime {
         self.register_object(RuntimeObjectKind::ChartTitle { workbook, chart_id })
     }
 
+    fn register_legend_handle(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+    ) -> ObjectHandle {
+        self.register_object(RuntimeObjectKind::Legend { workbook, chart_id })
+    }
+
     fn register_series_collection_handle(
         &mut self,
         workbook: WorkbookHandle,
@@ -11615,6 +11690,7 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         | RuntimeObjectKind::ChartObject { workbook, .. }
         | RuntimeObjectKind::Chart { workbook, .. }
         | RuntimeObjectKind::ChartTitle { workbook, .. }
+        | RuntimeObjectKind::Legend { workbook, .. }
         | RuntimeObjectKind::SeriesCollection { workbook, .. }
         | RuntimeObjectKind::Series { workbook, .. } => Some(workbook),
     }
@@ -62192,6 +62268,32 @@ mod tests {
                 .dispatch_get(chart, "HasLegend", &[])
                 .expect("Chart.HasLegend"),
             OmValue::Bool(true)
+        );
+        let legend = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Legend", &[])
+                .expect("Chart.Legend"),
+        );
+        assert_eq!(
+            expect_object_handle(
+                runtime
+                    .dispatch_get(legend, "Application", &[])
+                    .expect("Legend.Application")
+            ),
+            runtime.root_application()
+        );
+        let legend_parent = expect_object_handle(
+            runtime
+                .dispatch_get(legend, "Parent", &[])
+                .expect("Legend.Parent"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(legend_parent, "ChartType", &[])
+                    .expect("Legend.Parent.ChartType")
+            ),
+            f64::from(super::XL_BAR_CLUSTERED)
         );
         let series_collection = expect_object_handle(
             runtime
