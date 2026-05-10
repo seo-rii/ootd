@@ -2597,10 +2597,44 @@ impl ExcelRuntime {
                                     dirty: true,
                                 })
                             }
+                            OmValue::Object(handle) => match self.runtime_object(handle)? {
+                                RuntimeObjectKind::Range {
+                                    workbook: range_workbook,
+                                    range,
+                                    ..
+                                } => {
+                                    if range_workbook != workbook {
+                                        return Err(OmError::unsupported(format!(
+                                            "Series.{member} cross-workbook ranges are not supported"
+                                        )));
+                                    }
+                                    let (sheet_id, rect) = Self::range_set_single_area(&range)?;
+                                    let worksheet_name =
+                                        self.worksheet_model(workbook, sheet_id)?.name.clone();
+                                    Some(ChartSourceExpr {
+                                        raw: FormulaSource {
+                                            text: format!(
+                                                "{}{}",
+                                                formula_sheet_address_qualifier(&worksheet_name),
+                                                format_rect_address_with_flags(rect, true, true)
+                                            ),
+                                            is_r1c1: false,
+                                        },
+                                        resolved: None,
+                                        cache: None,
+                                        dirty: true,
+                                    })
+                                }
+                                _ => {
+                                    return Err(OmError::type_mismatch(format!(
+                                        "Series.{member} expects a string source formula or Range object"
+                                    )));
+                                }
+                            },
                             OmValue::Empty | OmValue::Missing | OmValue::Null => None,
                             _ => {
                                 return Err(OmError::type_mismatch(format!(
-                                    "Series.{member} expects a string source formula"
+                                    "Series.{member} expects a string source formula or Range object"
                                 )));
                             }
                         };
@@ -67593,6 +67627,159 @@ mod tests {
                 .dispatch_get(reopened_series, "XValues", &[])
                 .expect("reopened Series.XValues"),
             OmValue::Text("=Sheet1!$A$1:$A$3".to_string())
+        );
+    }
+
+    #[test]
+    fn chart_series_source_setters_accept_range_objects() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let name_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("C1".to_string())])
+                .expect("Worksheet.Range(C1)"),
+        );
+        let x_values_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:A3".to_string())])
+                .expect("Worksheet.Range(A1:A3)"),
+        );
+        let values_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("B1:B3".to_string())])
+                .expect("Worksheet.Range(B1:B3)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries"),
+        );
+
+        runtime
+            .dispatch_set(series, "Name", OmValue::Object(name_range), &[])
+            .expect("set Series.Name from Range");
+        runtime
+            .dispatch_set(series, "XValues", OmValue::Object(x_values_range), &[])
+            .expect("set Series.XValues from Range");
+        runtime
+            .dispatch_set(series, "Values", OmValue::Object(values_range), &[])
+            .expect("set Series.Values from Range");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Formula", &[])
+                    .expect("Series.Formula after Range setters")
+            ),
+            "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1)"
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after Range series setters");
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after Range series setters");
+        let reopened_worksheets = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[])
+                .expect("reopened Workbook.Worksheets"),
+        );
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened Worksheets.Item(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(reopened_series, "Formula", &[])
+                    .expect("reopened Series.Formula")
+            ),
+            "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1)"
         );
     }
 
