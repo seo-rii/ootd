@@ -2296,6 +2296,135 @@ impl ExcelRuntime {
                         runtime.dirty = true;
                         Ok(())
                     }
+                    "Formula" => {
+                        let OmValue::Text(formula_text) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Series.Formula expects a SERIES formula string",
+                            ));
+                        };
+                        let formula_body = formula_text.trim();
+                        let formula_body = formula_body
+                            .strip_prefix('=')
+                            .unwrap_or(formula_body)
+                            .trim();
+                        if formula_body.len() < "SERIES()".len()
+                            || !formula_body
+                                .get(..6)
+                                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("SERIES"))
+                            || !formula_body
+                                .get(6..)
+                                .is_some_and(|suffix| suffix.starts_with('('))
+                            || !formula_body.ends_with(')')
+                        {
+                            return Err(OmError::invalid_argument(
+                                "Series.Formula expects a SERIES(...) formula",
+                            ));
+                        }
+                        let inner = &formula_body[7..formula_body.len() - 1];
+                        let mut parts = Vec::new();
+                        let mut current = String::new();
+                        let mut depth = 0usize;
+                        let mut in_string = false;
+                        let mut chars = inner.chars().peekable();
+                        while let Some(ch) = chars.next() {
+                            if ch == '"' {
+                                current.push(ch);
+                                if in_string && chars.peek() == Some(&'"') {
+                                    current.push(chars.next().expect("peeked quote"));
+                                } else {
+                                    in_string = !in_string;
+                                }
+                                continue;
+                            }
+                            if !in_string {
+                                match ch {
+                                    '(' | '{' => depth += 1,
+                                    ')' | '}' => {
+                                        depth = depth.checked_sub(1).ok_or_else(|| {
+                                            OmError::invalid_argument(
+                                                "Series.Formula has unbalanced delimiters",
+                                            )
+                                        })?;
+                                    }
+                                    ',' if depth == 0 => {
+                                        parts.push(current.trim().to_string());
+                                        current.clear();
+                                        continue;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            current.push(ch);
+                        }
+                        if in_string || depth != 0 {
+                            return Err(OmError::invalid_argument(
+                                "Series.Formula has unbalanced delimiters",
+                            ));
+                        }
+                        parts.push(current.trim().to_string());
+                        if !(4..=5).contains(&parts.len()) {
+                            return Err(OmError::invalid_argument(
+                                "Series.Formula expects name, x-values, values, and plot order",
+                            ));
+                        }
+                        if parts.len() == 5 && !parts[4].trim().is_empty() {
+                            return Err(OmError::unsupported(
+                                "Series.Formula bubble size is not supported yet",
+                            ));
+                        }
+                        let plot_order = parts[3].trim().parse::<u32>().map_err(|_| {
+                            OmError::invalid_argument(
+                                "Series.Formula plot order must be a positive integer",
+                            )
+                        })?;
+                        if plot_order == 0 {
+                            return Err(OmError::invalid_argument(
+                                "Series.Formula plot order must be a positive integer",
+                            ));
+                        }
+                        let source_arg = |text: &str| {
+                            let text = text.trim();
+                            if text.is_empty() {
+                                None
+                            } else {
+                                Some(ChartSourceExpr {
+                                    raw: FormulaSource {
+                                        text: text.trim_start_matches('=').to_string(),
+                                        is_r1c1: false,
+                                    },
+                                    resolved: None,
+                                    cache: None,
+                                    dirty: true,
+                                })
+                            }
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let series = chart.series.get_mut(series_index).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "series not found")
+                        })?;
+                        series.name = source_arg(&parts[0]);
+                        series.x_values = source_arg(&parts[1]);
+                        series.values = source_arg(&parts[2]);
+                        series.order = Some(plot_order - 1);
+                        chart.dirty = true;
+                        runtime.dirty = true;
+                        Ok(())
+                    }
                     "PlotOrder" => {
                         let OmValue::Number(number) = value else {
                             return Err(OmError::type_mismatch(
@@ -65941,6 +66070,154 @@ mod tests {
                     .expect("reopened Series.PlotOrder")
             ),
             1.0
+        );
+    }
+
+    #[test]
+    fn chart_series_formula_setter_roundtrips_basic_series_formula() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries"),
+        );
+        runtime
+            .dispatch_set(
+                series,
+                "Formula",
+                OmValue::Text(
+                    "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1)".to_string(),
+                ),
+                &[],
+            )
+            .expect("set Series.Formula");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Name", &[])
+                .expect("Series.Name after Formula"),
+            OmValue::Text("=Sheet1!$C$1".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "XValues", &[])
+                .expect("Series.XValues after Formula"),
+            OmValue::Text("=Sheet1!$A$1:$A$3".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Values", &[])
+                .expect("Series.Values after Formula"),
+            OmValue::Text("=Sheet1!$B$1:$B$3".to_string())
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after Series.Formula");
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after Series.Formula");
+        let reopened_worksheets = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[])
+                .expect("reopened Workbook.Worksheets"),
+        );
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened Worksheets.Item(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(reopened_series, "Formula", &[])
+                    .expect("reopened Series.Formula")
+            ),
+            "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1)"
         );
     }
 
