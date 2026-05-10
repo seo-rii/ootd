@@ -1,16 +1,17 @@
 use excel_model::{
     AxisModel, ChartAxisKind, ChartLegendPosition, ChartModel, ChartObjectModel, ChartType,
-    DrawingObjectModel, SeriesModel, WorkbookState, WorksheetData,
+    DrawingModel, DrawingObjectModel, SeriesModel, WorkbookState, WorksheetData,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
 use office_common::{
-    CellError, CellValue, ChartId, ChartObjectId, DefinedNameId, DrawingAnchor, ExcelProfile,
-    FileFormat, FormulaSource, GetRangeValuesSpec, LoadOptions, NameScope, NameValidationMode,
-    ObjectHandle, ObjectPlacement, OmArray, OmError, OmErrorCode, OmResult, OmValue, OpaquePart,
-    OpenWorkbookSpec, RangeArea, RangeHandle, RangeRef, RangeSet, Rect, SaveOptions,
-    SaveWorkbookSpec, SetRangeValuesSpec, SheetId, SheetKind, SheetScope, SheetVisibility,
-    WorkbookHandle, WorkbookId, WorkbookModel, WorksheetHandle, WorksheetModel,
+    AbsoluteAnchor, CellError, CellValue, ChartId, ChartObjectId, DefinedNameId, DrawingAnchor,
+    DrawingId, ExcelProfile, FileFormat, FormulaSource, GetRangeValuesSpec, LoadOptions, NameScope,
+    NameValidationMode, ObjectHandle, ObjectPlacement, OmArray, OmError, OmErrorCode, OmResult,
+    OmValue, OpaquePart, OpenWorkbookSpec, PointEmu, RangeArea, RangeHandle, RangeRef, RangeSet,
+    Rect, SaveOptions, SaveWorkbookSpec, SetRangeValuesSpec, SheetId, SheetKind, SheetScope,
+    SheetVisibility, SizeEmu, WorkbookHandle, WorkbookId, WorkbookModel, WorksheetHandle,
+    WorksheetModel,
 };
 use office_idl::{AccessMode, SupportState};
 use office_opc::{CompressionMethod, OpcPackage, OpcPart};
@@ -6481,6 +6482,189 @@ impl ExcelRuntime {
                         ));
                     }
                 };
+                Ok(OmValue::Object(
+                    self.register_chart_object_handle(workbook, chart_object_id),
+                ))
+            }
+            "Add" => {
+                let [left, top, width, height] = args else {
+                    return Err(OmError::invalid_argument(
+                        "ChartObjects.Add expects Left, Top, Width, and Height arguments",
+                    ));
+                };
+                let mut geometry = Vec::new();
+                for (value, label, require_non_negative) in [
+                    (left, "ChartObjects.Add Left", false),
+                    (top, "ChartObjects.Add Top", false),
+                    (width, "ChartObjects.Add Width", true),
+                    (height, "ChartObjects.Add Height", true),
+                ] {
+                    let OmValue::Number(number) = value else {
+                        return Err(OmError::type_mismatch(format!(
+                            "{label} expects a numeric points value"
+                        )));
+                    };
+                    if !number.is_finite()
+                        || *number < i64::MIN as f64 / 12_700.0
+                        || *number > i64::MAX as f64 / 12_700.0
+                        || require_non_negative && *number < 0.0
+                    {
+                        return Err(OmError::invalid_argument(format!(
+                            "{label} expects a finite points value{}",
+                            if require_non_negative {
+                                " greater than or equal to zero"
+                            } else {
+                                ""
+                            }
+                        )));
+                    }
+                    geometry.push(office_common::Points(*number).to_emu());
+                }
+
+                let chart_object_id = {
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    let Some(worksheet) = runtime
+                        .loaded
+                        .state
+                        .worksheets
+                        .iter()
+                        .find(|worksheet| worksheet.id == sheet_id)
+                    else {
+                        return Err(OmError::new(OmErrorCode::NotFound, "unknown worksheet"));
+                    };
+                    if worksheet.kind != SheetKind::Worksheet {
+                        return Err(OmError::unsupported(
+                            "ChartObjects.Add is only available on worksheets",
+                        ));
+                    }
+
+                    let workbook_id = runtime.loaded.state.model.id;
+                    let chart_id = ChartId(
+                        runtime
+                            .loaded
+                            .state
+                            .charts
+                            .keys()
+                            .map(|chart_id| chart_id.0)
+                            .max()
+                            .unwrap_or_default()
+                            + 1,
+                    );
+                    let chart_object_id = ChartObjectId(
+                        runtime
+                            .loaded
+                            .state
+                            .drawings
+                            .values()
+                            .flat_map(|drawing| drawing.objects.iter())
+                            .filter_map(|object| match object {
+                                DrawingObjectModel::ChartFrame(chart_object) => {
+                                    Some(chart_object.id.0)
+                                }
+                                DrawingObjectModel::UnsupportedRaw { id, .. } => Some(id.0),
+                            })
+                            .max()
+                            .unwrap_or_default()
+                            + 1,
+                    );
+                    let chart_object_count = runtime
+                        .loaded
+                        .state
+                        .drawings
+                        .values()
+                        .filter(|drawing| drawing.host_sheet_id == sheet_id)
+                        .flat_map(|drawing| drawing.objects.iter())
+                        .filter(|object| matches!(object, DrawingObjectModel::ChartFrame(_)))
+                        .count();
+                    let drawing_id = if let Some(existing_drawing_id) = runtime
+                        .loaded
+                        .state
+                        .drawings
+                        .iter()
+                        .find(|(_, drawing)| drawing.host_sheet_id == sheet_id)
+                        .map(|(drawing_id, _)| *drawing_id)
+                    {
+                        existing_drawing_id
+                    } else {
+                        let drawing_id = DrawingId(
+                            runtime
+                                .loaded
+                                .state
+                                .drawings
+                                .keys()
+                                .map(|drawing_id| drawing_id.0)
+                                .max()
+                                .unwrap_or_default()
+                                + 1,
+                        );
+                        runtime.loaded.state.drawings.insert(
+                            drawing_id,
+                            DrawingModel {
+                                id: drawing_id,
+                                workbook_id,
+                                host_sheet_id: sheet_id,
+                                objects: Vec::new(),
+                                raw_part_uri: None,
+                                dirty: true,
+                            },
+                        );
+                        drawing_id
+                    };
+                    runtime.loaded.state.charts.insert(
+                        chart_id,
+                        ChartModel {
+                            id: chart_id,
+                            workbook_id,
+                            chart_type: ChartType::Bar,
+                            series: Vec::new(),
+                            title: None,
+                            legend: None,
+                            axes: Vec::new(),
+                            raw_part_uri: None,
+                            dirty: true,
+                        },
+                    );
+                    let drawing = runtime
+                        .loaded
+                        .state
+                        .drawings
+                        .get_mut(&drawing_id)
+                        .expect("drawing was inserted above");
+                    let z_order = u32::try_from(drawing.objects.len()).ok();
+                    drawing
+                        .objects
+                        .push(DrawingObjectModel::ChartFrame(ChartObjectModel {
+                            id: chart_object_id,
+                            workbook_id,
+                            host_sheet_id: sheet_id,
+                            chart_id,
+                            name: format!("Chart {}", chart_object_count + 1),
+                            anchor: Some(DrawingAnchor::Absolute(AbsoluteAnchor {
+                                position: PointEmu {
+                                    x: geometry[0],
+                                    y: geometry[1],
+                                },
+                                extents: SizeEmu {
+                                    cx: geometry[2],
+                                    cy: geometry[3],
+                                },
+                            })),
+                            placement: ObjectPlacement::FreeFloating,
+                            z_order,
+                            raw_binding: None,
+                            dirty: true,
+                        }));
+                    drawing.dirty = true;
+                    runtime.dirty = true;
+                    chart_object_id
+                };
+
                 Ok(OmValue::Object(
                     self.register_chart_object_handle(workbook, chart_object_id),
                 ))
@@ -63360,6 +63544,145 @@ mod tests {
             ),
             "=Sheet1!$A$1:$C$1"
         );
+    }
+
+    #[test]
+    fn chartobjects_add_creates_in_memory_embedded_chart_object() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count before add")
+            ),
+            0.0
+        );
+
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count after add")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(chart_object, "Name", &[])
+                    .expect("ChartObject.Name")
+            ),
+            "Chart 1"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_object, "Left", &[])
+                    .expect("ChartObject.Left")
+            ),
+            12.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_object, "Top", &[])
+                    .expect("ChartObject.Top")
+            ),
+            18.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_object, "Width", &[])
+                    .expect("ChartObject.Width")
+            ),
+            240.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_object, "Height", &[])
+                    .expect("ChartObject.Height")
+            ),
+            160.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_object, "Placement", &[])
+                    .expect("ChartObject.Placement")
+            ),
+            f64::from(super::XL_FREE_FLOATING)
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "ChartType", &[])
+                    .expect("Chart.ChartType")
+            ),
+            f64::from(super::XL_BAR_CLUSTERED)
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after ChartObjects.Add")
+        ));
+
+        let invalid_width = runtime
+            .dispatch_invoke(
+                chart_objects,
+                "Add",
+                &[
+                    OmValue::Number(1.0),
+                    OmValue::Number(2.0),
+                    OmValue::Number(-1.0),
+                    OmValue::Number(4.0),
+                ],
+            )
+            .expect_err("negative ChartObjects.Add width should fail");
+        assert_eq!(invalid_width.code, OmErrorCode::InvalidArgument);
     }
 
     #[test]
