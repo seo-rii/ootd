@@ -1,6 +1,6 @@
 use excel_model::{
-    AxisModel, ChartAxisKind, ChartLegendPosition, ChartModel, ChartObjectModel, ChartType,
-    DrawingModel, DrawingObjectModel, SeriesModel, WorkbookState, WorksheetData,
+    AxisModel, ChartAxisKind, ChartLegendPosition, ChartModel, ChartObjectModel, ChartSourceExpr,
+    ChartType, DrawingModel, DrawingObjectModel, SeriesModel, WorkbookState, WorksheetData,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
@@ -2096,6 +2096,72 @@ impl ExcelRuntime {
                     ))),
                 }
             }
+            RuntimeObjectKind::Series {
+                workbook,
+                chart_id,
+                series_index,
+            } => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "Series.{member} does not accept index arguments"
+                    )));
+                }
+                match member {
+                    "Name" | "Values" | "XValues" => {
+                        let source = match value {
+                            OmValue::Text(text) => {
+                                let raw_text = text.trim_start_matches('=').to_string();
+                                Some(ChartSourceExpr {
+                                    raw: FormulaSource {
+                                        text: raw_text,
+                                        is_r1c1: false,
+                                    },
+                                    resolved: None,
+                                    cache: None,
+                                    dirty: true,
+                                })
+                            }
+                            OmValue::Empty | OmValue::Missing | OmValue::Null => None,
+                            _ => {
+                                return Err(OmError::type_mismatch(format!(
+                                    "Series.{member} expects a string source formula"
+                                )));
+                            }
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let series = chart.series.get_mut(series_index).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "series not found")
+                        })?;
+                        match member {
+                            "Name" => series.name = source,
+                            "Values" => series.values = source,
+                            "XValues" => series.x_values = source,
+                            _ => unreachable!("handled series member"),
+                        }
+                        chart.dirty = true;
+                        runtime.dirty = true;
+                        Ok(())
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "Series.{member} is not writable"
+                    ))),
+                }
+            }
             RuntimeObjectKind::ChartObjects { .. }
             | RuntimeObjectKind::Chart { .. }
             | RuntimeObjectKind::ChartArea { .. }
@@ -2105,8 +2171,7 @@ impl ExcelRuntime {
             | RuntimeObjectKind::Axes { .. }
             | RuntimeObjectKind::Axis { .. }
             | RuntimeObjectKind::AxisTitle { .. }
-            | RuntimeObjectKind::SeriesCollection { .. }
-            | RuntimeObjectKind::Series { .. } => Err(OmError::unsupported(format!(
+            | RuntimeObjectKind::SeriesCollection { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
             ))),
             RuntimeObjectKind::WorkbooksCollection
@@ -64276,6 +64341,56 @@ mod tests {
                 .dispatch_get(series, "Values", &[])
                 .expect("Series.Values after NewSeries"),
             OmValue::Empty
+        );
+        runtime
+            .dispatch_set(
+                series,
+                "Name",
+                OmValue::Text("=Sheet1!$C$1".to_string()),
+                &[],
+            )
+            .expect("set Series.Name");
+        runtime
+            .dispatch_set(
+                series,
+                "XValues",
+                OmValue::Text("=Sheet1!$A$1:$A$3".to_string()),
+                &[],
+            )
+            .expect("set Series.XValues");
+        runtime
+            .dispatch_set(
+                series,
+                "Values",
+                OmValue::Text("=Sheet1!$B$1:$B$3".to_string()),
+                &[],
+            )
+            .expect("set Series.Values");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Name", &[])
+                .expect("Series.Name after set"),
+            OmValue::Text("=Sheet1!$C$1".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "XValues", &[])
+                .expect("Series.XValues after set"),
+            OmValue::Text("=Sheet1!$A$1:$A$3".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Values", &[])
+                .expect("Series.Values after set"),
+            OmValue::Text("=Sheet1!$B$1:$B$3".to_string())
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Formula", &[])
+                    .expect("Series.Formula after setters")
+            ),
+            "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1)"
         );
     }
 
