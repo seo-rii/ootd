@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Write};
 
 use excel_model::{
-    CellData, ChartCacheKind, ChartCacheSnapshot, ChartModel, ChartObjectModel, ChartSheetBinding,
-    ChartSourceExpr, ChartText, ChartType, DefinedNameTable, DrawingModel, DrawingObjectModel,
-    LegendModel, SeriesModel, WorkbookState, WorksheetData,
+    AxisModel, CellData, ChartCacheKind, ChartCacheSnapshot, ChartModel, ChartObjectModel,
+    ChartSheetBinding, ChartSourceExpr, ChartText, ChartType, DefinedNameTable, DrawingModel,
+    DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
 };
 use office_common::{
     AbsoluteAnchor, CellError, CellMarker, CellValue, ChartId, ChartObjectId, DefinedName,
@@ -631,6 +631,7 @@ pub struct ChartPartSummary {
     pub chart_type_names: Vec<String>,
     pub title_text: Option<String>,
     pub has_legend: bool,
+    pub axis_ids: Vec<String>,
     pub series: Vec<ChartSeriesSummary>,
     pub formula_refs: Vec<String>,
     pub has_extension_list: bool,
@@ -2578,7 +2579,13 @@ fn build_chart_model_overlay(
                     legend: summary
                         .filter(|summary| summary.has_legend)
                         .map(|_| LegendModel { visible: true }),
-                    axes: Vec::new(),
+                    axes: summary
+                        .into_iter()
+                        .flat_map(|summary| summary.axis_ids.iter())
+                        .map(|axis_id| AxisModel {
+                            raw_id: Some(axis_id.clone()),
+                        })
+                        .collect(),
                     raw_part_uri: Some(chart_part_uri.clone()),
                     dirty: false,
                 },
@@ -14681,6 +14688,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut title_text = None::<String>;
     let mut title_text_depth = 0usize;
     let mut has_legend = false;
+    let mut axis_ids = Vec::new();
     let mut series = Vec::new();
     let mut formula_refs = Vec::new();
     let mut has_extension_list = false;
@@ -14714,6 +14722,22 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         }
         Ok(None)
     };
+
+    let parse_string_val_attr =
+        |element: &BytesStart<'_>, reader: &Reader<Cursor<&[u8]>>| -> OmResult<Option<String>> {
+            for attr in element.attributes() {
+                let attr = attr.map_err(xml_error)?;
+                if attr.key.as_ref() != b"val" {
+                    continue;
+                }
+                return Ok(Some(
+                    attr.decode_and_unescape_value(reader.decoder())
+                        .map_err(xml_error)?
+                        .into_owned(),
+                ));
+            }
+            Ok(None)
+        };
 
     let detect_series_formula_slot = |path: &[String]| -> Option<ChartSeriesFormulaSlot> {
         let series_position = path.iter().rposition(|name| name == "ser")?;
@@ -14756,6 +14780,16 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
                 if local_name == b"legend" {
                     has_legend = true;
+                }
+                if local_name == b"axId"
+                    && matches!(
+                        element_path.last().map(String::as_str),
+                        Some("catAx" | "valAx" | "dateAx" | "serAx")
+                    )
+                    && let Some(axis_id) = parse_string_val_attr(&element, &reader)?
+                    && axis_ids.iter().all(|existing| existing != &axis_id)
+                {
+                    axis_ids.push(axis_id);
                 }
                 if local_name == b"ser" && active_series.is_none() {
                     active_series = Some(ChartSeriesSummary::default());
@@ -14815,6 +14849,16 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
                 if local_name == b"legend" {
                     has_legend = true;
+                }
+                if local_name == b"axId"
+                    && matches!(
+                        element_path.last().map(String::as_str),
+                        Some("catAx" | "valAx" | "dateAx" | "serAx")
+                    )
+                    && let Some(axis_id) = parse_string_val_attr(&element, &reader)?
+                    && axis_ids.iter().all(|existing| existing != &axis_id)
+                {
+                    axis_ids.push(axis_id);
                 }
                 if local_name == b"order"
                     && let Some(active_series) = active_series.as_mut()
@@ -14948,6 +14992,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         chart_type_names,
         title_text: title_text.filter(|text| !text.is_empty()),
         has_legend,
+        axis_ids,
         series,
         formula_refs,
         has_extension_list,
@@ -18870,6 +18915,8 @@ mod tests {
           <c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f><c:numCache><c:ptCount val="3"/></c:numCache></c:numRef></c:val>
         </c:ser>
       </c:barChart>
+      <c:catAx><c:axId val="10"/></c:catAx>
+      <c:valAx><c:axId val="20"/></c:valAx>
     </c:plotArea>
     <c:legend><c:legendPos val="r"/></c:legend>
   </c:chart>
@@ -18986,6 +19033,10 @@ mod tests {
         assert_eq!(chart_summary.title_text.as_deref(), Some("Revenue Trend"));
         assert!(chart_summary.has_legend);
         assert_eq!(
+            chart_summary.axis_ids,
+            vec!["10".to_string(), "20".to_string()]
+        );
+        assert_eq!(
             chart_summary.formula_refs,
             vec![
                 "Sheet1!$C$1".to_string(),
@@ -19065,6 +19116,14 @@ mod tests {
             "Revenue Trend"
         );
         assert!(chart_model.legend.as_ref().expect("chart legend").visible);
+        assert_eq!(
+            chart_model
+                .axes
+                .iter()
+                .map(|axis| axis.raw_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("10"), Some("20")]
+        );
         assert_eq!(
             chart_model.raw_part_uri.as_deref(),
             Some("xl/charts/chart1.xml")
