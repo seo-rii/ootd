@@ -2834,17 +2834,102 @@ impl ExcelRuntime {
                         "Series.{member} does not accept index arguments"
                     )));
                 }
+                macro_rules! resolved_chart_source_target {
+                    ($raw_text:expr) => {{
+                        let source_reference = $raw_text.trim();
+                        let mut resolved = None;
+                        if let Ok(parts) = split_reference_union_text(source_reference) {
+                            let mut areas = Vec::with_capacity(parts.len());
+                            let mut parse_failed = false;
+                            for part in parts {
+                                let Some((sheet_qualifier, a1_reference)) = part.rsplit_once('!')
+                                else {
+                                    parse_failed = true;
+                                    break;
+                                };
+                                let sheet_qualifier = sheet_qualifier.trim();
+                                let sheet_name = if sheet_qualifier.starts_with('\'') {
+                                    if !sheet_qualifier.ends_with('\'') || sheet_qualifier.len() < 2
+                                    {
+                                        parse_failed = true;
+                                        break;
+                                    }
+                                    sheet_qualifier[1..sheet_qualifier.len() - 1].replace("''", "'")
+                                } else {
+                                    if sheet_qualifier.contains('\'') {
+                                        parse_failed = true;
+                                        break;
+                                    }
+                                    sheet_qualifier.to_string()
+                                };
+                                let (source_workbook, source_sheet_name) = match self
+                                    .resolve_application_reference_sheet_qualifier(
+                                        workbook,
+                                        &sheet_name,
+                                    ) {
+                                    Ok(resolved) => resolved,
+                                    Err(_) => {
+                                        parse_failed = true;
+                                        break;
+                                    }
+                                };
+                                if source_workbook != workbook {
+                                    parse_failed = true;
+                                    break;
+                                }
+                                let Some(source_sheet_name) = source_sheet_name else {
+                                    parse_failed = true;
+                                    break;
+                                };
+                                let sheet_id = match self.runtime_workbook(workbook) {
+                                    Ok(runtime) => runtime
+                                        .loaded
+                                        .state
+                                        .worksheets
+                                        .iter()
+                                        .find(|worksheet| {
+                                            worksheet.name.eq_ignore_ascii_case(&source_sheet_name)
+                                        })
+                                        .map(|worksheet| worksheet.id),
+                                    Err(_) => None,
+                                };
+                                let Some(sheet_id) = sheet_id else {
+                                    parse_failed = true;
+                                    break;
+                                };
+                                let Ok(rect) = parse_rect_a1(a1_reference) else {
+                                    parse_failed = true;
+                                    break;
+                                };
+                                let Ok(area) = RangeArea::new(SheetScope::Single(sheet_id), rect)
+                                else {
+                                    parse_failed = true;
+                                    break;
+                                };
+                                areas.push(area);
+                            }
+                            if !parse_failed
+                                && let Ok(workbook_model) = self.workbook_model(workbook)
+                                && let Ok(range) = RangeSet::new(workbook_model.id, areas)
+                            {
+                                resolved = Some(ReferenceTarget::Range(range));
+                            }
+                        }
+                        resolved
+                    }};
+                }
                 match member {
                     "Name" | "Values" | "XValues" => {
                         let source = match value {
                             OmValue::Text(text) => {
                                 let raw_text = text.trim_start_matches('=').to_string();
+                                let resolved = resolved_chart_source_target!(raw_text);
                                 Some(ChartSourceExpr {
                                     raw: FormulaSource {
                                         text: raw_text,
                                         is_r1c1: false,
                                     },
-                                    resolved: None,
+                                    resolved,
                                     cache: None,
                                     dirty: true,
                                 })
@@ -2998,21 +3083,30 @@ impl ExcelRuntime {
                                 "Series.Formula plot order must be a positive integer",
                             ));
                         }
-                        let source_arg = |text: &str| {
-                            let text = text.trim();
-                            if text.is_empty() {
-                                None
-                            } else {
-                                Some(ChartSourceExpr {
-                                    raw: FormulaSource {
-                                        text: text.trim_start_matches('=').to_string(),
-                                        is_r1c1: false,
-                                    },
-                                    resolved: None,
-                                    cache: None,
-                                    dirty: true,
-                                })
-                            }
+                        let (name_source, x_values_source, values_source) = {
+                            let source_arg = |text: &str| {
+                                let text = text.trim();
+                                if text.is_empty() {
+                                    None
+                                } else {
+                                    let raw_text = text.trim_start_matches('=').to_string();
+                                    let resolved = resolved_chart_source_target!(raw_text);
+                                    Some(ChartSourceExpr {
+                                        raw: FormulaSource {
+                                            text: raw_text,
+                                            is_r1c1: false,
+                                        },
+                                        resolved,
+                                        cache: None,
+                                        dirty: true,
+                                    })
+                                }
+                            };
+                            (
+                                source_arg(&parts[0]),
+                                source_arg(&parts[1]),
+                                source_arg(&parts[2]),
+                            )
                         };
                         let runtime = self.runtime_workbook_mut(workbook)?;
                         if runtime.read_only {
@@ -3033,9 +3127,9 @@ impl ExcelRuntime {
                         let series = chart.series.get_mut(series_index).ok_or_else(|| {
                             OmError::new(OmErrorCode::NotFound, "series not found")
                         })?;
-                        series.name = source_arg(&parts[0]);
-                        series.x_values = source_arg(&parts[1]);
-                        series.values = source_arg(&parts[2]);
+                        series.name = name_source;
+                        series.x_values = x_values_source;
+                        series.values = values_source;
                         series.order = Some(plot_order - 1);
                         chart.dirty = true;
                         runtime.dirty = true;
@@ -67887,6 +67981,45 @@ mod tests {
             ),
             "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1)"
         );
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after string source setters");
+            let sheet_id = state.worksheets[0].id;
+            let chart = state.charts.values().next().expect("chart model");
+            let values = chart.series[0].values.as_ref().expect("series values");
+            let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
+                panic!("string Series.Values should resolve to a range");
+            };
+            assert_eq!(range.workbook_id(), state.model.id);
+            assert_eq!(range.areas().len(), 1);
+            assert_eq!(range.areas()[0].scope, SheetScope::Single(sheet_id));
+            assert_eq!(
+                range.areas()[0].rect,
+                Rect {
+                    row_first: 1,
+                    row_last: 3,
+                    col_first: 2,
+                    col_last: 2,
+                }
+            );
+        }
+        runtime
+            .dispatch_set(
+                worksheet,
+                "Name",
+                OmValue::Text("Data 2026".to_string()),
+                &[],
+            )
+            .expect("rename sheet after string chart source setters");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Formula", &[])
+                    .expect("Series.Formula after source sheet rename")
+            ),
+            "=SERIES('Data 2026'!$C$1,'Data 2026'!$A$1:$A$3,'Data 2026'!$B$1:$B$3,1)"
+        );
         let saved_with_series = runtime
             .save_workbook(
                 workbook,
@@ -67953,13 +68086,13 @@ mod tests {
             reopened_runtime
                 .dispatch_get(reopened_series, "Values", &[])
                 .expect("reopened Series.Values"),
-            OmValue::Text("=Sheet1!$B$1:$B$3".to_string())
+            OmValue::Text("='Data 2026'!$B$1:$B$3".to_string())
         );
         assert_eq!(
             reopened_runtime
                 .dispatch_get(reopened_series, "XValues", &[])
                 .expect("reopened Series.XValues"),
-            OmValue::Text("=Sheet1!$A$1:$A$3".to_string())
+            OmValue::Text("='Data 2026'!$A$1:$A$3".to_string())
         );
     }
 
