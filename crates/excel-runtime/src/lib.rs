@@ -3268,7 +3268,7 @@ impl ExcelRuntime {
                 "member {member} is not writable for this object handle"
             ))),
             RuntimeObjectKind::Chart { workbook, chart_id } => {
-                if !args.is_empty() {
+                if member != "HasAxis" && !args.is_empty() {
                     return Err(OmError::invalid_argument(format!(
                         "Chart.{member} does not accept index arguments"
                     )));
@@ -3362,6 +3362,111 @@ impl ExcelRuntime {
                             }
                         } else if chart.title.is_some() {
                             chart.title = None;
+                            true
+                        } else {
+                            false
+                        };
+                        if changed {
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "HasAxis" => {
+                        let OmValue::Bool(has_axis) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Chart.HasAxis expects a boolean value",
+                            ));
+                        };
+                        if args.is_empty() || args.len() > 2 {
+                            return Err(OmError::invalid_argument(
+                                "Chart.HasAxis expects axis type and optional axis group",
+                            ));
+                        }
+                        let axis_type = coerce_u32_arg(&args[0], "Chart.HasAxis axis type")? as i32;
+                        if !matches!(axis_type, XL_CATEGORY | XL_VALUE | XL_SERIES_AXIS) {
+                            return Err(OmError::invalid_argument(
+                                "Chart.HasAxis supports category, value, and series axes",
+                            ));
+                        }
+                        let axis_group = args
+                            .get(1)
+                            .map(|value| coerce_u32_arg(value, "Chart.HasAxis axis group"))
+                            .transpose()?
+                            .unwrap_or(XL_PRIMARY);
+                        if !matches!(axis_group, XL_PRIMARY | XL_SECONDARY) {
+                            return Err(OmError::invalid_argument(
+                                "Chart.HasAxis axis group supports xlPrimary and xlSecondary",
+                            ));
+                        }
+                        if axis_group == XL_SECONDARY {
+                            return Err(OmError::unsupported(
+                                "Chart.HasAxis secondary axes are not supported yet",
+                            ));
+                        }
+
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        if matches!(chart.chart_type, ChartType::Pie) && has_axis {
+                            return Err(OmError::unsupported(
+                                "Chart.HasAxis is unavailable for pie charts",
+                            ));
+                        }
+                        let axis_index = chart.axes.iter().position(|axis| match axis_type {
+                            XL_CATEGORY => {
+                                matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date)
+                            }
+                            XL_VALUE => axis.kind == ChartAxisKind::Value,
+                            XL_SERIES_AXIS => axis.kind == ChartAxisKind::Series,
+                            _ => false,
+                        });
+                        let changed = if has_axis {
+                            if axis_index.is_some() {
+                                false
+                            } else {
+                                let preferred_axis_id = match axis_type {
+                                    XL_CATEGORY => 10,
+                                    XL_VALUE => 20,
+                                    XL_SERIES_AXIS => 30,
+                                    _ => unreachable!("axis type validated above"),
+                                };
+                                let used_axis_ids = chart
+                                    .axes
+                                    .iter()
+                                    .filter_map(|axis| axis.raw_id.as_deref())
+                                    .collect::<BTreeSet<_>>();
+                                let mut axis_id = preferred_axis_id;
+                                while used_axis_ids.contains(axis_id.to_string().as_str()) {
+                                    axis_id += 10;
+                                }
+                                chart.axes.push(AxisModel {
+                                    raw_id: Some(axis_id.to_string()),
+                                    kind: match axis_type {
+                                        XL_CATEGORY => ChartAxisKind::Category,
+                                        XL_VALUE => ChartAxisKind::Value,
+                                        XL_SERIES_AXIS => ChartAxisKind::Series,
+                                        _ => unreachable!("axis type validated above"),
+                                    },
+                                    title: None,
+                                });
+                                true
+                            }
+                        } else if let Some(axis_index) = axis_index {
+                            chart.axes.remove(axis_index);
                             true
                         } else {
                             false
@@ -69679,6 +69784,122 @@ mod tests {
                 .expect_err("Chart.Axes(xlValue, xlSecondary)")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+
+        runtime
+            .dispatch_set(
+                chart,
+                "HasAxis",
+                OmValue::Bool(false),
+                &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+            )
+            .expect("clear Chart.HasAxis(xlCategory)");
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "HasAxis",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.HasAxis(xlCategory) after clear"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect_err("Chart.Axes(xlCategory) after clear")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "HasAxis",
+                OmValue::Bool(true),
+                &[
+                    OmValue::Number(f64::from(super::XL_CATEGORY)),
+                    OmValue::Number(f64::from(super::XL_PRIMARY)),
+                ],
+            )
+            .expect("restore Chart.HasAxis(xlCategory, xlPrimary)");
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "HasAxis",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.HasAxis(xlCategory) after restore"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    chart,
+                    "HasAxis",
+                    OmValue::Bool(true),
+                    &[
+                        OmValue::Number(f64::from(super::XL_VALUE)),
+                        OmValue::Number(f64::from(super::XL_SECONDARY)),
+                    ],
+                )
+                .expect_err("setting secondary Chart.HasAxis should fail")
+                .code,
+            OmErrorCode::Unsupported
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after Chart.HasAxis setter");
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after Chart.HasAxis setter");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "HasAxis",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("reopened Chart.HasAxis(xlCategory)"),
+            OmValue::Bool(true)
         );
     }
 
