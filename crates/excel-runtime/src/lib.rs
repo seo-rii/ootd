@@ -3351,32 +3351,34 @@ impl ExcelRuntime {
                                 ));
                             }
                         };
-                        let runtime = self.runtime_workbook_mut(workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
-                        }
-                        let chart =
-                            runtime
-                                .loaded
-                                .state
-                                .charts
-                                .get_mut(&chart_id)
-                                .ok_or_else(|| {
-                                    OmError::new(OmErrorCode::NotFound, "chart not found")
-                                })?;
-                        if chart.chart_type != chart_type {
-                            let chart_type_has_axes = !matches!(chart_type, ChartType::Pie);
-                            chart.chart_type = chart_type;
-                            if chart_type_has_axes && chart.axes.is_empty() {
-                                chart.axes = default_chart_axes();
-                            } else if !chart_type_has_axes && !chart.axes.is_empty() {
-                                chart.axes.clear();
+                        let mut stale_axis_handles = false;
+                        {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
                             }
-                            chart.dirty = true;
-                            runtime.dirty = true;
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            if chart.chart_type != chart_type {
+                                let chart_type_has_axes = !matches!(chart_type, ChartType::Pie);
+                                chart.chart_type = chart_type;
+                                if chart_type_has_axes && chart.axes.is_empty() {
+                                    chart.axes = default_chart_axes();
+                                    stale_axis_handles = true;
+                                } else if !chart_type_has_axes && !chart.axes.is_empty() {
+                                    chart.axes.clear();
+                                    stale_axis_handles = true;
+                                }
+                                chart.dirty = true;
+                                runtime.dirty = true;
+                            }
+                        }
+                        if stale_axis_handles {
+                            self.stale_axis_handles_for_chart(workbook, chart_id);
                         }
                         Ok(())
                     }
@@ -3456,75 +3458,76 @@ impl ExcelRuntime {
                             ));
                         }
 
-                        let runtime = self.runtime_workbook_mut(workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
-                        }
-                        let chart =
-                            runtime
-                                .loaded
-                                .state
-                                .charts
-                                .get_mut(&chart_id)
-                                .ok_or_else(|| {
-                                    OmError::new(OmErrorCode::NotFound, "chart not found")
-                                })?;
-                        if matches!(chart.chart_type, ChartType::Pie) && has_axis {
-                            return Err(OmError::unsupported(
-                                "Chart.HasAxis is unavailable for pie charts",
-                            ));
-                        }
-                        let axis_index = chart.axes.iter().position(|axis| match axis_type {
-                            XL_CATEGORY => {
-                                matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date)
+                        let changed = {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
                             }
-                            XL_VALUE => axis.kind == ChartAxisKind::Value,
-                            XL_SERIES_AXIS => axis.kind == ChartAxisKind::Series,
-                            _ => false,
-                        });
-                        let changed = if has_axis {
-                            if axis_index.is_some() {
-                                false
-                            } else {
-                                let preferred_axis_id = match axis_type {
-                                    XL_CATEGORY => 10,
-                                    XL_VALUE => 20,
-                                    XL_SERIES_AXIS => 30,
-                                    _ => unreachable!("axis type validated above"),
-                                };
-                                let used_axis_ids = chart
-                                    .axes
-                                    .iter()
-                                    .filter_map(|axis| axis.raw_id.as_deref())
-                                    .collect::<BTreeSet<_>>();
-                                let mut axis_id = preferred_axis_id;
-                                while used_axis_ids.contains(axis_id.to_string().as_str()) {
-                                    axis_id += 10;
-                                }
-                                chart.axes.push(AxisModel {
-                                    raw_id: Some(axis_id.to_string()),
-                                    kind: match axis_type {
-                                        XL_CATEGORY => ChartAxisKind::Category,
-                                        XL_VALUE => ChartAxisKind::Value,
-                                        XL_SERIES_AXIS => ChartAxisKind::Series,
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            if matches!(chart.chart_type, ChartType::Pie) && has_axis {
+                                return Err(OmError::unsupported(
+                                    "Chart.HasAxis is unavailable for pie charts",
+                                ));
+                            }
+                            let axis_index = chart.axes.iter().position(|axis| match axis_type {
+                                XL_CATEGORY => matches!(
+                                    axis.kind,
+                                    ChartAxisKind::Category | ChartAxisKind::Date
+                                ),
+                                XL_VALUE => axis.kind == ChartAxisKind::Value,
+                                XL_SERIES_AXIS => axis.kind == ChartAxisKind::Series,
+                                _ => false,
+                            });
+                            let changed = if has_axis {
+                                if axis_index.is_some() {
+                                    false
+                                } else {
+                                    let preferred_axis_id = match axis_type {
+                                        XL_CATEGORY => 10,
+                                        XL_VALUE => 20,
+                                        XL_SERIES_AXIS => 30,
                                         _ => unreachable!("axis type validated above"),
-                                    },
-                                    title: None,
-                                });
+                                    };
+                                    let used_axis_ids = chart
+                                        .axes
+                                        .iter()
+                                        .filter_map(|axis| axis.raw_id.as_deref())
+                                        .collect::<BTreeSet<_>>();
+                                    let mut axis_id = preferred_axis_id;
+                                    while used_axis_ids.contains(axis_id.to_string().as_str()) {
+                                        axis_id += 10;
+                                    }
+                                    chart.axes.push(AxisModel {
+                                        raw_id: Some(axis_id.to_string()),
+                                        kind: match axis_type {
+                                            XL_CATEGORY => ChartAxisKind::Category,
+                                            XL_VALUE => ChartAxisKind::Value,
+                                            XL_SERIES_AXIS => ChartAxisKind::Series,
+                                            _ => unreachable!("axis type validated above"),
+                                        },
+                                        title: None,
+                                    });
+                                    true
+                                }
+                            } else if let Some(axis_index) = axis_index {
+                                chart.axes.remove(axis_index);
                                 true
+                            } else {
+                                false
+                            };
+                            if changed {
+                                chart.dirty = true;
+                                runtime.dirty = true;
                             }
-                        } else if let Some(axis_index) = axis_index {
-                            chart.axes.remove(axis_index);
-                            true
-                        } else {
-                            false
+                            changed
                         };
                         if changed {
-                            chart.dirty = true;
-                            runtime.dirty = true;
+                            self.stale_axis_handles_for_chart(workbook, chart_id);
                         }
                         Ok(())
                     }
@@ -7194,35 +7197,7 @@ impl ExcelRuntime {
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
-                        let stale_object_ids = self
-                            .objects
-                            .iter()
-                            .filter_map(|(&object_id, object)| match object {
-                                RuntimeObjectKind::Axes {
-                                    workbook: object_workbook,
-                                    chart_id: object_chart_id,
-                                }
-                                | RuntimeObjectKind::Axis {
-                                    workbook: object_workbook,
-                                    chart_id: object_chart_id,
-                                    ..
-                                }
-                                | RuntimeObjectKind::AxisTitle {
-                                    workbook: object_workbook,
-                                    chart_id: object_chart_id,
-                                    ..
-                                } if *object_workbook == workbook
-                                    && *object_chart_id == chart_id =>
-                                {
-                                    Some(object_id)
-                                }
-                                _ => None,
-                            })
-                            .collect::<Vec<_>>();
-                        for object_id in stale_object_ids {
-                            self.objects.remove(&object_id);
-                            self.stale_objects.insert(object_id);
-                        }
+                        self.stale_axis_handles_for_chart(workbook, chart_id);
                         Ok(OmValue::Empty)
                     }
                     _ => Err(OmError::unsupported(format!(
@@ -14181,6 +14156,36 @@ impl ExcelRuntime {
                 XL_SERIES_AXIS => axis.kind == ChartAxisKind::Series,
                 _ => false,
             }))
+    }
+
+    fn stale_axis_handles_for_chart(&mut self, workbook: WorkbookHandle, chart_id: ChartId) {
+        let stale_object_ids = self
+            .objects
+            .iter()
+            .filter_map(|(&object_id, object)| match object {
+                RuntimeObjectKind::Axes {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                }
+                | RuntimeObjectKind::Axis {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    ..
+                }
+                | RuntimeObjectKind::AxisTitle {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    ..
+                } if *object_workbook == workbook && *object_chart_id == chart_id => {
+                    Some(object_id)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for object_id in stale_object_ids {
+            self.objects.remove(&object_id);
+            self.stale_objects.insert(object_id);
+        }
     }
 
     fn chart_object_geometry_value(chart_object: &ChartObjectModel, member: &str) -> OmResult<f64> {
@@ -70804,6 +70809,151 @@ mod tests {
                 )
                 .expect("reopened Chart.HasAxis(xlCategory)"),
             OmValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn chart_axis_handles_stale_after_chart_level_axis_mutations() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+
+        let axes = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Axes", &[])
+                .expect("Chart.Axes"),
+        );
+        let value_axis = expect_object_handle(
+            runtime
+                .dispatch_invoke(axes, "Item", &[OmValue::Number(f64::from(super::XL_VALUE))])
+                .expect("Axes.Item(xlValue)"),
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "HasAxis",
+                OmValue::Bool(false),
+                &[OmValue::Number(f64::from(super::XL_VALUE))],
+            )
+            .expect("clear Chart.HasAxis(xlValue)");
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "Type", &[])
+                .expect_err("axis handle should be stale after Chart.HasAxis false")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(axes, "Count", &[])
+                .expect_err("axes handle should be stale after Chart.HasAxis false")
+                .code,
+            OmErrorCode::InvalidState
+        );
+
+        let axes_after_has_axis = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Axes", &[])
+                .expect("Chart.Axes after Chart.HasAxis false"),
+        );
+        let category_axis = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    axes_after_has_axis,
+                    "Item",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Axes.Item(xlCategory)"),
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_PIE)),
+                &[],
+            )
+            .expect("set Chart.ChartType to pie");
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis, "Type", &[])
+                .expect_err("axis handle should be stale after ChartType clears axes")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(axes_after_has_axis, "Count", &[])
+                .expect_err("axes handle should be stale after ChartType clears axes")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        let pie_axes = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Axes", &[])
+                .expect("Chart.Axes after pie ChartType"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(pie_axes, "Count", &[])
+                    .expect("Axes.Count after pie ChartType")
+            ),
+            0.0
+        );
+
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_LINE)),
+                &[],
+            )
+            .expect("set Chart.ChartType back to line");
+        assert_eq!(
+            runtime
+                .dispatch_get(pie_axes, "Count", &[])
+                .expect_err("axes handle should be stale after ChartType recreates axes")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        let restored_axes = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Axes", &[])
+                .expect("Chart.Axes after line ChartType"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(restored_axes, "Count", &[])
+                    .expect("Axes.Count after line ChartType")
+            ),
+            2.0
         );
     }
 
