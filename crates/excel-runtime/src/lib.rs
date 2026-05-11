@@ -13463,17 +13463,28 @@ impl ExcelRuntime {
         {
             return Err(OmError::new(OmErrorCode::NotFound, "unknown worksheet"));
         }
-        Ok(state
+        let mut entries = state
             .drawings
             .values()
             .filter(|drawing| drawing.host_sheet_id == sheet_id)
             .flat_map(|drawing| drawing.objects.iter())
             .filter_map(|object| match object {
-                DrawingObjectModel::ChartFrame(chart_object) => {
-                    Some((chart_object.id, chart_object.name.clone()))
-                }
+                DrawingObjectModel::ChartFrame(chart_object) => Some((
+                    chart_object.z_order.unwrap_or(u32::MAX),
+                    chart_object.id,
+                    chart_object.name.clone(),
+                )),
                 DrawingObjectModel::UnsupportedRaw { .. } => None,
             })
+            .enumerate()
+            .map(|(fallback_index, (z_order, chart_object_id, name))| {
+                (z_order, fallback_index, chart_object_id, name)
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|(z_order, fallback_index, _, _)| (*z_order, *fallback_index));
+        Ok(entries
+            .into_iter()
+            .map(|(_, _, chart_object_id, name)| (chart_object_id, name))
             .collect())
     }
 
@@ -37950,6 +37961,7 @@ mod tests {
         XL_THOUSANDS_SEPARATOR, XL_TIME_SEPARATOR, XL_UPPER_CASE_COLUMN_LETTER,
         XL_UPPER_CASE_ROW_LETTER, blank_workbook_bytes, formula_complex_from_text, supports_format,
     };
+    use excel_model::DrawingObjectModel;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -70660,6 +70672,149 @@ mod tests {
                 runtime
                     .dispatch_get(cost_chart, "Index", &[])
                     .expect("Cost Chart Index")
+            ),
+            2.0
+        );
+    }
+
+    #[test]
+    fn chartobjects_item_and_index_follow_z_order() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let higher_z_chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(10.0),
+                        OmValue::Number(20.0),
+                        OmValue::Number(200.0),
+                        OmValue::Number(120.0),
+                    ],
+                )
+                .expect("higher z-order ChartObjects.Add"),
+        );
+        let lower_z_chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(30.0),
+                        OmValue::Number(40.0),
+                        OmValue::Number(200.0),
+                        OmValue::Number(120.0),
+                    ],
+                )
+                .expect("lower z-order ChartObjects.Add"),
+        );
+        runtime
+            .dispatch_set(
+                higher_z_chart,
+                "Name",
+                OmValue::Text("Z Ten Chart".to_string()),
+                &[],
+            )
+            .expect("set higher z-order ChartObject.Name");
+        runtime
+            .dispatch_set(
+                lower_z_chart,
+                "Name",
+                OmValue::Text("Z One Chart".to_string()),
+                &[],
+            )
+            .expect("set lower z-order ChartObject.Name");
+
+        let mut updated_chart_objects = 0usize;
+        for drawing in runtime
+            .runtime_workbook_mut(workbook)
+            .expect("runtime workbook")
+            .loaded
+            .state
+            .drawings
+            .values_mut()
+        {
+            for object in &mut drawing.objects {
+                let DrawingObjectModel::ChartFrame(chart_object) = object else {
+                    continue;
+                };
+                match chart_object.name.as_str() {
+                    "Z Ten Chart" => {
+                        chart_object.z_order = Some(10);
+                        updated_chart_objects += 1;
+                    }
+                    "Z One Chart" => {
+                        chart_object.z_order = Some(1);
+                        updated_chart_objects += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(updated_chart_objects, 2);
+
+        let first_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(first_chart_object, "Name", &[])
+                    .expect("first ChartObject.Name")
+            ),
+            "Z One Chart"
+        );
+        let second_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(2.0)])
+                .expect("ChartObjects.Item(2)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(second_chart_object, "Name", &[])
+                    .expect("second ChartObject.Name")
+            ),
+            "Z Ten Chart"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(lower_z_chart, "Index", &[])
+                    .expect("lower z-order ChartObject.Index")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(higher_z_chart, "Index", &[])
+                    .expect("higher z-order ChartObject.Index")
             ),
             2.0
         );
