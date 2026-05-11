@@ -3193,6 +3193,16 @@ impl ExcelRuntime {
                                 .ok_or_else(|| {
                                     OmError::new(OmErrorCode::NotFound, "chart not found")
                                 })?;
+                        let plot_order_index = usize::try_from(plot_order).map_err(|_| {
+                            OmError::invalid_argument(
+                                "Series.Formula plot order index is out of bounds",
+                            )
+                        })?;
+                        if plot_order_index > chart.series.len() {
+                            return Err(OmError::invalid_argument(
+                                "Series.Formula plot order index is out of bounds",
+                            ));
+                        }
                         let series = chart.series.get_mut(series_index).ok_or_else(|| {
                             OmError::new(OmErrorCode::NotFound, "series not found")
                         })?;
@@ -72452,6 +72462,28 @@ mod tests {
                 .dispatch_get(series, "Values", &[])
                 .expect("Series.Values after Formula"),
             OmValue::Text("=Sheet1!$B$1:$B$3".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    series,
+                    "Formula",
+                    OmValue::Text(
+                        "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,2)".to_string(),
+                    ),
+                    &[],
+                )
+                .expect_err("Series.Formula should reject out-of-bounds plot order")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Formula", &[])
+                    .expect("Series.Formula after rejected plot order")
+            ),
+            "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1)"
         );
 
         let saved = runtime
