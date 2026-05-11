@@ -2881,6 +2881,30 @@ impl ExcelRuntime {
                     )
                 };
                 match member {
+                    "AxisGroup" => {
+                        let OmValue::Number(number) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Series.AxisGroup expects an XlAxisGroup numeric value",
+                            ));
+                        };
+                        if !number.is_finite() || number.fract() != 0.0 {
+                            return Err(OmError::invalid_argument(
+                                "Series.AxisGroup expects an integral XlAxisGroup value",
+                            ));
+                        }
+                        match number as u32 {
+                            XL_PRIMARY => {
+                                self.series_model(workbook, chart_id, series_index)?;
+                                Ok(())
+                            }
+                            XL_SECONDARY => Err(OmError::unsupported(
+                                "Series.AxisGroup secondary axes are not supported yet",
+                            )),
+                            _ => Err(OmError::invalid_argument(
+                                "Series.AxisGroup supports xlPrimary and xlSecondary",
+                            )),
+                        }
+                    }
                     "Name" | "Values" | "XValues" => {
                         let source = match value {
                             OmValue::Text(text) => {
@@ -7219,6 +7243,7 @@ impl ExcelRuntime {
                             | "Values"
                             | "XValues"
                             | "Formula"
+                            | "AxisGroup"
                             | "PlotOrder"
                             | "Application"
                             | "Parent"
@@ -9897,6 +9922,7 @@ impl ExcelRuntime {
                 .map(OmValue::Text)
                 .unwrap_or(OmValue::Empty)),
             "Formula" => Ok(OmValue::Text(series_formula_text(series, series_index))),
+            "AxisGroup" => Ok(OmValue::Number(f64::from(XL_PRIMARY))),
             "PlotOrder" => Ok(OmValue::Number(f64::from(series_plot_order(
                 series,
                 series_index,
@@ -67894,6 +67920,14 @@ mod tests {
             ),
             1.0
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series, "AxisGroup", &[])
+                    .expect("Series.AxisGroup")
+            ),
+            f64::from(super::XL_PRIMARY)
+        );
         let series_by_chart_property = expect_object_handle(
             runtime
                 .dispatch_get(chart, "SeriesCollection", &[OmValue::Number(1.0)])
@@ -69885,6 +69919,41 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
+                    .dispatch_get(first_series, "AxisGroup", &[])
+                    .expect("first Series.AxisGroup")
+            ),
+            f64::from(super::XL_PRIMARY)
+        );
+        runtime
+            .dispatch_set(
+                first_series,
+                "AxisGroup",
+                OmValue::Number(f64::from(super::XL_PRIMARY)),
+                &[],
+            )
+            .expect("set first Series.AxisGroup xlPrimary");
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    first_series,
+                    "AxisGroup",
+                    OmValue::Number(f64::from(super::XL_SECONDARY)),
+                    &[],
+                )
+                .expect_err("secondary Series.AxisGroup should be unsupported")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(first_series, "AxisGroup", OmValue::Number(3.0), &[])
+                .expect_err("invalid Series.AxisGroup should fail")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            expect_number(
+                runtime
                     .dispatch_get(first_series, "PlotOrder", &[])
                     .expect("first Series.PlotOrder")
             ),
@@ -69987,6 +70056,14 @@ mod tests {
                     .expect("reopened first Series.PlotOrder")
             ),
             2.0
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_first_series, "AxisGroup", &[])
+                    .expect("reopened first Series.AxisGroup")
+            ),
+            f64::from(super::XL_PRIMARY)
         );
         assert_eq!(
             expect_number(
