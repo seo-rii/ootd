@@ -6546,14 +6546,15 @@ impl ExcelRuntime {
                 ))),
             },
             RuntimeObjectKind::Chart { workbook, chart_id } => match member {
-                "Activate" => {
+                "Activate" | "Select" => {
                     if !args.is_empty() {
-                        return Err(OmError::invalid_argument(
-                            "Chart.Activate does not accept arguments",
-                        ));
+                        return Err(OmError::invalid_argument(format!(
+                            "Chart.{member} does not accept arguments"
+                        )));
                     }
                     if let Some(sheet_id) = self.chart_sheet_id_for_chart(workbook, chart_id)? {
-                        self.ensure_worksheet_visible(workbook, sheet_id, "Chart.Activate")?;
+                        let operation = format!("Chart.{member}");
+                        self.ensure_worksheet_visible(workbook, sheet_id, operation.as_str())?;
                         self.set_selection(workbook, sheet_id, Rect::single_cell(1, 1));
                         return Ok(OmValue::Empty);
                     };
@@ -6578,7 +6579,8 @@ impl ExcelRuntime {
                     else {
                         return Err(OmError::new(OmErrorCode::NotFound, "chart not found"));
                     };
-                    self.ensure_worksheet_visible(workbook, sheet_id, "Chart.Activate")?;
+                    let operation = format!("Chart.{member}");
+                    self.ensure_worksheet_visible(workbook, sheet_id, operation.as_str())?;
                     self.set_selection(workbook, sheet_id, Rect::single_cell(1, 1));
                     self.active_chart = Some((workbook, chart_id));
                     Ok(OmValue::Empty)
@@ -6871,6 +6873,8 @@ impl ExcelRuntime {
                             | "Height"
                             | "Application"
                             | "Parent"
+                            | "Activate"
+                            | "Select"
                     )
                     | (
                         "Chart",
@@ -6886,6 +6890,7 @@ impl ExcelRuntime {
                             | "Application"
                             | "Parent"
                             | "Activate"
+                            | "Select"
                             | "Delete"
                     )
                     | ("ChartArea", "Application" | "Parent")
@@ -66376,6 +66381,32 @@ mod tests {
         );
 
         runtime
+            .dispatch_invoke(chart, "Select", &[])
+            .expect("Chart.Select");
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveChart", &[])
+                .expect("ActiveChart after Chart.Select"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_chart, "Name", &[])
+                    .expect("ActiveChart.Name after Chart.Select")
+            ),
+            "Chart1"
+        );
+        runtime
+            .dispatch_invoke(worksheet, "Activate", &[])
+            .expect("Worksheet.Activate clears Chart.Select");
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "ActiveChart", &[])
+                .expect("ActiveChart after Worksheet.Activate following Chart.Select"),
+            OmValue::Empty
+        );
+
+        runtime
             .dispatch_invoke(chart, "Activate", &[])
             .expect("Chart.Activate");
         let active_chart = expect_object_handle(
@@ -66543,6 +66574,32 @@ mod tests {
                 runtime
                     .dispatch_get(active_chart, "Name", &[])
                     .expect("ActiveChart.Name after embedded Chart.Activate")
+            ),
+            "Embedded Revenue Chart"
+        );
+        runtime
+            .dispatch_invoke(worksheet, "Activate", &[])
+            .expect("Worksheet.Activate clears embedded Chart.Activate");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "Select", &[OmValue::Bool(true)])
+                .expect_err("Chart.Select rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        runtime
+            .dispatch_invoke(chart, "Select", &[])
+            .expect("embedded Chart.Select");
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                .expect("ActiveChart after embedded Chart.Select"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_chart, "Name", &[])
+                    .expect("ActiveChart.Name after embedded Chart.Select")
             ),
             "Embedded Revenue Chart"
         );
