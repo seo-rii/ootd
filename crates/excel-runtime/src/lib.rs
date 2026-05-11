@@ -7056,6 +7056,10 @@ impl ExcelRuntime {
                     runtime.dirty = true;
                     Ok(OmValue::Empty)
                 }
+                "Axes" => self.dispatch_get_chart(workbook, chart_id, "Axes", args),
+                "SeriesCollection" | "FullSeriesCollection" => {
+                    self.dispatch_get_chart(workbook, chart_id, member, args)
+                }
                 _ => Err(OmError::unsupported(format!(
                     "Chart.{member} is not implemented as a method"
                 ))),
@@ -7427,6 +7431,7 @@ impl ExcelRuntime {
                             | "Legend"
                             | "Axes"
                             | "SeriesCollection"
+                            | "FullSeriesCollection"
                             | "Application"
                             | "Parent"
                             | "Activate"
@@ -9682,6 +9687,14 @@ impl ExcelRuntime {
                 }
             }
             "SeriesCollection" => {
+                let handle = self.register_series_collection_handle(workbook, chart_id);
+                if args.is_empty() {
+                    Ok(OmValue::Object(handle))
+                } else {
+                    self.dispatch_invoke(handle, "Item", args)
+                }
+            }
+            "FullSeriesCollection" => {
                 let handle = self.register_series_collection_handle(workbook, chart_id);
                 if args.is_empty() {
                     Ok(OmValue::Object(handle))
@@ -68281,6 +68294,75 @@ mod tests {
                     .expect("Series.Values from Chart.SeriesCollection(1)")
             ),
             "=Sheet1!$A$1:$C$1"
+        );
+        let series_by_chart_method = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart, "SeriesCollection", &[OmValue::Number(1.0)])
+                .expect("Chart.SeriesCollection(1) method"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series_by_chart_method, "Values", &[])
+                    .expect("Series.Values from Chart.SeriesCollection method")
+            ),
+            "=Sheet1!$A$1:$C$1"
+        );
+        let full_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "FullSeriesCollection", &[])
+                .expect("Chart.FullSeriesCollection"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(full_series_collection, "Count", &[])
+                    .expect("FullSeriesCollection.Count")
+            ),
+            1.0
+        );
+        let full_series_by_chart_property = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "FullSeriesCollection", &[OmValue::Number(1.0)])
+                .expect("Chart.FullSeriesCollection(1)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(full_series_by_chart_property, "Values", &[])
+                    .expect("Series.Values from Chart.FullSeriesCollection(1)")
+            ),
+            "=Sheet1!$A$1:$C$1"
+        );
+        let full_series_by_chart_method = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart, "FullSeriesCollection", &[OmValue::Number(1.0)])
+                .expect("Chart.FullSeriesCollection(1) method"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(full_series_by_chart_method, "Values", &[])
+                    .expect("Series.Values from Chart.FullSeriesCollection method")
+            ),
+            "=Sheet1!$A$1:$C$1"
+        );
+        let axis_by_chart_method = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.Axes(xlValue) method"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(axis_by_chart_method, "Type", &[])
+                    .expect("Axis.Type from Chart.Axes method")
+            ),
+            f64::from(super::XL_VALUE)
         );
     }
 
