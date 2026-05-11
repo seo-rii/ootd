@@ -13579,7 +13579,7 @@ impl ExcelRuntime {
         self.chart_model(workbook, chart_object.chart_id)?;
         let raw_binding = chart_object.raw_binding.clone();
 
-        {
+        let chart_was_removed = {
             let runtime = self.runtime_workbook_mut(workbook)?;
             if runtime.read_only {
                 return Err(OmError::new(
@@ -13631,6 +13631,7 @@ impl ExcelRuntime {
             };
             let mut removed_chart_part_uri = None;
             let mut removed_chart_support_part_uris = Vec::<String>::new();
+            let mut chart_was_removed = false;
             let chart_still_referenced = runtime
                 .loaded
                 .state
@@ -13649,6 +13650,7 @@ impl ExcelRuntime {
                 && let Some(removed_chart) =
                     runtime.loaded.state.charts.remove(&chart_object.chart_id)
             {
+                chart_was_removed = true;
                 removed_chart_part_uri = removed_chart.raw_part_uri;
             }
 
@@ -14118,12 +14120,15 @@ impl ExcelRuntime {
             }
 
             runtime.dirty = true;
-        }
+            chart_was_removed
+        };
 
         self.stale_chart_object_handles_for_id(workbook, chart_object_id);
-        self.stale_chart_handles_for_chart(workbook, chart_object.chart_id);
-        if self.active_chart == Some((workbook, chart_object.chart_id)) {
-            self.active_chart = None;
+        if chart_was_removed {
+            self.stale_chart_handles_for_chart(workbook, chart_object.chart_id);
+            if self.active_chart == Some((workbook, chart_object.chart_id)) {
+                self.active_chart = None;
+            }
         }
 
         Ok(true)
@@ -72097,6 +72102,7 @@ mod tests {
                 had_chart_rels,
             )
         };
+        let surviving_chart = runtime.register_chart_handle(workbook, chart_id);
 
         assert_eq!(
             runtime
@@ -72136,6 +72142,14 @@ mod tests {
                 "shared chart relationships part should remain in the package"
             );
         }
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(surviving_chart, "ChartType", &[])
+                    .expect("surviving Chart handle remains valid")
+            ),
+            f64::from(super::XL_BAR_CLUSTERED)
+        );
     }
 
     #[test]
