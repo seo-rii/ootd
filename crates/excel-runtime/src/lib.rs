@@ -6806,10 +6806,9 @@ impl ExcelRuntime {
                             "ChartObject.Delete does not accept arguments",
                         ));
                     }
-                    Ok(OmValue::Bool(self.delete_unpersisted_chart_object(
-                        workbook,
-                        chart_object_id,
-                    )?))
+                    Ok(OmValue::Bool(
+                        self.delete_chart_object(workbook, chart_object_id)?,
+                    ))
                 }
                 "Activate" | "Select" => {
                     if !args.is_empty() {
@@ -6904,7 +6903,7 @@ impl ExcelRuntime {
                                 OmError::new(OmErrorCode::NotFound, "chart not found")
                             })?;
                         return Ok(OmValue::Bool(
-                            self.delete_unpersisted_chart_object(workbook, chart_object_id)?,
+                            self.delete_chart_object(workbook, chart_object_id)?,
                         ));
                     };
                     Ok(OmValue::Bool(
@@ -9251,17 +9250,8 @@ impl ExcelRuntime {
                     .into_iter()
                     .map(|(chart_object_id, _)| chart_object_id)
                     .collect::<Vec<_>>();
-                for chart_object_id in &chart_object_ids {
-                    let chart_object = self.chart_object_model(workbook, *chart_object_id)?;
-                    let chart = self.chart_model(workbook, chart_object.chart_id)?;
-                    if chart_object.raw_binding.is_some() || chart.raw_part_uri.is_some() {
-                        return Err(OmError::unsupported(
-                            "ChartObjects.Delete for persisted chart objects is not implemented",
-                        ));
-                    }
-                }
                 for chart_object_id in chart_object_ids {
-                    self.delete_unpersisted_chart_object(workbook, chart_object_id)?;
+                    self.delete_chart_object(workbook, chart_object_id)?;
                 }
                 Ok(OmValue::Empty)
             }
@@ -13473,18 +13463,15 @@ impl ExcelRuntime {
             .find_map(|(sheet_id, binding)| (binding.chart_id == chart_id).then_some(*sheet_id)))
     }
 
-    fn delete_unpersisted_chart_object(
+    fn delete_chart_object(
         &mut self,
         workbook: WorkbookHandle,
         chart_object_id: ChartObjectId,
     ) -> OmResult<bool> {
         let chart_object = self.chart_object_model(workbook, chart_object_id)?.clone();
         let chart = self.chart_model(workbook, chart_object.chart_id)?;
-        if chart_object.raw_binding.is_some() || chart.raw_part_uri.is_some() {
-            return Err(OmError::unsupported(
-                "ChartObject.Delete for persisted chart objects is not implemented",
-            ));
-        }
+        let raw_binding = chart_object.raw_binding.clone();
+        let chart_part_uri = chart.raw_part_uri.clone();
 
         {
             let runtime = self.runtime_workbook_mut(workbook)?;
@@ -13519,6 +13506,12 @@ impl ExcelRuntime {
                 ));
             };
 
+            let drawing_raw_part_uri = runtime
+                .loaded
+                .state
+                .drawings
+                .get(&drawing_id)
+                .and_then(|drawing| drawing.raw_part_uri.clone());
             let drawing_is_empty = {
                 let drawing = runtime
                     .loaded
@@ -13528,12 +13521,496 @@ impl ExcelRuntime {
                     .expect("drawing id located above");
                 drawing.objects.remove(object_index);
                 drawing.dirty = true;
-                drawing.raw_part_uri.is_none() && drawing.objects.is_empty()
+                drawing.objects.is_empty()
             };
+            let mut removed_chart_part_uri = None;
+            let mut removed_chart_support_part_uris = Vec::<String>::new();
+            let chart_still_referenced = runtime
+                .loaded
+                .state
+                .chart_sheets
+                .values()
+                .any(|binding| binding.chart_id == chart_object.chart_id)
+                || runtime.loaded.state.drawings.values().any(|drawing| {
+                    drawing.objects.iter().any(|object| match object {
+                        DrawingObjectModel::ChartFrame(candidate) => {
+                            candidate.chart_id == chart_object.chart_id
+                        }
+                        DrawingObjectModel::UnsupportedRaw { .. } => false,
+                    })
+                });
+            if !chart_still_referenced
+                && let Some(removed_chart) =
+                    runtime.loaded.state.charts.remove(&chart_object.chart_id)
+            {
+                removed_chart_part_uri = removed_chart.raw_part_uri;
+            }
+
             if drawing_is_empty {
                 runtime.loaded.state.drawings.remove(&drawing_id);
             }
-            runtime.loaded.state.charts.remove(&chart_object.chart_id);
+
+            if let Some(raw_binding) = raw_binding.as_deref()
+                && let Some((drawing_part_uri, chart_relationship_id)) =
+                    raw_binding.rsplit_once('#')
+            {
+                let drawing_relationship_ids = runtime
+                    .loaded
+                    .sheet_drawing_support_parts
+                    .get(&chart_object.host_sheet_id)
+                    .map(|support_parts| {
+                        support_parts
+                            .drawing_relationships
+                            .iter()
+                            .filter_map(|binding| {
+                                (binding.target == drawing_part_uri)
+                                    .then_some(binding.relationship_id.clone())
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                if let Some(support_parts) = runtime
+                    .loaded
+                    .sheet_drawing_support_parts
+                    .get_mut(&chart_object.host_sheet_id)
+                {
+                    if drawing_is_empty {
+                        support_parts
+                            .drawing_part_uris
+                            .retain(|part_uri| part_uri != drawing_part_uri);
+                        support_parts
+                            .drawing_part_source_bytes
+                            .remove(drawing_part_uri);
+                        support_parts.drawing_summaries.remove(drawing_part_uri);
+                        let drawing_rels_part_uri =
+                            worksheet_relationships_part_uri_for(drawing_part_uri);
+                        support_parts
+                            .drawing_relationships_part_uris
+                            .retain(|part_uri| part_uri != &drawing_rels_part_uri);
+                        support_parts
+                            .drawing_relationships_part_source_bytes
+                            .remove(&drawing_rels_part_uri);
+                        for relationship_id in &drawing_relationship_ids {
+                            support_parts
+                                .drawing_relationship_ids
+                                .retain(|candidate| candidate != relationship_id);
+                            support_parts
+                                .drawing_relationships
+                                .retain(|binding| &binding.relationship_id != relationship_id);
+                        }
+                    } else if let Some(summary) =
+                        support_parts.drawing_summaries.get_mut(drawing_part_uri)
+                    {
+                        summary.anchors.retain(|anchor| {
+                            !anchor
+                                .chart_relationship_ids
+                                .iter()
+                                .any(|relationship_id| relationship_id == chart_relationship_id)
+                        });
+                        summary
+                            .chart_relationship_ids
+                            .retain(|relationship_id| relationship_id != chart_relationship_id);
+                        summary
+                            .chart_relationships
+                            .retain(|binding| binding.relationship_id != chart_relationship_id);
+                    }
+
+                    if let Some(chart_part_uri) = removed_chart_part_uri.as_ref() {
+                        if let Some(summary) = support_parts.chart_summaries.remove(chart_part_uri)
+                        {
+                            if let Some(chart_rels_part_uri) = summary.relationships_part_uri {
+                                support_parts
+                                    .chart_relationships_part_uris
+                                    .retain(|part_uri| part_uri != &chart_rels_part_uri);
+                                support_parts
+                                    .chart_relationships_part_source_bytes
+                                    .remove(&chart_rels_part_uri);
+                            }
+                            for relationship in summary.support_relationships {
+                                removed_chart_support_part_uris.push(relationship.target);
+                            }
+                        }
+                        support_parts
+                            .chart_part_uris
+                            .retain(|part_uri| part_uri != chart_part_uri);
+                        support_parts.chart_part_source_bytes.remove(chart_part_uri);
+                        for part_uri in &removed_chart_support_part_uris {
+                            support_parts
+                                .chart_support_part_uris
+                                .retain(|candidate| candidate != part_uri);
+                            support_parts
+                                .chart_support_part_source_bytes
+                                .remove(part_uri);
+                        }
+                    }
+                }
+
+                if drawing_is_empty {
+                    if let Some(drawing_part_uri) = drawing_raw_part_uri.as_ref() {
+                        runtime.loaded.package.remove_part(drawing_part_uri);
+                        runtime.loaded.package.remove_part(
+                            worksheet_relationships_part_uri_for(drawing_part_uri).as_str(),
+                        );
+                    }
+                    if !drawing_relationship_ids.is_empty() {
+                        let worksheet_part_uri = runtime
+                            .loaded
+                            .state
+                            .worksheets
+                            .iter()
+                            .find(|worksheet| worksheet.id == chart_object.host_sheet_id)
+                            .and_then(|worksheet| worksheet.part_uri.clone())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "chart object host worksheet is missing a part uri",
+                                )
+                            })?;
+                        if let Some(worksheet_xml) = runtime
+                            .loaded
+                            .package
+                            .part(worksheet_part_uri.as_str())
+                            .map(|part| part.bytes.clone())
+                        {
+                            let relationship_ids = drawing_relationship_ids
+                                .iter()
+                                .map(String::as_str)
+                                .collect::<BTreeSet<_>>();
+                            let mut reader =
+                                Reader::from_reader(Cursor::new(worksheet_xml.as_slice()));
+                            reader.config_mut().trim_text(false);
+                            let mut writer = Writer::new(Cursor::new(Vec::new()));
+                            let mut buffer = Vec::new();
+                            let mut skip_depth = 0usize;
+                            loop {
+                                match reader.read_event_into(&mut buffer) {
+                                    Ok(Event::Start(_)) if skip_depth > 0 => {
+                                        skip_depth += 1;
+                                    }
+                                    Ok(Event::End(_)) if skip_depth > 0 => {
+                                        skip_depth -= 1;
+                                    }
+                                    Ok(Event::Empty(element))
+                                        if xml_local_name(element.name().as_ref())
+                                            == b"drawing" =>
+                                    {
+                                        let mut should_strip = false;
+                                        for attr in element.attributes() {
+                                            let attr = attr.map_err(runtime_xml_error)?;
+                                            if attr.key.as_ref() != b"r:id" {
+                                                continue;
+                                            }
+                                            let value = attr
+                                                .decode_and_unescape_value(reader.decoder())
+                                                .map_err(runtime_xml_error)?
+                                                .into_owned();
+                                            if relationship_ids.contains(value.as_str()) {
+                                                should_strip = true;
+                                                break;
+                                            }
+                                        }
+                                        if !should_strip {
+                                            writer
+                                                .write_event(Event::Empty(element.into_owned()))
+                                                .map_err(runtime_xml_error)?;
+                                        }
+                                    }
+                                    Ok(Event::Start(element))
+                                        if xml_local_name(element.name().as_ref())
+                                            == b"drawing" =>
+                                    {
+                                        let mut should_strip = false;
+                                        for attr in element.attributes() {
+                                            let attr = attr.map_err(runtime_xml_error)?;
+                                            if attr.key.as_ref() != b"r:id" {
+                                                continue;
+                                            }
+                                            let value = attr
+                                                .decode_and_unescape_value(reader.decoder())
+                                                .map_err(runtime_xml_error)?
+                                                .into_owned();
+                                            if relationship_ids.contains(value.as_str()) {
+                                                should_strip = true;
+                                                break;
+                                            }
+                                        }
+                                        if should_strip {
+                                            skip_depth = 1;
+                                        } else {
+                                            writer
+                                                .write_event(Event::Start(element.into_owned()))
+                                                .map_err(runtime_xml_error)?;
+                                        }
+                                    }
+                                    Ok(Event::Eof) => break,
+                                    Ok(event) if skip_depth == 0 => writer
+                                        .write_event(event.into_owned())
+                                        .map_err(runtime_xml_error)?,
+                                    Ok(_) => {}
+                                    Err(error) => return Err(runtime_xml_error(error)),
+                                }
+                                buffer.clear();
+                            }
+                            runtime.loaded.package.replace_part_bytes(
+                                worksheet_part_uri.as_str(),
+                                writer.into_inner().into_inner(),
+                            )?;
+                        }
+                        let worksheet_rels_part_uri =
+                            worksheet_relationships_part_uri_for(worksheet_part_uri.as_str());
+                        if let Some(worksheet_rels_xml) = runtime
+                            .loaded
+                            .package
+                            .part(worksheet_rels_part_uri.as_str())
+                            .map(|part| part.bytes.clone())
+                        {
+                            let updated_worksheet_rels = strip_relationship_entries_by_id(
+                                worksheet_rels_xml.as_slice(),
+                                &drawing_relationship_ids,
+                            )?;
+                            runtime.loaded.package.replace_part_bytes(
+                                worksheet_rels_part_uri.as_str(),
+                                updated_worksheet_rels.clone(),
+                            )?;
+                            if let Some(worksheet_support_parts) = runtime
+                                .loaded
+                                .worksheet_support_parts
+                                .get_mut(&chart_object.host_sheet_id)
+                            {
+                                worksheet_support_parts.relationships_part_source_bytes =
+                                    Some(updated_worksheet_rels);
+                            }
+                        }
+                        if let Some(worksheet_support_parts) = runtime
+                            .loaded
+                            .worksheet_support_parts
+                            .get_mut(&chart_object.host_sheet_id)
+                            && let Some(summary) =
+                                worksheet_support_parts.relationships_summary.as_mut()
+                        {
+                            let removed_relationship_ids = drawing_relationship_ids
+                                .iter()
+                                .map(String::as_str)
+                                .collect::<BTreeSet<_>>();
+                            let removed_indexes = summary
+                                .relationship_ids
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(index, relationship_id)| {
+                                    removed_relationship_ids
+                                        .contains(relationship_id.as_str())
+                                        .then_some(index)
+                                })
+                                .collect::<BTreeSet<_>>();
+                            summary.relationship_ids = summary
+                                .relationship_ids
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(index, relationship_id)| {
+                                    (!removed_indexes.contains(&index))
+                                        .then_some(relationship_id.clone())
+                                })
+                                .collect();
+                            summary.relationship_attr_maps = summary
+                                .relationship_attr_maps
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(index, attr_map)| {
+                                    (!removed_indexes.contains(&index)).then_some(attr_map.clone())
+                                })
+                                .collect();
+                            summary.relationship_inner_xmls = summary
+                                .relationship_inner_xmls
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(index, inner_xml)| {
+                                    (!removed_indexes.contains(&index)).then_some(inner_xml.clone())
+                                })
+                                .collect();
+                            let mut relationship_index = 0usize;
+                            summary.root_child_names.retain(|child_name| {
+                                if child_name != "Relationship" {
+                                    return true;
+                                }
+                                let remove = removed_indexes.contains(&relationship_index);
+                                relationship_index += 1;
+                                !remove
+                            });
+                        }
+                    }
+                } else if let Some(drawing_xml) = runtime
+                    .loaded
+                    .package
+                    .part(drawing_part_uri)
+                    .map(|part| part.bytes.clone())
+                {
+                    let mut reader = Reader::from_reader(Cursor::new(drawing_xml.as_slice()));
+                    reader.config_mut().trim_text(false);
+                    let mut writer = Writer::new(Cursor::new(Vec::new()));
+                    let mut buffer = Vec::new();
+                    let mut anchor_depth = 0usize;
+                    let mut anchor_contains_deleted_chart = false;
+                    let mut pending_anchor_events = Vec::<Event<'static>>::new();
+                    loop {
+                        match reader.read_event_into(&mut buffer) {
+                            Ok(Event::Start(element)) => {
+                                let local_name = xml_local_name(element.name().as_ref()).to_vec();
+                                let is_anchor = matches!(
+                                    local_name.as_slice(),
+                                    b"twoCellAnchor" | b"oneCellAnchor" | b"absoluteAnchor"
+                                );
+                                if anchor_depth == 0 && is_anchor {
+                                    anchor_depth = 1;
+                                    anchor_contains_deleted_chart = false;
+                                    pending_anchor_events.push(Event::Start(element.into_owned()));
+                                } else if anchor_depth > 0 {
+                                    if local_name.as_slice() == b"chart" {
+                                        for attr in element.attributes() {
+                                            let attr = attr.map_err(runtime_xml_error)?;
+                                            if attr.key.as_ref() != b"r:id" {
+                                                continue;
+                                            }
+                                            let value = attr
+                                                .decode_and_unescape_value(reader.decoder())
+                                                .map_err(runtime_xml_error)?
+                                                .into_owned();
+                                            if value == chart_relationship_id {
+                                                anchor_contains_deleted_chart = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    anchor_depth += 1;
+                                    pending_anchor_events.push(Event::Start(element.into_owned()));
+                                } else {
+                                    writer
+                                        .write_event(Event::Start(element.into_owned()))
+                                        .map_err(runtime_xml_error)?;
+                                }
+                            }
+                            Ok(Event::Empty(element)) => {
+                                let local_name = xml_local_name(element.name().as_ref()).to_vec();
+                                if anchor_depth > 0 {
+                                    if local_name.as_slice() == b"chart" {
+                                        for attr in element.attributes() {
+                                            let attr = attr.map_err(runtime_xml_error)?;
+                                            if attr.key.as_ref() != b"r:id" {
+                                                continue;
+                                            }
+                                            let value = attr
+                                                .decode_and_unescape_value(reader.decoder())
+                                                .map_err(runtime_xml_error)?
+                                                .into_owned();
+                                            if value == chart_relationship_id {
+                                                anchor_contains_deleted_chart = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    pending_anchor_events.push(Event::Empty(element.into_owned()));
+                                } else {
+                                    writer
+                                        .write_event(Event::Empty(element.into_owned()))
+                                        .map_err(runtime_xml_error)?;
+                                }
+                            }
+                            Ok(Event::End(element)) => {
+                                let local_name = xml_local_name(element.name().as_ref()).to_vec();
+                                if anchor_depth > 0 {
+                                    pending_anchor_events.push(Event::End(element.into_owned()));
+                                    if matches!(
+                                        local_name.as_slice(),
+                                        b"twoCellAnchor" | b"oneCellAnchor" | b"absoluteAnchor"
+                                    ) && anchor_depth == 1
+                                    {
+                                        if !anchor_contains_deleted_chart {
+                                            for event in pending_anchor_events.drain(..) {
+                                                writer
+                                                    .write_event(event)
+                                                    .map_err(runtime_xml_error)?;
+                                            }
+                                        } else {
+                                            pending_anchor_events.clear();
+                                        }
+                                        anchor_depth = 0;
+                                        anchor_contains_deleted_chart = false;
+                                    } else {
+                                        anchor_depth = anchor_depth.saturating_sub(1);
+                                    }
+                                } else {
+                                    writer
+                                        .write_event(Event::End(element.into_owned()))
+                                        .map_err(runtime_xml_error)?;
+                                }
+                            }
+                            Ok(Event::Eof) => break,
+                            Ok(event) if anchor_depth > 0 => {
+                                pending_anchor_events.push(event.into_owned());
+                            }
+                            Ok(event) => writer
+                                .write_event(event.into_owned())
+                                .map_err(runtime_xml_error)?,
+                            Err(error) => return Err(runtime_xml_error(error)),
+                        }
+                        buffer.clear();
+                    }
+                    runtime
+                        .loaded
+                        .package
+                        .replace_part_bytes(drawing_part_uri, writer.into_inner().into_inner())?;
+                    let drawing_rels_part_uri =
+                        worksheet_relationships_part_uri_for(drawing_part_uri);
+                    if let Some(drawing_rels_xml) = runtime
+                        .loaded
+                        .package
+                        .part(drawing_rels_part_uri.as_str())
+                        .map(|part| part.bytes.clone())
+                    {
+                        runtime.loaded.package.replace_part_bytes(
+                            drawing_rels_part_uri.as_str(),
+                            strip_relationship_entries_by_id(
+                                drawing_rels_xml.as_slice(),
+                                &[chart_relationship_id.to_string()],
+                            )?,
+                        )?;
+                    }
+                }
+            }
+
+            let mut content_type_overrides_to_strip = Vec::<String>::new();
+            if drawing_is_empty && let Some(drawing_part_uri) = drawing_raw_part_uri.as_ref() {
+                content_type_overrides_to_strip.push(drawing_part_uri.clone());
+            }
+            if let Some(chart_part_uri) = removed_chart_part_uri.or(chart_part_uri) {
+                let chart_rels_part_uri =
+                    worksheet_relationships_part_uri_for(chart_part_uri.as_str());
+                runtime.loaded.package.remove_part(chart_part_uri.as_str());
+                runtime
+                    .loaded
+                    .package
+                    .remove_part(chart_rels_part_uri.as_str());
+                content_type_overrides_to_strip.push(chart_part_uri);
+            }
+            for part_uri in removed_chart_support_part_uris {
+                runtime.loaded.package.remove_part(part_uri.as_str());
+                content_type_overrides_to_strip.push(part_uri);
+            }
+            if !content_type_overrides_to_strip.is_empty()
+                && let Some(content_types_xml) = runtime
+                    .loaded
+                    .package
+                    .part(CONTENT_TYPES_PART_NAME)
+                    .map(|part| part.bytes.clone())
+            {
+                runtime.loaded.package.replace_part_bytes(
+                    CONTENT_TYPES_PART_NAME,
+                    strip_content_type_overrides(
+                        content_types_xml.as_slice(),
+                        &content_type_overrides_to_strip,
+                    )?,
+                )?;
+            }
+
             runtime.dirty = true;
         }
 
@@ -67276,7 +67753,7 @@ mod tests {
     }
 
     #[test]
-    fn embedded_chart_activate_sets_active_chart_but_delete_stays_unsupported() {
+    fn embedded_chart_activate_select_and_delete_updates_active_chart() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -67420,9 +67897,29 @@ mod tests {
         assert_eq!(
             runtime
                 .dispatch_invoke(chart, "Delete", &[])
-                .expect_err("embedded Chart.Delete should be unsupported")
+                .expect("embedded Chart.Delete"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count after embedded Chart.Delete")
+            ),
+            0.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                .expect("ActiveChart after embedded Chart.Delete"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ChartType", &[])
+                .expect_err("deleted embedded Chart handle should be stale")
                 .code,
-            OmErrorCode::Unsupported
+            OmErrorCode::InvalidState
         );
     }
 
@@ -70198,6 +70695,130 @@ mod tests {
                 read_only: false,
             })
             .expect("reopen workbook after ChartObject.Delete");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_objects, "Count", &[])
+                    .expect("reopened ChartObjects.Count")
+            ),
+            0.0
+        );
+    }
+
+    #[test]
+    fn chartobject_delete_removes_persisted_embedded_chart_parts() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with embedded chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        runtime
+            .dispatch_invoke(chart_object, "Activate", &[])
+            .expect("ChartObject.Activate");
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_object, "Delete", &[])
+                .expect("ChartObject.Delete"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count after delete")
+            ),
+            0.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                .expect("ActiveChart after ChartObject.Delete"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "Name", &[])
+                .expect_err("deleted persisted ChartObject handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ChartType", &[])
+                .expect_err("deleted persisted Chart handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after persisted ChartObject.Delete");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        assert!(!saved_package.contains("xl/charts/chart1.xml"));
+        assert!(!saved_package.contains("xl/charts/_rels/chart1.xml.rels"));
+        assert!(!saved_package.contains("xl/drawings/drawing1.xml"));
+        assert!(!saved_package.contains("xl/drawings/_rels/drawing1.xml.rels"));
+        let saved_sheet_xml = String::from_utf8(
+            saved_package
+                .part("xl/worksheets/sheet1.xml")
+                .expect("saved sheet1 xml")
+                .bytes
+                .clone(),
+        )
+        .expect("sheet xml utf8");
+        assert!(!saved_sheet_xml.contains("<drawing"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after persisted ChartObject.Delete");
         let reopened_worksheet = expect_object_handle(
             reopened_runtime
                 .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
