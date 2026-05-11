@@ -1265,7 +1265,7 @@ impl XlsxCodec {
                 RowOffset,
             }
 
-            let rewrite_position_or_ext_element =
+            let rewrite_chart_object_element =
                 |element: &BytesStart<'_>,
                  decoder: quick_xml::encoding::Decoder,
                  chart_object: &ChartObjectModel|
@@ -1273,6 +1273,9 @@ impl XlsxCodec {
                     let element_name = element.name();
                     let local_name = xml_local_name(element_name.as_ref());
                     let replacements = match (chart_object.anchor.as_ref(), local_name) {
+                        (Some(_), b"cNvPr") => {
+                            vec![("name".to_string(), chart_object.name.clone())]
+                        }
                         (Some(DrawingAnchor::Absolute(anchor)), b"pos") => vec![
                             ("x".to_string(), anchor.position.x.0.to_string()),
                             ("y".to_string(), anchor.position.y.0.to_string()),
@@ -1420,7 +1423,7 @@ impl XlsxCodec {
                             }
                             if let Some(chart_object_index) = active_chart_object_index {
                                 let chart_object = dirty_chart_objects[chart_object_index];
-                                if let Some(rewritten) = rewrite_position_or_ext_element(
+                                if let Some(rewritten) = rewrite_chart_object_element(
                                     &element,
                                     reader.decoder(),
                                     chart_object,
@@ -1457,7 +1460,7 @@ impl XlsxCodec {
                         }
                         if let Some(chart_object_index) = active_chart_object_index {
                             let chart_object = dirty_chart_objects[chart_object_index];
-                            if let Some(rewritten) = rewrite_position_or_ext_element(
+                            if let Some(rewritten) = rewrite_chart_object_element(
                                 &element,
                                 reader.decoder(),
                                 chart_object,
