@@ -19763,6 +19763,129 @@ mod tests {
     }
 
     #[test]
+    fn load_resolves_chart_source_defined_names_into_overlay_ranges() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        let workbook_xml = String::from_utf8(
+            package
+                .part("xl/workbook.xml")
+                .expect("workbook part")
+                .bytes
+                .clone(),
+        )
+        .expect("workbook xml utf8")
+        .replace(
+            "</sheets>",
+            r#"</sheets><definedNames><definedName name="SeriesValues">Sheet1!$B$1:$B$3</definedName></definedNames>"#,
+        );
+        package
+            .replace_part_bytes("xl/workbook.xml", workbook_xml.into_bytes())
+            .expect("replace workbook xml");
+        let sheet_xml = String::from_utf8(
+            package
+                .part("xl/worksheets/sheet1.xml")
+                .expect("sheet part")
+                .bytes
+                .clone(),
+        )
+        .expect("sheet xml utf8")
+        .replace(
+            "</worksheet>",
+            r#"<drawing r:id="rIdChartDrawing"/></worksheet>"#,
+        );
+        package
+            .replace_part_bytes("xl/worksheets/sheet1.xml", sheet_xml.into_bytes())
+            .expect("replace sheet xml");
+        package
+            .add_part(OpcPart {
+                name: "xl/worksheets/_rels/sheet1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdChartDrawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            })
+            .expect("add worksheet rels");
+        package
+            .add_part(OpcPart {
+                name: "xl/drawings/drawing1.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <xdr:twoCellAnchor>
+    <xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>8</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+    <xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Named Source Chart"/></xdr:nvGraphicFramePr><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart1"/></a:graphicData></a:graphic></xdr:graphicFrame>
+    <xdr:clientData/>
+  </xdr:twoCellAnchor>
+</xdr:wsDr>"#
+                    .to_vec(),
+            })
+            .expect("add drawing");
+        package
+            .add_part(OpcPart {
+                name: "xl/drawings/_rels/drawing1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdChart1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            })
+            .expect("add drawing rels");
+        package
+            .add_part(OpcPart {
+                name: "xl/charts/chart1.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart>
+    <c:plotArea>
+      <c:barChart>
+        <c:ser>
+          <c:idx val="0"/><c:order val="0"/>
+          <c:val><c:numRef><c:f>SeriesValues</c:f></c:numRef></c:val>
+        </c:ser>
+      </c:barChart>
+    </c:plotArea>
+  </c:chart>
+</c:chartSpace>"#
+                    .to_vec(),
+            })
+            .expect("add chart");
+        let bytes = package.to_bytes().expect("package bytes");
+
+        let loaded = codec
+            .load(bytes.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook with named chart source");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let chart = loaded.state.charts.values().next().expect("chart model");
+        let values = chart.series[0]
+            .values
+            .as_ref()
+            .expect("chart values source");
+        assert_eq!(values.raw.text, "SeriesValues");
+        let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
+            panic!("expected chart defined name source to resolve to range");
+        };
+        assert_eq!(range.areas()[0].scope, SheetScope::Single(sheet_id));
+        assert_eq!(
+            range.areas()[0].rect,
+            Rect {
+                row_first: 1,
+                row_last: 3,
+                col_first: 2,
+                col_last: 2,
+            }
+        );
+    }
+
+    #[test]
     fn resolve_chart_source_reference_resolves_quoted_multi_area_sources() {
         let worksheets = vec![WorksheetModel {
             id: SheetId(7),
