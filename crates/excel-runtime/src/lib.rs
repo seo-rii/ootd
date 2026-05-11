@@ -49,6 +49,8 @@ const XL_XY_SCATTER: i32 = -4169;
 const XL_CATEGORY: i32 = 1;
 const XL_VALUE: i32 = 2;
 const XL_SERIES_AXIS: i32 = 3;
+const XL_PRIMARY: u32 = 1;
+const XL_SECONDARY: u32 = 2;
 const XL_PLOT_BY_ROWS: i32 = 1;
 const XL_PLOT_BY_COLUMNS: i32 = 2;
 const XL_LEGEND_POSITION_BOTTOM: i32 = -4107;
@@ -9380,8 +9382,13 @@ impl ExcelRuntime {
                     .get(1)
                     .map(|value| coerce_u32_arg(value, "Chart.HasAxis axis group"))
                     .transpose()?
-                    .unwrap_or(1);
-                if axis_group != 1 {
+                    .unwrap_or(XL_PRIMARY);
+                if !matches!(axis_group, XL_PRIMARY | XL_SECONDARY) {
+                    return Err(OmError::invalid_argument(
+                        "Chart.HasAxis axis group supports xlPrimary and xlSecondary",
+                    ));
+                }
+                if axis_group == XL_SECONDARY {
                     return Ok(OmValue::Bool(false));
                 }
                 Ok(OmValue::Bool(
@@ -9591,12 +9598,32 @@ impl ExcelRuntime {
     ) -> OmResult<OmValue> {
         match member {
             "Item" => {
-                let [axis_type] = args else {
+                if args.is_empty() || args.len() > 2 {
                     return Err(OmError::invalid_argument(
-                        "Axes.Item expects a single XlAxisType value",
+                        "Axes.Item expects axis type and optional axis group",
                     ));
-                };
-                let axis_type = coerce_u32_arg(axis_type, "Axes.Item axis type")? as i32;
+                }
+                let axis_type = coerce_u32_arg(&args[0], "Axes.Item axis type")? as i32;
+                if !matches!(axis_type, XL_CATEGORY | XL_VALUE | XL_SERIES_AXIS) {
+                    return Err(OmError::invalid_argument(
+                        "Axes.Item supports category, value, and series axes",
+                    ));
+                }
+                let axis_group = args
+                    .get(1)
+                    .map(|value| coerce_u32_arg(value, "Axes.Item axis group"))
+                    .transpose()?
+                    .unwrap_or(XL_PRIMARY);
+                if !matches!(axis_group, XL_PRIMARY | XL_SECONDARY) {
+                    return Err(OmError::invalid_argument(
+                        "Axes.Item axis group supports xlPrimary and xlSecondary",
+                    ));
+                }
+                if axis_group == XL_SECONDARY {
+                    return Err(OmError::invalid_argument(
+                        "Axes.Item axis group is not available",
+                    ));
+                }
                 let axis_index = self
                     .chart_axis_index_for_type(workbook, chart_id, axis_type)?
                     .ok_or_else(|| {
@@ -69226,6 +69253,20 @@ mod tests {
                 .expect("Chart.HasAxis secondary value axis"),
             OmValue::Bool(false)
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "HasAxis",
+                    &[
+                        OmValue::Number(f64::from(super::XL_VALUE)),
+                        OmValue::Number(3.0),
+                    ],
+                )
+                .expect_err("Chart.HasAxis invalid axis group")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
 
         let category_axis = expect_object_handle(
             runtime
@@ -69257,6 +69298,31 @@ mod tests {
             ),
             "Quarter"
         );
+        let axes = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Axes", &[])
+                .expect("Chart.Axes collection"),
+        );
+        let category_axis_from_item = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    axes,
+                    "Item",
+                    &[
+                        OmValue::Number(f64::from(super::XL_CATEGORY)),
+                        OmValue::Number(f64::from(super::XL_PRIMARY)),
+                    ],
+                )
+                .expect("Axes.Item(xlCategory, xlPrimary)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(category_axis_from_item, "Type", &[])
+                    .expect("Axis.Type from Axes.Item primary group")
+            ),
+            f64::from(super::XL_CATEGORY)
+        );
 
         let value_axis = expect_object_handle(
             runtime
@@ -69274,6 +69340,40 @@ mod tests {
                     .expect("value Axis.Type")
             ),
             f64::from(super::XL_VALUE)
+        );
+        let value_axis_primary = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[
+                        OmValue::Number(f64::from(super::XL_VALUE)),
+                        OmValue::Number(f64::from(super::XL_PRIMARY)),
+                    ],
+                )
+                .expect("Chart.Axes(xlValue, xlPrimary)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(value_axis_primary, "Type", &[])
+                    .expect("value primary Axis.Type")
+            ),
+            f64::from(super::XL_VALUE)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[
+                        OmValue::Number(f64::from(super::XL_VALUE)),
+                        OmValue::Number(f64::from(super::XL_SECONDARY)),
+                    ],
+                )
+                .expect_err("Chart.Axes(xlValue, xlSecondary)")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 
