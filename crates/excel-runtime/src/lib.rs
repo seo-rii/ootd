@@ -3274,6 +3274,57 @@ impl ExcelRuntime {
                     )));
                 }
                 match member {
+                    "Name" => {
+                        let OmValue::Text(new_name) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Chart.Name expects a string value",
+                            ));
+                        };
+                        let (chart_sheet_id, chart_object_id) = {
+                            let state = &self.runtime_workbook(workbook)?.loaded.state;
+                            let chart_sheet_id =
+                                state.chart_sheets.iter().find_map(|(sheet_id, binding)| {
+                                    (binding.chart_id == chart_id).then_some(*sheet_id)
+                                });
+                            let chart_object_id = state.drawings.values().find_map(|drawing| {
+                                if !state.worksheets.iter().any(|worksheet| {
+                                    worksheet.id == drawing.host_sheet_id
+                                        && worksheet.kind == SheetKind::Worksheet
+                                }) {
+                                    return None;
+                                }
+                                drawing.objects.iter().find_map(|object| match object {
+                                    DrawingObjectModel::ChartFrame(chart_object)
+                                        if chart_object.chart_id == chart_id =>
+                                    {
+                                        Some(chart_object.id)
+                                    }
+                                    _ => None,
+                                })
+                            });
+                            (chart_sheet_id, chart_object_id)
+                        };
+                        if let Some(sheet_id) = chart_sheet_id {
+                            let sheet_handle = self.register_worksheet_handle(workbook, sheet_id).0;
+                            return self.dispatch_set(
+                                sheet_handle,
+                                "Name",
+                                OmValue::Text(new_name),
+                                &[],
+                            );
+                        }
+                        if let Some(chart_object_id) = chart_object_id {
+                            let chart_object_handle =
+                                self.register_chart_object_handle(workbook, chart_object_id);
+                            return self.dispatch_set(
+                                chart_object_handle,
+                                "Name",
+                                OmValue::Text(new_name),
+                                &[],
+                            );
+                        }
+                        Err(OmError::new(OmErrorCode::NotFound, "chart not found"))
+                    }
                     "ChartType" => {
                         let OmValue::Number(number) = value else {
                             return Err(OmError::type_mismatch(
@@ -66686,6 +66737,22 @@ mod tests {
             ),
             "Chart1"
         );
+        runtime
+            .dispatch_set(
+                chart,
+                "Name",
+                OmValue::Text("Dashboard Chart".to_string()),
+                &[],
+            )
+            .expect("set chart sheet Chart.Name");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(chart, "Name", &[])
+                    .expect("chart sheet Chart.Name after set")
+            ),
+            "Dashboard Chart"
+        );
         assert_eq!(
             expect_number(
                 runtime
@@ -66705,7 +66772,7 @@ mod tests {
                     .dispatch_get(active_chart, "Name", &[])
                     .expect("ActiveChart.Name after Charts.Add")
             ),
-            "Chart1"
+            "Dashboard Chart"
         );
         assert_eq!(
             runtime
@@ -66779,7 +66846,7 @@ mod tests {
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
-            vec!["Chart1".to_string(), "Sheet1".to_string()]
+            vec!["Dashboard Chart".to_string(), "Sheet1".to_string()]
         );
         assert_eq!(
             reopened.state.worksheets[0].kind,
@@ -67713,6 +67780,44 @@ mod tests {
             )
             .expect_err("old ChartObject.Name lookup should fail");
         assert_eq!(old_name_lookup.code, OmErrorCode::NotFound);
+        let chart_for_name = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart before Chart.Name set"),
+        );
+        runtime
+            .dispatch_set(
+                chart_for_name,
+                "Name",
+                OmValue::Text("Chart-Level Revenue Chart".to_string()),
+                &[],
+            )
+            .expect("set embedded Chart.Name");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(chart_object, "Name", &[])
+                    .expect("ChartObject.Name after Chart.Name set")
+            ),
+            "Chart-Level Revenue Chart"
+        );
+        let chart_named_object = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    worksheet,
+                    "ChartObjects",
+                    &[OmValue::Text("Chart-Level Revenue Chart".to_string())],
+                )
+                .expect("Worksheet.ChartObjects(\"Chart-Level Revenue Chart\")"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_named_object, "Index", &[])
+                    .expect("ChartObject.Index after Chart.Name set")
+            ),
+            1.0
+        );
         assert!(!expect_bool(
             runtime
                 .dispatch_get(workbook.0, "Saved", &[])
@@ -67812,7 +67917,7 @@ mod tests {
                     .dispatch_get(reopened_chart_object, "Name", &[])
                     .expect("reopened ChartObject.Name")
             ),
-            "Renamed Revenue Chart"
+            "Chart-Level Revenue Chart"
         );
         assert_eq!(
             expect_number(
@@ -67886,7 +67991,7 @@ mod tests {
                     .dispatch_get(chart, "Name", &[])
                     .expect("Chart.Name after ChartObject.Name set")
             ),
-            "Renamed Revenue Chart"
+            "Chart-Level Revenue Chart"
         );
         assert_eq!(
             expect_number(
@@ -67907,7 +68012,7 @@ mod tests {
                     .dispatch_get(chart_parent, "Name", &[])
                     .expect("Chart.Parent.Name")
             ),
-            "Renamed Revenue Chart"
+            "Chart-Level Revenue Chart"
         );
         let chart_area = expect_object_handle(
             runtime
