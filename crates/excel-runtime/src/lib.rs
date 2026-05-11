@@ -9452,7 +9452,20 @@ impl ExcelRuntime {
                         .drawings
                         .get_mut(&drawing_id)
                         .expect("drawing was inserted above");
-                    let z_order = u32::try_from(drawing.objects.len()).ok();
+                    let z_order = drawing
+                        .objects
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(fallback_index, object)| match object {
+                            DrawingObjectModel::ChartFrame(chart_object) => chart_object
+                                .z_order
+                                .or_else(|| u32::try_from(fallback_index).ok()),
+                            DrawingObjectModel::UnsupportedRaw { .. } => {
+                                u32::try_from(fallback_index).ok()
+                            }
+                        })
+                        .max()
+                        .map_or(Some(0), |existing_z_order| existing_z_order.checked_add(1));
                     drawing
                         .objects
                         .push(DrawingObjectModel::ChartFrame(ChartObjectModel {
@@ -69865,6 +69878,126 @@ mod tests {
                     .expect("reopened new Chart.ChartType")
             ),
             f64::from(super::XL_LINE)
+        );
+    }
+
+    #[test]
+    fn chartobjects_add_appends_after_existing_z_order() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let existing_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+
+        let mut updated_chart_objects = 0usize;
+        for drawing in runtime
+            .runtime_workbook_mut(workbook)
+            .expect("runtime workbook")
+            .loaded
+            .state
+            .drawings
+            .values_mut()
+        {
+            for object in &mut drawing.objects {
+                let DrawingObjectModel::ChartFrame(chart_object) = object else {
+                    continue;
+                };
+                chart_object.z_order = Some(10);
+                updated_chart_objects += 1;
+            }
+        }
+        assert_eq!(updated_chart_objects, 1);
+
+        let new_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(24.0),
+                        OmValue::Number(30.0),
+                        OmValue::Number(180.0),
+                        OmValue::Number(90.0),
+                    ],
+                )
+                .expect("ChartObjects.Add after high existing z-order"),
+        );
+        let new_z_order = runtime
+            .runtime_workbook(workbook)
+            .expect("runtime workbook")
+            .loaded
+            .state
+            .drawings
+            .values()
+            .flat_map(|drawing| drawing.objects.iter())
+            .find_map(|object| match object {
+                DrawingObjectModel::ChartFrame(chart_object) if chart_object.name == "Chart 2" => {
+                    chart_object.z_order
+                }
+                _ => None,
+            });
+        assert_eq!(new_z_order, Some(11));
+
+        let first_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1) after add"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(first_chart_object, "Name", &[])
+                    .expect("first ChartObject.Name after add")
+            ),
+            "Embedded Revenue Chart"
+        );
+        let second_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(2.0)])
+                .expect("ChartObjects.Item(2) after add"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(second_chart_object, "Name", &[])
+                    .expect("second ChartObject.Name after add")
+            ),
+            "Chart 2"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(existing_chart_object, "Index", &[])
+                    .expect("existing ChartObject.Index after add")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(new_chart_object, "Index", &[])
+                    .expect("new ChartObject.Index after add")
+            ),
+            2.0
         );
     }
 
