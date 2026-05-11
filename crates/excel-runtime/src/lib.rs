@@ -13576,9 +13576,8 @@ impl ExcelRuntime {
         chart_object_id: ChartObjectId,
     ) -> OmResult<bool> {
         let chart_object = self.chart_object_model(workbook, chart_object_id)?.clone();
-        let chart = self.chart_model(workbook, chart_object.chart_id)?;
+        self.chart_model(workbook, chart_object.chart_id)?;
         let raw_binding = chart_object.raw_binding.clone();
-        let chart_part_uri = chart.raw_part_uri.clone();
 
         {
             let runtime = self.runtime_workbook_mut(workbook)?;
@@ -14088,7 +14087,7 @@ impl ExcelRuntime {
             if drawing_is_empty && let Some(drawing_part_uri) = drawing_raw_part_uri.as_ref() {
                 content_type_overrides_to_strip.push(drawing_part_uri.clone());
             }
-            if let Some(chart_part_uri) = removed_chart_part_uri.or(chart_part_uri) {
+            if let Some(chart_part_uri) = removed_chart_part_uri {
                 let chart_rels_part_uri =
                     worksheet_relationships_part_uri_for(chart_part_uri.as_str());
                 runtime.loaded.package.remove_part(chart_part_uri.as_str());
@@ -38028,15 +38027,17 @@ mod tests {
         XL_DATE_SEPARATOR, XL_DECIMAL_SEPARATOR, XL_LIST_SEPARATOR, XL_R1C1, XL_ROW_SEPARATOR,
         XL_THOUSANDS_SEPARATOR, XL_TIME_SEPARATOR, XL_UPPER_CASE_COLUMN_LETTER,
         XL_UPPER_CASE_ROW_LETTER, blank_workbook_bytes, formula_complex_from_text, supports_format,
+        worksheet_relationships_part_uri_for,
     };
-    use excel_model::DrawingObjectModel;
+    use excel_model::{ChartSheetBinding, DrawingObjectModel};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use office_common::{
         CellError, CellValue, ExcelProfile, FileFormat, GetRangeValuesSpec, LoadOptions,
         ObjectHandle, OmArray, OmErrorCode, OmValue, OpenWorkbookSpec, RangeRef, Rect,
-        ReferenceTarget, SaveWorkbookSpec, SetRangeValuesSpec, SheetScope, StyleId, WorkbookId,
+        ReferenceTarget, SaveWorkbookSpec, SetRangeValuesSpec, SheetId, SheetScope, StyleId,
+        WorkbookId,
     };
     use office_opc::{CompressionMethod, OpcPackage, OpcPart};
 
@@ -72022,6 +72023,119 @@ mod tests {
             ),
             0.0
         );
+    }
+
+    #[test]
+    fn chartobject_delete_preserves_chart_part_when_chart_is_still_referenced() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with embedded chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart_sheet_id = SheetId(9_999);
+        let (chart_id, chart_part_uri, chart_rels_part_uri, had_chart_rels) = {
+            let runtime_workbook = runtime
+                .runtime_workbook_mut(workbook)
+                .expect("runtime workbook");
+            let chart_id = runtime_workbook
+                .loaded
+                .state
+                .drawings
+                .values()
+                .flat_map(|drawing| drawing.objects.iter())
+                .find_map(|object| match object {
+                    DrawingObjectModel::ChartFrame(chart_object) => Some(chart_object.chart_id),
+                    DrawingObjectModel::UnsupportedRaw { .. } => None,
+                })
+                .expect("embedded chart id");
+            let chart_part_uri = runtime_workbook
+                .loaded
+                .state
+                .charts
+                .get(&chart_id)
+                .expect("chart model")
+                .raw_part_uri
+                .clone()
+                .expect("chart part uri");
+            let chart_rels_part_uri = worksheet_relationships_part_uri_for(chart_part_uri.as_str());
+            let had_chart_rels = runtime_workbook
+                .loaded
+                .package
+                .contains(chart_rels_part_uri.as_str());
+            runtime_workbook.loaded.state.chart_sheets.insert(
+                chart_sheet_id,
+                ChartSheetBinding {
+                    sheet_id: chart_sheet_id,
+                    chart_id,
+                    drawing_id: None,
+                    raw_part_uri: None,
+                },
+            );
+            (
+                chart_id,
+                chart_part_uri,
+                chart_rels_part_uri,
+                had_chart_rels,
+            )
+        };
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_object, "Delete", &[])
+                .expect("ChartObject.Delete"),
+            OmValue::Bool(true)
+        );
+
+        let runtime_workbook = runtime
+            .runtime_workbook(workbook)
+            .expect("runtime workbook");
+        assert!(
+            runtime_workbook.loaded.state.charts.contains_key(&chart_id),
+            "chart model should remain while a chart sheet still references it"
+        );
+        assert!(
+            runtime_workbook
+                .loaded
+                .state
+                .chart_sheets
+                .contains_key(&chart_sheet_id),
+            "chart sheet binding should remain"
+        );
+        assert!(
+            runtime_workbook
+                .loaded
+                .package
+                .contains(chart_part_uri.as_str()),
+            "shared chart part should remain in the package"
+        );
+        if had_chart_rels {
+            assert!(
+                runtime_workbook
+                    .loaded
+                    .package
+                    .contains(chart_rels_part_uri.as_str()),
+                "shared chart relationships part should remain in the package"
+            );
+        }
     }
 
     #[test]
