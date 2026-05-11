@@ -9298,6 +9298,12 @@ impl ExcelRuntime {
                     .into_iter()
                     .map(|(chart_object_id, _)| chart_object_id)
                     .collect::<Vec<_>>();
+                if self.runtime_workbook(workbook)?.read_only {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        "cannot modify a read-only workbook",
+                    ));
+                }
                 for chart_object_id in chart_object_ids {
                     self.delete_chart_object(workbook, chart_object_id)?;
                 }
@@ -70168,6 +70174,43 @@ mod tests {
             ),
             1.0
         );
+    }
+
+    #[test]
+    fn chartobjects_delete_rejects_read_only_workbook_even_when_empty() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count")
+            ),
+            0.0
+        );
+
+        let error = runtime
+            .dispatch_invoke(chart_objects, "Delete", &[])
+            .expect_err("read-only ChartObjects.Delete should fail");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("read-only"));
     }
 
     #[test]
