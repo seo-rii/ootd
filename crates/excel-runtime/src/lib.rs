@@ -3203,13 +3203,16 @@ impl ExcelRuntime {
                                 "Series.Formula plot order index is out of bounds",
                             ));
                         }
+                        if series_index >= chart.series.len() {
+                            return Err(OmError::new(OmErrorCode::NotFound, "series not found"));
+                        }
+                        update_series_plot_order(&mut chart.series, series_index, plot_order);
                         let series = chart.series.get_mut(series_index).ok_or_else(|| {
                             OmError::new(OmErrorCode::NotFound, "series not found")
                         })?;
                         series.name = name_source;
                         series.x_values = x_values_source;
                         series.values = values_source;
-                        series.order = Some(plot_order - 1);
                         chart.dirty = true;
                         runtime.dirty = true;
                         Ok(())
@@ -3254,12 +3257,10 @@ impl ExcelRuntime {
                                 "Series.PlotOrder index is out of bounds",
                             ));
                         }
-                        let series = chart.series.get_mut(series_index).ok_or_else(|| {
-                            OmError::new(OmErrorCode::NotFound, "series not found")
-                        })?;
-                        let order = plot_order - 1;
-                        if series.order != Some(order) {
-                            series.order = Some(order);
+                        if series_index >= chart.series.len() {
+                            return Err(OmError::new(OmErrorCode::NotFound, "series not found"));
+                        }
+                        if update_series_plot_order(&mut chart.series, series_index, plot_order) {
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -16885,6 +16886,38 @@ fn series_plot_order(series: &SeriesModel, series_index: usize) -> u32 {
         .order
         .map(|order| order + 1)
         .unwrap_or((series_index + 1) as u32)
+}
+
+fn update_series_plot_order(
+    series: &mut [SeriesModel],
+    series_index: usize,
+    plot_order: u32,
+) -> bool {
+    let mut ordered_indices = series
+        .iter()
+        .enumerate()
+        .map(|(index, series)| (series.order.unwrap_or(index as u32), index))
+        .collect::<Vec<_>>();
+    ordered_indices.sort_by_key(|(order, index)| (*order, *index));
+    let Some(current_position) = ordered_indices
+        .iter()
+        .position(|(_, index)| *index == series_index)
+    else {
+        return false;
+    };
+    let target_position = plot_order as usize - 1;
+    let moved = ordered_indices.remove(current_position);
+    ordered_indices.insert(target_position, moved);
+
+    let mut changed = false;
+    for (position, (_, index)) in ordered_indices.into_iter().enumerate() {
+        let order = position as u32;
+        if series[index].order != Some(order) {
+            series[index].order = Some(order);
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
@@ -72443,9 +72476,6 @@ mod tests {
                 .expect("SeriesCollection.NewSeries second"),
         );
         runtime
-            .dispatch_set(first_series, "PlotOrder", OmValue::Number(2.0), &[])
-            .expect("set first Series.PlotOrder");
-        runtime
             .dispatch_set(second_series, "PlotOrder", OmValue::Number(1.0), &[])
             .expect("set second Series.PlotOrder");
         assert_eq!(
@@ -72951,6 +72981,106 @@ mod tests {
                 reopened_runtime
                     .dispatch_get(reopened_series, "Formula", &[])
                     .expect("reopened Series.Formula")
+            ),
+            "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1)"
+        );
+    }
+
+    #[test]
+    fn chart_series_formula_setter_rebalances_plot_order() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let first_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries first"),
+        );
+        let second_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries second"),
+        );
+
+        runtime
+            .dispatch_set(
+                second_series,
+                "Formula",
+                OmValue::Text(
+                    "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1)".to_string(),
+                ),
+                &[],
+            )
+            .expect("set second Series.Formula plot order");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_series, "PlotOrder", &[])
+                    .expect("first Series.PlotOrder")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_series, "PlotOrder", &[])
+                    .expect("second Series.PlotOrder")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(first_series, "Formula", &[])
+                    .expect("first Series.Formula")
+            ),
+            "=SERIES(,,,2)"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(second_series, "Formula", &[])
+                    .expect("second Series.Formula")
             ),
             "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1)"
         );
