@@ -6947,6 +6947,7 @@ impl ExcelRuntime {
                             | "PlotArea"
                             | "HasTitle"
                             | "ChartTitle"
+                            | "HasAxis"
                             | "HasLegend"
                             | "Legend"
                             | "Axes"
@@ -9129,6 +9130,31 @@ impl ExcelRuntime {
                         .is_some_and(|legend| legend.visible),
                 ))
             }
+            "HasAxis" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(OmError::invalid_argument(
+                        "Chart.HasAxis expects axis type and optional axis group",
+                    ));
+                }
+                let axis_type = coerce_u32_arg(&args[0], "Chart.HasAxis axis type")? as i32;
+                if !matches!(axis_type, XL_CATEGORY | XL_VALUE | XL_SERIES_AXIS) {
+                    return Err(OmError::invalid_argument(
+                        "Chart.HasAxis supports category, value, and series axes",
+                    ));
+                }
+                let axis_group = args
+                    .get(1)
+                    .map(|value| coerce_u32_arg(value, "Chart.HasAxis axis group"))
+                    .transpose()?
+                    .unwrap_or(1);
+                if axis_group != 1 {
+                    return Ok(OmValue::Bool(false));
+                }
+                Ok(OmValue::Bool(
+                    self.chart_axis_index_for_type(workbook, chart_id, axis_type)?
+                        .is_some(),
+                ))
+            }
             "Legend" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(
@@ -9336,19 +9362,9 @@ impl ExcelRuntime {
                         "Axes.Item expects a single XlAxisType value",
                     ));
                 };
-                let axis_type = coerce_u32_arg(axis_type, "Axes.Item axis type")?;
+                let axis_type = coerce_u32_arg(axis_type, "Axes.Item axis type")? as i32;
                 let axis_index = self
-                    .chart_model(workbook, chart_id)?
-                    .axes
-                    .iter()
-                    .position(|axis| match axis_type as i32 {
-                        XL_CATEGORY => {
-                            matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date)
-                        }
-                        XL_VALUE => axis.kind == ChartAxisKind::Value,
-                        XL_SERIES_AXIS => axis.kind == ChartAxisKind::Series,
-                        _ => false,
-                    })
+                    .chart_axis_index_for_type(workbook, chart_id, axis_type)?
                     .ok_or_else(|| {
                         OmError::invalid_argument("Axes.Item axis type is not available")
                     })?;
@@ -13080,6 +13096,24 @@ impl ExcelRuntime {
             .axes
             .get(axis_index)
             .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))
+    }
+
+    fn chart_axis_index_for_type(
+        &self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        axis_type: i32,
+    ) -> OmResult<Option<usize>> {
+        Ok(self
+            .chart_model(workbook, chart_id)?
+            .axes
+            .iter()
+            .position(|axis| match axis_type {
+                XL_CATEGORY => matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date),
+                XL_VALUE => axis.kind == ChartAxisKind::Value,
+                XL_SERIES_AXIS => axis.kind == ChartAxisKind::Series,
+                _ => false,
+            }))
     }
 
     fn chart_object_geometry_value(chart_object: &ChartObjectModel, member: &str) -> OmResult<f64> {
@@ -68618,6 +68652,49 @@ mod tests {
             runtime
                 .dispatch_get(chart_object, "Chart", &[])
                 .expect("ChartObject.Chart"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "HasAxis",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.HasAxis(xlCategory)"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "HasAxis",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.HasAxis(xlValue)"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "HasAxis",
+                    &[OmValue::Number(f64::from(super::XL_SERIES_AXIS))],
+                )
+                .expect("Chart.HasAxis(xlSeriesAxis)"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "HasAxis",
+                    &[
+                        OmValue::Number(f64::from(super::XL_VALUE)),
+                        OmValue::Number(2.0),
+                    ],
+                )
+                .expect("Chart.HasAxis secondary value axis"),
+            OmValue::Bool(false)
         );
 
         let category_axis = expect_object_handle(
