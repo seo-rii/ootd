@@ -6862,12 +6862,128 @@ impl ExcelRuntime {
             }
             RuntimeObjectKind::ChartArea { .. }
             | RuntimeObjectKind::PlotArea { .. }
-            | RuntimeObjectKind::ChartTitle { .. }
-            | RuntimeObjectKind::Legend { .. }
-            | RuntimeObjectKind::Axis { .. }
-            | RuntimeObjectKind::AxisTitle { .. } => Err(OmError::unsupported(format!(
+            | RuntimeObjectKind::Axis { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not implemented as a method for this object handle"
             ))),
+            RuntimeObjectKind::ChartTitle { workbook, chart_id } => {
+                match member {
+                    "Delete" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "ChartTitle.Delete does not accept arguments",
+                            ));
+                        }
+                        {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            if chart.title.take().is_none() {
+                                return Err(OmError::new(
+                                    OmErrorCode::NotFound,
+                                    "chart title not found",
+                                ));
+                            }
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        self.objects.remove(&handle.0);
+                        self.stale_objects.insert(handle.0);
+                        Ok(OmValue::Empty)
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "ChartTitle.{member} is not implemented as a method"
+                    ))),
+                }
+            }
+            RuntimeObjectKind::Legend { workbook, chart_id } => {
+                match member {
+                    "Delete" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "Legend.Delete does not accept arguments",
+                            ));
+                        }
+                        {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            if !chart.legend.as_ref().is_some_and(|legend| legend.visible) {
+                                return Err(OmError::new(
+                                    OmErrorCode::NotFound,
+                                    "chart legend not found",
+                                ));
+                            }
+                            chart.legend = None;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        self.objects.remove(&handle.0);
+                        self.stale_objects.insert(handle.0);
+                        Ok(OmValue::Empty)
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "Legend.{member} is not implemented as a method"
+                    ))),
+                }
+            }
+            RuntimeObjectKind::AxisTitle {
+                workbook,
+                chart_id,
+                axis_index,
+            } => {
+                match member {
+                    "Delete" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "AxisTitle.Delete does not accept arguments",
+                            ));
+                        }
+                        {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            let axis = chart.axes.get_mut(axis_index).ok_or_else(|| {
+                                OmError::new(OmErrorCode::NotFound, "axis not found")
+                            })?;
+                            if axis.title.take().is_none() {
+                                return Err(OmError::new(
+                                    OmErrorCode::NotFound,
+                                    "axis title not found",
+                                ));
+                            }
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        self.objects.remove(&handle.0);
+                        self.stale_objects.insert(handle.0);
+                        Ok(OmValue::Empty)
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "AxisTitle.{member} is not implemented as a method"
+                    ))),
+                }
+            }
         }
     }
 
@@ -6960,14 +7076,20 @@ impl ExcelRuntime {
                     )
                     | ("ChartArea", "Application" | "Parent")
                     | ("PlotArea", "Application" | "Parent")
-                    | ("ChartTitle", "Text" | "Caption" | "Application" | "Parent")
-                    | ("Legend", "Position" | "Application" | "Parent")
+                    | (
+                        "ChartTitle",
+                        "Text" | "Caption" | "Application" | "Parent" | "Delete"
+                    )
+                    | ("Legend", "Position" | "Application" | "Parent" | "Delete")
                     | ("Axes", "Count" | "Item" | "Application" | "Parent")
                     | (
                         "Axis",
                         "Type" | "HasTitle" | "AxisTitle" | "Application" | "Parent"
                     )
-                    | ("AxisTitle", "Text" | "Caption" | "Application" | "Parent")
+                    | (
+                        "AxisTitle",
+                        "Text" | "Caption" | "Application" | "Parent" | "Delete"
+                    )
                     | (
                         "SeriesCollection",
                         "Count" | "Item" | "Application" | "Parent"
@@ -67724,6 +67846,179 @@ mod tests {
                     .expect("reopened Legend.Position")
             ),
             f64::from(super::XL_LEGEND_POSITION_LEFT)
+        );
+    }
+
+    #[test]
+    fn loaded_chart_child_delete_methods_persist_on_save() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_title = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartTitle", &[])
+                .expect("Chart.ChartTitle"),
+        );
+        let legend = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Legend", &[])
+                .expect("Chart.Legend"),
+        );
+        let category_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.Axes(xlCategory)"),
+        );
+        let axis_title = expect_object_handle(
+            runtime
+                .dispatch_get(category_axis, "AxisTitle", &[])
+                .expect("Axis.AxisTitle"),
+        );
+
+        runtime
+            .dispatch_invoke(axis_title, "Delete", &[])
+            .expect("AxisTitle.Delete");
+        assert_eq!(
+            runtime
+                .dispatch_get(axis_title, "Text", &[])
+                .expect_err("deleted AxisTitle handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis, "HasTitle", &[])
+                .expect("Axis.HasTitle after AxisTitle.Delete"),
+            OmValue::Bool(false)
+        );
+        runtime
+            .dispatch_invoke(chart_title, "Delete", &[])
+            .expect("ChartTitle.Delete");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_title, "Text", &[])
+                .expect_err("deleted ChartTitle handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasTitle", &[])
+                .expect("Chart.HasTitle after ChartTitle.Delete"),
+            OmValue::Bool(false)
+        );
+        runtime
+            .dispatch_invoke(legend, "Delete", &[])
+            .expect("Legend.Delete");
+        assert_eq!(
+            runtime
+                .dispatch_get(legend, "Position", &[])
+                .expect_err("deleted Legend handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasLegend", &[])
+                .expect("Chart.HasLegend after Legend.Delete"),
+            OmValue::Bool(false)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after chart child deletes");
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after chart child deletes");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "HasTitle", &[])
+                .expect("reopened Chart.HasTitle"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "HasLegend", &[])
+                .expect("reopened Chart.HasLegend"),
+            OmValue::Bool(false)
+        );
+        let reopened_category_axis = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("reopened Chart.Axes(xlCategory)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_category_axis, "HasTitle", &[])
+                .expect("reopened Axis.HasTitle"),
+            OmValue::Bool(false)
         );
     }
 
