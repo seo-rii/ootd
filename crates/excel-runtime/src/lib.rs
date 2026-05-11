@@ -6519,6 +6519,17 @@ impl ExcelRuntime {
                 workbook,
                 chart_object_id,
             } => match member {
+                "Delete" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "ChartObject.Delete does not accept arguments",
+                        ));
+                    }
+                    Ok(OmValue::Bool(self.delete_unpersisted_chart_object(
+                        workbook,
+                        chart_object_id,
+                    )?))
+                }
                 "Activate" | "Select" => {
                     if !args.is_empty() {
                         return Err(OmError::invalid_argument(format!(
@@ -6592,8 +6603,27 @@ impl ExcelRuntime {
                         ));
                     }
                     let Some(sheet_id) = self.chart_sheet_id_for_chart(workbook, chart_id)? else {
-                        return Err(OmError::unsupported(
-                            "Chart.Delete for embedded charts is not implemented",
+                        let chart_object_id = self
+                            .runtime_workbook(workbook)?
+                            .loaded
+                            .state
+                            .drawings
+                            .values()
+                            .flat_map(|drawing| drawing.objects.iter())
+                            .find_map(|object| match object {
+                                DrawingObjectModel::ChartFrame(chart_object)
+                                    if chart_object.chart_id == chart_id =>
+                                {
+                                    Some(chart_object.id)
+                                }
+                                DrawingObjectModel::ChartFrame(_)
+                                | DrawingObjectModel::UnsupportedRaw { .. } => None,
+                            })
+                            .ok_or_else(|| {
+                                OmError::new(OmErrorCode::NotFound, "chart not found")
+                            })?;
+                        return Ok(OmValue::Bool(
+                            self.delete_unpersisted_chart_object(workbook, chart_object_id)?,
                         ));
                     };
                     Ok(OmValue::Bool(
@@ -6875,6 +6905,7 @@ impl ExcelRuntime {
                             | "Parent"
                             | "Activate"
                             | "Select"
+                            | "Delete"
                     )
                     | (
                         "Chart",
@@ -12824,6 +12855,139 @@ impl ExcelRuntime {
             .chart_sheets
             .iter()
             .find_map(|(sheet_id, binding)| (binding.chart_id == chart_id).then_some(*sheet_id)))
+    }
+
+    fn delete_unpersisted_chart_object(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_object_id: ChartObjectId,
+    ) -> OmResult<bool> {
+        let chart_object = self.chart_object_model(workbook, chart_object_id)?.clone();
+        let chart = self.chart_model(workbook, chart_object.chart_id)?;
+        if chart_object.raw_binding.is_some() || chart.raw_part_uri.is_some() {
+            return Err(OmError::unsupported(
+                "ChartObject.Delete for persisted chart objects is not implemented",
+            ));
+        }
+
+        {
+            let runtime = self.runtime_workbook_mut(workbook)?;
+            if runtime.read_only {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    "cannot modify a read-only workbook",
+                ));
+            }
+            let Some((drawing_id, object_index)) =
+                runtime
+                    .loaded
+                    .state
+                    .drawings
+                    .iter()
+                    .find_map(|(drawing_id, drawing)| {
+                        drawing
+                            .objects
+                            .iter()
+                            .position(|object| match object {
+                                DrawingObjectModel::ChartFrame(candidate) => {
+                                    candidate.id == chart_object_id
+                                }
+                                DrawingObjectModel::UnsupportedRaw { .. } => false,
+                            })
+                            .map(|object_index| (*drawing_id, object_index))
+                    })
+            else {
+                return Err(OmError::new(
+                    OmErrorCode::NotFound,
+                    "chart object not found",
+                ));
+            };
+
+            let drawing_is_empty = {
+                let drawing = runtime
+                    .loaded
+                    .state
+                    .drawings
+                    .get_mut(&drawing_id)
+                    .expect("drawing id located above");
+                drawing.objects.remove(object_index);
+                drawing.dirty = true;
+                drawing.raw_part_uri.is_none() && drawing.objects.is_empty()
+            };
+            if drawing_is_empty {
+                runtime.loaded.state.drawings.remove(&drawing_id);
+            }
+            runtime.loaded.state.charts.remove(&chart_object.chart_id);
+            runtime.dirty = true;
+        }
+
+        let stale_object_ids = self
+            .objects
+            .iter()
+            .filter_map(|(&object_id, object)| match object {
+                RuntimeObjectKind::ChartObject {
+                    workbook: object_workbook,
+                    chart_object_id: object_chart_object_id,
+                } if *object_workbook == workbook && *object_chart_object_id == chart_object_id => {
+                    Some(object_id)
+                }
+                RuntimeObjectKind::Chart {
+                    workbook: object_workbook,
+                    chart_id,
+                }
+                | RuntimeObjectKind::ChartArea {
+                    workbook: object_workbook,
+                    chart_id,
+                }
+                | RuntimeObjectKind::PlotArea {
+                    workbook: object_workbook,
+                    chart_id,
+                }
+                | RuntimeObjectKind::ChartTitle {
+                    workbook: object_workbook,
+                    chart_id,
+                }
+                | RuntimeObjectKind::Legend {
+                    workbook: object_workbook,
+                    chart_id,
+                }
+                | RuntimeObjectKind::Axes {
+                    workbook: object_workbook,
+                    chart_id,
+                }
+                | RuntimeObjectKind::Axis {
+                    workbook: object_workbook,
+                    chart_id,
+                    ..
+                }
+                | RuntimeObjectKind::AxisTitle {
+                    workbook: object_workbook,
+                    chart_id,
+                    ..
+                }
+                | RuntimeObjectKind::SeriesCollection {
+                    workbook: object_workbook,
+                    chart_id,
+                }
+                | RuntimeObjectKind::Series {
+                    workbook: object_workbook,
+                    chart_id,
+                    ..
+                } if *object_workbook == workbook && *chart_id == chart_object.chart_id => {
+                    Some(object_id)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for object_id in stale_object_ids {
+            self.objects.remove(&object_id);
+            self.stale_objects.insert(object_id);
+        }
+        if self.active_chart == Some((workbook, chart_object.chart_id)) {
+            self.active_chart = None;
+        }
+
+        Ok(true)
     }
 
     fn series_model(
@@ -68284,6 +68448,134 @@ mod tests {
                 .dispatch_get(reopened_series, "XValues", &[])
                 .expect("reopened Series.XValues"),
             OmValue::Text("='Data 2026'!$A$1:$A$3".to_string())
+        );
+    }
+
+    #[test]
+    fn chartobject_delete_removes_unpersisted_embedded_chart_before_save() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        runtime
+            .dispatch_invoke(chart_object, "Activate", &[])
+            .expect("ChartObject.Activate");
+        assert!(matches!(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                .expect("ActiveChart after ChartObject.Activate"),
+            OmValue::Object(_)
+        ));
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_object, "Delete", &[])
+                .expect("ChartObject.Delete"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count after delete")
+            ),
+            0.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                .expect("ActiveChart after ChartObject.Delete"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "Name", &[])
+                .expect_err("deleted ChartObject handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ChartType", &[])
+                .expect_err("deleted embedded Chart handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after ChartObject.Delete");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        assert!(!saved_package.contains("xl/charts/chart1.xml"));
+        assert!(!saved_package.contains("xl/drawings/drawing1.xml"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after ChartObject.Delete");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_objects, "Count", &[])
+                    .expect("reopened ChartObjects.Count")
+            ),
+            0.0
         );
     }
 
