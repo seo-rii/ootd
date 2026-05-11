@@ -12968,7 +12968,7 @@ impl ExcelRuntime {
                 .expect("replacement worksheet should exist")
         };
 
-        {
+        let (removed_chart_object_ids, removed_chart_ids) = {
             let runtime = self.runtime_workbook_mut(workbook)?;
             let worksheet_index = runtime
                 .loaded
@@ -12992,6 +12992,7 @@ impl ExcelRuntime {
                     (drawing.host_sheet_id == sheet_id).then_some(*drawing_id)
                 })
                 .collect::<Vec<_>>();
+            let mut removed_chart_object_ids = BTreeSet::new();
             let mut removed_chart_ids = BTreeSet::new();
             let mut drawing_chart_part_uris_to_remove = BTreeSet::<String>::new();
             for drawing_id in removed_drawing_ids {
@@ -13003,6 +13004,7 @@ impl ExcelRuntime {
                     }
                     for object in drawing.objects {
                         if let DrawingObjectModel::ChartFrame(chart_object) = object {
+                            removed_chart_object_ids.insert(chart_object.id);
                             removed_chart_ids.insert(chart_object.chart_id);
                         }
                     }
@@ -13030,6 +13032,7 @@ impl ExcelRuntime {
                         })
                 })
                 .collect::<Vec<_>>();
+            let removed_chart_ids_for_handles = removed_chart_ids.clone();
             for chart_id in removed_chart_ids {
                 if let Some(chart) = runtime.loaded.state.charts.remove(&chart_id)
                     && let Some(part_uri) = chart.raw_part_uri
@@ -13140,10 +13143,20 @@ impl ExcelRuntime {
             }
 
             runtime.dirty = true;
-        }
+            (
+                removed_chart_object_ids.into_iter().collect::<Vec<_>>(),
+                removed_chart_ids_for_handles,
+            )
+        };
 
         self.invalidate_workbook_calc_chain(workbook)?;
         self.invalidate_sheet_object_handles(workbook, sheet_id);
+        for chart_object_id in removed_chart_object_ids {
+            self.stale_chart_object_handles_for_id(workbook, chart_object_id);
+        }
+        for chart_id in removed_chart_ids {
+            self.stale_chart_handles_for_chart(workbook, chart_id);
+        }
         if deleted_was_active {
             self.set_selection(workbook, replacement_sheet_id, Rect::single_cell(1, 1));
         }
@@ -14051,68 +14064,8 @@ impl ExcelRuntime {
             runtime.dirty = true;
         }
 
-        let stale_object_ids = self
-            .objects
-            .iter()
-            .filter_map(|(&object_id, object)| match object {
-                RuntimeObjectKind::ChartObject {
-                    workbook: object_workbook,
-                    chart_object_id: object_chart_object_id,
-                } if *object_workbook == workbook && *object_chart_object_id == chart_object_id => {
-                    Some(object_id)
-                }
-                RuntimeObjectKind::Chart {
-                    workbook: object_workbook,
-                    chart_id,
-                }
-                | RuntimeObjectKind::ChartArea {
-                    workbook: object_workbook,
-                    chart_id,
-                }
-                | RuntimeObjectKind::PlotArea {
-                    workbook: object_workbook,
-                    chart_id,
-                }
-                | RuntimeObjectKind::ChartTitle {
-                    workbook: object_workbook,
-                    chart_id,
-                }
-                | RuntimeObjectKind::Legend {
-                    workbook: object_workbook,
-                    chart_id,
-                }
-                | RuntimeObjectKind::Axes {
-                    workbook: object_workbook,
-                    chart_id,
-                }
-                | RuntimeObjectKind::Axis {
-                    workbook: object_workbook,
-                    chart_id,
-                    ..
-                }
-                | RuntimeObjectKind::AxisTitle {
-                    workbook: object_workbook,
-                    chart_id,
-                    ..
-                }
-                | RuntimeObjectKind::SeriesCollection {
-                    workbook: object_workbook,
-                    chart_id,
-                }
-                | RuntimeObjectKind::Series {
-                    workbook: object_workbook,
-                    chart_id,
-                    ..
-                } if *object_workbook == workbook && *chart_id == chart_object.chart_id => {
-                    Some(object_id)
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        for object_id in stale_object_ids {
-            self.objects.remove(&object_id);
-            self.stale_objects.insert(object_id);
-        }
+        self.stale_chart_object_handles_for_id(workbook, chart_object_id);
+        self.stale_chart_handles_for_chart(workbook, chart_object.chart_id);
         if self.active_chart == Some((workbook, chart_object.chart_id)) {
             self.active_chart = None;
         }
@@ -14177,6 +14130,89 @@ impl ExcelRuntime {
                     ..
                 }
                 | RuntimeObjectKind::AxisTitle {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    ..
+                } if *object_workbook == workbook && *object_chart_id == chart_id => {
+                    Some(object_id)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for object_id in stale_object_ids {
+            self.objects.remove(&object_id);
+            self.stale_objects.insert(object_id);
+        }
+    }
+
+    fn stale_chart_object_handles_for_id(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_object_id: ChartObjectId,
+    ) {
+        let stale_object_ids = self
+            .objects
+            .iter()
+            .filter_map(|(&object_id, object)| match object {
+                RuntimeObjectKind::ChartObject {
+                    workbook: object_workbook,
+                    chart_object_id: object_chart_object_id,
+                } if *object_workbook == workbook && *object_chart_object_id == chart_object_id => {
+                    Some(object_id)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for object_id in stale_object_ids {
+            self.objects.remove(&object_id);
+            self.stale_objects.insert(object_id);
+        }
+    }
+
+    fn stale_chart_handles_for_chart(&mut self, workbook: WorkbookHandle, chart_id: ChartId) {
+        let stale_object_ids = self
+            .objects
+            .iter()
+            .filter_map(|(&object_id, object)| match object {
+                RuntimeObjectKind::Chart {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                }
+                | RuntimeObjectKind::ChartArea {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                }
+                | RuntimeObjectKind::PlotArea {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                }
+                | RuntimeObjectKind::ChartTitle {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                }
+                | RuntimeObjectKind::Legend {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                }
+                | RuntimeObjectKind::Axes {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                }
+                | RuntimeObjectKind::Axis {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    ..
+                }
+                | RuntimeObjectKind::AxisTitle {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    ..
+                }
+                | RuntimeObjectKind::SeriesCollection {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                }
+                | RuntimeObjectKind::Series {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
                     ..
@@ -67808,6 +67844,11 @@ mod tests {
                 .dispatch_invoke(charts, "Add", &[])
                 .expect("Charts.Add"),
         );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("Chart.ChartArea"),
+        );
         let worksheets = expect_object_handle(
             runtime
                 .dispatch_get(workbook.0, "Worksheets", &[])
@@ -67892,6 +67933,20 @@ mod tests {
                 .dispatch_get(application, "ActiveChart", &[])
                 .expect("ActiveChart after Chart.Delete"),
             OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ChartType", &[])
+                .expect_err("deleted chart sheet Chart handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_area, "Select", &[])
+                .expect_err("deleted chart sheet ChartArea handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
         );
         let saved = runtime
             .save_workbook(
@@ -71615,6 +71670,122 @@ mod tests {
             )
             .expect("save workbook after ChartObjects.Delete");
         let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        assert!(!saved_package.contains("xl/charts/chart1.xml"));
+        assert!(!saved_package.contains("xl/drawings/drawing1.xml"));
+    }
+
+    #[test]
+    fn worksheet_delete_invalidates_embedded_chart_handles() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with embedded chart");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("Chart.ChartArea"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+
+        runtime
+            .dispatch_invoke(worksheets, "Add", &[])
+            .expect("Worksheets.Add replacement sheet");
+        runtime
+            .dispatch_set(
+                runtime.root_application(),
+                "DisplayAlerts",
+                OmValue::Bool(false),
+                &[],
+            )
+            .expect("disable DisplayAlerts");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(worksheet, "Delete", &[])
+                .expect("delete worksheet with embedded chart"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_objects, "Count", &[])
+                .expect_err("deleted worksheet ChartObjects handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "Name", &[])
+                .expect_err("deleted worksheet ChartObject handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ChartType", &[])
+                .expect_err("deleted worksheet Chart handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_area, "Select", &[])
+                .expect_err("deleted worksheet ChartArea handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series_collection, "Count", &[])
+                .expect_err("deleted worksheet SeriesCollection handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after worksheet chart deletion");
+        let saved_package =
+            OpcPackage::from_bytes(&saved).expect("saved worksheet chart deletion package");
         assert!(!saved_package.contains("xl/charts/chart1.xml"));
         assert!(!saved_package.contains("xl/drawings/drawing1.xml"));
     }
