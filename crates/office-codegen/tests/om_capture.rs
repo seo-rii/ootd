@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 6);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 141);
-    assert_eq!(summary.stub_member_count, 141);
+    assert_eq!(summary.member_count, 143);
+    assert_eq!(summary.stub_member_count, 143);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1395,8 +1395,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|entry| entry.name == "Range")
         .expect("Range");
 
-    assert_eq!(application.member_count, 40);
-    assert_eq!(workbook.member_count, 20);
+    assert_eq!(application.member_count, 41);
+    assert_eq!(workbook.member_count, 21);
     assert_eq!(worksheet.member_count, 20);
     assert_eq!(range.member_count, 50);
     assert_eq!(
@@ -2481,8 +2481,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 141);
-    assert_eq!(coverage.support_counts.stub, 141);
+    assert_eq!(coverage.member_count, 143);
+    assert_eq!(coverage.support_counts.stub, 143);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -2506,14 +2506,15 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|entry| entry.name == "Range")
         .expect("Range coverage");
 
-    assert_eq!(application_coverage.member_count, 40);
-    assert_eq!(application_coverage.support_counts.stub, 40);
+    assert_eq!(application_coverage.member_count, 41);
+    assert_eq!(application_coverage.support_counts.stub, 41);
     assert_eq!(
         application_coverage.stub_members,
         vec![
             "Workbooks".to_string(),
             "Worksheets".to_string(),
             "Sheets".to_string(),
+            "Charts".to_string(),
             "ActiveWorkbook".to_string(),
             "ActiveSheet".to_string(),
             "ActiveCell".to_string(),
@@ -2554,13 +2555,14 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(workbook_coverage.member_count, 20);
-    assert_eq!(workbook_coverage.support_counts.stub, 20);
+    assert_eq!(workbook_coverage.member_count, 21);
+    assert_eq!(workbook_coverage.support_counts.stub, 21);
     assert_eq!(
         workbook_coverage.stub_members,
         vec![
             "Worksheets".to_string(),
             "Sheets".to_string(),
+            "Charts".to_string(),
             "ActiveSheet".to_string(),
             "Activate".to_string(),
             "Name".to_string(),
