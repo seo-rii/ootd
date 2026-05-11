@@ -9389,15 +9389,31 @@ impl ExcelRuntime {
                             .unwrap_or_default()
                             + 1,
                     );
-                    let chart_object_count = runtime
+                    let existing_chart_object_names = runtime
                         .loaded
                         .state
                         .drawings
                         .values()
                         .filter(|drawing| drawing.host_sheet_id == sheet_id)
                         .flat_map(|drawing| drawing.objects.iter())
-                        .filter(|object| matches!(object, DrawingObjectModel::ChartFrame(_)))
-                        .count();
+                        .filter_map(|object| match object {
+                            DrawingObjectModel::ChartFrame(chart_object) => {
+                                Some(chart_object.name.as_str())
+                            }
+                            DrawingObjectModel::UnsupportedRaw { .. } => None,
+                        })
+                        .collect::<Vec<_>>();
+                    let mut chart_object_number = existing_chart_object_names.len() + 1;
+                    let chart_object_name = loop {
+                        let candidate = format!("Chart {chart_object_number}");
+                        if !existing_chart_object_names
+                            .iter()
+                            .any(|name| name.eq_ignore_ascii_case(&candidate))
+                        {
+                            break candidate;
+                        }
+                        chart_object_number += 1;
+                    };
                     let drawing_id = if let Some(existing_drawing_id) = runtime
                         .loaded
                         .state
@@ -9473,7 +9489,7 @@ impl ExcelRuntime {
                             workbook_id,
                             host_sheet_id: sheet_id,
                             chart_id,
-                            name: format!("Chart {}", chart_object_count + 1),
+                            name: chart_object_name,
                             anchor: Some(DrawingAnchor::Absolute(AbsoluteAnchor {
                                 position: PointEmu {
                                     x: geometry[0],
@@ -69998,6 +70014,108 @@ mod tests {
                     .expect("new ChartObject.Index after add")
             ),
             2.0
+        );
+    }
+
+    #[test]
+    fn chartobjects_add_generates_unique_default_names() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let first_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("first ChartObjects.Add"),
+        );
+        runtime
+            .dispatch_set(
+                first_chart_object,
+                "Name",
+                OmValue::Text("Chart 2".to_string()),
+                &[],
+            )
+            .expect("rename first ChartObject");
+        let second_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(24.0),
+                        OmValue::Number(30.0),
+                        OmValue::Number(180.0),
+                        OmValue::Number(90.0),
+                    ],
+                )
+                .expect("second ChartObjects.Add"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(second_chart_object, "Name", &[])
+                    .expect("second ChartObject.Name")
+            ),
+            "Chart 3"
+        );
+        let chart_three = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Item",
+                    &[OmValue::Text("chart 3".to_string())],
+                )
+                .expect("ChartObjects.Item(\"chart 3\")"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_three, "Index", &[])
+                    .expect("Chart 3 Index")
+            ),
+            2.0
+        );
+        let chart_two = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Item",
+                    &[OmValue::Text("chart 2".to_string())],
+                )
+                .expect("ChartObjects.Item(\"chart 2\")"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_two, "Index", &[])
+                    .expect("Chart 2 Index")
+            ),
+            1.0
         );
     }
 
