@@ -7158,21 +7158,78 @@ impl ExcelRuntime {
                 workbook,
                 chart_id,
                 axis_index,
-            } => match member {
-                "Select" => {
-                    if !args.is_empty() {
-                        return Err(OmError::invalid_argument(
-                            "Axis.Select does not accept arguments",
-                        ));
+            } => {
+                match member {
+                    "Select" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "Axis.Select does not accept arguments",
+                            ));
+                        }
+                        self.axis_model(workbook, chart_id, axis_index)?;
+                        let chart = self.register_chart_handle(workbook, chart_id);
+                        self.dispatch_invoke(chart, "Select", &[])
                     }
-                    self.axis_model(workbook, chart_id, axis_index)?;
-                    let chart = self.register_chart_handle(workbook, chart_id);
-                    self.dispatch_invoke(chart, "Select", &[])
+                    "Delete" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "Axis.Delete does not accept arguments",
+                            ));
+                        }
+                        {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            if axis_index >= chart.axes.len() {
+                                return Err(OmError::new(OmErrorCode::NotFound, "axis not found"));
+                            }
+                            chart.axes.remove(axis_index);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        let stale_object_ids = self
+                            .objects
+                            .iter()
+                            .filter_map(|(&object_id, object)| match object {
+                                RuntimeObjectKind::Axes {
+                                    workbook: object_workbook,
+                                    chart_id: object_chart_id,
+                                }
+                                | RuntimeObjectKind::Axis {
+                                    workbook: object_workbook,
+                                    chart_id: object_chart_id,
+                                    ..
+                                }
+                                | RuntimeObjectKind::AxisTitle {
+                                    workbook: object_workbook,
+                                    chart_id: object_chart_id,
+                                    ..
+                                } if *object_workbook == workbook
+                                    && *object_chart_id == chart_id =>
+                                {
+                                    Some(object_id)
+                                }
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>();
+                        for object_id in stale_object_ids {
+                            self.objects.remove(&object_id);
+                            self.stale_objects.insert(object_id);
+                        }
+                        Ok(OmValue::Empty)
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "Axis.{member} is not implemented as a method"
+                    ))),
                 }
-                _ => Err(OmError::unsupported(format!(
-                    "Axis.{member} is not implemented as a method"
-                ))),
-            },
+            }
             RuntimeObjectKind::ChartTitle { workbook, chart_id } => {
                 match member {
                     "Select" => {
@@ -7457,6 +7514,7 @@ impl ExcelRuntime {
                             | "Application"
                             | "Parent"
                             | "Select"
+                            | "Delete"
                     )
                     | (
                         "AxisTitle",
@@ -70574,6 +70632,168 @@ mod tests {
             reopened_runtime
                 .dispatch_get(reopened_chart_object, "Chart", &[])
                 .expect("reopened ChartObject.Chart"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "HasAxis",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("reopened Chart.HasAxis(xlCategory)"),
+            OmValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn chart_axis_delete_removes_axis_and_roundtrips() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let axes = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Axes", &[])
+                .expect("Chart.Axes collection"),
+        );
+        let value_axis = expect_object_handle(
+            runtime
+                .dispatch_invoke(axes, "Item", &[OmValue::Number(f64::from(super::XL_VALUE))])
+                .expect("Axes.Item(xlValue)"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(value_axis, "Delete", &[OmValue::Bool(true)])
+                .expect_err("Axis.Delete rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+
+        runtime
+            .dispatch_invoke(value_axis, "Delete", &[])
+            .expect("Axis.Delete");
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "Type", &[])
+                .expect_err("deleted Axis handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(axes, "Count", &[])
+                .expect_err("Axes handle should be stale after Axis.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "HasAxis",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.HasAxis(xlValue) after Axis.Delete"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect_err("Chart.Axes(xlValue) after Axis.Delete")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        let refreshed_axes = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Axes", &[])
+                .expect("Chart.Axes collection after Axis.Delete"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(refreshed_axes, "Count", &[])
+                    .expect("Axes.Count after Axis.Delete")
+            ),
+            1.0
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after Axis.Delete");
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after Axis.Delete");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "HasAxis",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("reopened Chart.HasAxis(xlValue)"),
+            OmValue::Bool(false)
         );
         assert_eq!(
             reopened_runtime
