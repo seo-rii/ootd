@@ -9331,22 +9331,32 @@ impl ExcelRuntime {
     ) -> OmResult<OmValue> {
         match member {
             "Item" => {
-                let [index] = args else {
+                let [axis_type] = args else {
                     return Err(OmError::invalid_argument(
-                        "Axes.Item expects a single 1-based index",
+                        "Axes.Item expects a single XlAxisType value",
                     ));
                 };
-                let index = coerce_u32_arg(index, "Axes.Item index")? as usize;
-                if index == 0 || index > self.chart_model(workbook, chart_id)?.axes.len() {
-                    return Err(OmError::invalid_argument(
-                        "Axes.Item index is out of bounds",
-                    ));
-                }
+                let axis_type = coerce_u32_arg(axis_type, "Axes.Item axis type")?;
+                let axis_index = self
+                    .chart_model(workbook, chart_id)?
+                    .axes
+                    .iter()
+                    .position(|axis| match axis_type as i32 {
+                        XL_CATEGORY => {
+                            matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date)
+                        }
+                        XL_VALUE => axis.kind == ChartAxisKind::Value,
+                        XL_SERIES_AXIS => axis.kind == ChartAxisKind::Series,
+                        _ => false,
+                    })
+                    .ok_or_else(|| {
+                        OmError::invalid_argument("Axes.Item axis type is not available")
+                    })?;
                 Ok(OmValue::Object(self.register_object(
                     RuntimeObjectKind::Axis {
                         workbook,
                         chart_id,
-                        axis_index: index - 1,
+                        axis_index,
                     },
                 )))
             }
@@ -68557,6 +68567,106 @@ mod tests {
                 .dispatch_get(reopened_series, "XValues", &[])
                 .expect("reopened Series.XValues"),
             OmValue::Text("='Data 2026'!$A$1:$A$3".to_string())
+        );
+    }
+
+    #[test]
+    fn chart_axes_item_uses_excel_axis_type_constants() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            r#"<c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx><c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx>"#,
+            r#"<c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx><c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with reversed axes");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+
+        let category_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.Axes(xlCategory)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(category_axis, "Type", &[])
+                    .expect("category Axis.Type")
+            ),
+            f64::from(super::XL_CATEGORY)
+        );
+        let category_title = expect_object_handle(
+            runtime
+                .dispatch_get(category_axis, "AxisTitle", &[])
+                .expect("category Axis.AxisTitle"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(category_title, "Text", &[])
+                    .expect("category AxisTitle.Text")
+            ),
+            "Quarter"
+        );
+
+        let value_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.Axes(xlValue)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(value_axis, "Type", &[])
+                    .expect("value Axis.Type")
+            ),
+            f64::from(super::XL_VALUE)
         );
     }
 
