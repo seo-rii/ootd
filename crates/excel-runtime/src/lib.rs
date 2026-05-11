@@ -6890,7 +6890,10 @@ impl ExcelRuntime {
                         "Name",
                         "Name" | "RefersTo" | "RefersToRange" | "Application" | "Parent" | "Delete"
                     )
-                    | ("ChartObjects", "Count" | "Item" | "Application" | "Parent")
+                    | (
+                        "ChartObjects",
+                        "Count" | "Item" | "Application" | "Parent" | "Delete"
+                    )
                     | (
                         "ChartObject",
                         "Name"
@@ -8708,6 +8711,31 @@ impl ExcelRuntime {
                 Ok(OmValue::Object(
                     self.register_chart_object_handle(workbook, chart_object_id),
                 ))
+            }
+            "Delete" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ChartObjects.Delete does not accept arguments",
+                    ));
+                }
+                let chart_object_ids = self
+                    .chart_object_entries_for_sheet(workbook, sheet_id)?
+                    .into_iter()
+                    .map(|(chart_object_id, _)| chart_object_id)
+                    .collect::<Vec<_>>();
+                for chart_object_id in &chart_object_ids {
+                    let chart_object = self.chart_object_model(workbook, *chart_object_id)?;
+                    let chart = self.chart_model(workbook, chart_object.chart_id)?;
+                    if chart_object.raw_binding.is_some() || chart.raw_part_uri.is_some() {
+                        return Err(OmError::unsupported(
+                            "ChartObjects.Delete for persisted chart objects is not implemented",
+                        ));
+                    }
+                }
+                for chart_object_id in chart_object_ids {
+                    self.delete_unpersisted_chart_object(workbook, chart_object_id)?;
+                }
+                Ok(OmValue::Empty)
             }
             "Add" => {
                 let [left, top, width, height] = args else {
@@ -68577,6 +68605,111 @@ mod tests {
             ),
             0.0
         );
+    }
+
+    #[test]
+    fn chartobjects_delete_removes_unpersisted_embedded_chart_collection() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let first_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("first ChartObjects.Add"),
+        );
+        let first_chart = expect_object_handle(
+            runtime
+                .dispatch_get(first_chart_object, "Chart", &[])
+                .expect("first ChartObject.Chart"),
+        );
+        runtime
+            .dispatch_invoke(
+                chart_objects,
+                "Add",
+                &[
+                    OmValue::Number(20.0),
+                    OmValue::Number(28.0),
+                    OmValue::Number(120.0),
+                    OmValue::Number(80.0),
+                ],
+            )
+            .expect("second ChartObjects.Add");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count before delete")
+            ),
+            2.0
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_objects, "Delete", &[])
+                .expect("ChartObjects.Delete"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count after delete")
+            ),
+            0.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_chart_object, "Name", &[])
+                .expect_err("deleted collection ChartObject handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_chart, "ChartType", &[])
+                .expect_err("deleted collection Chart handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after ChartObjects.Delete");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        assert!(!saved_package.contains("xl/charts/chart1.xml"));
+        assert!(!saved_package.contains("xl/drawings/drawing1.xml"));
     }
 
     #[test]
