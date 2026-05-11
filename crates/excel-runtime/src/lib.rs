@@ -6821,6 +6821,16 @@ impl ExcelRuntime {
                 series_index,
             } => {
                 match member {
+                    "Select" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "Series.Select does not accept arguments",
+                            ));
+                        }
+                        self.series_model(workbook, chart_id, series_index)?;
+                        let chart = self.register_chart_handle(workbook, chart_id);
+                        self.dispatch_invoke(chart, "Select", &[])
+                    }
                     "Delete" => {
                         if !args.is_empty() {
                             return Err(OmError::invalid_argument(
@@ -6860,13 +6870,72 @@ impl ExcelRuntime {
                     ))),
                 }
             }
-            RuntimeObjectKind::ChartArea { .. }
-            | RuntimeObjectKind::PlotArea { .. }
-            | RuntimeObjectKind::Axis { .. } => Err(OmError::unsupported(format!(
-                "member {member} is not implemented as a method for this object handle"
-            ))),
+            RuntimeObjectKind::ChartArea { workbook, chart_id } => match member {
+                "Select" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "ChartArea.Select does not accept arguments",
+                        ));
+                    }
+                    self.chart_model(workbook, chart_id)?;
+                    let chart = self.register_chart_handle(workbook, chart_id);
+                    self.dispatch_invoke(chart, "Select", &[])
+                }
+                _ => Err(OmError::unsupported(format!(
+                    "ChartArea.{member} is not implemented as a method"
+                ))),
+            },
+            RuntimeObjectKind::PlotArea { workbook, chart_id } => match member {
+                "Select" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "PlotArea.Select does not accept arguments",
+                        ));
+                    }
+                    self.chart_model(workbook, chart_id)?;
+                    let chart = self.register_chart_handle(workbook, chart_id);
+                    self.dispatch_invoke(chart, "Select", &[])
+                }
+                _ => Err(OmError::unsupported(format!(
+                    "PlotArea.{member} is not implemented as a method"
+                ))),
+            },
+            RuntimeObjectKind::Axis {
+                workbook,
+                chart_id,
+                axis_index,
+            } => match member {
+                "Select" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "Axis.Select does not accept arguments",
+                        ));
+                    }
+                    self.axis_model(workbook, chart_id, axis_index)?;
+                    let chart = self.register_chart_handle(workbook, chart_id);
+                    self.dispatch_invoke(chart, "Select", &[])
+                }
+                _ => Err(OmError::unsupported(format!(
+                    "Axis.{member} is not implemented as a method"
+                ))),
+            },
             RuntimeObjectKind::ChartTitle { workbook, chart_id } => {
                 match member {
+                    "Select" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "ChartTitle.Select does not accept arguments",
+                            ));
+                        }
+                        if self.chart_model(workbook, chart_id)?.title.is_none() {
+                            return Err(OmError::new(
+                                OmErrorCode::NotFound,
+                                "chart title not found",
+                            ));
+                        }
+                        let chart = self.register_chart_handle(workbook, chart_id);
+                        self.dispatch_invoke(chart, "Select", &[])
+                    }
                     "Delete" => {
                         if !args.is_empty() {
                             return Err(OmError::invalid_argument(
@@ -6904,6 +6973,26 @@ impl ExcelRuntime {
             }
             RuntimeObjectKind::Legend { workbook, chart_id } => {
                 match member {
+                    "Select" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "Legend.Select does not accept arguments",
+                            ));
+                        }
+                        if !self
+                            .chart_model(workbook, chart_id)?
+                            .legend
+                            .as_ref()
+                            .is_some_and(|legend| legend.visible)
+                        {
+                            return Err(OmError::new(
+                                OmErrorCode::NotFound,
+                                "chart legend not found",
+                            ));
+                        }
+                        let chart = self.register_chart_handle(workbook, chart_id);
+                        self.dispatch_invoke(chart, "Select", &[])
+                    }
                     "Delete" => {
                         if !args.is_empty() {
                             return Err(OmError::invalid_argument(
@@ -6946,6 +7035,25 @@ impl ExcelRuntime {
                 axis_index,
             } => {
                 match member {
+                    "Select" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "AxisTitle.Select does not accept arguments",
+                            ));
+                        }
+                        if self
+                            .axis_model(workbook, chart_id, axis_index)?
+                            .title
+                            .is_none()
+                        {
+                            return Err(OmError::new(
+                                OmErrorCode::NotFound,
+                                "axis title not found",
+                            ));
+                        }
+                        let chart = self.register_chart_handle(workbook, chart_id);
+                        self.dispatch_invoke(chart, "Select", &[])
+                    }
                     "Delete" => {
                         if !args.is_empty() {
                             return Err(OmError::invalid_argument(
@@ -7074,21 +7182,24 @@ impl ExcelRuntime {
                             | "Select"
                             | "Delete"
                     )
-                    | ("ChartArea", "Application" | "Parent")
-                    | ("PlotArea", "Application" | "Parent")
+                    | ("ChartArea", "Application" | "Parent" | "Select")
+                    | ("PlotArea", "Application" | "Parent" | "Select")
                     | (
                         "ChartTitle",
-                        "Text" | "Caption" | "Application" | "Parent" | "Delete"
+                        "Text" | "Caption" | "Application" | "Parent" | "Select" | "Delete"
                     )
-                    | ("Legend", "Position" | "Application" | "Parent" | "Delete")
+                    | (
+                        "Legend",
+                        "Position" | "Application" | "Parent" | "Select" | "Delete"
+                    )
                     | ("Axes", "Count" | "Item" | "Application" | "Parent")
                     | (
                         "Axis",
-                        "Type" | "HasTitle" | "AxisTitle" | "Application" | "Parent"
+                        "Type" | "HasTitle" | "AxisTitle" | "Application" | "Parent" | "Select"
                     )
                     | (
                         "AxisTitle",
-                        "Text" | "Caption" | "Application" | "Parent" | "Delete"
+                        "Text" | "Caption" | "Application" | "Parent" | "Select" | "Delete"
                     )
                     | (
                         "SeriesCollection",
@@ -7103,6 +7214,7 @@ impl ExcelRuntime {
                             | "PlotOrder"
                             | "Application"
                             | "Parent"
+                            | "Select"
                     )
             )
         {
@@ -66997,6 +67109,129 @@ mod tests {
                 .expect_err("embedded Chart.Delete should be unsupported")
                 .code,
             OmErrorCode::Unsupported
+        );
+    }
+
+    #[test]
+    fn loaded_chart_child_select_methods_activate_embedded_chart() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("Chart.ChartArea"),
+        );
+        let plot_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "PlotArea", &[])
+                .expect("Chart.PlotArea"),
+        );
+        let chart_title = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartTitle", &[])
+                .expect("Chart.ChartTitle"),
+        );
+        let legend = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Legend", &[])
+                .expect("Chart.Legend"),
+        );
+        let category_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.Axes(xlCategory)"),
+        );
+        let axis_title = expect_object_handle(
+            runtime
+                .dispatch_get(category_axis, "AxisTitle", &[])
+                .expect("Axis.AxisTitle"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+
+        for (target, label) in [
+            (chart_area, "ChartArea.Select"),
+            (plot_area, "PlotArea.Select"),
+            (chart_title, "ChartTitle.Select"),
+            (legend, "Legend.Select"),
+            (category_axis, "Axis.Select"),
+            (axis_title, "AxisTitle.Select"),
+            (series, "Series.Select"),
+        ] {
+            runtime
+                .dispatch_invoke(worksheet, "Activate", &[])
+                .expect("Worksheet.Activate clears ActiveChart");
+            assert_eq!(
+                runtime
+                    .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                    .expect("ActiveChart after Worksheet.Activate"),
+                OmValue::Empty
+            );
+            runtime
+                .dispatch_invoke(target, "Select", &[])
+                .unwrap_or_else(|error| panic!("{label} failed: {error:?}"));
+            let active_chart = expect_object_handle(
+                runtime
+                    .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                    .unwrap_or_else(|error| panic!("ActiveChart after {label} failed: {error:?}")),
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(active_chart, "Name", &[])
+                        .unwrap_or_else(|error| panic!(
+                            "ActiveChart.Name after {label} failed: {error:?}"
+                        ))
+                ),
+                "Embedded Revenue Chart"
+            );
+        }
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_title, "Select", &[OmValue::Bool(true)])
+                .expect_err("ChartTitle.Select rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 
