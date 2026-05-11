@@ -3388,40 +3388,42 @@ impl ExcelRuntime {
                                 "Chart.HasTitle expects a boolean value",
                             ));
                         };
-                        let runtime = self.runtime_workbook_mut(workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
-                        }
-                        let chart =
-                            runtime
-                                .loaded
-                                .state
-                                .charts
-                                .get_mut(&chart_id)
-                                .ok_or_else(|| {
-                                    OmError::new(OmErrorCode::NotFound, "chart not found")
-                                })?;
-                        let changed = if has_title {
-                            if chart.title.is_none() {
-                                chart.title = Some(ChartText {
-                                    text: String::new(),
-                                });
+                        let removed_title = {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            let mut removed_title = false;
+                            let changed = if has_title {
+                                if chart.title.is_none() {
+                                    chart.title = Some(ChartText {
+                                        text: String::new(),
+                                    });
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else if chart.title.is_some() {
+                                chart.title = None;
+                                removed_title = true;
                                 true
                             } else {
                                 false
+                            };
+                            if changed {
+                                chart.dirty = true;
+                                runtime.dirty = true;
                             }
-                        } else if chart.title.is_some() {
-                            chart.title = None;
-                            true
-                        } else {
-                            false
+                            removed_title
                         };
-                        if changed {
-                            chart.dirty = true;
-                            runtime.dirty = true;
+                        if removed_title {
+                            self.stale_chart_title_handles_for_chart(workbook, chart_id);
                         }
                         Ok(())
                     }
@@ -3537,49 +3539,51 @@ impl ExcelRuntime {
                                 "Chart.HasLegend expects a boolean value",
                             ));
                         };
-                        let runtime = self.runtime_workbook_mut(workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
-                        }
-                        let chart =
-                            runtime
-                                .loaded
-                                .state
-                                .charts
-                                .get_mut(&chart_id)
-                                .ok_or_else(|| {
-                                    OmError::new(OmErrorCode::NotFound, "chart not found")
-                                })?;
-                        let changed = if has_legend {
-                            match chart.legend.as_mut() {
-                                Some(legend) if legend.visible => false,
-                                Some(legend) => {
-                                    legend.visible = true;
-                                    if legend.position.is_none() {
-                                        legend.position = Some(ChartLegendPosition::Right);
-                                    }
-                                    true
-                                }
-                                None => {
-                                    chart.legend = Some(LegendModel {
-                                        visible: true,
-                                        position: Some(ChartLegendPosition::Right),
-                                    });
-                                    true
-                                }
+                        let removed_legend = {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
                             }
-                        } else if chart.legend.is_some() {
-                            chart.legend = None;
-                            true
-                        } else {
-                            false
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            let mut removed_legend = false;
+                            let changed = if has_legend {
+                                match chart.legend.as_mut() {
+                                    Some(legend) if legend.visible => false,
+                                    Some(legend) => {
+                                        legend.visible = true;
+                                        if legend.position.is_none() {
+                                            legend.position = Some(ChartLegendPosition::Right);
+                                        }
+                                        true
+                                    }
+                                    None => {
+                                        chart.legend = Some(LegendModel {
+                                            visible: true,
+                                            position: Some(ChartLegendPosition::Right),
+                                        });
+                                        true
+                                    }
+                                }
+                            } else if chart.legend.is_some() {
+                                chart.legend = None;
+                                removed_legend = true;
+                                true
+                            } else {
+                                false
+                            };
+                            if changed {
+                                chart.dirty = true;
+                                runtime.dirty = true;
+                            }
+                            removed_legend
                         };
-                        if changed {
-                            chart.dirty = true;
-                            runtime.dirty = true;
+                        if removed_legend {
+                            self.stale_legend_handles_for_chart(workbook, chart_id);
                         }
                         Ok(())
                     }
@@ -3719,44 +3723,45 @@ impl ExcelRuntime {
                                 "Axis.HasTitle expects a boolean value",
                             ));
                         };
-                        let runtime = self.runtime_workbook_mut(workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
-                        }
-                        let chart =
-                            runtime
-                                .loaded
-                                .state
-                                .charts
-                                .get_mut(&chart_id)
-                                .ok_or_else(|| {
-                                    OmError::new(OmErrorCode::NotFound, "chart not found")
-                                })?;
-                        let axis = chart
-                            .axes
-                            .get_mut(axis_index)
-                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
-                        let changed = if has_title {
-                            if axis.title.is_none() {
-                                axis.title = Some(ChartText {
-                                    text: String::new(),
-                                });
+                        let removed_axis_title = {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            let axis = chart.axes.get_mut(axis_index).ok_or_else(|| {
+                                OmError::new(OmErrorCode::NotFound, "axis not found")
+                            })?;
+                            let mut removed_axis_title = false;
+                            let changed = if has_title {
+                                if axis.title.is_none() {
+                                    axis.title = Some(ChartText {
+                                        text: String::new(),
+                                    });
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else if axis.title.is_some() {
+                                axis.title = None;
+                                removed_axis_title = true;
                                 true
                             } else {
                                 false
+                            };
+                            if changed {
+                                chart.dirty = true;
+                                runtime.dirty = true;
                             }
-                        } else if axis.title.is_some() {
-                            axis.title = None;
-                            true
-                        } else {
-                            false
+                            removed_axis_title
                         };
-                        if changed {
-                            chart.dirty = true;
-                            runtime.dirty = true;
+                        if removed_axis_title {
+                            self.stale_axis_title_handles_for_axis(workbook, chart_id, axis_index);
                         }
                         Ok(())
                     }
@@ -7250,8 +7255,7 @@ impl ExcelRuntime {
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
-                        self.objects.remove(&handle.0);
-                        self.stale_objects.insert(handle.0);
+                        self.stale_chart_title_handles_for_chart(workbook, chart_id);
                         Ok(OmValue::Empty)
                     }
                     _ => Err(OmError::unsupported(format!(
@@ -7308,8 +7312,7 @@ impl ExcelRuntime {
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
-                        self.objects.remove(&handle.0);
-                        self.stale_objects.insert(handle.0);
+                        self.stale_legend_handles_for_chart(workbook, chart_id);
                         Ok(OmValue::Empty)
                     }
                     _ => Err(OmError::unsupported(format!(
@@ -7371,8 +7374,7 @@ impl ExcelRuntime {
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
-                        self.objects.remove(&handle.0);
-                        self.stale_objects.insert(handle.0);
+                        self.stale_axis_title_handles_for_axis(workbook, chart_id, axis_index);
                         Ok(OmValue::Empty)
                     }
                     _ => Err(OmError::unsupported(format!(
@@ -14178,6 +14180,75 @@ impl ExcelRuntime {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
                     ..
+                } if *object_workbook == workbook && *object_chart_id == chart_id => {
+                    Some(object_id)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for object_id in stale_object_ids {
+            self.objects.remove(&object_id);
+            self.stale_objects.insert(object_id);
+        }
+    }
+
+    fn stale_axis_title_handles_for_axis(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        axis_index: usize,
+    ) {
+        let stale_object_ids = self
+            .objects
+            .iter()
+            .filter_map(|(&object_id, object)| match object {
+                RuntimeObjectKind::AxisTitle {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    axis_index: object_axis_index,
+                } if *object_workbook == workbook
+                    && *object_chart_id == chart_id
+                    && *object_axis_index == axis_index =>
+                {
+                    Some(object_id)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for object_id in stale_object_ids {
+            self.objects.remove(&object_id);
+            self.stale_objects.insert(object_id);
+        }
+    }
+
+    fn stale_chart_title_handles_for_chart(&mut self, workbook: WorkbookHandle, chart_id: ChartId) {
+        let stale_object_ids = self
+            .objects
+            .iter()
+            .filter_map(|(&object_id, object)| match object {
+                RuntimeObjectKind::ChartTitle {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                } if *object_workbook == workbook && *object_chart_id == chart_id => {
+                    Some(object_id)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for object_id in stale_object_ids {
+            self.objects.remove(&object_id);
+            self.stale_objects.insert(object_id);
+        }
+    }
+
+    fn stale_legend_handles_for_chart(&mut self, workbook: WorkbookHandle, chart_id: ChartId) {
+        let stale_object_ids = self
+            .objects
+            .iter()
+            .filter_map(|(&object_id, object)| match object {
+                RuntimeObjectKind::Legend {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
                 }
@@ -69194,10 +69265,20 @@ mod tests {
                 .dispatch_get(chart, "ChartTitle", &[])
                 .expect("Chart.ChartTitle"),
         );
+        let duplicate_chart_title = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartTitle", &[])
+                .expect("duplicate Chart.ChartTitle"),
+        );
         let legend = expect_object_handle(
             runtime
                 .dispatch_get(chart, "Legend", &[])
                 .expect("Chart.Legend"),
+        );
+        let duplicate_legend = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Legend", &[])
+                .expect("duplicate Chart.Legend"),
         );
         let category_axis = expect_object_handle(
             runtime
@@ -69213,6 +69294,11 @@ mod tests {
                 .dispatch_get(category_axis, "AxisTitle", &[])
                 .expect("Axis.AxisTitle"),
         );
+        let duplicate_axis_title = expect_object_handle(
+            runtime
+                .dispatch_get(category_axis, "AxisTitle", &[])
+                .expect("duplicate Axis.AxisTitle"),
+        );
 
         runtime
             .dispatch_invoke(axis_title, "Delete", &[])
@@ -69221,6 +69307,13 @@ mod tests {
             runtime
                 .dispatch_get(axis_title, "Text", &[])
                 .expect_err("deleted AxisTitle handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(duplicate_axis_title, "Text", &[])
+                .expect_err("duplicate deleted AxisTitle handle should be stale")
                 .code,
             OmErrorCode::InvalidState
         );
@@ -69242,6 +69335,13 @@ mod tests {
         );
         assert_eq!(
             runtime
+                .dispatch_get(duplicate_chart_title, "Text", &[])
+                .expect_err("duplicate deleted ChartTitle handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
                 .dispatch_get(chart, "HasTitle", &[])
                 .expect("Chart.HasTitle after ChartTitle.Delete"),
             OmValue::Bool(false)
@@ -69253,6 +69353,13 @@ mod tests {
             runtime
                 .dispatch_get(legend, "Position", &[])
                 .expect_err("deleted Legend handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(duplicate_legend, "Position", &[])
+                .expect_err("duplicate deleted Legend handle should be stale")
                 .code,
             OmErrorCode::InvalidState
         );
@@ -69282,6 +69389,181 @@ mod tests {
                 read_only: false,
             })
             .expect("reopen workbook after chart child deletes");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "HasTitle", &[])
+                .expect("reopened Chart.HasTitle"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "HasLegend", &[])
+                .expect("reopened Chart.HasLegend"),
+            OmValue::Bool(false)
+        );
+        let reopened_category_axis = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("reopened Chart.Axes(xlCategory)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_category_axis, "HasTitle", &[])
+                .expect("reopened Axis.HasTitle"),
+            OmValue::Bool(false)
+        );
+    }
+
+    #[test]
+    fn chart_child_handles_stale_after_parent_visibility_setters() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_title = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartTitle", &[])
+                .expect("Chart.ChartTitle"),
+        );
+        let legend = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Legend", &[])
+                .expect("Chart.Legend"),
+        );
+        let category_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.Axes(xlCategory)"),
+        );
+        let axis_title = expect_object_handle(
+            runtime
+                .dispatch_get(category_axis, "AxisTitle", &[])
+                .expect("Axis.AxisTitle"),
+        );
+
+        runtime
+            .dispatch_set(chart, "HasTitle", OmValue::Bool(false), &[])
+            .expect("clear Chart.HasTitle");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_title, "Text", &[])
+                .expect_err("ChartTitle handle removed through HasTitle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasTitle", &[])
+                .expect("Chart.HasTitle after clearing title"),
+            OmValue::Bool(false)
+        );
+
+        runtime
+            .dispatch_set(chart, "HasLegend", OmValue::Bool(false), &[])
+            .expect("clear Chart.HasLegend");
+        assert_eq!(
+            runtime
+                .dispatch_get(legend, "Position", &[])
+                .expect_err("Legend handle removed through HasLegend should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasLegend", &[])
+                .expect("Chart.HasLegend after clearing legend"),
+            OmValue::Bool(false)
+        );
+
+        runtime
+            .dispatch_set(category_axis, "HasTitle", OmValue::Bool(false), &[])
+            .expect("clear Axis.HasTitle");
+        assert_eq!(
+            runtime
+                .dispatch_get(axis_title, "Text", &[])
+                .expect_err("AxisTitle handle removed through HasTitle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis, "HasTitle", &[])
+                .expect("Axis.HasTitle after clearing title"),
+            OmValue::Bool(false)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after parent visibility setters");
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after parent visibility setters");
         let reopened_worksheet = expect_object_handle(
             reopened_runtime
                 .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
