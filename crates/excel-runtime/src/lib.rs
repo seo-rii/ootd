@@ -10185,6 +10185,12 @@ impl ExcelRuntime {
                         values: None,
                         order: u32::try_from(series_index).ok(),
                     });
+                    if let Some(plot_order) = series_index
+                        .checked_add(1)
+                        .and_then(|index| u32::try_from(index).ok())
+                    {
+                        update_series_plot_order(&mut chart.series, series_index, plot_order);
+                    }
                     chart.dirty = true;
                     runtime.dirty = true;
                     series_index
@@ -72814,6 +72820,99 @@ mod tests {
             ),
             1.0
         );
+    }
+
+    #[test]
+    fn series_collection_new_series_rebalances_existing_plot_orders() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let first_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries first"),
+        );
+        let chart_id = match runtime.runtime_object(chart).expect("chart runtime object") {
+            super::RuntimeObjectKind::Chart { chart_id, .. } => chart_id,
+            other => panic!("expected chart object, got {other:?}"),
+        };
+        runtime
+            .runtime_workbook_mut(workbook)
+            .expect("runtime workbook")
+            .loaded
+            .state
+            .charts
+            .get_mut(&chart_id)
+            .expect("chart model")
+            .series[0]
+            .order = Some(10);
+
+        let second_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries second"),
+        );
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_series, "PlotOrder", &[])
+                    .expect("first Series.PlotOrder")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_series, "PlotOrder", &[])
+                    .expect("second Series.PlotOrder")
+            ),
+            2.0
+        );
+        let state = runtime.workbook_state(workbook).expect("workbook state");
+        let chart = state.charts.get(&chart_id).expect("chart model");
+        assert_eq!(chart.series[0].order, Some(0));
+        assert_eq!(chart.series[1].order, Some(1));
     }
 
     #[test]
