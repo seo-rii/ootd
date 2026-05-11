@@ -1,8 +1,10 @@
 use office_common::{
-    ChartId, ChartObjectId, DrawingAnchor, DrawingId, DrawingObjectId, FormulaSource,
+    ChartId, ChartObjectId, DrawingAnchor, DrawingId, DrawingObjectId, FormulaSource, NameScope,
     ObjectPlacement, RangeArea, RangeSet, Rect, ReferenceTarget, SheetId, SheetScope, WorkbookId,
     WorksheetModel,
 };
+
+use crate::names::DefinedNameTable;
 
 const EXCEL_MAX_ROW_INDEX: u32 = 1_048_576;
 const EXCEL_MAX_COLUMN_INDEX: u32 = 16_384;
@@ -329,58 +331,7 @@ pub fn resolve_chart_source_reference(
             return None;
         }
 
-        let mut sheet_name = if sheet.starts_with('\'') {
-            let mut output = String::new();
-            let mut chars = sheet.char_indices().peekable();
-            let (_, first) = chars.next()?;
-            if first != '\'' {
-                return None;
-            }
-
-            let mut parsed = None;
-            while let Some((index, ch)) = chars.next() {
-                if ch == '\'' {
-                    if chars.peek().is_some_and(|(_, next)| *next == '\'') {
-                        chars.next();
-                        output.push('\'');
-                    } else if sheet[index + ch.len_utf8()..].trim().is_empty() {
-                        parsed = Some(output);
-                        break;
-                    } else {
-                        return None;
-                    }
-                } else {
-                    output.push(ch);
-                }
-            }
-            parsed?
-        } else {
-            if sheet.contains('\'') {
-                return None;
-            }
-            sheet.to_string()
-        };
-        if let Some(qualified) = sheet_name.strip_prefix('[') {
-            let close_index = qualified.find(']')?;
-            let source_workbook_name = &qualified[..close_index];
-            let unqualified_sheet_name = &qualified[close_index + 1..];
-            if source_workbook_name.is_empty()
-                || unqualified_sheet_name.is_empty()
-                || !workbook_display_name
-                    .is_some_and(|name| name.eq_ignore_ascii_case(source_workbook_name))
-            {
-                return None;
-            }
-            sheet_name = unqualified_sheet_name.to_string();
-        }
-        if sheet_name.is_empty()
-            || sheet_name.contains('[')
-            || sheet_name.contains(']')
-            || sheet_name.contains(':')
-        {
-            return None;
-        }
-
+        let sheet_name = parse_chart_source_sheet_name(sheet, workbook_display_name)?;
         let sheet_id = worksheets
             .iter()
             .find(|worksheet| worksheet.name.eq_ignore_ascii_case(&sheet_name))
@@ -393,10 +344,188 @@ pub fn resolve_chart_source_reference(
         .map(ReferenceTarget::Range)
 }
 
+pub fn resolve_chart_source_reference_with_names(
+    reference: &str,
+    workbook_id: WorkbookId,
+    workbook_display_name: Option<&str>,
+    worksheets: &[WorksheetModel],
+    defined_names: &DefinedNameTable,
+    current_sheet: Option<SheetId>,
+) -> Option<ReferenceTarget> {
+    resolve_chart_source_reference(reference, workbook_id, workbook_display_name, worksheets)
+        .or_else(|| {
+            resolve_chart_source_defined_name(
+                reference,
+                workbook_id,
+                workbook_display_name,
+                worksheets,
+                defined_names,
+                current_sheet,
+            )
+        })
+}
+
+fn parse_chart_source_sheet_name(
+    sheet: &str,
+    workbook_display_name: Option<&str>,
+) -> Option<String> {
+    let mut sheet_name = if sheet.starts_with('\'') {
+        let mut output = String::new();
+        let mut chars = sheet.char_indices().peekable();
+        let (_, first) = chars.next()?;
+        if first != '\'' {
+            return None;
+        }
+
+        let mut parsed = None;
+        while let Some((index, ch)) = chars.next() {
+            if ch == '\'' {
+                if chars.peek().is_some_and(|(_, next)| *next == '\'') {
+                    chars.next();
+                    output.push('\'');
+                } else if sheet[index + ch.len_utf8()..].trim().is_empty() {
+                    parsed = Some(output);
+                    break;
+                } else {
+                    return None;
+                }
+            } else {
+                output.push(ch);
+            }
+        }
+        parsed?
+    } else {
+        if sheet.contains('\'') {
+            return None;
+        }
+        sheet.to_string()
+    };
+    if let Some(qualified) = sheet_name.strip_prefix('[') {
+        let close_index = qualified.find(']')?;
+        let source_workbook_name = &qualified[..close_index];
+        let unqualified_sheet_name = &qualified[close_index + 1..];
+        if source_workbook_name.is_empty()
+            || unqualified_sheet_name.is_empty()
+            || !workbook_display_name
+                .is_some_and(|name| name.eq_ignore_ascii_case(source_workbook_name))
+        {
+            return None;
+        }
+        sheet_name = unqualified_sheet_name.to_string();
+    }
+    if sheet_name.is_empty()
+        || sheet_name.contains('[')
+        || sheet_name.contains(']')
+        || sheet_name.contains(':')
+    {
+        return None;
+    }
+    Some(sheet_name)
+}
+
+fn resolve_chart_source_defined_name(
+    reference: &str,
+    workbook_id: WorkbookId,
+    workbook_display_name: Option<&str>,
+    worksheets: &[WorksheetModel],
+    defined_names: &DefinedNameTable,
+    current_sheet: Option<SheetId>,
+) -> Option<ReferenceTarget> {
+    let reference = reference.trim();
+    let mut reference = reference.strip_prefix('=').unwrap_or(reference).trim();
+    if reference.is_empty() || reference.contains(',') || reference.contains(':') {
+        return None;
+    }
+
+    let mut in_quote = false;
+    let mut separator = None;
+    let mut chars = reference.char_indices().peekable();
+    while let Some((index, ch)) = chars.next() {
+        match ch {
+            '\'' => {
+                if in_quote && chars.peek().is_some_and(|(_, next)| *next == '\'') {
+                    chars.next();
+                } else {
+                    in_quote = !in_quote;
+                }
+            }
+            '!' if !in_quote => separator = Some(index),
+            _ => {}
+        }
+    }
+    if in_quote {
+        return None;
+    }
+
+    let defined_name = if let Some(separator) = separator {
+        let sheet = reference[..separator].trim();
+        let name = reference[separator + 1..].trim();
+        if sheet.is_empty() || name.is_empty() {
+            return None;
+        }
+        let sheet_name = parse_chart_source_sheet_name(sheet, workbook_display_name)?;
+        let sheet_id = worksheets
+            .iter()
+            .find(|worksheet| worksheet.name.eq_ignore_ascii_case(&sheet_name))
+            .map(|worksheet| worksheet.id)?;
+        defined_names.lookup_in_scope(NameScope::Worksheet(sheet_id), name)?
+    } else {
+        if let Some(qualified) = reference.strip_prefix('[') {
+            let close_index = qualified.find(']')?;
+            let source_workbook_name = &qualified[..close_index];
+            let unqualified_name = qualified[close_index + 1..].trim();
+            if source_workbook_name.is_empty()
+                || unqualified_name.is_empty()
+                || !workbook_display_name
+                    .is_some_and(|name| name.eq_ignore_ascii_case(source_workbook_name))
+            {
+                return None;
+            }
+            reference = unqualified_name;
+        }
+        defined_names.lookup(current_sheet, reference)?
+    };
+
+    if let Some(target) = resolve_chart_source_reference(
+        &defined_name.refers_to.text,
+        workbook_id,
+        workbook_display_name,
+        worksheets,
+    ) {
+        return Some(target);
+    }
+
+    let refers_to = defined_name
+        .refers_to
+        .text
+        .trim()
+        .strip_prefix('=')
+        .unwrap_or(defined_name.refers_to.text.trim())
+        .trim();
+    if refers_to.is_empty() || refers_to.contains('!') || refers_to.contains(',') {
+        return None;
+    }
+
+    let NameScope::Worksheet(sheet_id) = defined_name.scope else {
+        return None;
+    };
+    let worksheet_name = worksheets
+        .iter()
+        .find(|worksheet| worksheet.id == sheet_id)
+        .map(|worksheet| worksheet.name.as_str())?;
+    let qualified_reference = format!("'{}'!{}", worksheet_name.replace('\'', "''"), refers_to);
+    resolve_chart_source_reference(
+        &qualified_reference,
+        workbook_id,
+        workbook_display_name,
+        worksheets,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use office_common::{SheetKind, SheetVisibility};
+    use office_common::{NameValidationMode, SheetKind, SheetVisibility};
 
     fn worksheet(id: u32, workbook_id: WorkbookId, name: &str) -> WorksheetModel {
         WorksheetModel {
@@ -530,5 +659,124 @@ mod tests {
             resolve_chart_source_reference("[Workbook]Data!$A$1", workbook_id, None, &worksheets)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn resolve_chart_source_reference_with_names_resolves_workbook_names() {
+        let workbook_id = WorkbookId(7);
+        let worksheets = vec![worksheet(2, workbook_id, "Data")];
+        let mut defined_names = DefinedNameTable::default();
+        defined_names
+            .add(
+                NameScope::Workbook,
+                "SeriesValues",
+                FormulaSource {
+                    text: "Data!$B$1:$B$3".to_string(),
+                    is_r1c1: false,
+                },
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add workbook name");
+
+        let target = resolve_chart_source_reference_with_names(
+            "[Workbook]SeriesValues",
+            workbook_id,
+            Some("Workbook"),
+            &worksheets,
+            &defined_names,
+            None,
+        )
+        .expect("defined name source target");
+
+        let ReferenceTarget::Range(range) = target else {
+            panic!("expected range target");
+        };
+        assert_eq!(range.areas()[0].scope, SheetScope::Single(SheetId(2)));
+        assert_eq!(
+            range.areas()[0].rect,
+            Rect {
+                row_first: 1,
+                row_last: 3,
+                col_first: 2,
+                col_last: 2,
+            }
+        );
+        assert!(
+            resolve_chart_source_reference_with_names(
+                "[Other]SeriesValues",
+                workbook_id,
+                Some("Workbook"),
+                &worksheets,
+                &defined_names,
+                None,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn resolve_chart_source_reference_with_names_uses_sheet_scope() {
+        let workbook_id = WorkbookId(8);
+        let worksheets = vec![worksheet(4, workbook_id, "Data 2026")];
+        let mut defined_names = DefinedNameTable::default();
+        defined_names
+            .add(
+                NameScope::Workbook,
+                "SeriesValues",
+                FormulaSource {
+                    text: "'Data 2026'!$A$1".to_string(),
+                    is_r1c1: false,
+                },
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add workbook name");
+        defined_names
+            .add(
+                NameScope::Worksheet(SheetId(4)),
+                "SeriesValues",
+                FormulaSource {
+                    text: "$C$1:$C$3".to_string(),
+                    is_r1c1: false,
+                },
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add sheet name");
+
+        let target = resolve_chart_source_reference_with_names(
+            "SeriesValues",
+            workbook_id,
+            None,
+            &worksheets,
+            &defined_names,
+            Some(SheetId(4)),
+        )
+        .expect("current sheet name source target");
+        let ReferenceTarget::Range(range) = target else {
+            panic!("expected range target");
+        };
+        assert_eq!(
+            range.areas()[0].rect,
+            Rect {
+                row_first: 1,
+                row_last: 3,
+                col_first: 3,
+                col_last: 3,
+            }
+        );
+
+        let target = resolve_chart_source_reference_with_names(
+            "'Data 2026'!SeriesValues",
+            workbook_id,
+            None,
+            &worksheets,
+            &defined_names,
+            None,
+        )
+        .expect("qualified sheet name source target");
+        let ReferenceTarget::Range(range) = target else {
+            panic!("expected range target");
+        };
+        assert_eq!(range.areas()[0].scope, SheetScope::Single(SheetId(4)));
+        assert_eq!(range.areas()[0].rect.col_first, 3);
     }
 }

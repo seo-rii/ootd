@@ -1,7 +1,7 @@
 use excel_model::{
     AxisModel, ChartAxisKind, ChartLegendPosition, ChartModel, ChartObjectModel, ChartSheetBinding,
     ChartSourceExpr, ChartText, ChartType, DrawingModel, DrawingObjectModel, LegendModel,
-    SeriesModel, WorkbookState, WorksheetData, resolve_chart_source_reference,
+    SeriesModel, WorkbookState, WorksheetData, resolve_chart_source_reference_with_names,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
@@ -2846,22 +2846,50 @@ impl ExcelRuntime {
                 let chart_source_workbook = self.workbook_model(workbook)?;
                 let chart_source_workbook_id = chart_source_workbook.id;
                 let chart_source_workbook_display_name = chart_source_workbook.display_name.clone();
-                let chart_source_worksheets = self
-                    .runtime_workbook(workbook)?
-                    .loaded
-                    .state
-                    .worksheets
-                    .clone();
+                let (
+                    chart_source_worksheets,
+                    chart_source_defined_names,
+                    chart_source_current_sheet,
+                ) = {
+                    let state = &self.runtime_workbook(workbook)?.loaded.state;
+                    let current_sheet = state
+                        .chart_sheets
+                        .iter()
+                        .find_map(|(sheet_id, binding)| {
+                            (binding.chart_id == chart_id).then_some(*sheet_id)
+                        })
+                        .or_else(|| {
+                            state.drawings.values().find_map(|drawing| {
+                                drawing
+                                    .objects
+                                    .iter()
+                                    .any(|object| match object {
+                                        DrawingObjectModel::ChartFrame(chart_object) => {
+                                            chart_object.chart_id == chart_id
+                                        }
+                                        DrawingObjectModel::UnsupportedRaw { .. } => false,
+                                    })
+                                    .then_some(drawing.host_sheet_id)
+                            })
+                        });
+                    (
+                        state.worksheets.clone(),
+                        state.defined_names.clone(),
+                        current_sheet,
+                    )
+                };
                 match member {
                     "Name" | "Values" | "XValues" => {
                         let source = match value {
                             OmValue::Text(text) => {
                                 let raw_text = text.trim_start_matches('=').to_string();
-                                let resolved = resolve_chart_source_reference(
+                                let resolved = resolve_chart_source_reference_with_names(
                                     &raw_text,
                                     chart_source_workbook_id,
                                     Some(&chart_source_workbook_display_name),
                                     &chart_source_worksheets,
+                                    &chart_source_defined_names,
+                                    chart_source_current_sheet,
                                 );
                                 Some(ChartSourceExpr {
                                     raw: FormulaSource {
@@ -3029,11 +3057,13 @@ impl ExcelRuntime {
                                     None
                                 } else {
                                     let raw_text = text.trim_start_matches('=').to_string();
-                                    let resolved = resolve_chart_source_reference(
+                                    let resolved = resolve_chart_source_reference_with_names(
                                         &raw_text,
                                         chart_source_workbook_id,
                                         Some(&chart_source_workbook_display_name),
                                         &chart_source_worksheets,
+                                        &chart_source_defined_names,
+                                        chart_source_current_sheet,
                                     );
                                     Some(ChartSourceExpr {
                                         raw: FormulaSource {
@@ -68366,6 +68396,57 @@ mod tests {
             let values = chart.series[0].values.as_ref().expect("series values");
             let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
                 panic!("workbook-qualified Series.Values should resolve to a range");
+            };
+            assert_eq!(range.workbook_id(), state.model.id);
+            assert_eq!(range.areas()[0].scope, SheetScope::Single(sheet_id));
+            assert_eq!(
+                range.areas()[0].rect,
+                Rect {
+                    row_first: 1,
+                    row_last: 3,
+                    col_first: 2,
+                    col_last: 2,
+                }
+            );
+        }
+        let names = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Names", &[])
+                .expect("Workbook.Names before defined chart source"),
+        );
+        runtime
+            .dispatch_invoke(
+                names,
+                "Add",
+                &[
+                    OmValue::Text("SeriesValues".to_string()),
+                    OmValue::Text("=Sheet1!$B$1:$B$3".to_string()),
+                ],
+            )
+            .expect("add defined name for chart source");
+        runtime
+            .dispatch_set(
+                series,
+                "Values",
+                OmValue::Text("=SeriesValues".to_string()),
+                &[],
+            )
+            .expect("set Series.Values from defined name");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Values", &[])
+                .expect("Series.Values after defined-name set"),
+            OmValue::Text("=SeriesValues".to_string())
+        );
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after defined-name source setter");
+            let sheet_id = state.worksheets[0].id;
+            let chart = state.charts.values().next().expect("chart model");
+            let values = chart.series[0].values.as_ref().expect("series values");
+            let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
+                panic!("defined-name Series.Values should resolve to a range");
             };
             assert_eq!(range.workbook_id(), state.model.id);
             assert_eq!(range.areas()[0].scope, SheetScope::Single(sheet_id));

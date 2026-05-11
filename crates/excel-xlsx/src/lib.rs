@@ -5,7 +5,7 @@ use excel_model::{
     AxisModel, CellData, ChartAxisKind, ChartCacheKind, ChartCacheSnapshot, ChartLegendPosition,
     ChartModel, ChartObjectModel, ChartSheetBinding, ChartSourceExpr, ChartText, ChartType,
     DefinedNameTable, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState,
-    WorksheetData, resolve_chart_source_reference,
+    WorksheetData, resolve_chart_source_reference_with_names,
 };
 use office_common::{
     AbsoluteAnchor, CellError, CellMarker, CellValue, ChartId, ChartObjectId, DefinedName,
@@ -802,8 +802,12 @@ impl XlsxCodec {
             })
             .collect();
         let support_parts = collect_workbook_support_parts(&relationship_entries, &package)?;
-        let (charts, drawings, chart_sheets) =
-            build_chart_model_overlay(WorkbookId(0), &worksheets, &sheet_drawing_support_parts)?;
+        let (charts, drawings, chart_sheets) = build_chart_model_overlay(
+            WorkbookId(0),
+            &worksheets,
+            &defined_names,
+            &sheet_drawing_support_parts,
+        )?;
         let state = WorkbookState {
             model: WorkbookModel {
                 id: WorkbookId(0),
@@ -2910,6 +2914,7 @@ fn collect_sheet_drawing_support_parts(
 fn build_chart_model_overlay(
     workbook_id: WorkbookId,
     worksheets: &[WorksheetModel],
+    defined_names: &DefinedNameTable,
     sheet_drawing_support_parts: &BTreeMap<SheetId, SheetDrawingSupportParts>,
 ) -> OmResult<(
     BTreeMap<ChartId, ChartModel>,
@@ -2939,7 +2944,13 @@ fn build_chart_model_overlay(
                     id: chart_id,
                     workbook_id,
                     chart_type: chart_type_from_summary(summary),
-                    series: chart_series_from_summary(summary, workbook_id, worksheets),
+                    series: chart_series_from_summary(
+                        summary,
+                        workbook_id,
+                        worksheets,
+                        defined_names,
+                        Some(*sheet_id),
+                    ),
                     title: summary
                         .and_then(|summary| summary.title_text.as_ref())
                         .map(|text| ChartText { text: text.clone() }),
@@ -3081,6 +3092,8 @@ fn chart_series_from_summary(
     summary: Option<&ChartPartSummary>,
     workbook_id: WorkbookId,
     worksheets: &[WorksheetModel],
+    defined_names: &DefinedNameTable,
+    current_sheet: Option<SheetId>,
 ) -> Vec<SeriesModel> {
     let Some(summary) = summary else {
         return Vec::new();
@@ -3091,7 +3104,14 @@ fn chart_series_from_summary(
             text: reference.clone(),
             is_r1c1: false,
         },
-        resolved: resolve_chart_source_reference(reference, workbook_id, None, worksheets),
+        resolved: resolve_chart_source_reference_with_names(
+            reference,
+            workbook_id,
+            None,
+            worksheets,
+            defined_names,
+            current_sheet,
+        ),
         cache: cache.map(|summary| ChartCacheSnapshot {
             kind: match summary.kind {
                 ChartCacheKindSummary::Number => ChartCacheKind::Number,
