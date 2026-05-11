@@ -7197,7 +7197,13 @@ impl ExcelRuntime {
                     | ("Axes", "Count" | "Item" | "Application" | "Parent")
                     | (
                         "Axis",
-                        "Type" | "HasTitle" | "AxisTitle" | "Application" | "Parent" | "Select"
+                        "Type"
+                            | "AxisGroup"
+                            | "HasTitle"
+                            | "AxisTitle"
+                            | "Application"
+                            | "Parent"
+                            | "Select"
                     )
                     | (
                         "AxisTitle",
@@ -9664,6 +9670,7 @@ impl ExcelRuntime {
                 ChartAxisKind::Value => XL_VALUE,
                 ChartAxisKind::Series => XL_SERIES_AXIS,
             }))),
+            "AxisGroup" => Ok(OmValue::Number(f64::from(XL_PRIMARY))),
             "HasTitle" => Ok(OmValue::Bool(axis.title.is_some())),
             "AxisTitle" => {
                 if axis.title.is_none() {
@@ -69285,6 +69292,21 @@ mod tests {
             ),
             f64::from(super::XL_CATEGORY)
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(category_axis, "AxisGroup", &[])
+                    .expect("category Axis.AxisGroup")
+            ),
+            f64::from(super::XL_PRIMARY)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis, "AxisGroup", &[OmValue::Number(1.0)])
+                .expect_err("Axis.AxisGroup rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
         let category_title = expect_object_handle(
             runtime
                 .dispatch_get(category_axis, "AxisTitle", &[])
@@ -69340,6 +69362,14 @@ mod tests {
                     .expect("value Axis.Type")
             ),
             f64::from(super::XL_VALUE)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(value_axis, "AxisGroup", &[])
+                    .expect("value Axis.AxisGroup")
+            ),
+            f64::from(super::XL_PRIMARY)
         );
         let value_axis_primary = expect_object_handle(
             runtime
