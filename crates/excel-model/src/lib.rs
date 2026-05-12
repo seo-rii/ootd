@@ -11,10 +11,10 @@ mod charts;
 mod names;
 
 pub use charts::{
-    AxisModel, ChartAxisKind, ChartCacheKind, ChartCacheSnapshot, ChartLegendPosition, ChartModel,
-    ChartObjectModel, ChartSheetBinding, ChartSourceExpr, ChartText, ChartType, DrawingModel,
-    DrawingObjectModel, LegendModel, SeriesModel, resolve_chart_source_reference,
-    resolve_chart_source_reference_with_names,
+    AxisModel, ChartAxisKind, ChartCacheKind, ChartCacheSnapshot, ChartCellMarkerXmlAttrs,
+    ChartLegendPosition, ChartMarkerXmlAttrs, ChartModel, ChartObjectModel, ChartSheetBinding,
+    ChartSourceExpr, ChartText, ChartType, DrawingModel, DrawingObjectModel, LegendModel,
+    SeriesModel, resolve_chart_source_reference, resolve_chart_source_reference_with_names,
 };
 pub use names::DefinedNameTable;
 
@@ -629,6 +629,7 @@ mod tests {
                     anchor_attrs: BTreeMap::new(),
                     position_attrs: BTreeMap::new(),
                     extents_attrs: BTreeMap::new(),
+                    marker_attrs: Default::default(),
                     graphic_frame_attrs: BTreeMap::new(),
                     graphic_frame_transform_xml: None,
                     graphic_data_attrs: BTreeMap::new(),
@@ -1190,6 +1191,7 @@ mod tests {
                     anchor_attrs: BTreeMap::new(),
                     position_attrs: BTreeMap::new(),
                     extents_attrs: BTreeMap::new(),
+                    marker_attrs: Default::default(),
                     graphic_frame_attrs: BTreeMap::new(),
                     graphic_frame_transform_xml: None,
                     graphic_data_attrs: BTreeMap::new(),

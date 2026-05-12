@@ -126,6 +126,7 @@ pub struct ChartObjectModel {
     pub anchor_attrs: BTreeMap<String, String>,
     pub position_attrs: BTreeMap<String, String>,
     pub extents_attrs: BTreeMap<String, String>,
+    pub marker_attrs: ChartMarkerXmlAttrs,
     pub graphic_frame_attrs: BTreeMap<String, String>,
     pub graphic_frame_transform_xml: Option<String>,
     pub graphic_data_attrs: BTreeMap<String, String>,
@@ -147,6 +148,21 @@ pub struct ChartObjectModel {
     pub z_order: Option<u32>,
     pub raw_binding: Option<String>,
     pub dirty: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ChartMarkerXmlAttrs {
+    pub from: ChartCellMarkerXmlAttrs,
+    pub to: ChartCellMarkerXmlAttrs,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ChartCellMarkerXmlAttrs {
+    pub attrs: BTreeMap<String, String>,
+    pub col_attrs: BTreeMap<String, String>,
+    pub col_offset_attrs: BTreeMap<String, String>,
+    pub row_attrs: BTreeMap<String, String>,
+    pub row_offset_attrs: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

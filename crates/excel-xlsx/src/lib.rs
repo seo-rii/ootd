@@ -2,10 +2,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Write};
 
 use excel_model::{
-    AxisModel, CellData, ChartAxisKind, ChartCacheKind, ChartCacheSnapshot, ChartLegendPosition,
-    ChartModel, ChartObjectModel, ChartSheetBinding, ChartSourceExpr, ChartText, ChartType,
-    DefinedNameTable, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState,
-    WorksheetData, resolve_chart_source_reference_with_names,
+    AxisModel, CellData, ChartAxisKind, ChartCacheKind, ChartCacheSnapshot,
+    ChartCellMarkerXmlAttrs, ChartLegendPosition, ChartMarkerXmlAttrs, ChartModel,
+    ChartObjectModel, ChartSheetBinding, ChartSourceExpr, ChartText, ChartType, DefinedNameTable,
+    DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
+    resolve_chart_source_reference_with_names,
 };
 use office_common::{
     AbsoluteAnchor, CellError, CellMarker, CellValue, ChartId, ChartObjectId, DefinedName,
@@ -623,6 +624,11 @@ pub enum DrawingAnchorKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DrawingCellMarkerSummary {
+    pub attrs: BTreeMap<String, String>,
+    pub col_attrs: BTreeMap<String, String>,
+    pub col_offset_attrs: BTreeMap<String, String>,
+    pub row_attrs: BTreeMap<String, String>,
+    pub row_offset_attrs: BTreeMap<String, String>,
     pub col: Option<i64>,
     pub col_offset: Option<i64>,
     pub row: Option<i64>,
@@ -3079,6 +3085,30 @@ fn build_chart_model_overlay(
                         anchor_attrs: anchor_summary.anchor_attrs.clone(),
                         position_attrs: anchor_summary.position_attrs.clone(),
                         extents_attrs: anchor_summary.extents_attrs.clone(),
+                        marker_attrs: ChartMarkerXmlAttrs {
+                            from: anchor_summary
+                                .from
+                                .as_ref()
+                                .map(|marker| ChartCellMarkerXmlAttrs {
+                                    attrs: marker.attrs.clone(),
+                                    col_attrs: marker.col_attrs.clone(),
+                                    col_offset_attrs: marker.col_offset_attrs.clone(),
+                                    row_attrs: marker.row_attrs.clone(),
+                                    row_offset_attrs: marker.row_offset_attrs.clone(),
+                                })
+                                .unwrap_or_default(),
+                            to: anchor_summary
+                                .to
+                                .as_ref()
+                                .map(|marker| ChartCellMarkerXmlAttrs {
+                                    attrs: marker.attrs.clone(),
+                                    col_attrs: marker.col_attrs.clone(),
+                                    col_offset_attrs: marker.col_offset_attrs.clone(),
+                                    row_attrs: marker.row_attrs.clone(),
+                                    row_offset_attrs: marker.row_offset_attrs.clone(),
+                                })
+                                .unwrap_or_default(),
+                        },
                         graphic_frame_attrs: anchor_summary.graphic_frame_attrs.clone(),
                         graphic_frame_transform_xml: anchor_summary
                             .graphic_frame_transform_xml
@@ -14990,6 +15020,50 @@ fn parse_drawing_part_summary(
                 MarkerField::RowOffset => marker_summary.row_offset = Some(value),
             }
         };
+    let record_marker_attrs =
+        |anchor: &mut DrawingAnchorSummary, marker: MarkerSlot, attrs: BTreeMap<String, String>| {
+            let marker_summary = match marker {
+                MarkerSlot::From => anchor
+                    .from
+                    .get_or_insert_with(DrawingCellMarkerSummary::default),
+                MarkerSlot::To => anchor
+                    .to
+                    .get_or_insert_with(DrawingCellMarkerSummary::default),
+            };
+            if marker_summary.attrs.is_empty() {
+                marker_summary.attrs = attrs;
+            }
+        };
+    let record_marker_field_attrs =
+        |anchor: &mut DrawingAnchorSummary,
+         marker: MarkerSlot,
+         field: MarkerField,
+         attrs: BTreeMap<String, String>| {
+            let marker_summary = match marker {
+                MarkerSlot::From => anchor
+                    .from
+                    .get_or_insert_with(DrawingCellMarkerSummary::default),
+                MarkerSlot::To => anchor
+                    .to
+                    .get_or_insert_with(DrawingCellMarkerSummary::default),
+            };
+            let field_attrs = match field {
+                MarkerField::Col => &mut marker_summary.col_attrs,
+                MarkerField::ColOffset => &mut marker_summary.col_offset_attrs,
+                MarkerField::Row => &mut marker_summary.row_attrs,
+                MarkerField::RowOffset => &mut marker_summary.row_offset_attrs,
+            };
+            if field_attrs.is_empty() {
+                *field_attrs = attrs;
+            }
+        };
+    let marker_field_for = |local_name: &[u8]| match local_name {
+        b"col" => Some(MarkerField::Col),
+        b"colOff" => Some(MarkerField::ColOffset),
+        b"row" => Some(MarkerField::Row),
+        b"rowOff" => Some(MarkerField::RowOffset),
+        _ => None,
+    };
 
     let collect_chart_relationship_id = |element: &BytesStart<'_>,
                                          reader: &Reader<Cursor<&[u8]>>,
@@ -15066,23 +15140,37 @@ fn parse_drawing_part_summary(
                         b"from" => {
                             active_marker = Some(MarkerSlot::From);
                             if let Some(anchor) = active_anchor.as_mut() {
-                                anchor
-                                    .from
-                                    .get_or_insert_with(DrawingCellMarkerSummary::default);
+                                record_marker_attrs(
+                                    anchor,
+                                    MarkerSlot::From,
+                                    decode_attrs(&element, &reader)?,
+                                );
                             }
                         }
                         b"to" => {
                             active_marker = Some(MarkerSlot::To);
                             if let Some(anchor) = active_anchor.as_mut() {
-                                anchor
-                                    .to
-                                    .get_or_insert_with(DrawingCellMarkerSummary::default);
+                                record_marker_attrs(
+                                    anchor,
+                                    MarkerSlot::To,
+                                    decode_attrs(&element, &reader)?,
+                                );
                             }
                         }
-                        b"col" => active_marker_field = Some(MarkerField::Col),
-                        b"colOff" => active_marker_field = Some(MarkerField::ColOffset),
-                        b"row" => active_marker_field = Some(MarkerField::Row),
-                        b"rowOff" => active_marker_field = Some(MarkerField::RowOffset),
+                        name if marker_field_for(name).is_some() => {
+                            let field = marker_field_for(name).expect("marker field");
+                            active_marker_field = Some(field);
+                            if let (Some(marker), Some(anchor)) =
+                                (active_marker, active_anchor.as_mut())
+                            {
+                                record_marker_field_attrs(
+                                    anchor,
+                                    marker,
+                                    field,
+                                    decode_attrs(&element, &reader)?,
+                                );
+                            }
+                        }
                         b"pos" => {
                             if let Some(anchor) = active_anchor.as_mut() {
                                 anchor.position = Some(DrawingPointSummary {
@@ -15301,6 +15389,37 @@ fn parse_drawing_part_summary(
                     continue;
                 }
                 match local_name {
+                    b"from" => {
+                        if let Some(anchor) = active_anchor.as_mut() {
+                            record_marker_attrs(
+                                anchor,
+                                MarkerSlot::From,
+                                decode_attrs(&element, &reader)?,
+                            );
+                        }
+                    }
+                    b"to" => {
+                        if let Some(anchor) = active_anchor.as_mut() {
+                            record_marker_attrs(
+                                anchor,
+                                MarkerSlot::To,
+                                decode_attrs(&element, &reader)?,
+                            );
+                        }
+                    }
+                    name if marker_field_for(name).is_some() => {
+                        let field = marker_field_for(name).expect("marker field");
+                        if let (Some(marker), Some(anchor)) =
+                            (active_marker, active_anchor.as_mut())
+                        {
+                            record_marker_field_attrs(
+                                anchor,
+                                marker,
+                                field,
+                                decode_attrs(&element, &reader)?,
+                            );
+                        }
+                    }
                     b"pos" => {
                         if let Some(anchor) = active_anchor.as_mut() {
                             anchor.position = Some(DrawingPointSummary {
@@ -18997,18 +19116,52 @@ fn write_chart_marker(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     name: &str,
     marker: CellMarker,
+    attrs: &ChartCellMarkerXmlAttrs,
 ) -> OmResult<()> {
+    let mut marker_start = BytesStart::new(name);
+    let preserved_marker_attrs = attrs
+        .attrs
+        .iter()
+        .map(|(name, value)| (name.as_str(), partial_escape(value.as_str()).to_string()))
+        .collect::<Vec<_>>();
+    for (name, value) in &preserved_marker_attrs {
+        marker_start.push_attribute((*name, value.as_str()));
+    }
     writer
-        .write_event(Event::Start(BytesStart::new(name)))
+        .write_event(Event::Start(marker_start))
         .map_err(xml_error)?;
-    for (field, value) in [
-        ("xdr:col", marker.col_zero_based.to_string()),
-        ("xdr:colOff", marker.col_offset.0.to_string()),
-        ("xdr:row", marker.row_zero_based.to_string()),
-        ("xdr:rowOff", marker.row_offset.0.to_string()),
+    for (field, value, field_attrs) in [
+        (
+            "xdr:col",
+            marker.col_zero_based.to_string(),
+            &attrs.col_attrs,
+        ),
+        (
+            "xdr:colOff",
+            marker.col_offset.0.to_string(),
+            &attrs.col_offset_attrs,
+        ),
+        (
+            "xdr:row",
+            marker.row_zero_based.to_string(),
+            &attrs.row_attrs,
+        ),
+        (
+            "xdr:rowOff",
+            marker.row_offset.0.to_string(),
+            &attrs.row_offset_attrs,
+        ),
     ] {
+        let mut field_start = BytesStart::new(field);
+        let preserved_field_attrs = field_attrs
+            .iter()
+            .map(|(name, value)| (name.as_str(), partial_escape(value.as_str()).to_string()))
+            .collect::<Vec<_>>();
+        for (name, value) in &preserved_field_attrs {
+            field_start.push_attribute((*name, value.as_str()));
+        }
         writer
-            .write_event(Event::Start(BytesStart::new(field)))
+            .write_event(Event::Start(field_start))
             .map_err(xml_error)?;
         writer
             .write_event(Event::Text(BytesText::new(&value)))
@@ -19257,7 +19410,7 @@ fn write_chart_object_anchor(
         (DrawingAnchor::Absolute(anchor), ObjectPlacement::MoveOnly) => {
             let from = chart_marker_from_absolute(anchor);
             write_anchor_start(writer, "xdr:oneCellAnchor", None)?;
-            write_chart_marker(writer, "xdr:from", from)?;
+            write_chart_marker(writer, "xdr:from", from, &chart_object.marker_attrs.from)?;
             write_chart_extents(writer, anchor.extents, &chart_object.extents_attrs)?;
             write_chart_graphic_frame(writer, chart_object, relationship_id)?;
             write_client_data(writer)?;
@@ -19270,8 +19423,8 @@ fn write_chart_object_anchor(
             let from = chart_marker_from_absolute(anchor);
             let to = chart_marker_with_extents(from, anchor.extents)?;
             write_anchor_start(writer, "xdr:twoCellAnchor", None)?;
-            write_chart_marker(writer, "xdr:from", from)?;
-            write_chart_marker(writer, "xdr:to", to)?;
+            write_chart_marker(writer, "xdr:from", from, &chart_object.marker_attrs.from)?;
+            write_chart_marker(writer, "xdr:to", to, &chart_object.marker_attrs.to)?;
             write_chart_graphic_frame(writer, chart_object, relationship_id)?;
             write_client_data(writer)?;
             write_anchor_extensions(writer)?;
@@ -19307,8 +19460,13 @@ fn write_chart_object_anchor(
         (DrawingAnchor::OneCell(anchor), ObjectPlacement::MoveAndSize) => {
             let to = chart_marker_with_extents(anchor.from, anchor.extents)?;
             write_anchor_start(writer, "xdr:twoCellAnchor", None)?;
-            write_chart_marker(writer, "xdr:from", anchor.from)?;
-            write_chart_marker(writer, "xdr:to", to)?;
+            write_chart_marker(
+                writer,
+                "xdr:from",
+                anchor.from,
+                &chart_object.marker_attrs.from,
+            )?;
+            write_chart_marker(writer, "xdr:to", to, &chart_object.marker_attrs.to)?;
             write_chart_graphic_frame(writer, chart_object, relationship_id)?;
             write_client_data(writer)?;
             write_anchor_extensions(writer)?;
@@ -19318,7 +19476,12 @@ fn write_chart_object_anchor(
         }
         (DrawingAnchor::OneCell(anchor), ObjectPlacement::MoveOnly | ObjectPlacement::Unknown) => {
             write_anchor_start(writer, "xdr:oneCellAnchor", None)?;
-            write_chart_marker(writer, "xdr:from", anchor.from)?;
+            write_chart_marker(
+                writer,
+                "xdr:from",
+                anchor.from,
+                &chart_object.marker_attrs.from,
+            )?;
             write_chart_extents(writer, anchor.extents, &chart_object.extents_attrs)?;
             write_chart_graphic_frame(writer, chart_object, relationship_id)?;
             write_client_data(writer)?;
@@ -19335,8 +19498,13 @@ fn write_chart_object_anchor(
                 ObjectPlacement::Unknown => anchor.edit_as.as_deref(),
             };
             write_anchor_start(writer, "xdr:twoCellAnchor", edit_as)?;
-            write_chart_marker(writer, "xdr:from", anchor.from)?;
-            write_chart_marker(writer, "xdr:to", anchor.to)?;
+            write_chart_marker(
+                writer,
+                "xdr:from",
+                anchor.from,
+                &chart_object.marker_attrs.from,
+            )?;
+            write_chart_marker(writer, "xdr:to", anchor.to, &chart_object.marker_attrs.to)?;
             write_chart_graphic_frame(writer, chart_object, relationship_id)?;
             write_client_data(writer)?;
             write_anchor_extensions(writer)?;
@@ -19376,17 +19544,19 @@ mod tests {
         STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE, VML_DRAWING_RELATIONSHIP_TYPE,
         WORKBOOK_RELS_PART_NAME, WorksheetCommentSummary, WorksheetData, WorksheetHyperlinkBinding,
         WorksheetHyperlinkSummary, WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec,
-        collect_support_part_dimension_coords, compute_dimension_ref,
+        chart_object_anchor_xml, collect_support_part_dimension_coords, compute_dimension_ref,
         compute_dimension_ref_with_preserved, parse_shared_strings, parse_workbook,
         parse_workbook_relationships, parse_worksheet_cells, rewrite_worksheet_xml,
     };
     use excel_model::{
-        ChartCacheKind, ChartType, DrawingObjectModel, resolve_chart_source_reference,
+        ChartCacheKind, ChartCellMarkerXmlAttrs, ChartMarkerXmlAttrs, ChartObjectModel, ChartType,
+        DrawingObjectModel, resolve_chart_source_reference,
     };
     use office_common::{
-        CellError, CellValue, DrawingAnchor, Emu, FormulaSource, LoadOptions as CommonLoadOptions,
-        NameScope, NameValidationMode, ObjectPlacement, OmErrorCode, Rect, ReferenceTarget,
-        SheetId, SheetKind, SheetScope, SheetVisibility, StyleId, WorkbookId, WorksheetModel,
+        CellError, CellMarker, CellValue, ChartId, ChartObjectId, DrawingAnchor, Emu,
+        FormulaSource, LoadOptions as CommonLoadOptions, NameScope, NameValidationMode,
+        ObjectPlacement, OmErrorCode, Rect, ReferenceTarget, SheetId, SheetKind, SheetScope,
+        SheetVisibility, StyleId, TwoCellAnchor, WorkbookId, WorksheetModel,
     };
     use office_opc::{CompressionMethod, OpcPart};
 
@@ -19404,6 +19574,89 @@ mod tests {
             authors,
             comments,
         }
+    }
+
+    #[test]
+    fn chart_object_anchor_xml_preserves_marker_attrs() {
+        let chart_object = ChartObjectModel {
+            id: ChartObjectId(2),
+            anchor_attrs: BTreeMap::new(),
+            position_attrs: BTreeMap::new(),
+            extents_attrs: BTreeMap::new(),
+            marker_attrs: ChartMarkerXmlAttrs {
+                from: ChartCellMarkerXmlAttrs {
+                    attrs: BTreeMap::from([
+                        ("fm:tag".to_string(), "keep".to_string()),
+                        ("xmlns:fm".to_string(), "urn:from".to_string()),
+                    ]),
+                    col_attrs: BTreeMap::from([
+                        ("fc:tag".to_string(), "keep".to_string()),
+                        ("xmlns:fc".to_string(), "urn:from-col".to_string()),
+                    ]),
+                    ..Default::default()
+                },
+                to: ChartCellMarkerXmlAttrs {
+                    attrs: BTreeMap::from([
+                        ("tm:tag".to_string(), "keep".to_string()),
+                        ("xmlns:tm".to_string(), "urn:to".to_string()),
+                    ]),
+                    row_offset_attrs: BTreeMap::from([
+                        ("tro:tag".to_string(), "keep".to_string()),
+                        ("xmlns:tro".to_string(), "urn:to-row-off".to_string()),
+                    ]),
+                    ..Default::default()
+                },
+            },
+            graphic_frame_attrs: BTreeMap::new(),
+            graphic_frame_transform_xml: None,
+            graphic_data_attrs: BTreeMap::new(),
+            chart_reference_attrs: BTreeMap::new(),
+            non_visual_frame_attrs: BTreeMap::new(),
+            graphic_attrs: BTreeMap::new(),
+            non_visual_id: Some(2),
+            non_visual_attrs: BTreeMap::new(),
+            non_visual_child_xml: None,
+            non_visual_frame_properties_xml: None,
+            client_data_xml: None,
+            anchor_extension_xmls: Vec::new(),
+            workbook_id: WorkbookId(0),
+            host_sheet_id: SheetId(1),
+            chart_id: ChartId(1),
+            name: "Chart 1".to_string(),
+            anchor: Some(DrawingAnchor::TwoCell(TwoCellAnchor {
+                from: CellMarker {
+                    col_zero_based: 0,
+                    col_offset: Emu(10),
+                    row_zero_based: 1,
+                    row_offset: Emu(20),
+                },
+                to: CellMarker {
+                    col_zero_based: 4,
+                    col_offset: Emu(30),
+                    row_zero_based: 8,
+                    row_offset: Emu(40),
+                },
+                edit_as: None,
+            })),
+            placement: ObjectPlacement::MoveAndSize,
+            z_order: None,
+            raw_binding: None,
+            dirty: true,
+        };
+
+        let xml = String::from_utf8(
+            chart_object_anchor_xml(&chart_object, "rIdChart1").expect("anchor xml"),
+        )
+        .expect("anchor xml utf8");
+
+        assert!(xml.contains(r#"<xdr:from fm:tag="keep" xmlns:fm="urn:from">"#));
+        assert!(xml.contains(r#"<xdr:col fc:tag="keep" xmlns:fc="urn:from-col">0</xdr:col>"#));
+        assert!(xml.contains(r#"<xdr:to tm:tag="keep" xmlns:tm="urn:to">"#));
+        assert!(
+            xml.contains(
+                r#"<xdr:rowOff tro:tag="keep" xmlns:tro="urn:to-row-off">40</xdr:rowOff>"#
+            )
+        );
     }
 
     #[test]
@@ -20288,8 +20541,8 @@ mod tests {
                 bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
 <xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <xdr:twoCellAnchor ar:tag="keep" xmlns:ar="urn:anchor-root">
-    <xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
-    <xdr:to><xdr:col>6</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>12</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+    <xdr:from fm:tag="keep" xmlns:fm="urn:from"><xdr:col fc:tag="keep" xmlns:fc="urn:from-col">0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:to tm:tag="keep" xmlns:tm="urn:to"><xdr:col>6</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>12</xdr:row><xdr:rowOff tro:tag="keep" xmlns:tro="urn:to-row-off">0</xdr:rowOff></xdr:to>
     <xdr:graphicFrame macro="" fPublished="0"><xdr:nvGraphicFramePr nv:tag="keep" xmlns:nv="urn:nv"><xdr:cNvPr id="2" name="Embedded Revenue Chart" descr="Revenue detail" title="Chart Alt" hidden="1"><a:extLst><a:ext uri="urn:cnvpr"><test:meta xmlns:test="urn:test" value="keep"/></a:ext></a:extLst></xdr:cNvPr><xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1" noChangeAspect="1"/></xdr:cNvGraphicFramePr></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic g:role="frame" xmlns:g="urn:g"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart" gd:role="chart" xmlns:gd="urn:graphic"><c:chart r:id="rIdChart1" chartRef="keep"/></a:graphicData></a:graphic></xdr:graphicFrame>
     <xdr:clientData fLocksWithSheet="1" fPrintsWithSheet="0"/>
     <xdr:extLst><xdr:ext uri="urn:anchor"><xdr14:creationId xmlns:xdr14="http://schemas.microsoft.com/office/drawing/2010/spreadsheetDrawing" id="{11111111-2222-3333-4444-555555555555}"/></xdr:ext></xdr:extLst>
@@ -20467,12 +20720,34 @@ mod tests {
                 ],
                 name: Some("Embedded Revenue Chart".to_string()),
                 from: Some(DrawingCellMarkerSummary {
+                    attrs: BTreeMap::from([
+                        ("fm:tag".to_string(), "keep".to_string()),
+                        ("xmlns:fm".to_string(), "urn:from".to_string()),
+                    ]),
+                    col_attrs: BTreeMap::from([
+                        ("fc:tag".to_string(), "keep".to_string()),
+                        ("xmlns:fc".to_string(), "urn:from-col".to_string()),
+                    ]),
+                    col_offset_attrs: BTreeMap::new(),
+                    row_attrs: BTreeMap::new(),
+                    row_offset_attrs: BTreeMap::new(),
                     col: Some(0),
                     col_offset: Some(0),
                     row: Some(0),
                     row_offset: Some(0),
                 }),
                 to: Some(DrawingCellMarkerSummary {
+                    attrs: BTreeMap::from([
+                        ("tm:tag".to_string(), "keep".to_string()),
+                        ("xmlns:tm".to_string(), "urn:to".to_string()),
+                    ]),
+                    col_attrs: BTreeMap::new(),
+                    col_offset_attrs: BTreeMap::new(),
+                    row_attrs: BTreeMap::new(),
+                    row_offset_attrs: BTreeMap::from([
+                        ("tro:tag".to_string(), "keep".to_string()),
+                        ("xmlns:tro".to_string(), "urn:to-row-off".to_string()),
+                    ]),
                     col: Some(6),
                     col_offset: Some(0),
                     row: Some(12),
@@ -20691,6 +20966,33 @@ mod tests {
                 ("ar:tag".to_string(), "keep".to_string()),
                 ("xmlns:ar".to_string(), "urn:anchor-root".to_string()),
             ])
+        );
+        assert_eq!(
+            chart_object.marker_attrs,
+            ChartMarkerXmlAttrs {
+                from: ChartCellMarkerXmlAttrs {
+                    attrs: BTreeMap::from([
+                        ("fm:tag".to_string(), "keep".to_string()),
+                        ("xmlns:fm".to_string(), "urn:from".to_string()),
+                    ]),
+                    col_attrs: BTreeMap::from([
+                        ("fc:tag".to_string(), "keep".to_string()),
+                        ("xmlns:fc".to_string(), "urn:from-col".to_string()),
+                    ]),
+                    ..Default::default()
+                },
+                to: ChartCellMarkerXmlAttrs {
+                    attrs: BTreeMap::from([
+                        ("tm:tag".to_string(), "keep".to_string()),
+                        ("xmlns:tm".to_string(), "urn:to".to_string()),
+                    ]),
+                    row_offset_attrs: BTreeMap::from([
+                        ("tro:tag".to_string(), "keep".to_string()),
+                        ("xmlns:tro".to_string(), "urn:to-row-off".to_string()),
+                    ]),
+                    ..Default::default()
+                },
+            }
         );
         assert_eq!(
             chart_object.graphic_frame_attrs,
