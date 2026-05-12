@@ -9415,6 +9415,7 @@ impl ExcelRuntime {
                             non_visual_id: u32::try_from(chart_object_id.0).ok(),
                             non_visual_attrs: BTreeMap::new(),
                             non_visual_frame_properties_xml: None,
+                            client_data_xml: None,
                             workbook_id,
                             host_sheet_id: sheet_id,
                             chart_id,
@@ -11718,6 +11719,7 @@ impl ExcelRuntime {
                             non_visual_id: u32::try_from(chart_object_id.0).ok(),
                             non_visual_attrs: BTreeMap::new(),
                             non_visual_frame_properties_xml: None,
+                            client_data_xml: None,
                             workbook_id: runtime.loaded.state.model.id,
                             host_sheet_id: sheet_id,
                             chart_id,
@@ -68759,6 +68761,8 @@ mod tests {
         assert!(drawing_xml.contains("a:graphicFrameLocks"));
         assert!(drawing_xml.contains(r#"noGrp="1""#));
         assert!(drawing_xml.contains(r#"noChangeAspect="1""#));
+        assert!(drawing_xml.contains(r#"fLocksWithSheet="1""#));
+        assert!(drawing_xml.contains(r#"fPrintsWithSheet="0""#));
         let mut placement_runtime = ExcelRuntime::new();
         let placement_workbook = placement_runtime
             .open_workbook(OpenWorkbookSpec {
@@ -78038,7 +78042,7 @@ mod tests {
     <xdr:pos x="25400" y="38100"/>
     <xdr:ext cx="1270000" cy="635000"/>
     <xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Embedded Revenue Chart" descr="Revenue detail" title="Chart Alt" hidden="1"/><xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1" noChangeAspect="1"/></xdr:cNvGraphicFramePr></xdr:nvGraphicFramePr><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart1"/></a:graphicData></a:graphic></xdr:graphicFrame>
-    <xdr:clientData/>
+    <xdr:clientData fLocksWithSheet="1" fPrintsWithSheet="0"/>
   </xdr:absoluteAnchor>
 </xdr:wsDr>"#
                     .to_vec(),
