@@ -627,6 +627,7 @@ mod tests {
                 objects: vec![DrawingObjectModel::ChartFrame(ChartObjectModel {
                     id: ChartObjectId(21),
                     non_visual_id: Some(2),
+                    non_visual_attrs: BTreeMap::new(),
                     workbook_id,
                     host_sheet_id: sheet_id,
                     chart_id,
@@ -1174,6 +1175,7 @@ mod tests {
                 objects: vec![DrawingObjectModel::ChartFrame(ChartObjectModel {
                     id: ChartObjectId(21),
                     non_visual_id: Some(2),
+                    non_visual_attrs: BTreeMap::new(),
                     workbook_id: state.model.id,
                     host_sheet_id: sheet_id,
                     chart_id,

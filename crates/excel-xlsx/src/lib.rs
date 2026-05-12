@@ -592,6 +592,7 @@ pub struct DrawingAnchorSummary {
     pub kind: DrawingAnchorKind,
     pub edit_as: Option<String>,
     pub non_visual_id: Option<u32>,
+    pub non_visual_attrs: BTreeMap<String, String>,
     pub name: Option<String>,
     pub from: Option<DrawingCellMarkerSummary>,
     pub to: Option<DrawingCellMarkerSummary>,
@@ -3066,6 +3067,7 @@ fn build_chart_model_overlay(
                         host_sheet_id: *sheet_id,
                         chart_id: *chart_id,
                         non_visual_id: anchor_summary.non_visual_id,
+                        non_visual_attrs: anchor_summary.non_visual_attrs.clone(),
                         name: anchor_summary
                             .name
                             .clone()
@@ -14854,6 +14856,22 @@ fn parse_drawing_part_summary(
         Ok(None)
     };
 
+    let decode_attrs = |element: &BytesStart<'_>,
+                        reader: &Reader<Cursor<&[u8]>>|
+     -> OmResult<BTreeMap<String, String>> {
+        let mut attrs = BTreeMap::new();
+        for attr in element.attributes() {
+            let attr = attr.map_err(xml_error)?;
+            let name = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+            let value = attr
+                .decode_and_unescape_value(reader.decoder())
+                .map_err(xml_error)?
+                .into_owned();
+            attrs.insert(name, value);
+        }
+        Ok(attrs)
+    };
+
     let decode_i64_attr = |element: &BytesStart<'_>,
                            attr_name: &[u8],
                            reader: &Reader<Cursor<&[u8]>>|
@@ -14938,6 +14956,7 @@ fn parse_drawing_part_summary(
                             kind,
                             edit_as: decode_attr(&element, b"editAs", &reader)?,
                             non_visual_id: None,
+                            non_visual_attrs: BTreeMap::new(),
                             name: None,
                             from: None,
                             to: None,
@@ -14999,6 +15018,11 @@ fn parse_drawing_part_summary(
                                     anchor.non_visual_id =
                                         decode_u32_attr(&element, b"id", &reader)?;
                                 }
+                                for (name, value) in decode_attrs(&element, &reader)? {
+                                    if name != "id" && name != "name" {
+                                        anchor.non_visual_attrs.entry(name).or_insert(value);
+                                    }
+                                }
                                 if anchor.name.is_none() {
                                     anchor.name = decode_attr(&element, b"name", &reader)?;
                                 }
@@ -15023,6 +15047,7 @@ fn parse_drawing_part_summary(
                             kind,
                             edit_as: decode_attr(&element, b"editAs", &reader)?,
                             non_visual_id: None,
+                            non_visual_attrs: BTreeMap::new(),
                             name: None,
                             from: None,
                             to: None,
@@ -15062,6 +15087,11 @@ fn parse_drawing_part_summary(
                         if let Some(anchor) = active_anchor.as_mut() {
                             if anchor.non_visual_id.is_none() {
                                 anchor.non_visual_id = decode_u32_attr(&element, b"id", &reader)?;
+                            }
+                            for (name, value) in decode_attrs(&element, &reader)? {
+                                if name != "id" && name != "name" {
+                                    anchor.non_visual_attrs.entry(name).or_insert(value);
+                                }
                             }
                             if anchor.name.is_none() {
                                 anchor.name = decode_attr(&element, b"name", &reader)?;
@@ -18686,6 +18716,15 @@ fn write_chart_graphic_frame(
     let escaped_name = partial_escape(chart_object.name.as_str()).to_string();
     non_visual.push_attribute(("id", chart_object_id.as_str()));
     non_visual.push_attribute(("name", escaped_name.as_str()));
+    let preserved_non_visual_attrs = chart_object
+        .non_visual_attrs
+        .iter()
+        .filter(|(name, _)| name.as_str() != "id" && name.as_str() != "name")
+        .map(|(name, value)| (name.as_str(), partial_escape(value.as_str()).to_string()))
+        .collect::<Vec<_>>();
+    for (name, value) in &preserved_non_visual_attrs {
+        non_visual.push_attribute((*name, value.as_str()));
+    }
     writer
         .write_event(Event::Empty(non_visual))
         .map_err(xml_error)?;
@@ -19636,6 +19675,7 @@ mod tests {
                 kind: DrawingAnchorKind::Absolute,
                 edit_as: None,
                 non_visual_id: Some(2),
+                non_visual_attrs: BTreeMap::new(),
                 name: Some("Chart Sheet Chart".to_string()),
                 from: None,
                 to: None,
@@ -19772,7 +19812,7 @@ mod tests {
   <xdr:twoCellAnchor>
     <xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
     <xdr:to><xdr:col>6</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>12</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
-    <xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Embedded Revenue Chart"/></xdr:nvGraphicFramePr><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart1"/></a:graphicData></a:graphic></xdr:graphicFrame>
+    <xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Embedded Revenue Chart" descr="Revenue detail" title="Chart Alt" hidden="1"/></xdr:nvGraphicFramePr><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart1"/></a:graphicData></a:graphic></xdr:graphicFrame>
     <xdr:clientData/>
   </xdr:twoCellAnchor>
 </xdr:wsDr>"#
@@ -19896,6 +19936,11 @@ mod tests {
                 kind: DrawingAnchorKind::TwoCell,
                 edit_as: None,
                 non_visual_id: Some(2),
+                non_visual_attrs: BTreeMap::from([
+                    ("descr".to_string(), "Revenue detail".to_string()),
+                    ("hidden".to_string(), "1".to_string()),
+                    ("title".to_string(), "Chart Alt".to_string()),
+                ]),
                 name: Some("Embedded Revenue Chart".to_string()),
                 from: Some(DrawingCellMarkerSummary {
                     col: Some(0),
@@ -20117,6 +20162,14 @@ mod tests {
         };
         assert_eq!(chart_object.chart_id, *chart_id);
         assert_eq!(chart_object.non_visual_id, Some(2));
+        assert_eq!(
+            chart_object.non_visual_attrs,
+            BTreeMap::from([
+                ("descr".to_string(), "Revenue detail".to_string()),
+                ("hidden".to_string(), "1".to_string()),
+                ("title".to_string(), "Chart Alt".to_string()),
+            ])
+        );
         assert_eq!(chart_object.name, "Embedded Revenue Chart");
         assert_eq!(chart_object.placement, ObjectPlacement::MoveAndSize);
         assert_eq!(

@@ -9413,6 +9413,7 @@ impl ExcelRuntime {
                         .push(DrawingObjectModel::ChartFrame(ChartObjectModel {
                             id: chart_object_id,
                             non_visual_id: u32::try_from(chart_object_id.0).ok(),
+                            non_visual_attrs: BTreeMap::new(),
                             workbook_id,
                             host_sheet_id: sheet_id,
                             chart_id,
@@ -11714,6 +11715,7 @@ impl ExcelRuntime {
                         objects: vec![DrawingObjectModel::ChartFrame(ChartObjectModel {
                             id: chart_object_id,
                             non_visual_id: u32::try_from(chart_object_id.0).ok(),
+                            non_visual_attrs: BTreeMap::new(),
                             workbook_id: runtime.loaded.state.model.id,
                             host_sheet_id: sheet_id,
                             chart_id,
@@ -68748,6 +68750,9 @@ mod tests {
         .expect("saved placement drawing XML utf8");
         assert!(drawing_xml.contains("xdr:oneCellAnchor"));
         assert!(drawing_xml.contains(r#"id="2" name="Chart-Level Revenue Chart""#));
+        assert!(drawing_xml.contains(r#"descr="Revenue detail""#));
+        assert!(drawing_xml.contains(r#"title="Chart Alt""#));
+        assert!(drawing_xml.contains(r#"hidden="1""#));
         let mut placement_runtime = ExcelRuntime::new();
         let placement_workbook = placement_runtime
             .open_workbook(OpenWorkbookSpec {
@@ -78026,7 +78031,7 @@ mod tests {
   <xdr:absoluteAnchor>
     <xdr:pos x="25400" y="38100"/>
     <xdr:ext cx="1270000" cy="635000"/>
-    <xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Embedded Revenue Chart"/></xdr:nvGraphicFramePr><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart1"/></a:graphicData></a:graphic></xdr:graphicFrame>
+    <xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Embedded Revenue Chart" descr="Revenue detail" title="Chart Alt" hidden="1"/></xdr:nvGraphicFramePr><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart1"/></a:graphicData></a:graphic></xdr:graphicFrame>
     <xdr:clientData/>
   </xdr:absoluteAnchor>
 </xdr:wsDr>"#

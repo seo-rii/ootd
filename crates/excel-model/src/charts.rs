@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use office_common::{
     ChartId, ChartObjectId, DrawingAnchor, DrawingId, DrawingObjectId, FormulaSource, NameScope,
     ObjectPlacement, RangeArea, RangeSet, Rect, ReferenceTarget, SheetId, SheetScope, WorkbookId,
@@ -122,6 +124,7 @@ pub enum DrawingObjectModel {
 pub struct ChartObjectModel {
     pub id: ChartObjectId,
     pub non_visual_id: Option<u32>,
+    pub non_visual_attrs: BTreeMap<String, String>,
     pub workbook_id: WorkbookId,
     pub host_sheet_id: SheetId,
     pub chart_id: ChartId,
