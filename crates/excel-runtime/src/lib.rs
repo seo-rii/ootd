@@ -3,7 +3,7 @@ use excel_model::{
     ChartSourceExpr, ChartText, ChartType, DrawingModel, DrawingObjectModel, LegendModel,
     SeriesModel, WorkbookState, WorksheetData, resolve_chart_source_reference_with_names,
 };
-use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec};
+use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
 use office_common::{
     AbsoluteAnchor, CellError, CellValue, ChartId, ChartObjectId, DefinedNameId, DrawingAnchor,
@@ -23,7 +23,7 @@ use regex::{Regex, RegexBuilder};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::Cursor;
+use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 
 const ROOT_APPLICATION_HANDLE_VALUE: u64 = 0;
@@ -817,32 +817,19 @@ impl ExcelRuntime {
                         else {
                             continue;
                         };
-                        let Some(DrawingAnchor::Absolute(anchor)) = chart_object.anchor.as_ref()
-                        else {
-                            return Err(OmError::unsupported(
-                                "saving newly added chart objects currently requires an absolute anchor",
-                            ));
-                        };
-                        let escaped_name = partial_escape(chart_object.name.as_str()).to_string();
-                        drawing_xml.push_str(&format!(
-                            r#"  <xdr:absoluteAnchor>
-    <xdr:pos x="{}" y="{}"/>
-    <xdr:ext cx="{}" cy="{}"/>
-    <xdr:graphicFrame>
-      <xdr:nvGraphicFramePr><xdr:cNvPr id="{}" name="{}"/></xdr:nvGraphicFramePr>
-      <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="{}"/></a:graphicData></a:graphic>
-    </xdr:graphicFrame>
-    <xdr:clientData/>
-  </xdr:absoluteAnchor>
-"#,
-                            anchor.position.x.0,
-                            anchor.position.y.0,
-                            anchor.extents.cx.0,
-                            anchor.extents.cy.0,
-                            chart_object.id.0,
-                            escaped_name,
-                            relationship_id
-                        ));
+                        let anchor_xml = String::from_utf8(chart_object_anchor_xml(
+                            chart_object,
+                            relationship_id,
+                        )?)
+                        .map_err(|error| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                format!("generated chart anchor XML was not UTF-8: {error}"),
+                            )
+                        })?;
+                        drawing_xml.push_str("  ");
+                        drawing_xml.push_str(anchor_xml.as_str());
+                        drawing_xml.push('\n');
                     }
                 }
                 drawing_xml.push_str("</xdr:wsDr>");
@@ -1376,79 +1363,11 @@ impl ExcelRuntime {
                         let relationship_id = chart_relationship_ids_by_object_id
                             .get(&chart_object.id)
                             .expect("relationship id inserted above");
-                        let Some(DrawingAnchor::Absolute(anchor)) = chart_object.anchor.as_ref()
-                        else {
-                            return Err(OmError::unsupported(
-                                "saving newly added chart objects into existing drawings currently requires an absolute anchor",
-                            ));
-                        };
+                        let anchor_xml = chart_object_anchor_xml(chart_object, relationship_id)?;
                         writer
-                            .write_event(Event::Start(BytesStart::new("xdr:absoluteAnchor")))
-                            .map_err(runtime_xml_error)?;
-                        let position_x = anchor.position.x.0.to_string();
-                        let position_y = anchor.position.y.0.to_string();
-                        let mut position = BytesStart::new("xdr:pos");
-                        position.push_attribute(("x", position_x.as_str()));
-                        position.push_attribute(("y", position_y.as_str()));
-                        writer
-                            .write_event(Event::Empty(position))
-                            .map_err(runtime_xml_error)?;
-                        let extent_cx = anchor.extents.cx.0.to_string();
-                        let extent_cy = anchor.extents.cy.0.to_string();
-                        let mut extents = BytesStart::new("xdr:ext");
-                        extents.push_attribute(("cx", extent_cx.as_str()));
-                        extents.push_attribute(("cy", extent_cy.as_str()));
-                        writer
-                            .write_event(Event::Empty(extents))
-                            .map_err(runtime_xml_error)?;
-                        writer
-                            .write_event(Event::Start(BytesStart::new("xdr:graphicFrame")))
-                            .map_err(runtime_xml_error)?;
-                        writer
-                            .write_event(Event::Start(BytesStart::new("xdr:nvGraphicFramePr")))
-                            .map_err(runtime_xml_error)?;
-                        let mut non_visual = BytesStart::new("xdr:cNvPr");
-                        let chart_object_id = chart_object.id.0.to_string();
-                        let escaped_name = partial_escape(chart_object.name.as_str()).to_string();
-                        non_visual.push_attribute(("id", chart_object_id.as_str()));
-                        non_visual.push_attribute(("name", escaped_name.as_str()));
-                        writer
-                            .write_event(Event::Empty(non_visual))
-                            .map_err(runtime_xml_error)?;
-                        writer
-                            .write_event(Event::End(BytesEnd::new("xdr:nvGraphicFramePr")))
-                            .map_err(runtime_xml_error)?;
-                        writer
-                            .write_event(Event::Start(BytesStart::new("a:graphic")))
-                            .map_err(runtime_xml_error)?;
-                        let mut graphic_data = BytesStart::new("a:graphicData");
-                        graphic_data.push_attribute((
-                            "uri",
-                            "http://schemas.openxmlformats.org/drawingml/2006/chart",
-                        ));
-                        writer
-                            .write_event(Event::Start(graphic_data))
-                            .map_err(runtime_xml_error)?;
-                        let mut chart_reference = BytesStart::new("c:chart");
-                        chart_reference.push_attribute(("r:id", relationship_id.as_str()));
-                        writer
-                            .write_event(Event::Empty(chart_reference))
-                            .map_err(runtime_xml_error)?;
-                        writer
-                            .write_event(Event::End(BytesEnd::new("a:graphicData")))
-                            .map_err(runtime_xml_error)?;
-                        writer
-                            .write_event(Event::End(BytesEnd::new("a:graphic")))
-                            .map_err(runtime_xml_error)?;
-                        writer
-                            .write_event(Event::End(BytesEnd::new("xdr:graphicFrame")))
-                            .map_err(runtime_xml_error)?;
-                        writer
-                            .write_event(Event::Empty(BytesStart::new("xdr:clientData")))
-                            .map_err(runtime_xml_error)?;
-                        writer
-                            .write_event(Event::End(BytesEnd::new("xdr:absoluteAnchor")))
-                            .map_err(runtime_xml_error)?;
+                            .get_mut()
+                            .write_all(anchor_xml.as_slice())
+                            .map_err(|error| OmError::io(error.to_string()))?;
                     }
                     Ok(())
                 };
@@ -68805,6 +68724,59 @@ mod tests {
                 .dispatch_get(workbook.0, "Saved", &[])
                 .expect("Workbook.Saved after chart placement set")
         ));
+        let saved_with_placement = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with chart placement");
+        let saved_placement_package =
+            OpcPackage::from_bytes(&saved_with_placement).expect("saved chart placement package");
+        let drawing_xml = String::from_utf8(
+            saved_placement_package
+                .part("xl/drawings/drawing1.xml")
+                .expect("saved placement drawing part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved placement drawing XML utf8");
+        assert!(drawing_xml.contains("xdr:oneCellAnchor"));
+        let mut placement_runtime = ExcelRuntime::new();
+        let placement_workbook = placement_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved_with_placement,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook with chart placement");
+        let placement_worksheet = expect_object_handle(
+            placement_runtime
+                .dispatch_get(placement_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("placement Workbook.Worksheets(1)"),
+        );
+        let placement_chart_objects = expect_object_handle(
+            placement_runtime
+                .dispatch_get(placement_worksheet, "ChartObjects", &[])
+                .expect("placement Worksheet.ChartObjects"),
+        );
+        let placement_chart_object = expect_object_handle(
+            placement_runtime
+                .dispatch_invoke(placement_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("placement ChartObjects.Item(1)"),
+        );
+        assert_eq!(
+            expect_number(
+                placement_runtime
+                    .dispatch_get(placement_chart_object, "Placement", &[])
+                    .expect("reopened ChartObject.Placement")
+            ),
+            f64::from(super::XL_MOVE)
+        );
         let invalid_height = runtime
             .dispatch_set(chart_object, "Height", OmValue::Number(-1.0), &[])
             .expect_err("negative ChartObject.Height should fail");
@@ -69839,6 +69811,14 @@ mod tests {
         );
         runtime
             .dispatch_set(
+                new_chart_object,
+                "Placement",
+                OmValue::Number(f64::from(super::XL_MOVE_AND_SIZE)),
+                &[],
+            )
+            .expect("set new ChartObject.Placement");
+        runtime
+            .dispatch_set(
                 new_chart,
                 "ChartType",
                 OmValue::Number(f64::from(super::XL_LINE)),
@@ -69868,6 +69848,7 @@ mod tests {
         )
         .expect("drawing XML utf8");
         assert!(drawing_xml.contains("Chart 2"));
+        assert!(drawing_xml.contains("xdr:twoCellAnchor"));
         let drawing_rels_xml = String::from_utf8(
             saved_package
                 .part("xl/drawings/_rels/drawing1.xml.rels")
@@ -69938,6 +69919,14 @@ mod tests {
                     .expect("reopened new ChartObject.Height")
             ),
             90.0
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_new_chart_object, "Placement", &[])
+                    .expect("reopened new ChartObject.Placement")
+            ),
+            f64::from(super::XL_MOVE_AND_SIZE)
         );
         let reopened_new_chart = expect_object_handle(
             reopened_runtime
@@ -70318,6 +70307,22 @@ mod tests {
             ),
             f64::from(super::XL_FREE_FLOATING)
         );
+        runtime
+            .dispatch_set(
+                chart_object,
+                "Placement",
+                OmValue::Number(f64::from(super::XL_MOVE)),
+                &[],
+            )
+            .expect("set ChartObject.Placement");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_object, "Placement", &[])
+                    .expect("ChartObject.Placement after set")
+            ),
+            f64::from(super::XL_MOVE)
+        );
         let chart = expect_object_handle(
             runtime
                 .dispatch_get(chart_object, "Chart", &[])
@@ -70506,6 +70511,14 @@ mod tests {
                     .expect("reopened ChartObject.Height")
             ),
             160.0
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_object, "Placement", &[])
+                    .expect("reopened ChartObject.Placement")
+            ),
+            f64::from(super::XL_MOVE)
         );
         let reopened_chart = expect_object_handle(
             reopened_runtime

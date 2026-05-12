@@ -1325,12 +1325,18 @@ impl XlsxCodec {
             let mut anchor_index = 0usize;
             let mut active_chart_object_index = None::<usize>;
             let mut active_anchor_depth = 0usize;
+            let mut replaced_anchor_depth = 0usize;
             let mut active_marker = None::<ActiveMarker>;
             let mut active_marker_field = None::<ActiveMarkerField>;
 
             loop {
                 match reader.read_event_into(&mut buffer) {
                     Ok(Event::Start(element)) => {
+                        if replaced_anchor_depth > 0 {
+                            replaced_anchor_depth += 1;
+                            buffer.clear();
+                            continue;
+                        }
                         let element_name = element.name();
                         let local_name = xml_local_name(element_name.as_ref());
                         let is_anchor = matches!(
@@ -1345,8 +1351,25 @@ impl XlsxCodec {
                             active_anchor_depth = 1;
                             if let Some(chart_object_index) = active_chart_object_index {
                                 let chart_object = dirty_chart_objects[chart_object_index];
-                                if matches!(chart_object.anchor, Some(DrawingAnchor::TwoCell(_)))
-                                    && local_name == b"twoCellAnchor"
+                                let desired_anchor_name = chart_object.anchor.as_ref().map_or(
+                                    Ok(local_name),
+                                    |anchor| {
+                                        chart_anchor_element_name(anchor, chart_object.placement)
+                                    },
+                                )?;
+                                if desired_anchor_name != local_name {
+                                    let relationship_id =
+                                        chart_object_relationship_id(chart_object)?;
+                                    write_chart_object_anchor(
+                                        &mut writer,
+                                        chart_object,
+                                        relationship_id,
+                                    )?;
+                                    replaced_anchor_depth = 1;
+                                } else if matches!(
+                                    chart_object.anchor,
+                                    Some(DrawingAnchor::TwoCell(_))
+                                ) && local_name == b"twoCellAnchor"
                                 {
                                     let mut rewritten = BytesStart::new(
                                         String::from_utf8_lossy(element.name().as_ref())
@@ -1444,6 +1467,10 @@ impl XlsxCodec {
                         }
                     }
                     Ok(Event::Empty(element)) => {
+                        if replaced_anchor_depth > 0 {
+                            buffer.clear();
+                            continue;
+                        }
                         let element_name = element.name();
                         let local_name = xml_local_name(element_name.as_ref());
                         let is_anchor = matches!(
@@ -1480,6 +1507,10 @@ impl XlsxCodec {
                         }
                     }
                     Ok(Event::Text(text)) => {
+                        if replaced_anchor_depth > 0 {
+                            buffer.clear();
+                            continue;
+                        }
                         let replacement = if let Some(chart_object_index) =
                             active_chart_object_index
                         {
@@ -1543,6 +1574,20 @@ impl XlsxCodec {
                         }
                     }
                     Ok(Event::End(element)) => {
+                        if replaced_anchor_depth > 0 {
+                            if replaced_anchor_depth == 1 {
+                                replaced_anchor_depth = 0;
+                                active_anchor_depth = 0;
+                                active_chart_object_index = None;
+                                active_marker = None;
+                                active_marker_field = None;
+                                anchor_index += 1;
+                            } else {
+                                replaced_anchor_depth -= 1;
+                            }
+                            buffer.clear();
+                            continue;
+                        }
                         let element_name = element.name();
                         let local_name = xml_local_name(element_name.as_ref()).to_vec();
                         writer
@@ -18483,6 +18528,325 @@ fn io_error(error: std::io::Error) -> OmError {
 
 fn xml_error(error: impl std::fmt::Display) -> OmError {
     OmError::new(OmErrorCode::Parse, error.to_string())
+}
+
+fn chart_marker_from_absolute(anchor: &AbsoluteAnchor) -> CellMarker {
+    CellMarker {
+        col_zero_based: 0,
+        col_offset: anchor.position.x,
+        row_zero_based: 0,
+        row_offset: anchor.position.y,
+    }
+}
+
+fn chart_marker_with_extents(from: CellMarker, extents: SizeEmu) -> OmResult<CellMarker> {
+    Ok(CellMarker {
+        col_zero_based: from.col_zero_based,
+        col_offset: Emu(from
+            .col_offset
+            .0
+            .checked_add(extents.cx.0)
+            .ok_or_else(|| OmError::invalid_argument("chart anchor width exceeds EMU bounds"))?),
+        row_zero_based: from.row_zero_based,
+        row_offset: Emu(from
+            .row_offset
+            .0
+            .checked_add(extents.cy.0)
+            .ok_or_else(|| OmError::invalid_argument("chart anchor height exceeds EMU bounds"))?),
+    })
+}
+
+fn chart_anchor_element_name(
+    anchor: &DrawingAnchor,
+    placement: ObjectPlacement,
+) -> OmResult<&'static [u8]> {
+    match (anchor, placement) {
+        (DrawingAnchor::Absolute(_), ObjectPlacement::MoveOnly) => Ok(b"oneCellAnchor"),
+        (DrawingAnchor::Absolute(_), ObjectPlacement::MoveAndSize) => Ok(b"twoCellAnchor"),
+        (DrawingAnchor::Absolute(_), ObjectPlacement::FreeFloating | ObjectPlacement::Unknown) => {
+            Ok(b"absoluteAnchor")
+        }
+        (DrawingAnchor::OneCell(_), ObjectPlacement::FreeFloating) => Ok(b"absoluteAnchor"),
+        (DrawingAnchor::OneCell(_), ObjectPlacement::MoveAndSize) => Ok(b"twoCellAnchor"),
+        (DrawingAnchor::OneCell(_), ObjectPlacement::MoveOnly | ObjectPlacement::Unknown) => {
+            Ok(b"oneCellAnchor")
+        }
+        (DrawingAnchor::TwoCell(_), _) => Ok(b"twoCellAnchor"),
+        (DrawingAnchor::UnsupportedRaw, _) => Err(OmError::unsupported(
+            "saving chart objects with unsupported drawing anchors is not implemented",
+        )),
+    }
+}
+
+fn chart_object_relationship_id(chart_object: &ChartObjectModel) -> OmResult<&str> {
+    chart_object
+        .raw_binding
+        .as_deref()
+        .and_then(|binding| {
+            binding
+                .rsplit_once('#')
+                .map(|(_, relationship_id)| relationship_id)
+        })
+        .ok_or_else(|| {
+            OmError::new(
+                OmErrorCode::InvalidState,
+                format!(
+                    "chart object {} is missing a drawing relationship binding",
+                    chart_object.name
+                ),
+            )
+        })
+}
+
+fn write_chart_marker(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    name: &str,
+    marker: CellMarker,
+) -> OmResult<()> {
+    writer
+        .write_event(Event::Start(BytesStart::new(name)))
+        .map_err(xml_error)?;
+    for (field, value) in [
+        ("xdr:col", marker.col_zero_based.to_string()),
+        ("xdr:colOff", marker.col_offset.0.to_string()),
+        ("xdr:row", marker.row_zero_based.to_string()),
+        ("xdr:rowOff", marker.row_offset.0.to_string()),
+    ] {
+        writer
+            .write_event(Event::Start(BytesStart::new(field)))
+            .map_err(xml_error)?;
+        writer
+            .write_event(Event::Text(BytesText::new(&value)))
+            .map_err(xml_error)?;
+        writer
+            .write_event(Event::End(BytesEnd::new(field)))
+            .map_err(xml_error)?;
+    }
+    writer
+        .write_event(Event::End(BytesEnd::new(name)))
+        .map_err(xml_error)?;
+    Ok(())
+}
+
+fn write_chart_extents(writer: &mut Writer<Cursor<Vec<u8>>>, extents: SizeEmu) -> OmResult<()> {
+    let extent_cx = extents.cx.0.to_string();
+    let extent_cy = extents.cy.0.to_string();
+    let mut element = BytesStart::new("xdr:ext");
+    element.push_attribute(("cx", extent_cx.as_str()));
+    element.push_attribute(("cy", extent_cy.as_str()));
+    writer
+        .write_event(Event::Empty(element))
+        .map_err(xml_error)?;
+    Ok(())
+}
+
+fn write_chart_graphic_frame(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    chart_object: &ChartObjectModel,
+    relationship_id: &str,
+) -> OmResult<()> {
+    writer
+        .write_event(Event::Start(BytesStart::new("xdr:graphicFrame")))
+        .map_err(xml_error)?;
+    writer
+        .write_event(Event::Start(BytesStart::new("xdr:nvGraphicFramePr")))
+        .map_err(xml_error)?;
+    let mut non_visual = BytesStart::new("xdr:cNvPr");
+    let chart_object_id = chart_object.id.0.to_string();
+    let escaped_name = partial_escape(chart_object.name.as_str()).to_string();
+    non_visual.push_attribute(("id", chart_object_id.as_str()));
+    non_visual.push_attribute(("name", escaped_name.as_str()));
+    writer
+        .write_event(Event::Empty(non_visual))
+        .map_err(xml_error)?;
+    writer
+        .write_event(Event::End(BytesEnd::new("xdr:nvGraphicFramePr")))
+        .map_err(xml_error)?;
+    writer
+        .write_event(Event::Start(BytesStart::new("a:graphic")))
+        .map_err(xml_error)?;
+    let mut graphic_data = BytesStart::new("a:graphicData");
+    graphic_data.push_attribute((
+        "uri",
+        "http://schemas.openxmlformats.org/drawingml/2006/chart",
+    ));
+    writer
+        .write_event(Event::Start(graphic_data))
+        .map_err(xml_error)?;
+    let mut chart_reference = BytesStart::new("c:chart");
+    chart_reference.push_attribute(("r:id", relationship_id));
+    writer
+        .write_event(Event::Empty(chart_reference))
+        .map_err(xml_error)?;
+    writer
+        .write_event(Event::End(BytesEnd::new("a:graphicData")))
+        .map_err(xml_error)?;
+    writer
+        .write_event(Event::End(BytesEnd::new("a:graphic")))
+        .map_err(xml_error)?;
+    writer
+        .write_event(Event::End(BytesEnd::new("xdr:graphicFrame")))
+        .map_err(xml_error)?;
+    Ok(())
+}
+
+fn write_chart_object_anchor(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    chart_object: &ChartObjectModel,
+    relationship_id: &str,
+) -> OmResult<()> {
+    let Some(anchor) = chart_object.anchor.as_ref() else {
+        return Err(OmError::unsupported(
+            "saving chart objects currently requires a supported drawing anchor",
+        ));
+    };
+
+    match (anchor, chart_object.placement) {
+        (DrawingAnchor::Absolute(anchor), ObjectPlacement::MoveOnly) => {
+            let from = chart_marker_from_absolute(anchor);
+            writer
+                .write_event(Event::Start(BytesStart::new("xdr:oneCellAnchor")))
+                .map_err(xml_error)?;
+            write_chart_marker(writer, "xdr:from", from)?;
+            write_chart_extents(writer, anchor.extents)?;
+            write_chart_graphic_frame(writer, chart_object, relationship_id)?;
+            writer
+                .write_event(Event::Empty(BytesStart::new("xdr:clientData")))
+                .map_err(xml_error)?;
+            writer
+                .write_event(Event::End(BytesEnd::new("xdr:oneCellAnchor")))
+                .map_err(xml_error)?;
+        }
+        (DrawingAnchor::Absolute(anchor), ObjectPlacement::MoveAndSize) => {
+            let from = chart_marker_from_absolute(anchor);
+            let to = chart_marker_with_extents(from, anchor.extents)?;
+            writer
+                .write_event(Event::Start(BytesStart::new("xdr:twoCellAnchor")))
+                .map_err(xml_error)?;
+            write_chart_marker(writer, "xdr:from", from)?;
+            write_chart_marker(writer, "xdr:to", to)?;
+            write_chart_graphic_frame(writer, chart_object, relationship_id)?;
+            writer
+                .write_event(Event::Empty(BytesStart::new("xdr:clientData")))
+                .map_err(xml_error)?;
+            writer
+                .write_event(Event::End(BytesEnd::new("xdr:twoCellAnchor")))
+                .map_err(xml_error)?;
+        }
+        (
+            DrawingAnchor::Absolute(anchor),
+            ObjectPlacement::FreeFloating | ObjectPlacement::Unknown,
+        ) => {
+            writer
+                .write_event(Event::Start(BytesStart::new("xdr:absoluteAnchor")))
+                .map_err(xml_error)?;
+            let position_x = anchor.position.x.0.to_string();
+            let position_y = anchor.position.y.0.to_string();
+            let mut position = BytesStart::new("xdr:pos");
+            position.push_attribute(("x", position_x.as_str()));
+            position.push_attribute(("y", position_y.as_str()));
+            writer
+                .write_event(Event::Empty(position))
+                .map_err(xml_error)?;
+            write_chart_extents(writer, anchor.extents)?;
+            write_chart_graphic_frame(writer, chart_object, relationship_id)?;
+            writer
+                .write_event(Event::Empty(BytesStart::new("xdr:clientData")))
+                .map_err(xml_error)?;
+            writer
+                .write_event(Event::End(BytesEnd::new("xdr:absoluteAnchor")))
+                .map_err(xml_error)?;
+        }
+        (DrawingAnchor::OneCell(anchor), ObjectPlacement::FreeFloating) => {
+            writer
+                .write_event(Event::Start(BytesStart::new("xdr:absoluteAnchor")))
+                .map_err(xml_error)?;
+            let position_x = anchor.from.col_offset.0.to_string();
+            let position_y = anchor.from.row_offset.0.to_string();
+            let mut position = BytesStart::new("xdr:pos");
+            position.push_attribute(("x", position_x.as_str()));
+            position.push_attribute(("y", position_y.as_str()));
+            writer
+                .write_event(Event::Empty(position))
+                .map_err(xml_error)?;
+            write_chart_extents(writer, anchor.extents)?;
+            write_chart_graphic_frame(writer, chart_object, relationship_id)?;
+            writer
+                .write_event(Event::Empty(BytesStart::new("xdr:clientData")))
+                .map_err(xml_error)?;
+            writer
+                .write_event(Event::End(BytesEnd::new("xdr:absoluteAnchor")))
+                .map_err(xml_error)?;
+        }
+        (DrawingAnchor::OneCell(anchor), ObjectPlacement::MoveAndSize) => {
+            let to = chart_marker_with_extents(anchor.from, anchor.extents)?;
+            writer
+                .write_event(Event::Start(BytesStart::new("xdr:twoCellAnchor")))
+                .map_err(xml_error)?;
+            write_chart_marker(writer, "xdr:from", anchor.from)?;
+            write_chart_marker(writer, "xdr:to", to)?;
+            write_chart_graphic_frame(writer, chart_object, relationship_id)?;
+            writer
+                .write_event(Event::Empty(BytesStart::new("xdr:clientData")))
+                .map_err(xml_error)?;
+            writer
+                .write_event(Event::End(BytesEnd::new("xdr:twoCellAnchor")))
+                .map_err(xml_error)?;
+        }
+        (DrawingAnchor::OneCell(anchor), ObjectPlacement::MoveOnly | ObjectPlacement::Unknown) => {
+            writer
+                .write_event(Event::Start(BytesStart::new("xdr:oneCellAnchor")))
+                .map_err(xml_error)?;
+            write_chart_marker(writer, "xdr:from", anchor.from)?;
+            write_chart_extents(writer, anchor.extents)?;
+            write_chart_graphic_frame(writer, chart_object, relationship_id)?;
+            writer
+                .write_event(Event::Empty(BytesStart::new("xdr:clientData")))
+                .map_err(xml_error)?;
+            writer
+                .write_event(Event::End(BytesEnd::new("xdr:oneCellAnchor")))
+                .map_err(xml_error)?;
+        }
+        (DrawingAnchor::TwoCell(anchor), placement) => {
+            let mut start = BytesStart::new("xdr:twoCellAnchor");
+            match placement {
+                ObjectPlacement::MoveOnly => start.push_attribute(("editAs", "oneCell")),
+                ObjectPlacement::FreeFloating => start.push_attribute(("editAs", "absolute")),
+                ObjectPlacement::MoveAndSize => {}
+                ObjectPlacement::Unknown => {
+                    if let Some(edit_as) = anchor.edit_as.as_deref() {
+                        start.push_attribute(("editAs", edit_as));
+                    }
+                }
+            }
+            writer.write_event(Event::Start(start)).map_err(xml_error)?;
+            write_chart_marker(writer, "xdr:from", anchor.from)?;
+            write_chart_marker(writer, "xdr:to", anchor.to)?;
+            write_chart_graphic_frame(writer, chart_object, relationship_id)?;
+            writer
+                .write_event(Event::Empty(BytesStart::new("xdr:clientData")))
+                .map_err(xml_error)?;
+            writer
+                .write_event(Event::End(BytesEnd::new("xdr:twoCellAnchor")))
+                .map_err(xml_error)?;
+        }
+        (DrawingAnchor::UnsupportedRaw, _) => {
+            return Err(OmError::unsupported(
+                "saving chart objects with unsupported drawing anchors is not implemented",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+pub fn chart_object_anchor_xml(
+    chart_object: &ChartObjectModel,
+    relationship_id: &str,
+) -> OmResult<Vec<u8>> {
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    write_chart_object_anchor(&mut writer, chart_object, relationship_id)?;
+    Ok(writer.into_inner().into_inner())
 }
 
 #[cfg(test)]
