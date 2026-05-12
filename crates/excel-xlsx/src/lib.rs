@@ -592,6 +592,8 @@ pub struct DrawingAnchorSummary {
     pub kind: DrawingAnchorKind,
     pub edit_as: Option<String>,
     pub anchor_attrs: BTreeMap<String, String>,
+    pub position_attrs: BTreeMap<String, String>,
+    pub extents_attrs: BTreeMap<String, String>,
     pub graphic_frame_attrs: BTreeMap<String, String>,
     pub graphic_frame_transform_xml: Option<String>,
     pub graphic_data_attrs: BTreeMap<String, String>,
@@ -3075,6 +3077,8 @@ fn build_chart_model_overlay(
                     objects.push(DrawingObjectModel::ChartFrame(ChartObjectModel {
                         id: ChartObjectId(next_drawing_object_id),
                         anchor_attrs: anchor_summary.anchor_attrs.clone(),
+                        position_attrs: anchor_summary.position_attrs.clone(),
+                        extents_attrs: anchor_summary.extents_attrs.clone(),
                         graphic_frame_attrs: anchor_summary.graphic_frame_attrs.clone(),
                         graphic_frame_transform_xml: anchor_summary
                             .graphic_frame_transform_xml
@@ -15026,6 +15030,8 @@ fn parse_drawing_part_summary(
                                 .into_iter()
                                 .filter(|(name, _)| name != "editAs")
                                 .collect(),
+                            position_attrs: BTreeMap::new(),
+                            extents_attrs: BTreeMap::new(),
                             graphic_frame_attrs: BTreeMap::new(),
                             graphic_frame_transform_xml: None,
                             graphic_data_attrs: BTreeMap::new(),
@@ -15083,6 +15089,12 @@ fn parse_drawing_part_summary(
                                     x: decode_i64_attr(&element, b"x", &reader)?,
                                     y: decode_i64_attr(&element, b"y", &reader)?,
                                 });
+                                if anchor.position_attrs.is_empty() {
+                                    anchor.position_attrs = decode_attrs(&element, &reader)?
+                                        .into_iter()
+                                        .filter(|(name, _)| name != "x" && name != "y")
+                                        .collect();
+                                }
                             }
                         }
                         b"ext" => {
@@ -15091,6 +15103,12 @@ fn parse_drawing_part_summary(
                                     cx: decode_i64_attr(&element, b"cx", &reader)?,
                                     cy: decode_i64_attr(&element, b"cy", &reader)?,
                                 });
+                                if anchor.extents_attrs.is_empty() {
+                                    anchor.extents_attrs = decode_attrs(&element, &reader)?
+                                        .into_iter()
+                                        .filter(|(name, _)| name != "cx" && name != "cy")
+                                        .collect();
+                                }
                             }
                         }
                         b"graphicFrame" => {
@@ -15250,6 +15268,8 @@ fn parse_drawing_part_summary(
                                 .into_iter()
                                 .filter(|(name, _)| name != "editAs")
                                 .collect(),
+                            position_attrs: BTreeMap::new(),
+                            extents_attrs: BTreeMap::new(),
                             graphic_frame_attrs: BTreeMap::new(),
                             graphic_frame_transform_xml: None,
                             graphic_data_attrs: BTreeMap::new(),
@@ -15287,6 +15307,12 @@ fn parse_drawing_part_summary(
                                 x: decode_i64_attr(&element, b"x", &reader)?,
                                 y: decode_i64_attr(&element, b"y", &reader)?,
                             });
+                            if anchor.position_attrs.is_empty() {
+                                anchor.position_attrs = decode_attrs(&element, &reader)?
+                                    .into_iter()
+                                    .filter(|(name, _)| name != "x" && name != "y")
+                                    .collect();
+                            }
                         }
                     }
                     b"ext" => {
@@ -15295,6 +15321,12 @@ fn parse_drawing_part_summary(
                                 cx: decode_i64_attr(&element, b"cx", &reader)?,
                                 cy: decode_i64_attr(&element, b"cy", &reader)?,
                             });
+                            if anchor.extents_attrs.is_empty() {
+                                anchor.extents_attrs = decode_attrs(&element, &reader)?
+                                    .into_iter()
+                                    .filter(|(name, _)| name != "cx" && name != "cy")
+                                    .collect();
+                            }
                         }
                     }
                     b"graphicFrame" => {
@@ -18991,12 +19023,24 @@ fn write_chart_marker(
     Ok(())
 }
 
-fn write_chart_extents(writer: &mut Writer<Cursor<Vec<u8>>>, extents: SizeEmu) -> OmResult<()> {
+fn write_chart_extents(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    extents: SizeEmu,
+    attrs: &BTreeMap<String, String>,
+) -> OmResult<()> {
     let extent_cx = extents.cx.0.to_string();
     let extent_cy = extents.cy.0.to_string();
     let mut element = BytesStart::new("xdr:ext");
     element.push_attribute(("cx", extent_cx.as_str()));
     element.push_attribute(("cy", extent_cy.as_str()));
+    let preserved_attrs = attrs
+        .iter()
+        .filter(|(name, _)| name.as_str() != "cx" && name.as_str() != "cy")
+        .map(|(name, value)| (name.as_str(), partial_escape(value.as_str()).to_string()))
+        .collect::<Vec<_>>();
+    for (name, value) in &preserved_attrs {
+        element.push_attribute((*name, value.as_str()));
+    }
     writer
         .write_event(Event::Empty(element))
         .map_err(xml_error)?;
@@ -19188,13 +19232,33 @@ fn write_chart_object_anchor(
             writer.write_event(Event::Start(start)).map_err(xml_error)?;
             Ok(())
         };
+    let write_position = |writer: &mut Writer<Cursor<Vec<u8>>>, x: Emu, y: Emu| -> OmResult<()> {
+        let position_x = x.0.to_string();
+        let position_y = y.0.to_string();
+        let mut position = BytesStart::new("xdr:pos");
+        position.push_attribute(("x", position_x.as_str()));
+        position.push_attribute(("y", position_y.as_str()));
+        let preserved_attrs = chart_object
+            .position_attrs
+            .iter()
+            .filter(|(name, _)| name.as_str() != "x" && name.as_str() != "y")
+            .map(|(name, value)| (name.as_str(), partial_escape(value.as_str()).to_string()))
+            .collect::<Vec<_>>();
+        for (name, value) in &preserved_attrs {
+            position.push_attribute((*name, value.as_str()));
+        }
+        writer
+            .write_event(Event::Empty(position))
+            .map_err(xml_error)?;
+        Ok(())
+    };
 
     match (anchor, chart_object.placement) {
         (DrawingAnchor::Absolute(anchor), ObjectPlacement::MoveOnly) => {
             let from = chart_marker_from_absolute(anchor);
             write_anchor_start(writer, "xdr:oneCellAnchor", None)?;
             write_chart_marker(writer, "xdr:from", from)?;
-            write_chart_extents(writer, anchor.extents)?;
+            write_chart_extents(writer, anchor.extents, &chart_object.extents_attrs)?;
             write_chart_graphic_frame(writer, chart_object, relationship_id)?;
             write_client_data(writer)?;
             write_anchor_extensions(writer)?;
@@ -19220,15 +19284,8 @@ fn write_chart_object_anchor(
             ObjectPlacement::FreeFloating | ObjectPlacement::Unknown,
         ) => {
             write_anchor_start(writer, "xdr:absoluteAnchor", None)?;
-            let position_x = anchor.position.x.0.to_string();
-            let position_y = anchor.position.y.0.to_string();
-            let mut position = BytesStart::new("xdr:pos");
-            position.push_attribute(("x", position_x.as_str()));
-            position.push_attribute(("y", position_y.as_str()));
-            writer
-                .write_event(Event::Empty(position))
-                .map_err(xml_error)?;
-            write_chart_extents(writer, anchor.extents)?;
+            write_position(writer, anchor.position.x, anchor.position.y)?;
+            write_chart_extents(writer, anchor.extents, &chart_object.extents_attrs)?;
             write_chart_graphic_frame(writer, chart_object, relationship_id)?;
             write_client_data(writer)?;
             write_anchor_extensions(writer)?;
@@ -19238,15 +19295,8 @@ fn write_chart_object_anchor(
         }
         (DrawingAnchor::OneCell(anchor), ObjectPlacement::FreeFloating) => {
             write_anchor_start(writer, "xdr:absoluteAnchor", None)?;
-            let position_x = anchor.from.col_offset.0.to_string();
-            let position_y = anchor.from.row_offset.0.to_string();
-            let mut position = BytesStart::new("xdr:pos");
-            position.push_attribute(("x", position_x.as_str()));
-            position.push_attribute(("y", position_y.as_str()));
-            writer
-                .write_event(Event::Empty(position))
-                .map_err(xml_error)?;
-            write_chart_extents(writer, anchor.extents)?;
+            write_position(writer, anchor.from.col_offset, anchor.from.row_offset)?;
+            write_chart_extents(writer, anchor.extents, &chart_object.extents_attrs)?;
             write_chart_graphic_frame(writer, chart_object, relationship_id)?;
             write_client_data(writer)?;
             write_anchor_extensions(writer)?;
@@ -19269,7 +19319,7 @@ fn write_chart_object_anchor(
         (DrawingAnchor::OneCell(anchor), ObjectPlacement::MoveOnly | ObjectPlacement::Unknown) => {
             write_anchor_start(writer, "xdr:oneCellAnchor", None)?;
             write_chart_marker(writer, "xdr:from", anchor.from)?;
-            write_chart_extents(writer, anchor.extents)?;
+            write_chart_extents(writer, anchor.extents, &chart_object.extents_attrs)?;
             write_chart_graphic_frame(writer, chart_object, relationship_id)?;
             write_client_data(writer)?;
             write_anchor_extensions(writer)?;
@@ -19998,8 +20048,8 @@ mod tests {
                 bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
 <xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <xdr:absoluteAnchor>
-    <xdr:pos x="0" y="0"/>
-    <xdr:ext cx="5486400" cy="3200400"/>
+    <xdr:pos x="0" y="0" pg:tag="keep" xmlns:pg="urn:pos"/>
+    <xdr:ext cx="5486400" cy="3200400" eg:tag="keep" xmlns:eg="urn:ext"/>
     <xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart Sheet Chart"/></xdr:nvGraphicFramePr><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart2"/></a:graphicData></a:graphic></xdr:graphicFrame>
     <xdr:clientData/>
   </xdr:absoluteAnchor>
@@ -20070,6 +20120,14 @@ mod tests {
                 kind: DrawingAnchorKind::Absolute,
                 edit_as: None,
                 anchor_attrs: BTreeMap::new(),
+                position_attrs: BTreeMap::from([
+                    ("pg:tag".to_string(), "keep".to_string()),
+                    ("xmlns:pg".to_string(), "urn:pos".to_string()),
+                ]),
+                extents_attrs: BTreeMap::from([
+                    ("eg:tag".to_string(), "keep".to_string()),
+                    ("xmlns:eg".to_string(), "urn:ext".to_string()),
+                ]),
                 graphic_frame_attrs: BTreeMap::new(),
                 graphic_frame_transform_xml: None,
                 graphic_data_attrs: BTreeMap::new(),
@@ -20148,6 +20206,20 @@ mod tests {
         };
         assert_eq!(chart_object.chart_id, *chart_id);
         assert_eq!(chart_object.name, "Chart Sheet Chart");
+        assert_eq!(
+            chart_object.position_attrs,
+            BTreeMap::from([
+                ("pg:tag".to_string(), "keep".to_string()),
+                ("xmlns:pg".to_string(), "urn:pos".to_string()),
+            ])
+        );
+        assert_eq!(
+            chart_object.extents_attrs,
+            BTreeMap::from([
+                ("eg:tag".to_string(), "keep".to_string()),
+                ("xmlns:eg".to_string(), "urn:ext".to_string()),
+            ])
+        );
         assert_eq!(chart_object.placement, ObjectPlacement::FreeFloating);
         assert_eq!(
             chart_object.raw_binding.as_deref(),
@@ -20346,6 +20418,8 @@ mod tests {
                     ("ar:tag".to_string(), "keep".to_string()),
                     ("xmlns:ar".to_string(), "urn:anchor-root".to_string()),
                 ]),
+                position_attrs: BTreeMap::new(),
+                extents_attrs: BTreeMap::new(),
                 graphic_frame_attrs: BTreeMap::from([
                     ("fPublished".to_string(), "0".to_string()),
                     ("macro".to_string(), "".to_string()),
