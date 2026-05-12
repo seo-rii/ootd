@@ -1470,12 +1470,6 @@ impl ExcelRuntime {
                     .flatten()
             })
             .collect::<Vec<_>>();
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        enum ChartSourceXmlSlot {
-            Name,
-            XValues,
-            Values,
-        }
         for (chart_id, chart_part_uri) in dirty_chart_part_uris {
             let chart = loaded
                 .state
@@ -1493,178 +1487,8 @@ impl ExcelRuntime {
                 .part(chart_part_uri.as_str())
                 .map(|part| part.bytes.clone());
             let chart_xml = if let Some(existing_chart_xml) = existing_chart_xml {
-                let expected_dirty_sources = chart
-                    .series
-                    .iter()
-                    .map(|series| {
-                        let mut count = 0usize;
-                        if series.name.as_ref().is_some_and(|source| source.dirty) {
-                            count += 1;
-                        }
-                        if series.x_values.as_ref().is_some_and(|source| source.dirty) {
-                            count += 1;
-                        }
-                        if series.values.as_ref().is_some_and(|source| source.dirty) {
-                            count += 1;
-                        }
-                        count
-                    })
-                    .sum::<usize>();
-                let mut patched_chart_xml = None;
-                if expected_dirty_sources > 0 {
-                    let mut reader =
-                        Reader::from_reader(Cursor::new(existing_chart_xml.as_slice()));
-                    reader.config_mut().trim_text(false);
-                    let mut writer = Writer::new(Cursor::new(Vec::new()));
-                    let mut buffer = Vec::new();
-                    let mut next_series_index = 0usize;
-                    let mut current_series_index = None::<usize>;
-                    let mut source_stack = Vec::<ChartSourceXmlSlot>::new();
-                    let mut current_formula = None::<(ChartSourceXmlSlot, bool)>;
-                    let mut patched_sources = 0usize;
-
-                    loop {
-                        match reader.read_event_into(&mut buffer) {
-                            Ok(Event::Start(element)) => {
-                                let local_name = xml_local_name(element.name().as_ref()).to_vec();
-                                if local_name.as_slice() == b"ser" {
-                                    current_series_index = Some(next_series_index);
-                                    next_series_index += 1;
-                                    source_stack.clear();
-                                } else if current_series_index.is_some() {
-                                    match local_name.as_slice() {
-                                        b"tx" => source_stack.push(ChartSourceXmlSlot::Name),
-                                        b"cat" => source_stack.push(ChartSourceXmlSlot::XValues),
-                                        b"val" => source_stack.push(ChartSourceXmlSlot::Values),
-                                        b"f" => {
-                                            if let Some(slot) = source_stack.last().copied() {
-                                                current_formula = Some((slot, false));
-                                            }
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                                writer
-                                    .write_event(Event::Start(element.into_owned()))
-                                    .map_err(runtime_xml_error)?;
-                            }
-                            Ok(Event::Empty(element)) => {
-                                writer
-                                    .write_event(Event::Empty(element.into_owned()))
-                                    .map_err(runtime_xml_error)?;
-                            }
-                            Ok(Event::Text(text)) => {
-                                if let Some((slot, written)) = current_formula.as_mut()
-                                    && !*written
-                                    && let Some(series_index) = current_series_index
-                                    && let Some(source) = chart.series.get(series_index).and_then(
-                                        |series| match *slot {
-                                            ChartSourceXmlSlot::Name => series.name.as_ref(),
-                                            ChartSourceXmlSlot::XValues => series.x_values.as_ref(),
-                                            ChartSourceXmlSlot::Values => series.values.as_ref(),
-                                        },
-                                    )
-                                    && source.dirty
-                                {
-                                    let replacement =
-                                        source.raw.text.trim_start_matches('=').to_string();
-                                    writer
-                                        .write_event(Event::Text(BytesText::from_escaped(
-                                            partial_escape(&replacement),
-                                        )))
-                                        .map_err(runtime_xml_error)?;
-                                    *written = true;
-                                    patched_sources += 1;
-                                } else {
-                                    writer
-                                        .write_event(Event::Text(text.into_owned()))
-                                        .map_err(runtime_xml_error)?;
-                                }
-                            }
-                            Ok(Event::CData(data)) => {
-                                if let Some((slot, written)) = current_formula.as_mut()
-                                    && !*written
-                                    && let Some(series_index) = current_series_index
-                                    && let Some(source) = chart.series.get(series_index).and_then(
-                                        |series| match *slot {
-                                            ChartSourceXmlSlot::Name => series.name.as_ref(),
-                                            ChartSourceXmlSlot::XValues => series.x_values.as_ref(),
-                                            ChartSourceXmlSlot::Values => series.values.as_ref(),
-                                        },
-                                    )
-                                    && source.dirty
-                                {
-                                    let replacement =
-                                        source.raw.text.trim_start_matches('=').to_string();
-                                    writer
-                                        .write_event(Event::Text(BytesText::from_escaped(
-                                            partial_escape(&replacement),
-                                        )))
-                                        .map_err(runtime_xml_error)?;
-                                    *written = true;
-                                    patched_sources += 1;
-                                } else {
-                                    writer
-                                        .write_event(Event::CData(data.into_owned()))
-                                        .map_err(runtime_xml_error)?;
-                                }
-                            }
-                            Ok(Event::End(element)) => {
-                                let local_name = xml_local_name(element.name().as_ref()).to_vec();
-                                if local_name.as_slice() == b"f"
-                                    && let Some((slot, written)) = current_formula.take()
-                                    && !written
-                                    && let Some(series_index) = current_series_index
-                                    && let Some(source) =
-                                        chart.series.get(series_index).and_then(|series| match slot
-                                        {
-                                            ChartSourceXmlSlot::Name => series.name.as_ref(),
-                                            ChartSourceXmlSlot::XValues => series.x_values.as_ref(),
-                                            ChartSourceXmlSlot::Values => series.values.as_ref(),
-                                        })
-                                    && source.dirty
-                                {
-                                    let replacement =
-                                        source.raw.text.trim_start_matches('=').to_string();
-                                    writer
-                                        .write_event(Event::Text(BytesText::from_escaped(
-                                            partial_escape(&replacement),
-                                        )))
-                                        .map_err(runtime_xml_error)?;
-                                    patched_sources += 1;
-                                }
-
-                                writer
-                                    .write_event(Event::End(element.to_owned()))
-                                    .map_err(runtime_xml_error)?;
-
-                                if current_series_index.is_some() {
-                                    match local_name.as_slice() {
-                                        b"tx" | b"cat" | b"val" => {
-                                            source_stack.pop();
-                                        }
-                                        b"ser" => {
-                                            current_series_index = None;
-                                            source_stack.clear();
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
-                            Ok(Event::Eof) => break,
-                            Ok(event) => writer
-                                .write_event(event.into_owned())
-                                .map_err(runtime_xml_error)?,
-                            Err(error) => return Err(runtime_xml_error(error)),
-                        }
-                        buffer.clear();
-                    }
-
-                    if patched_sources == expected_dirty_sources {
-                        patched_chart_xml = Some(writer.into_inner().into_inner());
-                    }
-                }
-                patched_chart_xml.unwrap_or(serialize_chart_model_xml(chart)?)
+                patch_loaded_chart_model_xml(existing_chart_xml.as_slice(), chart)?
+                    .unwrap_or(serialize_chart_model_xml(chart)?)
             } else {
                 serialize_chart_model_xml(chart)?
             };
@@ -16663,6 +16487,486 @@ fn blank_worksheet_xml_bytes() -> Vec<u8> {
         .to_vec()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChartSourceXmlSlot {
+    Name,
+    XValues,
+    Values,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChartTextXmlTarget {
+    ChartTitle,
+    AxisTitle(usize),
+}
+
+fn chart_type_from_group_name(local_name: &[u8]) -> Option<ChartType> {
+    match local_name {
+        b"barChart" => Some(ChartType::Bar),
+        b"lineChart" => Some(ChartType::Line),
+        b"scatterChart" => Some(ChartType::Scatter),
+        b"pieChart" => Some(ChartType::Pie),
+        _ => None,
+    }
+}
+
+fn chart_axis_kind_from_xml_name(local_name: &[u8]) -> Option<ChartAxisKind> {
+    match local_name {
+        b"catAx" => Some(ChartAxisKind::Category),
+        b"valAx" => Some(ChartAxisKind::Value),
+        b"dateAx" => Some(ChartAxisKind::Date),
+        b"serAx" => Some(ChartAxisKind::Series),
+        _ => None,
+    }
+}
+
+fn chart_legend_position_xml_value(position: ChartLegendPosition) -> &'static str {
+    match position {
+        ChartLegendPosition::Bottom => "b",
+        ChartLegendPosition::Corner => "tr",
+        ChartLegendPosition::Custom => "cust",
+        ChartLegendPosition::Left => "l",
+        ChartLegendPosition::Right => "r",
+        ChartLegendPosition::Top => "t",
+    }
+}
+
+fn patch_loaded_chart_model_xml(
+    existing_chart_xml: &[u8],
+    chart: &ChartModel,
+) -> OmResult<Option<Vec<u8>>> {
+    let expected_dirty_sources = chart
+        .series
+        .iter()
+        .map(|series| {
+            let mut count = 0usize;
+            if series.name.as_ref().is_some_and(|source| source.dirty) {
+                count += 1;
+            }
+            if series.x_values.as_ref().is_some_and(|source| source.dirty) {
+                count += 1;
+            }
+            if series.values.as_ref().is_some_and(|source| source.dirty) {
+                count += 1;
+            }
+            count
+        })
+        .sum::<usize>();
+    let expected_legend_position =
+        chart
+            .legend
+            .as_ref()
+            .filter(|legend| legend.visible)
+            .map(|legend| {
+                chart_legend_position_xml_value(
+                    legend.position.unwrap_or(ChartLegendPosition::Right),
+                )
+            });
+
+    let mut reader = Reader::from_reader(Cursor::new(existing_chart_xml));
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut buffer = Vec::new();
+    let mut element_stack = Vec::<Vec<u8>>::new();
+    let mut next_series_index = 0usize;
+    let mut current_series_index = None::<usize>;
+    let mut source_stack = Vec::<ChartSourceXmlSlot>::new();
+    let mut current_formula = None::<(ChartSourceXmlSlot, bool)>;
+    let mut source_slots_seen = Vec::<[bool; 3]>::new();
+    let mut patched_sources = 0usize;
+    let mut chart_type = None::<ChartType>;
+    let mut chart_title_seen = false;
+    let mut chart_title_text_written = false;
+    let mut current_text_target = None::<(ChartTextXmlTarget, bool)>;
+    let mut title_stack = Vec::<(usize, ChartTextXmlTarget)>::new();
+    let mut legend_seen = false;
+    let mut legend_position_written = false;
+    let mut current_axis_index = None::<usize>;
+    let mut axis_kinds = Vec::<ChartAxisKind>::new();
+    let mut axis_title_texts = Vec::<Option<String>>::new();
+
+    let source_for_slot =
+        |series_index: usize, slot: ChartSourceXmlSlot| -> Option<&ChartSourceExpr> {
+            chart
+                .series
+                .get(series_index)
+                .and_then(|series| match slot {
+                    ChartSourceXmlSlot::Name => series.name.as_ref(),
+                    ChartSourceXmlSlot::XValues => series.x_values.as_ref(),
+                    ChartSourceXmlSlot::Values => series.values.as_ref(),
+                })
+        };
+    let slot_index = |slot: ChartSourceXmlSlot| -> usize {
+        match slot {
+            ChartSourceXmlSlot::Name => 0,
+            ChartSourceXmlSlot::XValues => 1,
+            ChartSourceXmlSlot::Values => 2,
+        }
+    };
+    let rewrite_legend_position_element = |element: &BytesStart<'_>,
+                                           decoder: quick_xml::encoding::Decoder,
+                                           position: &'static str|
+     -> OmResult<BytesStart<'static>> {
+        let qualified_name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
+        let mut rewritten = BytesStart::new(qualified_name);
+        let mut wrote_value = false;
+        for attr in element.attributes() {
+            let attr = attr.map_err(runtime_xml_error)?;
+            let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+            let value = attr
+                .decode_and_unescape_value(decoder)
+                .map_err(runtime_xml_error)?
+                .into_owned();
+            if xml_local_name(attr.key.as_ref()) == b"val" {
+                rewritten.push_attribute((key.as_str(), position));
+                wrote_value = true;
+            } else {
+                rewritten.push_attribute((key.as_str(), value.as_str()));
+            }
+        }
+        if !wrote_value {
+            rewritten.push_attribute(("val", position));
+        }
+        Ok(rewritten)
+    };
+
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) => {
+                let local_name = xml_local_name(element.name().as_ref()).to_vec();
+                let parent_name = element_stack.last().map(Vec::as_slice);
+                let depth = element_stack.len() + 1;
+                if let Some(next_chart_type) = chart_type_from_group_name(local_name.as_slice()) {
+                    if chart_type.is_some() {
+                        return Ok(None);
+                    }
+                    chart_type = Some(next_chart_type);
+                }
+                if local_name.as_slice() == b"ser" {
+                    current_series_index = Some(next_series_index);
+                    next_series_index += 1;
+                    source_stack.clear();
+                    source_slots_seen.push([false; 3]);
+                } else if let Some(series_index) = current_series_index {
+                    match local_name.as_slice() {
+                        b"tx" => source_stack.push(ChartSourceXmlSlot::Name),
+                        b"cat" => source_stack.push(ChartSourceXmlSlot::XValues),
+                        b"val" => source_stack.push(ChartSourceXmlSlot::Values),
+                        b"f" => {
+                            if let Some(slot) = source_stack.last().copied() {
+                                current_formula = Some((slot, false));
+                                if let Some(seen) = source_slots_seen.get_mut(series_index) {
+                                    seen[slot_index(slot)] = true;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(axis_kind) = chart_axis_kind_from_xml_name(local_name.as_slice()) {
+                    current_axis_index = Some(axis_kinds.len());
+                    axis_kinds.push(axis_kind);
+                    axis_title_texts.push(None);
+                }
+                if local_name.as_slice() == b"title" && parent_name == Some(b"chart".as_slice()) {
+                    chart_title_seen = true;
+                    title_stack.push((depth, ChartTextXmlTarget::ChartTitle));
+                } else if local_name.as_slice() == b"title"
+                    && parent_name.is_some_and(|parent_name| {
+                        chart_axis_kind_from_xml_name(parent_name).is_some()
+                    })
+                    && let Some(axis_index) = current_axis_index
+                {
+                    title_stack.push((depth, ChartTextXmlTarget::AxisTitle(axis_index)));
+                    if let Some(axis_title_text) = axis_title_texts.get_mut(axis_index) {
+                        axis_title_text.get_or_insert_with(String::new);
+                    }
+                } else if local_name.as_slice() == b"t"
+                    && let Some((_, target)) = title_stack.last().copied()
+                {
+                    current_text_target = Some((target, false));
+                } else if local_name.as_slice() == b"legend"
+                    && parent_name == Some(b"chart".as_slice())
+                {
+                    legend_seen = true;
+                }
+
+                if local_name.as_slice() == b"legendPos"
+                    && expected_legend_position.is_some()
+                    && element_stack
+                        .iter()
+                        .any(|name| name.as_slice() == b"legend")
+                {
+                    writer
+                        .write_event(Event::Start(rewrite_legend_position_element(
+                            &element,
+                            reader.decoder(),
+                            expected_legend_position.expect("checked is_some"),
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    legend_position_written = true;
+                } else {
+                    writer
+                        .write_event(Event::Start(element.into_owned()))
+                        .map_err(runtime_xml_error)?;
+                }
+                element_stack.push(local_name);
+            }
+            Ok(Event::Empty(element)) => {
+                let local_name = xml_local_name(element.name().as_ref()).to_vec();
+                if let Some(next_chart_type) = chart_type_from_group_name(local_name.as_slice()) {
+                    if chart_type.is_some() {
+                        return Ok(None);
+                    }
+                    chart_type = Some(next_chart_type);
+                }
+                if local_name.as_slice() == b"legendPos"
+                    && expected_legend_position.is_some()
+                    && element_stack
+                        .iter()
+                        .any(|name| name.as_slice() == b"legend")
+                {
+                    writer
+                        .write_event(Event::Empty(rewrite_legend_position_element(
+                            &element,
+                            reader.decoder(),
+                            expected_legend_position.expect("checked is_some"),
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    legend_position_written = true;
+                } else {
+                    writer
+                        .write_event(Event::Empty(element.into_owned()))
+                        .map_err(runtime_xml_error)?;
+                }
+            }
+            Ok(Event::Text(text)) => {
+                if let Some((target, written)) = current_text_target.as_mut() {
+                    match target {
+                        ChartTextXmlTarget::ChartTitle => {
+                            if let Some(title) = chart.title.as_ref() {
+                                if !chart_title_text_written {
+                                    writer
+                                        .write_event(Event::Text(BytesText::from_escaped(
+                                            partial_escape(&title.text),
+                                        )))
+                                        .map_err(runtime_xml_error)?;
+                                    chart_title_text_written = true;
+                                } else {
+                                    writer
+                                        .write_event(Event::Text(BytesText::new("")))
+                                        .map_err(runtime_xml_error)?;
+                                }
+                                *written = true;
+                            } else {
+                                writer
+                                    .write_event(Event::Text(text.into_owned()))
+                                    .map_err(runtime_xml_error)?;
+                            }
+                        }
+                        ChartTextXmlTarget::AxisTitle(axis_index) => {
+                            if let Some(axis_title_text) = axis_title_texts
+                                .get_mut(*axis_index)
+                                .and_then(Option::as_mut)
+                            {
+                                axis_title_text
+                                    .push_str(&text.xml_content().map_err(runtime_xml_error)?);
+                            }
+                            writer
+                                .write_event(Event::Text(text.into_owned()))
+                                .map_err(runtime_xml_error)?;
+                        }
+                    }
+                } else if let Some((slot, written)) = current_formula.as_mut()
+                    && !*written
+                    && let Some(series_index) = current_series_index
+                    && let Some(source) = source_for_slot(series_index, *slot)
+                    && source.dirty
+                {
+                    let replacement = source.raw.text.trim_start_matches('=').to_string();
+                    writer
+                        .write_event(Event::Text(BytesText::from_escaped(partial_escape(
+                            &replacement,
+                        ))))
+                        .map_err(runtime_xml_error)?;
+                    *written = true;
+                    patched_sources += 1;
+                } else {
+                    writer
+                        .write_event(Event::Text(text.into_owned()))
+                        .map_err(runtime_xml_error)?;
+                }
+            }
+            Ok(Event::CData(data)) => {
+                if let Some((target, written)) = current_text_target.as_mut() {
+                    match target {
+                        ChartTextXmlTarget::ChartTitle => {
+                            if let Some(title) = chart.title.as_ref() {
+                                if !chart_title_text_written {
+                                    writer
+                                        .write_event(Event::Text(BytesText::from_escaped(
+                                            partial_escape(&title.text),
+                                        )))
+                                        .map_err(runtime_xml_error)?;
+                                    chart_title_text_written = true;
+                                } else {
+                                    writer
+                                        .write_event(Event::Text(BytesText::new("")))
+                                        .map_err(runtime_xml_error)?;
+                                }
+                                *written = true;
+                            } else {
+                                writer
+                                    .write_event(Event::CData(data.into_owned()))
+                                    .map_err(runtime_xml_error)?;
+                            }
+                        }
+                        ChartTextXmlTarget::AxisTitle(axis_index) => {
+                            if let Some(axis_title_text) = axis_title_texts
+                                .get_mut(*axis_index)
+                                .and_then(Option::as_mut)
+                            {
+                                axis_title_text
+                                    .push_str(&data.xml_content().map_err(runtime_xml_error)?);
+                            }
+                            writer
+                                .write_event(Event::CData(data.into_owned()))
+                                .map_err(runtime_xml_error)?;
+                        }
+                    }
+                } else if let Some((slot, written)) = current_formula.as_mut()
+                    && !*written
+                    && let Some(series_index) = current_series_index
+                    && let Some(source) = source_for_slot(series_index, *slot)
+                    && source.dirty
+                {
+                    let replacement = source.raw.text.trim_start_matches('=').to_string();
+                    writer
+                        .write_event(Event::Text(BytesText::from_escaped(partial_escape(
+                            &replacement,
+                        ))))
+                        .map_err(runtime_xml_error)?;
+                    *written = true;
+                    patched_sources += 1;
+                } else {
+                    writer
+                        .write_event(Event::CData(data.into_owned()))
+                        .map_err(runtime_xml_error)?;
+                }
+            }
+            Ok(Event::End(element)) => {
+                let local_name = xml_local_name(element.name().as_ref()).to_vec();
+                if local_name.as_slice() == b"f"
+                    && let Some((slot, written)) = current_formula.take()
+                    && !written
+                    && let Some(series_index) = current_series_index
+                    && let Some(source) = source_for_slot(series_index, slot)
+                    && source.dirty
+                {
+                    let replacement = source.raw.text.trim_start_matches('=').to_string();
+                    writer
+                        .write_event(Event::Text(BytesText::from_escaped(partial_escape(
+                            &replacement,
+                        ))))
+                        .map_err(runtime_xml_error)?;
+                    patched_sources += 1;
+                }
+                if local_name.as_slice() == b"t"
+                    && let Some((ChartTextXmlTarget::ChartTitle, written)) =
+                        current_text_target.take()
+                    && !written
+                    && !chart_title_text_written
+                    && let Some(title) = chart.title.as_ref()
+                {
+                    writer
+                        .write_event(Event::Text(BytesText::from_escaped(partial_escape(
+                            &title.text,
+                        ))))
+                        .map_err(runtime_xml_error)?;
+                    chart_title_text_written = true;
+                } else if local_name.as_slice() == b"t" {
+                    current_text_target = None;
+                }
+
+                writer
+                    .write_event(Event::End(element.to_owned()))
+                    .map_err(runtime_xml_error)?;
+
+                if current_series_index.is_some() {
+                    match local_name.as_slice() {
+                        b"tx" | b"cat" | b"val" => {
+                            source_stack.pop();
+                        }
+                        b"ser" => {
+                            current_series_index = None;
+                            source_stack.clear();
+                        }
+                        _ => {}
+                    }
+                }
+                if local_name.as_slice() == b"title"
+                    && let Some((title_depth, _)) = title_stack.last()
+                    && *title_depth == element_stack.len()
+                {
+                    title_stack.pop();
+                }
+                if chart_axis_kind_from_xml_name(local_name.as_slice()).is_some() {
+                    current_axis_index = None;
+                }
+                element_stack.pop();
+            }
+            Ok(Event::Eof) => break,
+            Ok(event) => writer
+                .write_event(event.into_owned())
+                .map_err(runtime_xml_error)?,
+            Err(error) => return Err(runtime_xml_error(error)),
+        }
+        buffer.clear();
+    }
+
+    let chart_type_matches = chart_type.as_ref() == Some(&chart.chart_type);
+    let series_sources_match = source_slots_seen.len() == chart.series.len()
+        && source_slots_seen
+            .iter()
+            .zip(chart.series.iter())
+            .all(|(seen, series)| {
+                seen[0] == series.name.is_some()
+                    && seen[1] == series.x_values.is_some()
+                    && seen[2] == series.values.is_some()
+            });
+    let title_matches = match (chart.title.as_ref(), chart_title_seen) {
+        (Some(_), true) => chart_title_text_written,
+        (None, false) => true,
+        _ => false,
+    };
+    let legend_matches = match (expected_legend_position, legend_seen) {
+        (Some(_), true) => legend_position_written,
+        (None, false) => true,
+        _ => false,
+    };
+    let axes_match = axis_kinds.len() == chart.axes.len()
+        && axis_kinds
+            .iter()
+            .zip(axis_title_texts.iter())
+            .zip(chart.axes.iter())
+            .all(|((kind, title_text), axis)| {
+                *kind == axis.kind
+                    && title_text.as_ref() == axis.title.as_ref().map(|title| &title.text)
+            });
+
+    if chart_type_matches
+        && series_sources_match
+        && patched_sources == expected_dirty_sources
+        && title_matches
+        && legend_matches
+        && axes_match
+    {
+        Ok(Some(writer.into_inner().into_inner()))
+    } else {
+        Ok(None)
+    }
+}
+
 fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     let mut series_xml = String::new();
     for (series_index, series) in chart.series.iter().enumerate() {
@@ -16717,14 +17021,9 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
         .as_ref()
         .filter(|legend| legend.visible)
         .map(|legend| {
-            let legend_position = match legend.position.unwrap_or(ChartLegendPosition::Right) {
-                ChartLegendPosition::Bottom => "b",
-                ChartLegendPosition::Corner => "tr",
-                ChartLegendPosition::Custom => "cust",
-                ChartLegendPosition::Left => "l",
-                ChartLegendPosition::Right => "r",
-                ChartLegendPosition::Top => "t",
-            };
+            let legend_position = chart_legend_position_xml_value(
+                legend.position.unwrap_or(ChartLegendPosition::Right),
+            );
             format!(r#"<c:legend><c:legendPos val="{legend_position}"/></c:legend>"#)
         })
         .unwrap_or_default();
@@ -69302,10 +69601,28 @@ mod tests {
 
     #[test]
     fn loaded_chart_content_setters_persist_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:content-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
-                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                bytes: package.to_bytes().expect("package bytes"),
                 format_hint: Some(FileFormat::Xlsx),
                 profile: ExcelProfile::Excel365,
                 read_only: false,
@@ -69373,6 +69690,19 @@ mod tests {
                 },
             )
             .expect("save workbook after loaded chart edits");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:content-preserve"/>"#));
+        assert!(saved_chart_xml.contains("<a:t>Updated Revenue</a:t>"));
+        assert!(saved_chart_xml.contains(r#"<c:legendPos val="l""#));
+
         let mut reopened_runtime = ExcelRuntime::new();
         let reopened_workbook = reopened_runtime
             .open_workbook(OpenWorkbookSpec {
