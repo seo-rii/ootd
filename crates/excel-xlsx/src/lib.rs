@@ -595,6 +595,8 @@ pub struct DrawingAnchorSummary {
     pub graphic_frame_transform_xml: Option<String>,
     pub graphic_data_attrs: BTreeMap<String, String>,
     pub chart_reference_attrs: BTreeMap<String, String>,
+    pub non_visual_frame_attrs: BTreeMap<String, String>,
+    pub graphic_attrs: BTreeMap<String, String>,
     pub non_visual_id: Option<u32>,
     pub non_visual_attrs: BTreeMap<String, String>,
     pub non_visual_child_xml: Option<String>,
@@ -3077,6 +3079,8 @@ fn build_chart_model_overlay(
                             .clone(),
                         graphic_data_attrs: anchor_summary.graphic_data_attrs.clone(),
                         chart_reference_attrs: anchor_summary.chart_reference_attrs.clone(),
+                        non_visual_frame_attrs: anchor_summary.non_visual_frame_attrs.clone(),
+                        graphic_attrs: anchor_summary.graphic_attrs.clone(),
                         workbook_id,
                         host_sheet_id: *sheet_id,
                         chart_id: *chart_id,
@@ -15020,6 +15024,8 @@ fn parse_drawing_part_summary(
                             graphic_frame_transform_xml: None,
                             graphic_data_attrs: BTreeMap::new(),
                             chart_reference_attrs: BTreeMap::new(),
+                            non_visual_frame_attrs: BTreeMap::new(),
+                            graphic_attrs: BTreeMap::new(),
                             non_visual_id: None,
                             non_visual_attrs: BTreeMap::new(),
                             non_visual_child_xml: None,
@@ -15086,6 +15092,13 @@ fn parse_drawing_part_summary(
                                 && anchor.graphic_frame_attrs.is_empty()
                             {
                                 anchor.graphic_frame_attrs = decode_attrs(&element, &reader)?;
+                            }
+                        }
+                        b"nvGraphicFramePr" => {
+                            if let Some(anchor) = active_anchor.as_mut()
+                                && anchor.non_visual_frame_attrs.is_empty()
+                            {
+                                anchor.non_visual_frame_attrs = decode_attrs(&element, &reader)?;
                             }
                         }
                         b"cNvPr" => {
@@ -15175,6 +15188,13 @@ fn parse_drawing_part_summary(
                                 }
                             }
                         }
+                        b"graphic" => {
+                            if let Some(anchor) = active_anchor.as_mut()
+                                && anchor.graphic_attrs.is_empty()
+                            {
+                                anchor.graphic_attrs = decode_attrs(&element, &reader)?;
+                            }
+                        }
                         b"clientData" => {
                             let raw_xml = capture_start_element_xml(&mut reader, element)?;
                             if let Some(anchor) = active_anchor.as_mut()
@@ -15224,6 +15244,8 @@ fn parse_drawing_part_summary(
                             graphic_frame_transform_xml: None,
                             graphic_data_attrs: BTreeMap::new(),
                             chart_reference_attrs: BTreeMap::new(),
+                            non_visual_frame_attrs: BTreeMap::new(),
+                            graphic_attrs: BTreeMap::new(),
                             non_visual_id: None,
                             non_visual_attrs: BTreeMap::new(),
                             non_visual_child_xml: None,
@@ -15270,6 +15292,13 @@ fn parse_drawing_part_summary(
                             && anchor.graphic_frame_attrs.is_empty()
                         {
                             anchor.graphic_frame_attrs = decode_attrs(&element, &reader)?;
+                        }
+                    }
+                    b"nvGraphicFramePr" => {
+                        if let Some(anchor) = active_anchor.as_mut()
+                            && anchor.non_visual_frame_attrs.is_empty()
+                        {
+                            anchor.non_visual_frame_attrs = decode_attrs(&element, &reader)?;
                         }
                     }
                     b"cNvPr" => {
@@ -15322,6 +15351,13 @@ fn parse_drawing_part_summary(
                                     anchor.graphic_data_attrs.insert(name, value);
                                 }
                             }
+                        }
+                    }
+                    b"graphic" => {
+                        if let Some(anchor) = active_anchor.as_mut()
+                            && anchor.graphic_attrs.is_empty()
+                        {
+                            anchor.graphic_attrs = decode_attrs(&element, &reader)?;
                         }
                     }
                     b"clientData" => {
@@ -18974,8 +19010,17 @@ fn write_chart_graphic_frame(
     writer
         .write_event(Event::Start(graphic_frame))
         .map_err(xml_error)?;
+    let mut non_visual_frame = BytesStart::new("xdr:nvGraphicFramePr");
+    let preserved_non_visual_frame_attrs = chart_object
+        .non_visual_frame_attrs
+        .iter()
+        .map(|(name, value)| (name.as_str(), partial_escape(value.as_str()).to_string()))
+        .collect::<Vec<_>>();
+    for (name, value) in &preserved_non_visual_frame_attrs {
+        non_visual_frame.push_attribute((*name, value.as_str()));
+    }
     writer
-        .write_event(Event::Start(BytesStart::new("xdr:nvGraphicFramePr")))
+        .write_event(Event::Start(non_visual_frame))
         .map_err(xml_error)?;
     let mut non_visual = BytesStart::new("xdr:cNvPr");
     let chart_object_id = chart_object
@@ -19028,8 +19073,17 @@ fn write_chart_graphic_frame(
             .write_all(graphic_frame_transform_xml.as_bytes())
             .map_err(io_error)?;
     }
+    let mut graphic = BytesStart::new("a:graphic");
+    let preserved_graphic_attrs = chart_object
+        .graphic_attrs
+        .iter()
+        .map(|(name, value)| (name.as_str(), partial_escape(value.as_str()).to_string()))
+        .collect::<Vec<_>>();
+    for (name, value) in &preserved_graphic_attrs {
+        graphic.push_attribute((*name, value.as_str()));
+    }
     writer
-        .write_event(Event::Start(BytesStart::new("a:graphic")))
+        .write_event(Event::Start(graphic))
         .map_err(xml_error)?;
     let mut graphic_data = BytesStart::new("a:graphicData");
     graphic_data.push_attribute((
@@ -20008,6 +20062,8 @@ mod tests {
                 graphic_frame_transform_xml: None,
                 graphic_data_attrs: BTreeMap::new(),
                 chart_reference_attrs: BTreeMap::new(),
+                non_visual_frame_attrs: BTreeMap::new(),
+                graphic_attrs: BTreeMap::new(),
                 non_visual_id: Some(2),
                 non_visual_attrs: BTreeMap::new(),
                 non_visual_child_xml: None,
@@ -20150,7 +20206,7 @@ mod tests {
   <xdr:twoCellAnchor>
     <xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
     <xdr:to><xdr:col>6</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>12</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
-    <xdr:graphicFrame macro="" fPublished="0"><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Embedded Revenue Chart" descr="Revenue detail" title="Chart Alt" hidden="1"><a:extLst><a:ext uri="urn:cnvpr"><test:meta xmlns:test="urn:test" value="keep"/></a:ext></a:extLst></xdr:cNvPr><xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1" noChangeAspect="1"/></xdr:cNvGraphicFramePr></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart" gd:role="chart" xmlns:gd="urn:graphic"><c:chart r:id="rIdChart1" chartRef="keep"/></a:graphicData></a:graphic></xdr:graphicFrame>
+    <xdr:graphicFrame macro="" fPublished="0"><xdr:nvGraphicFramePr nv:tag="keep" xmlns:nv="urn:nv"><xdr:cNvPr id="2" name="Embedded Revenue Chart" descr="Revenue detail" title="Chart Alt" hidden="1"><a:extLst><a:ext uri="urn:cnvpr"><test:meta xmlns:test="urn:test" value="keep"/></a:ext></a:extLst></xdr:cNvPr><xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1" noChangeAspect="1"/></xdr:cNvGraphicFramePr></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic g:role="frame" xmlns:g="urn:g"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart" gd:role="chart" xmlns:gd="urn:graphic"><c:chart r:id="rIdChart1" chartRef="keep"/></a:graphicData></a:graphic></xdr:graphicFrame>
     <xdr:clientData fLocksWithSheet="1" fPrintsWithSheet="0"/>
     <xdr:extLst><xdr:ext uri="urn:anchor"><xdr14:creationId xmlns:xdr14="http://schemas.microsoft.com/office/drawing/2010/spreadsheetDrawing" id="{11111111-2222-3333-4444-555555555555}"/></xdr:ext></xdr:extLst>
   </xdr:twoCellAnchor>
@@ -20290,6 +20346,14 @@ mod tests {
                     "chartRef".to_string(),
                     "keep".to_string()
                 )]),
+                non_visual_frame_attrs: BTreeMap::from([
+                    ("nv:tag".to_string(), "keep".to_string()),
+                    ("xmlns:nv".to_string(), "urn:nv".to_string()),
+                ]),
+                graphic_attrs: BTreeMap::from([
+                    ("g:role".to_string(), "frame".to_string()),
+                    ("xmlns:g".to_string(), "urn:g".to_string()),
+                ]),
                 non_visual_id: Some(2),
                 non_visual_attrs: BTreeMap::from([
                     ("descr".to_string(), "Revenue detail".to_string()),
@@ -20552,6 +20616,20 @@ mod tests {
         assert_eq!(
             chart_object.chart_reference_attrs,
             BTreeMap::from([("chartRef".to_string(), "keep".to_string())])
+        );
+        assert_eq!(
+            chart_object.non_visual_frame_attrs,
+            BTreeMap::from([
+                ("nv:tag".to_string(), "keep".to_string()),
+                ("xmlns:nv".to_string(), "urn:nv".to_string()),
+            ])
+        );
+        assert_eq!(
+            chart_object.graphic_attrs,
+            BTreeMap::from([
+                ("g:role".to_string(), "frame".to_string()),
+                ("xmlns:g".to_string(), "urn:g".to_string()),
+            ])
         );
         assert_eq!(chart_object.non_visual_id, Some(2));
         assert_eq!(
