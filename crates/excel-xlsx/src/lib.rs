@@ -593,6 +593,8 @@ pub struct DrawingAnchorSummary {
     pub edit_as: Option<String>,
     pub graphic_frame_attrs: BTreeMap<String, String>,
     pub graphic_frame_transform_xml: Option<String>,
+    pub graphic_data_attrs: BTreeMap<String, String>,
+    pub chart_reference_attrs: BTreeMap<String, String>,
     pub non_visual_id: Option<u32>,
     pub non_visual_attrs: BTreeMap<String, String>,
     pub non_visual_child_xml: Option<String>,
@@ -3073,6 +3075,8 @@ fn build_chart_model_overlay(
                         graphic_frame_transform_xml: anchor_summary
                             .graphic_frame_transform_xml
                             .clone(),
+                        graphic_data_attrs: anchor_summary.graphic_data_attrs.clone(),
+                        chart_reference_attrs: anchor_summary.chart_reference_attrs.clone(),
                         workbook_id,
                         host_sheet_id: *sheet_id,
                         chart_id: *chart_id,
@@ -15014,6 +15018,8 @@ fn parse_drawing_part_summary(
                             edit_as: decode_attr(&element, b"editAs", &reader)?,
                             graphic_frame_attrs: BTreeMap::new(),
                             graphic_frame_transform_xml: None,
+                            graphic_data_attrs: BTreeMap::new(),
+                            chart_reference_attrs: BTreeMap::new(),
                             non_visual_id: None,
                             non_visual_attrs: BTreeMap::new(),
                             non_visual_child_xml: None,
@@ -15158,6 +15164,17 @@ fn parse_drawing_part_summary(
                             }
                             active_anchor_depth = active_anchor_depth.saturating_sub(1);
                         }
+                        b"graphicData" => {
+                            if let Some(anchor) = active_anchor.as_mut()
+                                && anchor.graphic_data_attrs.is_empty()
+                            {
+                                for (name, value) in decode_attrs(&element, &reader)? {
+                                    if name != "uri" {
+                                        anchor.graphic_data_attrs.insert(name, value);
+                                    }
+                                }
+                            }
+                        }
                         b"clientData" => {
                             let raw_xml = capture_start_element_xml(&mut reader, element)?;
                             if let Some(anchor) = active_anchor.as_mut()
@@ -15174,12 +15191,23 @@ fn parse_drawing_part_summary(
                             }
                             active_anchor_depth = active_anchor_depth.saturating_sub(1);
                         }
-                        b"chart" => collect_chart_relationship_id(
-                            &element,
-                            &reader,
-                            &mut chart_relationship_ids,
-                            &mut active_anchor,
-                        )?,
+                        b"chart" => {
+                            if let Some(anchor) = active_anchor.as_mut()
+                                && anchor.chart_reference_attrs.is_empty()
+                            {
+                                for (name, value) in decode_attrs(&element, &reader)? {
+                                    if name != "r:id" {
+                                        anchor.chart_reference_attrs.insert(name, value);
+                                    }
+                                }
+                            }
+                            collect_chart_relationship_id(
+                                &element,
+                                &reader,
+                                &mut chart_relationship_ids,
+                                &mut active_anchor,
+                            )?
+                        }
                         _ => {}
                     }
                 }
@@ -15194,6 +15222,8 @@ fn parse_drawing_part_summary(
                             edit_as: decode_attr(&element, b"editAs", &reader)?,
                             graphic_frame_attrs: BTreeMap::new(),
                             graphic_frame_transform_xml: None,
+                            graphic_data_attrs: BTreeMap::new(),
+                            chart_reference_attrs: BTreeMap::new(),
                             non_visual_id: None,
                             non_visual_attrs: BTreeMap::new(),
                             non_visual_child_xml: None,
@@ -15283,6 +15313,17 @@ fn parse_drawing_part_summary(
                             anchor.graphic_frame_transform_xml = Some(raw_xml);
                         }
                     }
+                    b"graphicData" => {
+                        if let Some(anchor) = active_anchor.as_mut()
+                            && anchor.graphic_data_attrs.is_empty()
+                        {
+                            for (name, value) in decode_attrs(&element, &reader)? {
+                                if name != "uri" {
+                                    anchor.graphic_data_attrs.insert(name, value);
+                                }
+                            }
+                        }
+                    }
                     b"clientData" => {
                         let mut writer = Writer::new(Cursor::new(Vec::new()));
                         writer
@@ -15307,12 +15348,23 @@ fn parse_drawing_part_summary(
                             anchor.anchor_extension_xmls.push(raw_xml);
                         }
                     }
-                    b"chart" => collect_chart_relationship_id(
-                        &element,
-                        &reader,
-                        &mut chart_relationship_ids,
-                        &mut active_anchor,
-                    )?,
+                    b"chart" => {
+                        if let Some(anchor) = active_anchor.as_mut()
+                            && anchor.chart_reference_attrs.is_empty()
+                        {
+                            for (name, value) in decode_attrs(&element, &reader)? {
+                                if name != "r:id" {
+                                    anchor.chart_reference_attrs.insert(name, value);
+                                }
+                            }
+                        }
+                        collect_chart_relationship_id(
+                            &element,
+                            &reader,
+                            &mut chart_relationship_ids,
+                            &mut active_anchor,
+                        )?
+                    }
                     _ => {}
                 }
             }
@@ -18984,11 +19036,29 @@ fn write_chart_graphic_frame(
         "uri",
         "http://schemas.openxmlformats.org/drawingml/2006/chart",
     ));
+    let preserved_graphic_data_attrs = chart_object
+        .graphic_data_attrs
+        .iter()
+        .filter(|(name, _)| name.as_str() != "uri")
+        .map(|(name, value)| (name.as_str(), partial_escape(value.as_str()).to_string()))
+        .collect::<Vec<_>>();
+    for (name, value) in &preserved_graphic_data_attrs {
+        graphic_data.push_attribute((*name, value.as_str()));
+    }
     writer
         .write_event(Event::Start(graphic_data))
         .map_err(xml_error)?;
     let mut chart_reference = BytesStart::new("c:chart");
     chart_reference.push_attribute(("r:id", relationship_id));
+    let preserved_chart_reference_attrs = chart_object
+        .chart_reference_attrs
+        .iter()
+        .filter(|(name, _)| name.as_str() != "r:id")
+        .map(|(name, value)| (name.as_str(), partial_escape(value.as_str()).to_string()))
+        .collect::<Vec<_>>();
+    for (name, value) in &preserved_chart_reference_attrs {
+        chart_reference.push_attribute((*name, value.as_str()));
+    }
     writer
         .write_event(Event::Empty(chart_reference))
         .map_err(xml_error)?;
@@ -19936,6 +20006,8 @@ mod tests {
                 edit_as: None,
                 graphic_frame_attrs: BTreeMap::new(),
                 graphic_frame_transform_xml: None,
+                graphic_data_attrs: BTreeMap::new(),
+                chart_reference_attrs: BTreeMap::new(),
                 non_visual_id: Some(2),
                 non_visual_attrs: BTreeMap::new(),
                 non_visual_child_xml: None,
@@ -20078,7 +20150,7 @@ mod tests {
   <xdr:twoCellAnchor>
     <xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
     <xdr:to><xdr:col>6</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>12</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
-    <xdr:graphicFrame macro="" fPublished="0"><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Embedded Revenue Chart" descr="Revenue detail" title="Chart Alt" hidden="1"><a:extLst><a:ext uri="urn:cnvpr"><test:meta xmlns:test="urn:test" value="keep"/></a:ext></a:extLst></xdr:cNvPr><xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1" noChangeAspect="1"/></xdr:cNvGraphicFramePr></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart1"/></a:graphicData></a:graphic></xdr:graphicFrame>
+    <xdr:graphicFrame macro="" fPublished="0"><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Embedded Revenue Chart" descr="Revenue detail" title="Chart Alt" hidden="1"><a:extLst><a:ext uri="urn:cnvpr"><test:meta xmlns:test="urn:test" value="keep"/></a:ext></a:extLst></xdr:cNvPr><xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1" noChangeAspect="1"/></xdr:cNvGraphicFramePr></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart" gd:role="chart" xmlns:gd="urn:graphic"><c:chart r:id="rIdChart1" chartRef="keep"/></a:graphicData></a:graphic></xdr:graphicFrame>
     <xdr:clientData fLocksWithSheet="1" fPrintsWithSheet="0"/>
     <xdr:extLst><xdr:ext uri="urn:anchor"><xdr14:creationId xmlns:xdr14="http://schemas.microsoft.com/office/drawing/2010/spreadsheetDrawing" id="{11111111-2222-3333-4444-555555555555}"/></xdr:ext></xdr:extLst>
   </xdr:twoCellAnchor>
@@ -20210,6 +20282,14 @@ mod tests {
                     r#"<xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm>"#
                         .to_string()
                 ),
+                graphic_data_attrs: BTreeMap::from([
+                    ("gd:role".to_string(), "chart".to_string()),
+                    ("xmlns:gd".to_string(), "urn:graphic".to_string()),
+                ]),
+                chart_reference_attrs: BTreeMap::from([(
+                    "chartRef".to_string(),
+                    "keep".to_string()
+                )]),
                 non_visual_id: Some(2),
                 non_visual_attrs: BTreeMap::from([
                     ("descr".to_string(), "Revenue detail".to_string()),
@@ -20461,6 +20541,17 @@ mod tests {
         assert_eq!(
             chart_object.graphic_frame_transform_xml.as_deref(),
             Some(r#"<xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm>"#)
+        );
+        assert_eq!(
+            chart_object.graphic_data_attrs,
+            BTreeMap::from([
+                ("gd:role".to_string(), "chart".to_string()),
+                ("xmlns:gd".to_string(), "urn:graphic".to_string()),
+            ])
+        );
+        assert_eq!(
+            chart_object.chart_reference_attrs,
+            BTreeMap::from([("chartRef".to_string(), "keep".to_string())])
         );
         assert_eq!(chart_object.non_visual_id, Some(2));
         assert_eq!(
