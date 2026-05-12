@@ -595,6 +595,7 @@ pub struct DrawingAnchorSummary {
     pub graphic_frame_transform_xml: Option<String>,
     pub non_visual_id: Option<u32>,
     pub non_visual_attrs: BTreeMap<String, String>,
+    pub non_visual_child_xml: Option<String>,
     pub non_visual_frame_properties_xml: Option<String>,
     pub client_data_xml: Option<String>,
     pub anchor_extension_xmls: Vec<String>,
@@ -3077,6 +3078,7 @@ fn build_chart_model_overlay(
                         chart_id: *chart_id,
                         non_visual_id: anchor_summary.non_visual_id,
                         non_visual_attrs: anchor_summary.non_visual_attrs.clone(),
+                        non_visual_child_xml: anchor_summary.non_visual_child_xml.clone(),
                         non_visual_frame_properties_xml: anchor_summary
                             .non_visual_frame_properties_xml
                             .clone(),
@@ -14927,7 +14929,6 @@ fn parse_drawing_part_summary(
             }
             String::from_utf8(writer.into_inner().into_inner()).map_err(xml_error)
         };
-
     let decode_i64_attr = |element: &BytesStart<'_>,
                            attr_name: &[u8],
                            reader: &Reader<Cursor<&[u8]>>|
@@ -15015,6 +15016,7 @@ fn parse_drawing_part_summary(
                             graphic_frame_transform_xml: None,
                             non_visual_id: None,
                             non_visual_attrs: BTreeMap::new(),
+                            non_visual_child_xml: None,
                             non_visual_frame_properties_xml: None,
                             client_data_xml: None,
                             anchor_extension_xmls: Vec::new(),
@@ -15081,6 +15083,44 @@ fn parse_drawing_part_summary(
                             }
                         }
                         b"cNvPr" => {
+                            let mut writer = Writer::new(Cursor::new(Vec::new()));
+                            let mut capture_buffer = Vec::new();
+                            let mut depth = 1usize;
+                            loop {
+                                match reader.read_event_into(&mut capture_buffer) {
+                                    Ok(Event::Start(element)) => {
+                                        depth += 1;
+                                        writer
+                                            .write_event(Event::Start(element.into_owned()))
+                                            .map_err(xml_error)?;
+                                    }
+                                    Ok(Event::End(element)) => {
+                                        depth = depth.saturating_sub(1);
+                                        if depth == 0 {
+                                            break;
+                                        }
+                                        writer
+                                            .write_event(Event::End(element.into_owned()))
+                                            .map_err(xml_error)?;
+                                    }
+                                    Ok(Event::Empty(element)) => writer
+                                        .write_event(Event::Empty(element.into_owned()))
+                                        .map_err(xml_error)?,
+                                    Ok(Event::Eof) => {
+                                        return Err(OmError::new(
+                                            OmErrorCode::Parse,
+                                            "drawing XML ended while reading captured drawing element contents",
+                                        ));
+                                    }
+                                    Ok(event) => {
+                                        writer.write_event(event.into_owned()).map_err(xml_error)?
+                                    }
+                                    Err(error) => return Err(xml_error(error)),
+                                }
+                                capture_buffer.clear();
+                            }
+                            let child_xml = String::from_utf8(writer.into_inner().into_inner())
+                                .map_err(xml_error)?;
                             if let Some(anchor) = active_anchor.as_mut() {
                                 if anchor.non_visual_id.is_none() {
                                     anchor.non_visual_id =
@@ -15094,7 +15134,11 @@ fn parse_drawing_part_summary(
                                 if anchor.name.is_none() {
                                     anchor.name = decode_attr(&element, b"name", &reader)?;
                                 }
+                                if !child_xml.is_empty() && anchor.non_visual_child_xml.is_none() {
+                                    anchor.non_visual_child_xml = Some(child_xml);
+                                }
                             }
+                            active_anchor_depth = active_anchor_depth.saturating_sub(1);
                         }
                         b"cNvGraphicFramePr" => {
                             let raw_xml = capture_start_element_xml(&mut reader, element)?;
@@ -15152,6 +15196,7 @@ fn parse_drawing_part_summary(
                             graphic_frame_transform_xml: None,
                             non_visual_id: None,
                             non_visual_attrs: BTreeMap::new(),
+                            non_visual_child_xml: None,
                             non_visual_frame_properties_xml: None,
                             client_data_xml: None,
                             anchor_extension_xmls: Vec::new(),
@@ -18898,9 +18943,22 @@ fn write_chart_graphic_frame(
     for (name, value) in &preserved_non_visual_attrs {
         non_visual.push_attribute((*name, value.as_str()));
     }
-    writer
-        .write_event(Event::Empty(non_visual))
-        .map_err(xml_error)?;
+    if let Some(non_visual_child_xml) = chart_object.non_visual_child_xml.as_deref() {
+        writer
+            .write_event(Event::Start(non_visual))
+            .map_err(xml_error)?;
+        writer
+            .get_mut()
+            .write_all(non_visual_child_xml.as_bytes())
+            .map_err(io_error)?;
+        writer
+            .write_event(Event::End(BytesEnd::new("xdr:cNvPr")))
+            .map_err(xml_error)?;
+    } else {
+        writer
+            .write_event(Event::Empty(non_visual))
+            .map_err(xml_error)?;
+    }
     if let Some(non_visual_frame_properties_xml) =
         chart_object.non_visual_frame_properties_xml.as_deref()
     {
@@ -19880,6 +19938,7 @@ mod tests {
                 graphic_frame_transform_xml: None,
                 non_visual_id: Some(2),
                 non_visual_attrs: BTreeMap::new(),
+                non_visual_child_xml: None,
                 non_visual_frame_properties_xml: None,
                 client_data_xml: Some(r#"<xdr:clientData/>"#.to_string()),
                 anchor_extension_xmls: Vec::new(),
@@ -20019,7 +20078,7 @@ mod tests {
   <xdr:twoCellAnchor>
     <xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
     <xdr:to><xdr:col>6</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>12</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
-    <xdr:graphicFrame macro="" fPublished="0"><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Embedded Revenue Chart" descr="Revenue detail" title="Chart Alt" hidden="1"/><xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1" noChangeAspect="1"/></xdr:cNvGraphicFramePr></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart1"/></a:graphicData></a:graphic></xdr:graphicFrame>
+    <xdr:graphicFrame macro="" fPublished="0"><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Embedded Revenue Chart" descr="Revenue detail" title="Chart Alt" hidden="1"><a:extLst><a:ext uri="urn:cnvpr"><test:meta xmlns:test="urn:test" value="keep"/></a:ext></a:extLst></xdr:cNvPr><xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1" noChangeAspect="1"/></xdr:cNvGraphicFramePr></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart1"/></a:graphicData></a:graphic></xdr:graphicFrame>
     <xdr:clientData fLocksWithSheet="1" fPrintsWithSheet="0"/>
     <xdr:extLst><xdr:ext uri="urn:anchor"><xdr14:creationId xmlns:xdr14="http://schemas.microsoft.com/office/drawing/2010/spreadsheetDrawing" id="{11111111-2222-3333-4444-555555555555}"/></xdr:ext></xdr:extLst>
   </xdr:twoCellAnchor>
@@ -20157,6 +20216,10 @@ mod tests {
                     ("hidden".to_string(), "1".to_string()),
                     ("title".to_string(), "Chart Alt".to_string()),
                 ]),
+                non_visual_child_xml: Some(
+                    r#"<a:extLst><a:ext uri="urn:cnvpr"><test:meta xmlns:test="urn:test" value="keep"/></a:ext></a:extLst>"#
+                        .to_string()
+                ),
                 non_visual_frame_properties_xml: Some(
                     r#"<xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1" noChangeAspect="1"/></xdr:cNvGraphicFramePr>"#
                         .to_string()
@@ -20407,6 +20470,12 @@ mod tests {
                 ("hidden".to_string(), "1".to_string()),
                 ("title".to_string(), "Chart Alt".to_string()),
             ])
+        );
+        assert_eq!(
+            chart_object.non_visual_child_xml.as_deref(),
+            Some(
+                r#"<a:extLst><a:ext uri="urn:cnvpr"><test:meta xmlns:test="urn:test" value="keep"/></a:ext></a:extLst>"#
+            )
         );
         assert_eq!(
             chart_object.non_visual_frame_properties_xml.as_deref(),
