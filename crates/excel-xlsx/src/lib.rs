@@ -598,6 +598,7 @@ pub struct DrawingAnchorSummary {
     pub graphic_frame_attrs: BTreeMap<String, String>,
     pub graphic_frame_transform_xml: Option<String>,
     pub graphic_data_attrs: BTreeMap<String, String>,
+    pub graphic_data_child_xmls: Vec<String>,
     pub chart_reference_attrs: BTreeMap<String, String>,
     pub non_visual_frame_attrs: BTreeMap<String, String>,
     pub graphic_attrs: BTreeMap<String, String>,
@@ -3114,6 +3115,7 @@ fn build_chart_model_overlay(
                             .graphic_frame_transform_xml
                             .clone(),
                         graphic_data_attrs: anchor_summary.graphic_data_attrs.clone(),
+                        graphic_data_child_xmls: anchor_summary.graphic_data_child_xmls.clone(),
                         chart_reference_attrs: anchor_summary.chart_reference_attrs.clone(),
                         non_visual_frame_attrs: anchor_summary.non_visual_frame_attrs.clone(),
                         graphic_attrs: anchor_summary.graphic_attrs.clone(),
@@ -14890,6 +14892,7 @@ fn parse_drawing_part_summary(
     let mut active_anchor_depth = 0usize;
     let mut active_marker = None::<MarkerSlot>;
     let mut active_marker_field = None::<MarkerField>;
+    let mut active_graphic_data_depth = None::<usize>;
 
     let anchor_kind_for = |local_name: &[u8]| match local_name {
         b"twoCellAnchor" => Some(DrawingAnchorKind::TwoCell),
@@ -15109,6 +15112,7 @@ fn parse_drawing_part_summary(
                             graphic_frame_attrs: BTreeMap::new(),
                             graphic_frame_transform_xml: None,
                             graphic_data_attrs: BTreeMap::new(),
+                            graphic_data_child_xmls: Vec::new(),
                             chart_reference_attrs: BTreeMap::new(),
                             non_visual_frame_attrs: BTreeMap::new(),
                             graphic_attrs: BTreeMap::new(),
@@ -15136,6 +15140,18 @@ fn parse_drawing_part_summary(
                     }
                 } else {
                     active_anchor_depth += 1;
+                    if let Some(graphic_data_depth) = active_graphic_data_depth
+                        && active_anchor_depth == graphic_data_depth + 1
+                        && local_name != b"chart"
+                    {
+                        let raw_xml = capture_start_element_xml(&mut reader, element)?;
+                        if let Some(anchor) = active_anchor.as_mut() {
+                            anchor.graphic_data_child_xmls.push(raw_xml);
+                        }
+                        active_anchor_depth = active_anchor_depth.saturating_sub(1);
+                        buffer.clear();
+                        continue;
+                    }
                     match local_name {
                         b"from" => {
                             active_marker = Some(MarkerSlot::From);
@@ -15299,6 +15315,7 @@ fn parse_drawing_part_summary(
                                     }
                                 }
                             }
+                            active_graphic_data_depth = Some(active_anchor_depth);
                         }
                         b"graphic" => {
                             if let Some(anchor) = active_anchor.as_mut()
@@ -15361,6 +15378,7 @@ fn parse_drawing_part_summary(
                             graphic_frame_attrs: BTreeMap::new(),
                             graphic_frame_transform_xml: None,
                             graphic_data_attrs: BTreeMap::new(),
+                            graphic_data_child_xmls: Vec::new(),
                             chart_reference_attrs: BTreeMap::new(),
                             non_visual_frame_attrs: BTreeMap::new(),
                             graphic_attrs: BTreeMap::new(),
@@ -15384,6 +15402,22 @@ fn parse_drawing_part_summary(
                             &mut chart_relationship_ids,
                             &mut active_anchor,
                         )?;
+                    }
+                    buffer.clear();
+                    continue;
+                }
+                if let Some(graphic_data_depth) = active_graphic_data_depth
+                    && active_anchor_depth == graphic_data_depth
+                    && local_name != b"chart"
+                {
+                    let mut writer = Writer::new(Cursor::new(Vec::new()));
+                    writer
+                        .write_event(Event::Empty(element.into_owned()))
+                        .map_err(xml_error)?;
+                    let raw_xml =
+                        String::from_utf8(writer.into_inner().into_inner()).map_err(xml_error)?;
+                    if let Some(anchor) = active_anchor.as_mut() {
+                        anchor.graphic_data_child_xmls.push(raw_xml);
                     }
                     buffer.clear();
                     continue;
@@ -15582,6 +15616,9 @@ fn parse_drawing_part_summary(
             Ok(Event::End(element)) => {
                 let element_name = element.name();
                 let local_name = xml_local_name(element_name.as_ref());
+                if local_name == b"graphicData" {
+                    active_graphic_data_depth = None;
+                }
                 match local_name {
                     b"col" | b"colOff" | b"row" | b"rowOff" => active_marker_field = None,
                     b"from" | b"to" => active_marker = None,
@@ -15594,6 +15631,7 @@ fn parse_drawing_part_summary(
                         }
                         active_marker = None;
                         active_marker_field = None;
+                        active_graphic_data_depth = None;
                     } else {
                         active_anchor_depth = active_anchor_depth.saturating_sub(1);
                     }
@@ -19323,6 +19361,12 @@ fn write_chart_graphic_frame(
     writer
         .write_event(Event::Empty(chart_reference))
         .map_err(xml_error)?;
+    for child_xml in &chart_object.graphic_data_child_xmls {
+        writer
+            .get_mut()
+            .write_all(child_xml.as_bytes())
+            .map_err(io_error)?;
+    }
     writer
         .write_event(Event::End(BytesEnd::new("a:graphicData")))
         .map_err(xml_error)?;
@@ -19610,6 +19654,9 @@ mod tests {
             graphic_frame_attrs: BTreeMap::new(),
             graphic_frame_transform_xml: None,
             graphic_data_attrs: BTreeMap::new(),
+            graphic_data_child_xmls: vec![
+                r#"<gd:extra xmlns:gd="urn:graphic-data" gd:tag="keep"/>"#.to_string(),
+            ],
             chart_reference_attrs: BTreeMap::new(),
             non_visual_frame_attrs: BTreeMap::new(),
             graphic_attrs: BTreeMap::new(),
@@ -19657,6 +19704,7 @@ mod tests {
                 r#"<xdr:rowOff tro:tag="keep" xmlns:tro="urn:to-row-off">40</xdr:rowOff>"#
             )
         );
+        assert!(xml.contains(r#"<gd:extra xmlns:gd="urn:graphic-data" gd:tag="keep"/>"#));
     }
 
     #[test]
@@ -20384,6 +20432,7 @@ mod tests {
                 graphic_frame_attrs: BTreeMap::new(),
                 graphic_frame_transform_xml: None,
                 graphic_data_attrs: BTreeMap::new(),
+                graphic_data_child_xmls: Vec::new(),
                 chart_reference_attrs: BTreeMap::new(),
                 non_visual_frame_attrs: BTreeMap::new(),
                 graphic_attrs: BTreeMap::new(),
@@ -20543,7 +20592,7 @@ mod tests {
   <xdr:twoCellAnchor ar:tag="keep" xmlns:ar="urn:anchor-root">
     <xdr:from fm:tag="keep" xmlns:fm="urn:from"><xdr:col fc:tag="keep" xmlns:fc="urn:from-col">0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
     <xdr:to tm:tag="keep" xmlns:tm="urn:to"><xdr:col>6</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>12</xdr:row><xdr:rowOff tro:tag="keep" xmlns:tro="urn:to-row-off">0</xdr:rowOff></xdr:to>
-    <xdr:graphicFrame macro="" fPublished="0"><xdr:nvGraphicFramePr nv:tag="keep" xmlns:nv="urn:nv"><xdr:cNvPr id="2" name="Embedded Revenue Chart" descr="Revenue detail" title="Chart Alt" hidden="1"><a:extLst><a:ext uri="urn:cnvpr"><test:meta xmlns:test="urn:test" value="keep"/></a:ext></a:extLst></xdr:cNvPr><xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1" noChangeAspect="1"/></xdr:cNvGraphicFramePr></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic g:role="frame" xmlns:g="urn:g"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart" gd:role="chart" xmlns:gd="urn:graphic"><c:chart r:id="rIdChart1" chartRef="keep"/></a:graphicData></a:graphic></xdr:graphicFrame>
+    <xdr:graphicFrame macro="" fPublished="0"><xdr:nvGraphicFramePr nv:tag="keep" xmlns:nv="urn:nv"><xdr:cNvPr id="2" name="Embedded Revenue Chart" descr="Revenue detail" title="Chart Alt" hidden="1"><a:extLst><a:ext uri="urn:cnvpr"><test:meta xmlns:test="urn:test" value="keep"/></a:ext></a:extLst></xdr:cNvPr><xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1" noChangeAspect="1"/></xdr:cNvGraphicFramePr></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic g:role="frame" xmlns:g="urn:g"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart" gd:role="chart" xmlns:gd="urn:graphic"><c:chart r:id="rIdChart1" chartRef="keep"/><gd:extra xmlns:gd="urn:graphic-extra" gd:tag="keep"/></a:graphicData></a:graphic></xdr:graphicFrame>
     <xdr:clientData fLocksWithSheet="1" fPrintsWithSheet="0"/>
     <xdr:extLst><xdr:ext uri="urn:anchor"><xdr14:creationId xmlns:xdr14="http://schemas.microsoft.com/office/drawing/2010/spreadsheetDrawing" id="{11111111-2222-3333-4444-555555555555}"/></xdr:ext></xdr:extLst>
   </xdr:twoCellAnchor>
@@ -20685,6 +20734,9 @@ mod tests {
                     ("gd:role".to_string(), "chart".to_string()),
                     ("xmlns:gd".to_string(), "urn:graphic".to_string()),
                 ]),
+                graphic_data_child_xmls: vec![
+                    r#"<gd:extra xmlns:gd="urn:graphic-extra" gd:tag="keep"/>"#.to_string()
+                ],
                 chart_reference_attrs: BTreeMap::from([(
                     "chartRef".to_string(),
                     "keep".to_string()
@@ -21011,6 +21063,10 @@ mod tests {
                 ("gd:role".to_string(), "chart".to_string()),
                 ("xmlns:gd".to_string(), "urn:graphic".to_string()),
             ])
+        );
+        assert_eq!(
+            chart_object.graphic_data_child_xmls,
+            vec![r#"<gd:extra xmlns:gd="urn:graphic-extra" gd:tag="keep"/>"#.to_string()]
         );
         assert_eq!(
             chart_object.chart_reference_attrs,

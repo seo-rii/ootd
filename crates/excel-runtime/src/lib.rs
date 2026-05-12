@@ -9419,6 +9419,7 @@ impl ExcelRuntime {
                             graphic_frame_attrs: BTreeMap::new(),
                             graphic_frame_transform_xml: None,
                             graphic_data_attrs: BTreeMap::new(),
+                            graphic_data_child_xmls: Vec::new(),
                             chart_reference_attrs: BTreeMap::new(),
                             non_visual_frame_attrs: BTreeMap::new(),
                             graphic_attrs: BTreeMap::new(),
@@ -11735,6 +11736,7 @@ impl ExcelRuntime {
                             graphic_frame_attrs: BTreeMap::new(),
                             graphic_frame_transform_xml: None,
                             graphic_data_attrs: BTreeMap::new(),
+                            graphic_data_child_xmls: Vec::new(),
                             chart_reference_attrs: BTreeMap::new(),
                             non_visual_frame_attrs: BTreeMap::new(),
                             graphic_attrs: BTreeMap::new(),
@@ -68785,6 +68787,8 @@ mod tests {
         assert!(drawing_xml.contains(r#"<a:ext cx="0" cy="0"/>"#));
         assert!(drawing_xml.contains(r#"gd:role="chart""#));
         assert!(drawing_xml.contains(r#"xmlns:gd="urn:graphic""#));
+        assert!(drawing_xml.contains(r#"gde:tag="keep""#));
+        assert!(drawing_xml.contains(r#"xmlns:gde="urn:graphic-extra""#));
         assert!(drawing_xml.contains(r#"chartRef="keep""#));
         assert!(drawing_xml.contains(r#"nv:tag="keep""#));
         assert!(drawing_xml.contains(r#"xmlns:nv="urn:nv""#));
@@ -78088,7 +78092,7 @@ mod tests {
   <xdr:absoluteAnchor ar:tag="keep" xmlns:ar="urn:anchor-root">
   <xdr:pos x="25400" y="38100" pg:tag="keep" xmlns:pg="urn:pos"/>
   <xdr:ext cx="1270000" cy="635000" eg:tag="keep" xmlns:eg="urn:ext"/>
-    <xdr:graphicFrame macro="" fPublished="0"><xdr:nvGraphicFramePr nv:tag="keep" xmlns:nv="urn:nv"><xdr:cNvPr id="2" name="Embedded Revenue Chart" descr="Revenue detail" title="Chart Alt" hidden="1"><a:extLst><a:ext uri="urn:cnvpr"><test:meta xmlns:test="urn:test" value="keep"/></a:ext></a:extLst></xdr:cNvPr><xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1" noChangeAspect="1"/></xdr:cNvGraphicFramePr></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic g:role="frame" xmlns:g="urn:g"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart" gd:role="chart" xmlns:gd="urn:graphic"><c:chart r:id="rIdChart1" chartRef="keep"/></a:graphicData></a:graphic></xdr:graphicFrame>
+    <xdr:graphicFrame macro="" fPublished="0"><xdr:nvGraphicFramePr nv:tag="keep" xmlns:nv="urn:nv"><xdr:cNvPr id="2" name="Embedded Revenue Chart" descr="Revenue detail" title="Chart Alt" hidden="1"><a:extLst><a:ext uri="urn:cnvpr"><test:meta xmlns:test="urn:test" value="keep"/></a:ext></a:extLst></xdr:cNvPr><xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1" noChangeAspect="1"/></xdr:cNvGraphicFramePr></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic g:role="frame" xmlns:g="urn:g"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart" gd:role="chart" xmlns:gd="urn:graphic"><c:chart r:id="rIdChart1" chartRef="keep"/><gde:extra xmlns:gde="urn:graphic-extra" gde:tag="keep"/></a:graphicData></a:graphic></xdr:graphicFrame>
     <xdr:clientData fLocksWithSheet="1" fPrintsWithSheet="0"/>
     <xdr:extLst><xdr:ext uri="urn:anchor"><xdr14:creationId xmlns:xdr14="http://schemas.microsoft.com/office/drawing/2010/spreadsheetDrawing" id="{11111111-2222-3333-4444-555555555555}"/></xdr:ext></xdr:extLst>
   </xdr:absoluteAnchor>

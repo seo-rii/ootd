@@ -130,6 +130,7 @@ pub struct ChartObjectModel {
     pub graphic_frame_attrs: BTreeMap<String, String>,
     pub graphic_frame_transform_xml: Option<String>,
     pub graphic_data_attrs: BTreeMap<String, String>,
+    pub graphic_data_child_xmls: Vec<String>,
     pub chart_reference_attrs: BTreeMap<String, String>,
     pub non_visual_frame_attrs: BTreeMap<String, String>,
     pub graphic_attrs: BTreeMap<String, String>,
