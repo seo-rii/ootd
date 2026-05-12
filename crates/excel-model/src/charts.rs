@@ -121,6 +121,7 @@ pub enum DrawingObjectModel {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChartObjectModel {
     pub id: ChartObjectId,
+    pub non_visual_id: Option<u32>,
     pub workbook_id: WorkbookId,
     pub host_sheet_id: SheetId,
     pub chart_id: ChartId,

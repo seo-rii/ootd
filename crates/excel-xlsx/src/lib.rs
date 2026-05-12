@@ -591,6 +591,7 @@ pub struct DrawingPartSummary {
 pub struct DrawingAnchorSummary {
     pub kind: DrawingAnchorKind,
     pub edit_as: Option<String>,
+    pub non_visual_id: Option<u32>,
     pub name: Option<String>,
     pub from: Option<DrawingCellMarkerSummary>,
     pub to: Option<DrawingCellMarkerSummary>,
@@ -3064,6 +3065,7 @@ fn build_chart_model_overlay(
                         workbook_id,
                         host_sheet_id: *sheet_id,
                         chart_id: *chart_id,
+                        non_visual_id: anchor_summary.non_visual_id,
                         name: anchor_summary
                             .name
                             .clone()
@@ -14867,6 +14869,21 @@ fn parse_drawing_part_summary(
         })
     };
 
+    let decode_u32_attr = |element: &BytesStart<'_>,
+                           attr_name: &[u8],
+                           reader: &Reader<Cursor<&[u8]>>|
+     -> OmResult<Option<u32>> {
+        let Some(value) = decode_attr(element, attr_name, reader)? else {
+            return Ok(None);
+        };
+        value.trim().parse::<u32>().map(Some).map_err(|error| {
+            OmError::new(
+                OmErrorCode::Parse,
+                format!("drawing attribute value must be an unsigned integer: {value}: {error}"),
+            )
+        })
+    };
+
     let apply_marker_value =
         |anchor: &mut DrawingAnchorSummary, marker: MarkerSlot, field: MarkerField, value: i64| {
             let marker_summary = match marker {
@@ -14920,6 +14937,7 @@ fn parse_drawing_part_summary(
                         active_anchor = Some(DrawingAnchorSummary {
                             kind,
                             edit_as: decode_attr(&element, b"editAs", &reader)?,
+                            non_visual_id: None,
                             name: None,
                             from: None,
                             to: None,
@@ -14976,10 +14994,14 @@ fn parse_drawing_part_summary(
                             }
                         }
                         b"cNvPr" => {
-                            if let Some(anchor) = active_anchor.as_mut()
-                                && anchor.name.is_none()
-                            {
-                                anchor.name = decode_attr(&element, b"name", &reader)?;
+                            if let Some(anchor) = active_anchor.as_mut() {
+                                if anchor.non_visual_id.is_none() {
+                                    anchor.non_visual_id =
+                                        decode_u32_attr(&element, b"id", &reader)?;
+                                }
+                                if anchor.name.is_none() {
+                                    anchor.name = decode_attr(&element, b"name", &reader)?;
+                                }
                             }
                         }
                         b"chart" => collect_chart_relationship_id(
@@ -15000,6 +15022,7 @@ fn parse_drawing_part_summary(
                         anchors.push(DrawingAnchorSummary {
                             kind,
                             edit_as: decode_attr(&element, b"editAs", &reader)?,
+                            non_visual_id: None,
                             name: None,
                             from: None,
                             to: None,
@@ -15036,10 +15059,13 @@ fn parse_drawing_part_summary(
                         }
                     }
                     b"cNvPr" => {
-                        if let Some(anchor) = active_anchor.as_mut()
-                            && anchor.name.is_none()
-                        {
-                            anchor.name = decode_attr(&element, b"name", &reader)?;
+                        if let Some(anchor) = active_anchor.as_mut() {
+                            if anchor.non_visual_id.is_none() {
+                                anchor.non_visual_id = decode_u32_attr(&element, b"id", &reader)?;
+                            }
+                            if anchor.name.is_none() {
+                                anchor.name = decode_attr(&element, b"name", &reader)?;
+                            }
                         }
                     }
                     b"chart" => collect_chart_relationship_id(
@@ -18652,7 +18678,11 @@ fn write_chart_graphic_frame(
         .write_event(Event::Start(BytesStart::new("xdr:nvGraphicFramePr")))
         .map_err(xml_error)?;
     let mut non_visual = BytesStart::new("xdr:cNvPr");
-    let chart_object_id = chart_object.id.0.to_string();
+    let chart_object_id = chart_object
+        .non_visual_id
+        .map(u64::from)
+        .unwrap_or(chart_object.id.0)
+        .to_string();
     let escaped_name = partial_escape(chart_object.name.as_str()).to_string();
     non_visual.push_attribute(("id", chart_object_id.as_str()));
     non_visual.push_attribute(("name", escaped_name.as_str()));
@@ -19605,6 +19635,7 @@ mod tests {
             vec![DrawingAnchorSummary {
                 kind: DrawingAnchorKind::Absolute,
                 edit_as: None,
+                non_visual_id: Some(2),
                 name: Some("Chart Sheet Chart".to_string()),
                 from: None,
                 to: None,
@@ -19864,6 +19895,7 @@ mod tests {
             vec![DrawingAnchorSummary {
                 kind: DrawingAnchorKind::TwoCell,
                 edit_as: None,
+                non_visual_id: Some(2),
                 name: Some("Embedded Revenue Chart".to_string()),
                 from: Some(DrawingCellMarkerSummary {
                     col: Some(0),
@@ -20084,6 +20116,7 @@ mod tests {
             panic!("expected chart frame");
         };
         assert_eq!(chart_object.chart_id, *chart_id);
+        assert_eq!(chart_object.non_visual_id, Some(2));
         assert_eq!(chart_object.name, "Embedded Revenue Chart");
         assert_eq!(chart_object.placement, ObjectPlacement::MoveAndSize);
         assert_eq!(

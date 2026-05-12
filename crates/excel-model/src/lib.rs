@@ -626,6 +626,7 @@ mod tests {
                 host_sheet_id: sheet_id,
                 objects: vec![DrawingObjectModel::ChartFrame(ChartObjectModel {
                     id: ChartObjectId(21),
+                    non_visual_id: Some(2),
                     workbook_id,
                     host_sheet_id: sheet_id,
                     chart_id,
@@ -1172,6 +1173,7 @@ mod tests {
                 host_sheet_id: sheet_id,
                 objects: vec![DrawingObjectModel::ChartFrame(ChartObjectModel {
                     id: ChartObjectId(21),
+                    non_visual_id: Some(2),
                     workbook_id: state.model.id,
                     host_sheet_id: sheet_id,
                     chart_id,

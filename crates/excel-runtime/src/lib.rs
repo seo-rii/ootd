@@ -9412,6 +9412,7 @@ impl ExcelRuntime {
                         .objects
                         .push(DrawingObjectModel::ChartFrame(ChartObjectModel {
                             id: chart_object_id,
+                            non_visual_id: u32::try_from(chart_object_id.0).ok(),
                             workbook_id,
                             host_sheet_id: sheet_id,
                             chart_id,
@@ -11712,6 +11713,7 @@ impl ExcelRuntime {
                         host_sheet_id: sheet_id,
                         objects: vec![DrawingObjectModel::ChartFrame(ChartObjectModel {
                             id: chart_object_id,
+                            non_visual_id: u32::try_from(chart_object_id.0).ok(),
                             workbook_id: runtime.loaded.state.model.id,
                             host_sheet_id: sheet_id,
                             chart_id,
@@ -68745,6 +68747,7 @@ mod tests {
         )
         .expect("saved placement drawing XML utf8");
         assert!(drawing_xml.contains("xdr:oneCellAnchor"));
+        assert!(drawing_xml.contains(r#"id="2" name="Chart-Level Revenue Chart""#));
         let mut placement_runtime = ExcelRuntime::new();
         let placement_workbook = placement_runtime
             .open_workbook(OpenWorkbookSpec {
