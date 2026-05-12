@@ -626,6 +626,7 @@ mod tests {
                 host_sheet_id: sheet_id,
                 objects: vec![DrawingObjectModel::ChartFrame(ChartObjectModel {
                     id: ChartObjectId(21),
+                    anchor_attrs: BTreeMap::new(),
                     graphic_frame_attrs: BTreeMap::new(),
                     graphic_frame_transform_xml: None,
                     graphic_data_attrs: BTreeMap::new(),
@@ -1184,6 +1185,7 @@ mod tests {
                 host_sheet_id: sheet_id,
                 objects: vec![DrawingObjectModel::ChartFrame(ChartObjectModel {
                     id: ChartObjectId(21),
+                    anchor_attrs: BTreeMap::new(),
                     graphic_frame_attrs: BTreeMap::new(),
                     graphic_frame_transform_xml: None,
                     graphic_data_attrs: BTreeMap::new(),

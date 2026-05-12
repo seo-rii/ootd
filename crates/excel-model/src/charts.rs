@@ -123,6 +123,7 @@ pub enum DrawingObjectModel {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChartObjectModel {
     pub id: ChartObjectId,
+    pub anchor_attrs: BTreeMap<String, String>,
     pub graphic_frame_attrs: BTreeMap<String, String>,
     pub graphic_frame_transform_xml: Option<String>,
     pub graphic_data_attrs: BTreeMap<String, String>,

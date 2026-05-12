@@ -9412,6 +9412,7 @@ impl ExcelRuntime {
                         .objects
                         .push(DrawingObjectModel::ChartFrame(ChartObjectModel {
                             id: chart_object_id,
+                            anchor_attrs: BTreeMap::new(),
                             graphic_frame_attrs: BTreeMap::new(),
                             graphic_frame_transform_xml: None,
                             graphic_data_attrs: BTreeMap::new(),
@@ -11724,6 +11725,7 @@ impl ExcelRuntime {
                         host_sheet_id: sheet_id,
                         objects: vec![DrawingObjectModel::ChartFrame(ChartObjectModel {
                             id: chart_object_id,
+                            anchor_attrs: BTreeMap::new(),
                             graphic_frame_attrs: BTreeMap::new(),
                             graphic_frame_transform_xml: None,
                             graphic_data_attrs: BTreeMap::new(),
@@ -68782,6 +68784,8 @@ mod tests {
         assert!(drawing_xml.contains(r#"xmlns:nv="urn:nv""#));
         assert!(drawing_xml.contains(r#"g:role="frame""#));
         assert!(drawing_xml.contains(r#"xmlns:g="urn:g""#));
+        assert!(drawing_xml.contains(r#"ar:tag="keep""#));
+        assert!(drawing_xml.contains(r#"xmlns:ar="urn:anchor-root""#));
         assert!(drawing_xml.contains(r#"id="2" name="Chart-Level Revenue Chart""#));
         assert!(drawing_xml.contains(r#"descr="Revenue detail""#));
         assert!(drawing_xml.contains(r#"title="Chart Alt""#));
@@ -78073,7 +78077,7 @@ mod tests {
                 compression: CompressionMethod::Stored,
                 bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
 <xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-  <xdr:absoluteAnchor>
+  <xdr:absoluteAnchor ar:tag="keep" xmlns:ar="urn:anchor-root">
     <xdr:pos x="25400" y="38100"/>
     <xdr:ext cx="1270000" cy="635000"/>
     <xdr:graphicFrame macro="" fPublished="0"><xdr:nvGraphicFramePr nv:tag="keep" xmlns:nv="urn:nv"><xdr:cNvPr id="2" name="Embedded Revenue Chart" descr="Revenue detail" title="Chart Alt" hidden="1"><a:extLst><a:ext uri="urn:cnvpr"><test:meta xmlns:test="urn:test" value="keep"/></a:ext></a:extLst></xdr:cNvPr><xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1" noChangeAspect="1"/></xdr:cNvGraphicFramePr></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic g:role="frame" xmlns:g="urn:g"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart" gd:role="chart" xmlns:gd="urn:graphic"><c:chart r:id="rIdChart1" chartRef="keep"/></a:graphicData></a:graphic></xdr:graphicFrame>

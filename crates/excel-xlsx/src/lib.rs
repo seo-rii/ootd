@@ -591,6 +591,7 @@ pub struct DrawingPartSummary {
 pub struct DrawingAnchorSummary {
     pub kind: DrawingAnchorKind,
     pub edit_as: Option<String>,
+    pub anchor_attrs: BTreeMap<String, String>,
     pub graphic_frame_attrs: BTreeMap<String, String>,
     pub graphic_frame_transform_xml: Option<String>,
     pub graphic_data_attrs: BTreeMap<String, String>,
@@ -3073,6 +3074,7 @@ fn build_chart_model_overlay(
                     };
                     objects.push(DrawingObjectModel::ChartFrame(ChartObjectModel {
                         id: ChartObjectId(next_drawing_object_id),
+                        anchor_attrs: anchor_summary.anchor_attrs.clone(),
                         graphic_frame_attrs: anchor_summary.graphic_frame_attrs.clone(),
                         graphic_frame_transform_xml: anchor_summary
                             .graphic_frame_transform_xml
@@ -15020,6 +15022,10 @@ fn parse_drawing_part_summary(
                         active_anchor = Some(DrawingAnchorSummary {
                             kind,
                             edit_as: decode_attr(&element, b"editAs", &reader)?,
+                            anchor_attrs: decode_attrs(&element, &reader)?
+                                .into_iter()
+                                .filter(|(name, _)| name != "editAs")
+                                .collect(),
                             graphic_frame_attrs: BTreeMap::new(),
                             graphic_frame_transform_xml: None,
                             graphic_data_attrs: BTreeMap::new(),
@@ -15240,6 +15246,10 @@ fn parse_drawing_part_summary(
                         anchors.push(DrawingAnchorSummary {
                             kind,
                             edit_as: decode_attr(&element, b"editAs", &reader)?,
+                            anchor_attrs: decode_attrs(&element, &reader)?
+                                .into_iter()
+                                .filter(|(name, _)| name != "editAs")
+                                .collect(),
                             graphic_frame_attrs: BTreeMap::new(),
                             graphic_frame_transform_xml: None,
                             graphic_data_attrs: BTreeMap::new(),
@@ -19160,13 +19170,29 @@ fn write_chart_object_anchor(
         }
         Ok(())
     };
+    let write_anchor_start =
+        |writer: &mut Writer<Cursor<Vec<u8>>>, name: &str, edit_as: Option<&str>| -> OmResult<()> {
+            let mut start = BytesStart::new(name);
+            let preserved_anchor_attrs = chart_object
+                .anchor_attrs
+                .iter()
+                .filter(|(name, _)| name.as_str() != "editAs")
+                .map(|(name, value)| (name.as_str(), partial_escape(value.as_str()).to_string()))
+                .collect::<Vec<_>>();
+            for (name, value) in &preserved_anchor_attrs {
+                start.push_attribute((*name, value.as_str()));
+            }
+            if let Some(edit_as) = edit_as {
+                start.push_attribute(("editAs", edit_as));
+            }
+            writer.write_event(Event::Start(start)).map_err(xml_error)?;
+            Ok(())
+        };
 
     match (anchor, chart_object.placement) {
         (DrawingAnchor::Absolute(anchor), ObjectPlacement::MoveOnly) => {
             let from = chart_marker_from_absolute(anchor);
-            writer
-                .write_event(Event::Start(BytesStart::new("xdr:oneCellAnchor")))
-                .map_err(xml_error)?;
+            write_anchor_start(writer, "xdr:oneCellAnchor", None)?;
             write_chart_marker(writer, "xdr:from", from)?;
             write_chart_extents(writer, anchor.extents)?;
             write_chart_graphic_frame(writer, chart_object, relationship_id)?;
@@ -19179,9 +19205,7 @@ fn write_chart_object_anchor(
         (DrawingAnchor::Absolute(anchor), ObjectPlacement::MoveAndSize) => {
             let from = chart_marker_from_absolute(anchor);
             let to = chart_marker_with_extents(from, anchor.extents)?;
-            writer
-                .write_event(Event::Start(BytesStart::new("xdr:twoCellAnchor")))
-                .map_err(xml_error)?;
+            write_anchor_start(writer, "xdr:twoCellAnchor", None)?;
             write_chart_marker(writer, "xdr:from", from)?;
             write_chart_marker(writer, "xdr:to", to)?;
             write_chart_graphic_frame(writer, chart_object, relationship_id)?;
@@ -19195,9 +19219,7 @@ fn write_chart_object_anchor(
             DrawingAnchor::Absolute(anchor),
             ObjectPlacement::FreeFloating | ObjectPlacement::Unknown,
         ) => {
-            writer
-                .write_event(Event::Start(BytesStart::new("xdr:absoluteAnchor")))
-                .map_err(xml_error)?;
+            write_anchor_start(writer, "xdr:absoluteAnchor", None)?;
             let position_x = anchor.position.x.0.to_string();
             let position_y = anchor.position.y.0.to_string();
             let mut position = BytesStart::new("xdr:pos");
@@ -19215,9 +19237,7 @@ fn write_chart_object_anchor(
                 .map_err(xml_error)?;
         }
         (DrawingAnchor::OneCell(anchor), ObjectPlacement::FreeFloating) => {
-            writer
-                .write_event(Event::Start(BytesStart::new("xdr:absoluteAnchor")))
-                .map_err(xml_error)?;
+            write_anchor_start(writer, "xdr:absoluteAnchor", None)?;
             let position_x = anchor.from.col_offset.0.to_string();
             let position_y = anchor.from.row_offset.0.to_string();
             let mut position = BytesStart::new("xdr:pos");
@@ -19236,9 +19256,7 @@ fn write_chart_object_anchor(
         }
         (DrawingAnchor::OneCell(anchor), ObjectPlacement::MoveAndSize) => {
             let to = chart_marker_with_extents(anchor.from, anchor.extents)?;
-            writer
-                .write_event(Event::Start(BytesStart::new("xdr:twoCellAnchor")))
-                .map_err(xml_error)?;
+            write_anchor_start(writer, "xdr:twoCellAnchor", None)?;
             write_chart_marker(writer, "xdr:from", anchor.from)?;
             write_chart_marker(writer, "xdr:to", to)?;
             write_chart_graphic_frame(writer, chart_object, relationship_id)?;
@@ -19249,9 +19267,7 @@ fn write_chart_object_anchor(
                 .map_err(xml_error)?;
         }
         (DrawingAnchor::OneCell(anchor), ObjectPlacement::MoveOnly | ObjectPlacement::Unknown) => {
-            writer
-                .write_event(Event::Start(BytesStart::new("xdr:oneCellAnchor")))
-                .map_err(xml_error)?;
+            write_anchor_start(writer, "xdr:oneCellAnchor", None)?;
             write_chart_marker(writer, "xdr:from", anchor.from)?;
             write_chart_extents(writer, anchor.extents)?;
             write_chart_graphic_frame(writer, chart_object, relationship_id)?;
@@ -19262,18 +19278,13 @@ fn write_chart_object_anchor(
                 .map_err(xml_error)?;
         }
         (DrawingAnchor::TwoCell(anchor), placement) => {
-            let mut start = BytesStart::new("xdr:twoCellAnchor");
-            match placement {
-                ObjectPlacement::MoveOnly => start.push_attribute(("editAs", "oneCell")),
-                ObjectPlacement::FreeFloating => start.push_attribute(("editAs", "absolute")),
-                ObjectPlacement::MoveAndSize => {}
-                ObjectPlacement::Unknown => {
-                    if let Some(edit_as) = anchor.edit_as.as_deref() {
-                        start.push_attribute(("editAs", edit_as));
-                    }
-                }
-            }
-            writer.write_event(Event::Start(start)).map_err(xml_error)?;
+            let edit_as = match placement {
+                ObjectPlacement::MoveOnly => Some("oneCell"),
+                ObjectPlacement::FreeFloating => Some("absolute"),
+                ObjectPlacement::MoveAndSize => None,
+                ObjectPlacement::Unknown => anchor.edit_as.as_deref(),
+            };
+            write_anchor_start(writer, "xdr:twoCellAnchor", edit_as)?;
             write_chart_marker(writer, "xdr:from", anchor.from)?;
             write_chart_marker(writer, "xdr:to", anchor.to)?;
             write_chart_graphic_frame(writer, chart_object, relationship_id)?;
@@ -20058,6 +20069,7 @@ mod tests {
             vec![DrawingAnchorSummary {
                 kind: DrawingAnchorKind::Absolute,
                 edit_as: None,
+                anchor_attrs: BTreeMap::new(),
                 graphic_frame_attrs: BTreeMap::new(),
                 graphic_frame_transform_xml: None,
                 graphic_data_attrs: BTreeMap::new(),
@@ -20203,7 +20215,7 @@ mod tests {
                 compression: CompressionMethod::Stored,
                 bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
 <xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-  <xdr:twoCellAnchor>
+  <xdr:twoCellAnchor ar:tag="keep" xmlns:ar="urn:anchor-root">
     <xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
     <xdr:to><xdr:col>6</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>12</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
     <xdr:graphicFrame macro="" fPublished="0"><xdr:nvGraphicFramePr nv:tag="keep" xmlns:nv="urn:nv"><xdr:cNvPr id="2" name="Embedded Revenue Chart" descr="Revenue detail" title="Chart Alt" hidden="1"><a:extLst><a:ext uri="urn:cnvpr"><test:meta xmlns:test="urn:test" value="keep"/></a:ext></a:extLst></xdr:cNvPr><xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1" noChangeAspect="1"/></xdr:cNvGraphicFramePr></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic g:role="frame" xmlns:g="urn:g"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart" gd:role="chart" xmlns:gd="urn:graphic"><c:chart r:id="rIdChart1" chartRef="keep"/></a:graphicData></a:graphic></xdr:graphicFrame>
@@ -20330,6 +20342,10 @@ mod tests {
             vec![DrawingAnchorSummary {
                 kind: DrawingAnchorKind::TwoCell,
                 edit_as: None,
+                anchor_attrs: BTreeMap::from([
+                    ("ar:tag".to_string(), "keep".to_string()),
+                    ("xmlns:ar".to_string(), "urn:anchor-root".to_string()),
+                ]),
                 graphic_frame_attrs: BTreeMap::from([
                     ("fPublished".to_string(), "0".to_string()),
                     ("macro".to_string(), "".to_string()),
@@ -20595,6 +20611,13 @@ mod tests {
             panic!("expected chart frame");
         };
         assert_eq!(chart_object.chart_id, *chart_id);
+        assert_eq!(
+            chart_object.anchor_attrs,
+            BTreeMap::from([
+                ("ar:tag".to_string(), "keep".to_string()),
+                ("xmlns:ar".to_string(), "urn:anchor-root".to_string()),
+            ])
+        );
         assert_eq!(
             chart_object.graphic_frame_attrs,
             BTreeMap::from([
