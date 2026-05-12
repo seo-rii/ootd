@@ -129,6 +129,7 @@ pub struct ChartObjectModel {
     pub non_visual_attrs: BTreeMap<String, String>,
     pub non_visual_frame_properties_xml: Option<String>,
     pub client_data_xml: Option<String>,
+    pub anchor_extension_xmls: Vec<String>,
     pub workbook_id: WorkbookId,
     pub host_sheet_id: SheetId,
     pub chart_id: ChartId,

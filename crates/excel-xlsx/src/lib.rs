@@ -597,6 +597,7 @@ pub struct DrawingAnchorSummary {
     pub non_visual_attrs: BTreeMap<String, String>,
     pub non_visual_frame_properties_xml: Option<String>,
     pub client_data_xml: Option<String>,
+    pub anchor_extension_xmls: Vec<String>,
     pub name: Option<String>,
     pub from: Option<DrawingCellMarkerSummary>,
     pub to: Option<DrawingCellMarkerSummary>,
@@ -3080,6 +3081,7 @@ fn build_chart_model_overlay(
                             .non_visual_frame_properties_xml
                             .clone(),
                         client_data_xml: anchor_summary.client_data_xml.clone(),
+                        anchor_extension_xmls: anchor_summary.anchor_extension_xmls.clone(),
                         name: anchor_summary
                             .name
                             .clone()
@@ -15015,6 +15017,7 @@ fn parse_drawing_part_summary(
                             non_visual_attrs: BTreeMap::new(),
                             non_visual_frame_properties_xml: None,
                             client_data_xml: None,
+                            anchor_extension_xmls: Vec::new(),
                             name: None,
                             from: None,
                             to: None,
@@ -15120,6 +15123,13 @@ fn parse_drawing_part_summary(
                             }
                             active_anchor_depth = active_anchor_depth.saturating_sub(1);
                         }
+                        b"extLst" if active_anchor_depth == 2 => {
+                            let raw_xml = capture_start_element_xml(&mut reader, element)?;
+                            if let Some(anchor) = active_anchor.as_mut() {
+                                anchor.anchor_extension_xmls.push(raw_xml);
+                            }
+                            active_anchor_depth = active_anchor_depth.saturating_sub(1);
+                        }
                         b"chart" => collect_chart_relationship_id(
                             &element,
                             &reader,
@@ -15144,6 +15154,7 @@ fn parse_drawing_part_summary(
                             non_visual_attrs: BTreeMap::new(),
                             non_visual_frame_properties_xml: None,
                             client_data_xml: None,
+                            anchor_extension_xmls: Vec::new(),
                             name: None,
                             from: None,
                             to: None,
@@ -15238,6 +15249,17 @@ fn parse_drawing_part_summary(
                             && anchor.client_data_xml.is_none()
                         {
                             anchor.client_data_xml = Some(raw_xml);
+                        }
+                    }
+                    b"extLst" if active_anchor_depth == 1 => {
+                        let mut writer = Writer::new(Cursor::new(Vec::new()));
+                        writer
+                            .write_event(Event::Empty(element.into_owned()))
+                            .map_err(xml_error)?;
+                        let raw_xml = String::from_utf8(writer.into_inner().into_inner())
+                            .map_err(xml_error)?;
+                        if let Some(anchor) = active_anchor.as_mut() {
+                            anchor.anchor_extension_xmls.push(raw_xml);
                         }
                     }
                     b"chart" => collect_chart_relationship_id(
@@ -18947,6 +18969,15 @@ fn write_chart_object_anchor(
         }
         Ok(())
     };
+    let write_anchor_extensions = |writer: &mut Writer<Cursor<Vec<u8>>>| -> OmResult<()> {
+        for extension_xml in &chart_object.anchor_extension_xmls {
+            writer
+                .get_mut()
+                .write_all(extension_xml.as_bytes())
+                .map_err(io_error)?;
+        }
+        Ok(())
+    };
 
     match (anchor, chart_object.placement) {
         (DrawingAnchor::Absolute(anchor), ObjectPlacement::MoveOnly) => {
@@ -18958,6 +18989,7 @@ fn write_chart_object_anchor(
             write_chart_extents(writer, anchor.extents)?;
             write_chart_graphic_frame(writer, chart_object, relationship_id)?;
             write_client_data(writer)?;
+            write_anchor_extensions(writer)?;
             writer
                 .write_event(Event::End(BytesEnd::new("xdr:oneCellAnchor")))
                 .map_err(xml_error)?;
@@ -18972,6 +19004,7 @@ fn write_chart_object_anchor(
             write_chart_marker(writer, "xdr:to", to)?;
             write_chart_graphic_frame(writer, chart_object, relationship_id)?;
             write_client_data(writer)?;
+            write_anchor_extensions(writer)?;
             writer
                 .write_event(Event::End(BytesEnd::new("xdr:twoCellAnchor")))
                 .map_err(xml_error)?;
@@ -18994,6 +19027,7 @@ fn write_chart_object_anchor(
             write_chart_extents(writer, anchor.extents)?;
             write_chart_graphic_frame(writer, chart_object, relationship_id)?;
             write_client_data(writer)?;
+            write_anchor_extensions(writer)?;
             writer
                 .write_event(Event::End(BytesEnd::new("xdr:absoluteAnchor")))
                 .map_err(xml_error)?;
@@ -19013,6 +19047,7 @@ fn write_chart_object_anchor(
             write_chart_extents(writer, anchor.extents)?;
             write_chart_graphic_frame(writer, chart_object, relationship_id)?;
             write_client_data(writer)?;
+            write_anchor_extensions(writer)?;
             writer
                 .write_event(Event::End(BytesEnd::new("xdr:absoluteAnchor")))
                 .map_err(xml_error)?;
@@ -19026,6 +19061,7 @@ fn write_chart_object_anchor(
             write_chart_marker(writer, "xdr:to", to)?;
             write_chart_graphic_frame(writer, chart_object, relationship_id)?;
             write_client_data(writer)?;
+            write_anchor_extensions(writer)?;
             writer
                 .write_event(Event::End(BytesEnd::new("xdr:twoCellAnchor")))
                 .map_err(xml_error)?;
@@ -19038,6 +19074,7 @@ fn write_chart_object_anchor(
             write_chart_extents(writer, anchor.extents)?;
             write_chart_graphic_frame(writer, chart_object, relationship_id)?;
             write_client_data(writer)?;
+            write_anchor_extensions(writer)?;
             writer
                 .write_event(Event::End(BytesEnd::new("xdr:oneCellAnchor")))
                 .map_err(xml_error)?;
@@ -19059,6 +19096,7 @@ fn write_chart_object_anchor(
             write_chart_marker(writer, "xdr:to", anchor.to)?;
             write_chart_graphic_frame(writer, chart_object, relationship_id)?;
             write_client_data(writer)?;
+            write_anchor_extensions(writer)?;
             writer
                 .write_event(Event::End(BytesEnd::new("xdr:twoCellAnchor")))
                 .map_err(xml_error)?;
@@ -19844,6 +19882,7 @@ mod tests {
                 non_visual_attrs: BTreeMap::new(),
                 non_visual_frame_properties_xml: None,
                 client_data_xml: Some(r#"<xdr:clientData/>"#.to_string()),
+                anchor_extension_xmls: Vec::new(),
                 name: Some("Chart Sheet Chart".to_string()),
                 from: None,
                 to: None,
@@ -19982,6 +20021,7 @@ mod tests {
     <xdr:to><xdr:col>6</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>12</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
     <xdr:graphicFrame macro="" fPublished="0"><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Embedded Revenue Chart" descr="Revenue detail" title="Chart Alt" hidden="1"/><xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1" noChangeAspect="1"/></xdr:cNvGraphicFramePr></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart1"/></a:graphicData></a:graphic></xdr:graphicFrame>
     <xdr:clientData fLocksWithSheet="1" fPrintsWithSheet="0"/>
+    <xdr:extLst><xdr:ext uri="urn:anchor"><xdr14:creationId xmlns:xdr14="http://schemas.microsoft.com/office/drawing/2010/spreadsheetDrawing" id="{11111111-2222-3333-4444-555555555555}"/></xdr:ext></xdr:extLst>
   </xdr:twoCellAnchor>
 </xdr:wsDr>"#
                     .to_vec(),
@@ -20124,6 +20164,10 @@ mod tests {
                 client_data_xml: Some(
                     r#"<xdr:clientData fLocksWithSheet="1" fPrintsWithSheet="0"/>"#.to_string()
                 ),
+                anchor_extension_xmls: vec![
+                    r#"<xdr:extLst><xdr:ext uri="urn:anchor"><xdr14:creationId xmlns:xdr14="http://schemas.microsoft.com/office/drawing/2010/spreadsheetDrawing" id="{11111111-2222-3333-4444-555555555555}"/></xdr:ext></xdr:extLst>"#
+                        .to_string()
+                ],
                 name: Some("Embedded Revenue Chart".to_string()),
                 from: Some(DrawingCellMarkerSummary {
                     col: Some(0),
@@ -20373,6 +20417,13 @@ mod tests {
         assert_eq!(
             chart_object.client_data_xml.as_deref(),
             Some(r#"<xdr:clientData fLocksWithSheet="1" fPrintsWithSheet="0"/>"#)
+        );
+        assert_eq!(
+            chart_object.anchor_extension_xmls,
+            vec![
+                r#"<xdr:extLst><xdr:ext uri="urn:anchor"><xdr14:creationId xmlns:xdr14="http://schemas.microsoft.com/office/drawing/2010/spreadsheetDrawing" id="{11111111-2222-3333-4444-555555555555}"/></xdr:ext></xdr:extLst>"#
+                    .to_string()
+            ]
         );
         assert_eq!(chart_object.name, "Embedded Revenue Chart");
         assert_eq!(chart_object.placement, ObjectPlacement::MoveAndSize);
