@@ -3308,11 +3308,52 @@ impl ExcelRuntime {
             RuntimeObjectKind::ChartArea { .. }
             | RuntimeObjectKind::PlotArea { .. }
             | RuntimeObjectKind::ChartGroups { .. }
-            | RuntimeObjectKind::ChartGroup { .. }
             | RuntimeObjectKind::Axes { .. }
             | RuntimeObjectKind::SeriesCollection { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
             ))),
+            RuntimeObjectKind::ChartGroup {
+                workbook,
+                chart_id,
+                group_index,
+            } => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "ChartGroup.{member} does not accept index arguments"
+                    )));
+                }
+                match member {
+                    "AxisGroup" => {
+                        let OmValue::Number(number) = value else {
+                            return Err(OmError::type_mismatch(
+                                "ChartGroup.AxisGroup expects an XlAxisGroup numeric value",
+                            ));
+                        };
+                        if !number.is_finite()
+                            || number.fract() != 0.0
+                            || number < i32::MIN as f64
+                            || number > i32::MAX as f64
+                        {
+                            return Err(OmError::invalid_argument(
+                                "ChartGroup.AxisGroup expects an integral XlAxisGroup value",
+                            ));
+                        }
+                        self.chart_group_model(workbook, chart_id, group_index)?;
+                        match number as i32 {
+                            value if value == XL_PRIMARY as i32 => Ok(()),
+                            value if value == XL_SECONDARY as i32 => Err(OmError::unsupported(
+                                "ChartGroup.AxisGroup secondary axes are not supported yet",
+                            )),
+                            _ => Err(OmError::invalid_argument(
+                                "ChartGroup.AxisGroup supports xlPrimary and xlSecondary",
+                            )),
+                        }
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "ChartGroup.{member} is not writable"
+                    ))),
+                }
+            }
             RuntimeObjectKind::Chart { workbook, chart_id } => {
                 if member != "HasAxis" && !args.is_empty() {
                     return Err(OmError::invalid_argument(format!(
@@ -8618,6 +8659,7 @@ impl ExcelRuntime {
                         "ChartGroup",
                         "ChartType"
                             | "Index"
+                            | "AxisGroup"
                             | "SeriesCollection"
                             | "Creator"
                             | "Application"
@@ -11571,6 +11613,7 @@ impl ExcelRuntime {
                         &chart.chart_type,
                     )?))),
                     "Index" => Ok(OmValue::Number((group_index + 1) as f64)),
+                    "AxisGroup" => Ok(OmValue::Number(f64::from(XL_PRIMARY))),
                     "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
                     "Application" => Ok(OmValue::Object(self.root_application())),
                     "Parent" => Ok(OmValue::Object(
@@ -73671,6 +73714,35 @@ mod tests {
             ),
             f64::from(super::XL_BAR_CLUSTERED)
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_group, "AxisGroup", &[])
+                    .expect("ChartGroup.AxisGroup")
+            ),
+            f64::from(super::XL_PRIMARY)
+        );
+        runtime
+            .dispatch_set(
+                chart_group,
+                "AxisGroup",
+                OmValue::Number(f64::from(super::XL_PRIMARY)),
+                &[],
+            )
+            .expect("set ChartGroup.AxisGroup xlPrimary");
+        let secondary_chart_group_axis = runtime
+            .dispatch_set(
+                chart_group,
+                "AxisGroup",
+                OmValue::Number(f64::from(super::XL_SECONDARY)),
+                &[],
+            )
+            .expect_err("secondary ChartGroup.AxisGroup should be unsupported");
+        assert_eq!(secondary_chart_group_axis.code, OmErrorCode::Unsupported);
+        let invalid_chart_group_axis = runtime
+            .dispatch_set(chart_group, "AxisGroup", OmValue::Number(3.0), &[])
+            .expect_err("invalid ChartGroup.AxisGroup should fail");
+        assert_eq!(invalid_chart_group_axis.code, OmErrorCode::InvalidArgument);
         assert_eq!(
             expect_object_handle(
                 runtime
