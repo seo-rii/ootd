@@ -7135,6 +7135,38 @@ impl ExcelRuntime {
                     validate_optional_integer_arg(args, 1, "Chart.ApplyLayout ChartType")?;
                     Ok(OmValue::Empty)
                 }
+                "ApplyDataLabels" => {
+                    if args.len() > 10 {
+                        return Err(OmError::invalid_argument(
+                            "Chart.ApplyDataLabels accepts at most Type, LegendKey, AutoText, HasLeaderLines, ShowSeriesName, ShowCategoryName, ShowValue, ShowPercentage, ShowBubbleSize, and Separator arguments",
+                        ));
+                    }
+                    self.chart_model(workbook, chart_id)?;
+                    validate_optional_integer_arg(args, 0, "Chart.ApplyDataLabels Type")?;
+                    for (index, label) in [
+                        (1, "Chart.ApplyDataLabels LegendKey"),
+                        (2, "Chart.ApplyDataLabels AutoText"),
+                        (3, "Chart.ApplyDataLabels HasLeaderLines"),
+                        (4, "Chart.ApplyDataLabels ShowSeriesName"),
+                        (5, "Chart.ApplyDataLabels ShowCategoryName"),
+                        (6, "Chart.ApplyDataLabels ShowValue"),
+                        (7, "Chart.ApplyDataLabels ShowPercentage"),
+                        (8, "Chart.ApplyDataLabels ShowBubbleSize"),
+                    ] {
+                        if let Some(value) = args.get(index) {
+                            coerce_optional_bool_arg(value, false, label)?;
+                        }
+                    }
+                    if let Some(value) = args.get(9)
+                        && !om_value_is_omitted(value)
+                        && !matches!(value, OmValue::Text(_))
+                    {
+                        return Err(OmError::type_mismatch(
+                            "Chart.ApplyDataLabels Separator expects a text value when provided",
+                        ));
+                    }
+                    Ok(OmValue::Empty)
+                }
                 "ApplyChartTemplate" => {
                     let [file_name] = args else {
                         return Err(OmError::invalid_argument(
@@ -7170,6 +7202,45 @@ impl ExcelRuntime {
                         return Err(OmError::invalid_argument(
                             "Chart.SaveChartTemplate FileName must not be empty",
                         ));
+                    }
+                    Ok(OmValue::Empty)
+                }
+                "SetDefaultChart" => {
+                    let [name] = args else {
+                        return Err(OmError::invalid_argument(
+                            "Chart.SetDefaultChart expects a single Name argument",
+                        ));
+                    };
+                    self.chart_model(workbook, chart_id)?;
+                    match name {
+                        OmValue::Text(name) => {
+                            if name.is_empty() {
+                                return Err(OmError::invalid_argument(
+                                    "Chart.SetDefaultChart Name must not be empty",
+                                ));
+                            }
+                        }
+                        OmValue::Number(number) => {
+                            if !number.is_finite()
+                                || number.fract() != 0.0
+                                || *number < i32::MIN as f64
+                                || *number > i32::MAX as f64
+                            {
+                                return Err(OmError::invalid_argument(
+                                    "Chart.SetDefaultChart Name numeric value must be an integer Excel constant",
+                                ));
+                            }
+                        }
+                        OmValue::Missing | OmValue::Empty | OmValue::Null => {
+                            return Err(OmError::invalid_argument(
+                                "Chart.SetDefaultChart Name is required",
+                            ));
+                        }
+                        _ => {
+                            return Err(OmError::type_mismatch(
+                                "Chart.SetDefaultChart Name expects a text value or numeric Excel constant",
+                            ));
+                        }
                     }
                     Ok(OmValue::Empty)
                 }
@@ -8258,8 +8329,10 @@ impl ExcelRuntime {
                             | "ClearToMatchColorStyle"
                             | "ClearToMatchStyle"
                             | "ApplyLayout"
+                            | "ApplyDataLabels"
                             | "ApplyChartTemplate"
                             | "SaveChartTemplate"
+                            | "SetDefaultChart"
                             | "SetBackgroundPicture"
                             | "Paste"
                             | "CopyPicture"
@@ -74582,6 +74655,27 @@ mod tests {
             runtime
                 .dispatch_invoke(
                     chart,
+                    "ApplyDataLabels",
+                    &[
+                        OmValue::Number(4.0),
+                        OmValue::Bool(true),
+                        OmValue::Bool(false),
+                        OmValue::Bool(true),
+                        OmValue::Bool(false),
+                        OmValue::Bool(true),
+                        OmValue::Bool(true),
+                        OmValue::Bool(false),
+                        OmValue::Bool(false),
+                        OmValue::Text(", ".to_string()),
+                    ],
+                )
+                .expect("Chart.ApplyDataLabels"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
                     "ApplyChartTemplate",
                     &[OmValue::Text("standard.crtx".to_string())],
                 )
@@ -74596,6 +74690,22 @@ mod tests {
                     &[OmValue::Text("presentation chart.crtx".to_string())],
                 )
                 .expect("Chart.SaveChartTemplate"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "SetDefaultChart",
+                    &[OmValue::Text("Monthly Sales".to_string())],
+                )
+                .expect("Chart.SetDefaultChart text"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "SetDefaultChart", &[OmValue::Number(-4102.0)])
+                .expect("Chart.SetDefaultChart built-in constant"),
             OmValue::Empty
         );
         assert_eq!(
@@ -74792,6 +74902,73 @@ mod tests {
         );
         assert_eq!(
             runtime
+                .dispatch_invoke(
+                    chart,
+                    "ApplyDataLabels",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                    ],
+                )
+                .expect_err("Chart.ApplyDataLabels rejects too many arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "ApplyDataLabels",
+                    &[OmValue::Text("bad".to_string())]
+                )
+                .expect_err("Chart.ApplyDataLabels rejects non-numeric Type")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "ApplyDataLabels",
+                    &[OmValue::Missing, OmValue::Text("bad".to_string())],
+                )
+                .expect_err("Chart.ApplyDataLabels rejects non-bool LegendKey")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "ApplyDataLabels",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                    ],
+                )
+                .expect_err("Chart.ApplyDataLabels rejects non-text Separator")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
                 .dispatch_invoke(chart, "ApplyChartTemplate", &[])
                 .expect_err("Chart.ApplyChartTemplate requires FileName")
                 .code,
@@ -74831,6 +75008,41 @@ mod tests {
                 .expect_err("Chart.SaveChartTemplate rejects empty FileName")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "SetDefaultChart", &[])
+                .expect_err("Chart.SetDefaultChart requires Name")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "SetDefaultChart", &[OmValue::Missing])
+                .expect_err("Chart.SetDefaultChart rejects omitted Name")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "SetDefaultChart", &[OmValue::Text(String::new())])
+                .expect_err("Chart.SetDefaultChart rejects empty Name")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "SetDefaultChart", &[OmValue::Number(1.5)])
+                .expect_err("Chart.SetDefaultChart rejects fractional constant")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "SetDefaultChart", &[OmValue::Bool(true)])
+                .expect_err("Chart.SetDefaultChart rejects invalid Name type")
+                .code,
+            OmErrorCode::TypeMismatch
         );
         assert_eq!(
             runtime
