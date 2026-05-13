@@ -2704,6 +2704,57 @@ impl ExcelRuntime {
                             ))
                         }
                     }
+                    "OnAction" => {
+                        let OmValue::Text(on_action) = value else {
+                            return Err(OmError::type_mismatch(
+                                "ChartObject.OnAction expects a string value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let mut found = false;
+                        let mut workbook_dirty = false;
+                        for drawing in runtime.loaded.state.drawings.values_mut() {
+                            for object in &mut drawing.objects {
+                                let DrawingObjectModel::ChartFrame(chart_object) = object else {
+                                    continue;
+                                };
+                                if chart_object.id != chart_object_id {
+                                    continue;
+                                }
+                                found = true;
+                                if chart_object.graphic_frame_attrs.get("macro") != Some(&on_action)
+                                {
+                                    chart_object
+                                        .graphic_frame_attrs
+                                        .insert("macro".to_string(), on_action.clone());
+                                    chart_object.dirty = true;
+                                    drawing.dirty = true;
+                                    workbook_dirty = true;
+                                }
+                                break;
+                            }
+                            if found {
+                                break;
+                            }
+                        }
+                        if workbook_dirty {
+                            runtime.dirty = true;
+                        }
+                        if found {
+                            Ok(())
+                        } else {
+                            Err(OmError::new(
+                                OmErrorCode::NotFound,
+                                "chart object not found",
+                            ))
+                        }
+                    }
                     _ => Err(OmError::unsupported(format!(
                         "ChartObject.{member} is not writable"
                     ))),
@@ -7275,6 +7326,7 @@ impl ExcelRuntime {
                             | "Width"
                             | "Height"
                             | "Visible"
+                            | "OnAction"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -9453,6 +9505,13 @@ impl ExcelRuntime {
                     });
                 Ok(OmValue::Bool(visible))
             }
+            "OnAction" => Ok(OmValue::Text(
+                self.chart_object_model(workbook, chart_object_id)?
+                    .graphic_frame_attrs
+                    .get("macro")
+                    .cloned()
+                    .unwrap_or_default(),
+            )),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Left" | "Top" | "Width" | "Height" => {
                 Ok(OmValue::Number(Self::chart_object_geometry_value(
@@ -70281,6 +70340,109 @@ mod tests {
     }
 
     #[test]
+    fn chartobject_onaction_roundtrips_graphic_frame_macro_attr() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(chart_object, "OnAction", &[])
+                    .expect("initial ChartObject.OnAction")
+            ),
+            ""
+        );
+        runtime
+            .dispatch_set(
+                chart_object,
+                "OnAction",
+                OmValue::Text("Book1.xlsm!RefreshChart".to_string()),
+                &[],
+            )
+            .expect("set ChartObject.OnAction");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(chart_object, "OnAction", &[])
+                    .expect("ChartObject.OnAction after set")
+            ),
+            "Book1.xlsm!RefreshChart"
+        );
+        let macro_bytes = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save chart object macro");
+        let macro_package = OpcPackage::from_bytes(&macro_bytes).expect("macro package");
+        let macro_drawing = String::from_utf8(
+            macro_package
+                .part("xl/drawings/drawing1.xml")
+                .expect("macro drawing part")
+                .bytes
+                .clone(),
+        )
+        .expect("macro drawing utf8");
+        assert!(macro_drawing.contains(r#"macro="Book1.xlsm!RefreshChart""#));
+        assert!(macro_drawing.contains(r#"fPublished="0""#));
+
+        runtime
+            .dispatch_set(chart_object, "OnAction", OmValue::Text(String::new()), &[])
+            .expect("clear ChartObject.OnAction");
+        let cleared_bytes = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save cleared chart object macro");
+        let cleared_package = OpcPackage::from_bytes(&cleared_bytes).expect("cleared package");
+        let cleared_drawing = String::from_utf8(
+            cleared_package
+                .part("xl/drawings/drawing1.xml")
+                .expect("cleared drawing part")
+                .bytes
+                .clone(),
+        )
+        .expect("cleared drawing utf8");
+        assert!(cleared_drawing.contains(r#"macro="""#));
+
+        let invalid_on_action = runtime
+            .dispatch_set(chart_object, "OnAction", OmValue::Bool(true), &[])
+            .expect_err("ChartObject.OnAction should reject non-string");
+        assert_eq!(invalid_on_action.code, OmErrorCode::TypeMismatch);
+    }
+
+    #[test]
     fn worksheet_chartobjects_dispatch_reads_loaded_embedded_chart_models() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -70414,6 +70576,14 @@ mod tests {
                 .dispatch_get(chart_object, "Visible", &[])
                 .expect("ChartObject.Visible"),
             OmValue::Bool(false)
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(chart_object, "OnAction", &[])
+                    .expect("ChartObject.OnAction")
+            ),
+            ""
         );
         runtime
             .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])

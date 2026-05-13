@@ -1294,6 +1294,27 @@ impl XlsxCodec {
                  -> OmResult<Option<BytesStart<'static>>> {
                     let element_name = element.name();
                     let local_name = xml_local_name(element_name.as_ref());
+                    if local_name == b"graphicFrame" {
+                        let mut rewritten = BytesStart::new(
+                            String::from_utf8_lossy(element.name().as_ref()).into_owned(),
+                        );
+                        let mut written_preserved_attrs = BTreeSet::new();
+                        for attr in element.attributes() {
+                            let attr = attr.map_err(xml_error)?;
+                            let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+                            if let Some(value) = chart_object.graphic_frame_attrs.get(&key) {
+                                rewritten.push_attribute((key.as_str(), value.as_str()));
+                                written_preserved_attrs.insert(key);
+                            }
+                        }
+                        for (key, value) in &chart_object.graphic_frame_attrs {
+                            if written_preserved_attrs.contains(key) {
+                                continue;
+                            }
+                            rewritten.push_attribute((key.as_str(), value.as_str()));
+                        }
+                        return Ok(Some(rewritten));
+                    }
                     if local_name == b"cNvPr" {
                         let mut rewritten = BytesStart::new(
                             String::from_utf8_lossy(element.name().as_ref()).into_owned(),
