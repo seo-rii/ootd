@@ -290,6 +290,15 @@ struct RuntimeClipboard {
     rect: Rect,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct RuntimeChartProtection {
+    drawing_objects: bool,
+    contents: bool,
+    data: bool,
+    formatting: bool,
+    selection: bool,
+}
+
 #[derive(Debug, Clone)]
 struct RuntimeFindState {
     workbook: WorkbookHandle,
@@ -461,6 +470,7 @@ pub struct ExcelRuntime {
     workbooks: BTreeMap<u64, RuntimeWorkbook>,
     objects: BTreeMap<u64, RuntimeObjectKind>,
     stale_objects: BTreeSet<u64>,
+    chart_protections: BTreeMap<(WorkbookHandle, ChartId), RuntimeChartProtection>,
 }
 
 impl ExcelRuntime {
@@ -506,6 +516,7 @@ impl ExcelRuntime {
             workbooks: BTreeMap::new(),
             objects,
             stale_objects: BTreeSet::new(),
+            chart_protections: BTreeMap::new(),
         }
     }
 
@@ -3387,6 +3398,25 @@ impl ExcelRuntime {
                         }
                         if stale_axis_handles {
                             self.stale_axis_handles_for_chart(workbook, chart_id);
+                        }
+                        Ok(())
+                    }
+                    "ProtectData" | "ProtectFormatting" | "ProtectSelection" => {
+                        self.chart_model(workbook, chart_id)?;
+                        let OmValue::Bool(protected) = value else {
+                            return Err(OmError::type_mismatch(format!(
+                                "Chart.{member} expects a boolean value"
+                            )));
+                        };
+                        let state = self
+                            .chart_protections
+                            .entry((workbook, chart_id))
+                            .or_default();
+                        match member {
+                            "ProtectData" => state.data = protected,
+                            "ProtectFormatting" => state.formatting = protected,
+                            "ProtectSelection" => state.selection = protected,
+                            _ => unreachable!("chart protection setter was matched"),
                         }
                         Ok(())
                     }
@@ -6913,236 +6943,289 @@ impl ExcelRuntime {
                     "ChartObject.{member} is not implemented as a method"
                 ))),
             },
-            RuntimeObjectKind::Chart { workbook, chart_id } => {
-                match member {
-                    "Activate" | "Select" => {
-                        if !args.is_empty() {
-                            return Err(OmError::invalid_argument(format!(
-                                "Chart.{member} does not accept arguments"
-                            )));
-                        }
-                        if let Some(sheet_id) = self.chart_sheet_id_for_chart(workbook, chart_id)? {
-                            let operation = format!("Chart.{member}");
-                            self.ensure_worksheet_visible(workbook, sheet_id, operation.as_str())?;
-                            self.set_selection(workbook, sheet_id, Rect::single_cell(1, 1));
-                            return Ok(OmValue::Empty);
-                        };
-                        let Some(sheet_id) = self
+            RuntimeObjectKind::Chart { workbook, chart_id } => match member {
+                "Activate" | "Select" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(format!(
+                            "Chart.{member} does not accept arguments"
+                        )));
+                    }
+                    if let Some(sheet_id) = self.chart_sheet_id_for_chart(workbook, chart_id)? {
+                        let operation = format!("Chart.{member}");
+                        self.ensure_worksheet_visible(workbook, sheet_id, operation.as_str())?;
+                        self.set_selection(workbook, sheet_id, Rect::single_cell(1, 1));
+                        return Ok(OmValue::Empty);
+                    };
+                    let Some(sheet_id) = self
+                        .runtime_workbook(workbook)?
+                        .loaded
+                        .state
+                        .drawings
+                        .values()
+                        .find_map(|drawing| {
+                            drawing
+                                .objects
+                                .iter()
+                                .any(|object| match object {
+                                    DrawingObjectModel::ChartFrame(chart_object) => {
+                                        chart_object.chart_id == chart_id
+                                    }
+                                    DrawingObjectModel::UnsupportedRaw { .. } => false,
+                                })
+                                .then_some(drawing.host_sheet_id)
+                        })
+                    else {
+                        return Err(OmError::new(OmErrorCode::NotFound, "chart not found"));
+                    };
+                    let operation = format!("Chart.{member}");
+                    self.ensure_worksheet_visible(workbook, sheet_id, operation.as_str())?;
+                    self.set_selection(workbook, sheet_id, Rect::single_cell(1, 1));
+                    self.active_chart = Some((workbook, chart_id));
+                    Ok(OmValue::Empty)
+                }
+                "Protect" => {
+                    if args.len() > 5 {
+                        return Err(OmError::invalid_argument(
+                            "Chart.Protect accepts at most Password, DrawingObjects, Contents, Scenarios, and UserInterfaceOnly arguments",
+                        ));
+                    }
+                    self.chart_model(workbook, chart_id)?;
+                    let drawing_objects = args
+                        .get(1)
+                        .map(|value| {
+                            coerce_optional_bool_arg(value, true, "Chart.Protect DrawingObjects")
+                        })
+                        .transpose()?
+                        .unwrap_or(true);
+                    let contents = args
+                        .get(2)
+                        .map(|value| {
+                            coerce_optional_bool_arg(value, true, "Chart.Protect Contents")
+                        })
+                        .transpose()?
+                        .unwrap_or(true);
+                    if let Some(value) = args.get(3) {
+                        coerce_optional_bool_arg(value, true, "Chart.Protect Scenarios")?;
+                    }
+                    if let Some(value) = args.get(4) {
+                        coerce_optional_bool_arg(value, false, "Chart.Protect UserInterfaceOnly")?;
+                    }
+                    let state = self
+                        .chart_protections
+                        .entry((workbook, chart_id))
+                        .or_default();
+                    state.drawing_objects = drawing_objects;
+                    state.contents = contents;
+                    Ok(OmValue::Empty)
+                }
+                "Unprotect" => {
+                    if args.len() > 1 {
+                        return Err(OmError::invalid_argument(
+                            "Chart.Unprotect accepts at most a Password argument",
+                        ));
+                    }
+                    self.chart_model(workbook, chart_id)?;
+                    let state = self
+                        .chart_protections
+                        .entry((workbook, chart_id))
+                        .or_default();
+                    state.drawing_objects = false;
+                    state.contents = false;
+                    Ok(OmValue::Empty)
+                }
+                "Delete" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "Chart.Delete does not accept arguments",
+                        ));
+                    }
+                    let Some(sheet_id) = self.chart_sheet_id_for_chart(workbook, chart_id)? else {
+                        let chart_object_id = self
                             .runtime_workbook(workbook)?
                             .loaded
                             .state
                             .drawings
                             .values()
-                            .find_map(|drawing| {
-                                drawing
-                                    .objects
-                                    .iter()
-                                    .any(|object| match object {
-                                        DrawingObjectModel::ChartFrame(chart_object) => {
-                                            chart_object.chart_id == chart_id
-                                        }
-                                        DrawingObjectModel::UnsupportedRaw { .. } => false,
-                                    })
-                                    .then_some(drawing.host_sheet_id)
-                            })
-                        else {
-                            return Err(OmError::new(OmErrorCode::NotFound, "chart not found"));
-                        };
-                        let operation = format!("Chart.{member}");
-                        self.ensure_worksheet_visible(workbook, sheet_id, operation.as_str())?;
-                        self.set_selection(workbook, sheet_id, Rect::single_cell(1, 1));
-                        self.active_chart = Some((workbook, chart_id));
-                        Ok(OmValue::Empty)
-                    }
-                    "Delete" => {
-                        if !args.is_empty() {
-                            return Err(OmError::invalid_argument(
-                                "Chart.Delete does not accept arguments",
-                            ));
-                        }
-                        let Some(sheet_id) = self.chart_sheet_id_for_chart(workbook, chart_id)?
-                        else {
-                            let chart_object_id = self
-                                .runtime_workbook(workbook)?
-                                .loaded
-                                .state
-                                .drawings
-                                .values()
-                                .flat_map(|drawing| drawing.objects.iter())
-                                .find_map(|object| match object {
-                                    DrawingObjectModel::ChartFrame(chart_object)
-                                        if chart_object.chart_id == chart_id =>
-                                    {
-                                        Some(chart_object.id)
-                                    }
-                                    DrawingObjectModel::ChartFrame(_)
-                                    | DrawingObjectModel::UnsupportedRaw { .. } => None,
-                                })
-                                .ok_or_else(|| {
-                                    OmError::new(OmErrorCode::NotFound, "chart not found")
-                                })?;
-                            return Ok(OmValue::Bool(
-                                self.delete_chart_object(workbook, chart_object_id)?,
-                            ));
-                        };
-                        Ok(OmValue::Bool(
-                            self.delete_worksheet(workbook, sheet_id, true)?,
-                        ))
-                    }
-                    "SetSourceData" => {
-                        if args.is_empty() || args.len() > 2 {
-                            return Err(OmError::invalid_argument(
-                                "Chart.SetSourceData expects Source and optional PlotBy arguments",
-                            ));
-                        }
-                        let plot_by = match args.get(1) {
-                            None => None,
-                            Some(value) if om_value_is_omitted(value) => None,
-                            Some(OmValue::Number(number)) => {
-                                if !number.is_finite()
-                                    || number.fract() != 0.0
-                                    || *number < i32::MIN as f64
-                                    || *number > i32::MAX as f64
+                            .flat_map(|drawing| drawing.objects.iter())
+                            .find_map(|object| match object {
+                                DrawingObjectModel::ChartFrame(chart_object)
+                                    if chart_object.chart_id == chart_id =>
                                 {
-                                    return Err(OmError::invalid_argument(
-                                        "Chart.SetSourceData PlotBy expects an integer value when provided",
-                                    ));
+                                    Some(chart_object.id)
                                 }
-                                let plot_by = *number as i32;
-                                if !matches!(plot_by, XL_PLOT_BY_ROWS | XL_PLOT_BY_COLUMNS) {
-                                    return Err(OmError::invalid_argument(
-                                        "Chart.SetSourceData PlotBy supports xlRows and xlColumns",
-                                    ));
-                                }
-                                Some(plot_by)
-                            }
-                            Some(_) => {
-                                return Err(OmError::type_mismatch(
-                                    "Chart.SetSourceData PlotBy expects a numeric value when provided",
+                                DrawingObjectModel::ChartFrame(_)
+                                | DrawingObjectModel::UnsupportedRaw { .. } => None,
+                            })
+                            .ok_or_else(|| {
+                                OmError::new(OmErrorCode::NotFound, "chart not found")
+                            })?;
+                        return Ok(OmValue::Bool(
+                            self.delete_chart_object(workbook, chart_object_id)?,
+                        ));
+                    };
+                    Ok(OmValue::Bool(
+                        self.delete_worksheet(workbook, sheet_id, true)?,
+                    ))
+                }
+                "SetSourceData" => {
+                    if args.is_empty() || args.len() > 2 {
+                        return Err(OmError::invalid_argument(
+                            "Chart.SetSourceData expects Source and optional PlotBy arguments",
+                        ));
+                    }
+                    let plot_by = match args.get(1) {
+                        None => None,
+                        Some(value) if om_value_is_omitted(value) => None,
+                        Some(OmValue::Number(number)) => {
+                            if !number.is_finite()
+                                || number.fract() != 0.0
+                                || *number < i32::MIN as f64
+                                || *number > i32::MAX as f64
+                            {
+                                return Err(OmError::invalid_argument(
+                                    "Chart.SetSourceData PlotBy expects an integer value when provided",
                                 ));
                             }
-                        };
-                        let (source_sheet_id, source_rect) = match &args[0] {
-                            OmValue::Object(handle) => match self.runtime_object(*handle)? {
-                                RuntimeObjectKind::Range {
-                                    workbook: range_workbook,
-                                    range,
-                                    ..
-                                } => {
-                                    if range_workbook != workbook {
-                                        return Err(OmError::unsupported(
-                                            "Chart.SetSourceData cross-workbook ranges are not supported",
-                                        ));
-                                    }
-                                    Self::range_set_single_area(&range)?
-                                }
-                                _ => {
-                                    return Err(OmError::type_mismatch(
-                                        "Chart.SetSourceData Source expects a Range object",
+                            let plot_by = *number as i32;
+                            if !matches!(plot_by, XL_PLOT_BY_ROWS | XL_PLOT_BY_COLUMNS) {
+                                return Err(OmError::invalid_argument(
+                                    "Chart.SetSourceData PlotBy supports xlRows and xlColumns",
+                                ));
+                            }
+                            Some(plot_by)
+                        }
+                        Some(_) => {
+                            return Err(OmError::type_mismatch(
+                                "Chart.SetSourceData PlotBy expects a numeric value when provided",
+                            ));
+                        }
+                    };
+                    let (source_sheet_id, source_rect) = match &args[0] {
+                        OmValue::Object(handle) => match self.runtime_object(*handle)? {
+                            RuntimeObjectKind::Range {
+                                workbook: range_workbook,
+                                range,
+                                ..
+                            } => {
+                                if range_workbook != workbook {
+                                    return Err(OmError::unsupported(
+                                        "Chart.SetSourceData cross-workbook ranges are not supported",
                                     ));
                                 }
-                            },
+                                Self::range_set_single_area(&range)?
+                            }
                             _ => {
                                 return Err(OmError::type_mismatch(
                                     "Chart.SetSourceData Source expects a Range object",
                                 ));
                             }
-                        };
-                        let worksheet_name = self
-                            .worksheet_model(workbook, source_sheet_id)?
-                            .name
-                            .clone();
-                        let workbook_id = self.workbook_model(workbook)?.id;
-                        let mut new_series = Vec::new();
-                        match plot_by {
-                            Some(XL_PLOT_BY_ROWS) => {
-                                for (index, row) in
-                                    (source_rect.row_first..=source_rect.row_last).enumerate()
-                                {
-                                    let values_rect = Rect {
-                                        row_first: row,
-                                        row_last: row,
-                                        col_first: source_rect.col_first,
-                                        col_last: source_rect.col_last,
-                                    };
-                                    new_series.push(SeriesModel {
-                                        name: None,
-                                        x_values: None,
-                                        values: Some(chart_source_expr_for_range(
-                                            workbook_id,
-                                            source_sheet_id,
-                                            values_rect,
-                                            &worksheet_name,
-                                        )?),
-                                        order: u32::try_from(index).ok(),
-                                    });
-                                }
-                            }
-                            Some(XL_PLOT_BY_COLUMNS) => {
-                                for (index, col) in
-                                    (source_rect.col_first..=source_rect.col_last).enumerate()
-                                {
-                                    let values_rect = Rect {
-                                        row_first: source_rect.row_first,
-                                        row_last: source_rect.row_last,
-                                        col_first: col,
-                                        col_last: col,
-                                    };
-                                    new_series.push(SeriesModel {
-                                        name: None,
-                                        x_values: None,
-                                        values: Some(chart_source_expr_for_range(
-                                            workbook_id,
-                                            source_sheet_id,
-                                            values_rect,
-                                            &worksheet_name,
-                                        )?),
-                                        order: u32::try_from(index).ok(),
-                                    });
-                                }
-                            }
-                            Some(_) => unreachable!("unsupported PlotBy was rejected"),
-                            None => {
+                        },
+                        _ => {
+                            return Err(OmError::type_mismatch(
+                                "Chart.SetSourceData Source expects a Range object",
+                            ));
+                        }
+                    };
+                    let worksheet_name = self
+                        .worksheet_model(workbook, source_sheet_id)?
+                        .name
+                        .clone();
+                    let workbook_id = self.workbook_model(workbook)?.id;
+                    let mut new_series = Vec::new();
+                    match plot_by {
+                        Some(XL_PLOT_BY_ROWS) => {
+                            for (index, row) in
+                                (source_rect.row_first..=source_rect.row_last).enumerate()
+                            {
+                                let values_rect = Rect {
+                                    row_first: row,
+                                    row_last: row,
+                                    col_first: source_rect.col_first,
+                                    col_last: source_rect.col_last,
+                                };
                                 new_series.push(SeriesModel {
                                     name: None,
                                     x_values: None,
                                     values: Some(chart_source_expr_for_range(
                                         workbook_id,
                                         source_sheet_id,
-                                        source_rect,
+                                        values_rect,
                                         &worksheet_name,
                                     )?),
-                                    order: Some(0),
+                                    order: u32::try_from(index).ok(),
                                 });
                             }
                         }
-                        {
-                            let runtime = self.runtime_workbook_mut(workbook)?;
-                            if runtime.read_only {
-                                return Err(OmError::new(
-                                    OmErrorCode::InvalidState,
-                                    "cannot modify a read-only workbook",
-                                ));
+                        Some(XL_PLOT_BY_COLUMNS) => {
+                            for (index, col) in
+                                (source_rect.col_first..=source_rect.col_last).enumerate()
+                            {
+                                let values_rect = Rect {
+                                    row_first: source_rect.row_first,
+                                    row_last: source_rect.row_last,
+                                    col_first: col,
+                                    col_last: col,
+                                };
+                                new_series.push(SeriesModel {
+                                    name: None,
+                                    x_values: None,
+                                    values: Some(chart_source_expr_for_range(
+                                        workbook_id,
+                                        source_sheet_id,
+                                        values_rect,
+                                        &worksheet_name,
+                                    )?),
+                                    order: u32::try_from(index).ok(),
+                                });
                             }
-                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
-                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
-                            )?;
-                            chart.series = new_series;
-                            chart.dirty = true;
-                            runtime.dirty = true;
                         }
-                        self.stale_series_handles_for_chart(workbook, chart_id);
-                        Ok(OmValue::Empty)
+                        Some(_) => unreachable!("unsupported PlotBy was rejected"),
+                        None => {
+                            new_series.push(SeriesModel {
+                                name: None,
+                                x_values: None,
+                                values: Some(chart_source_expr_for_range(
+                                    workbook_id,
+                                    source_sheet_id,
+                                    source_rect,
+                                    &worksheet_name,
+                                )?),
+                                order: Some(0),
+                            });
+                        }
                     }
-                    "Axes" => self.dispatch_get_chart(workbook, chart_id, "Axes", args),
-                    "SeriesCollection" | "FullSeriesCollection" => {
-                        self.dispatch_get_chart(workbook, chart_id, member, args)
+                    {
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        chart.series = new_series;
+                        chart.dirty = true;
+                        runtime.dirty = true;
                     }
-                    _ => Err(OmError::unsupported(format!(
-                        "Chart.{member} is not implemented as a method"
-                    ))),
+                    self.stale_series_handles_for_chart(workbook, chart_id);
+                    Ok(OmValue::Empty)
                 }
-            }
+                "Axes" => self.dispatch_get_chart(workbook, chart_id, "Axes", args),
+                "SeriesCollection" | "FullSeriesCollection" => {
+                    self.dispatch_get_chart(workbook, chart_id, member, args)
+                }
+                _ => Err(OmError::unsupported(format!(
+                    "Chart.{member} is not implemented as a method"
+                ))),
+            },
             RuntimeObjectKind::Axes { workbook, chart_id } => {
                 self.dispatch_invoke_axes(workbook, chart_id, member, args)
             }
@@ -7546,6 +7629,11 @@ impl ExcelRuntime {
                             | "Index"
                             | "DisplayBlanksAs"
                             | "PlotVisibleOnly"
+                            | "ProtectContents"
+                            | "ProtectDrawingObjects"
+                            | "ProtectData"
+                            | "ProtectFormatting"
+                            | "ProtectSelection"
                             | "ChartArea"
                             | "PlotArea"
                             | "HasTitle"
@@ -7564,6 +7652,8 @@ impl ExcelRuntime {
                             | "Visible"
                             | "Activate"
                             | "Select"
+                            | "Protect"
+                            | "Unprotect"
                             | "Delete"
                     )
                     | ("ChartArea", "Creator" | "Application" | "Parent" | "Select")
@@ -9977,6 +10067,31 @@ impl ExcelRuntime {
                         .plot_visible_only
                         .unwrap_or(true),
                 ))
+            }
+            "ProtectContents"
+            | "ProtectDrawingObjects"
+            | "ProtectData"
+            | "ProtectFormatting"
+            | "ProtectSelection" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "Chart.{member} does not accept arguments"
+                    )));
+                }
+                self.chart_model(workbook, chart_id)?;
+                let protection = self
+                    .chart_protections
+                    .get(&(workbook, chart_id))
+                    .copied()
+                    .unwrap_or_default();
+                Ok(OmValue::Bool(match member {
+                    "ProtectContents" => protection.contents,
+                    "ProtectDrawingObjects" => protection.drawing_objects,
+                    "ProtectData" => protection.data,
+                    "ProtectFormatting" => protection.formatting,
+                    "ProtectSelection" => protection.selection,
+                    _ => unreachable!("chart protection getter was matched"),
+                }))
             }
             "Creator" => {
                 if !args.is_empty() {
@@ -14787,6 +14902,7 @@ impl ExcelRuntime {
     }
 
     fn stale_chart_handles_for_chart(&mut self, workbook: WorkbookHandle, chart_id: ChartId) {
+        self.chart_protections.remove(&(workbook, chart_id));
         let stale_object_ids = self
             .objects
             .iter()
@@ -72830,6 +72946,208 @@ mod tests {
             ),
             f64::from(super::XL_ZERO)
         );
+    }
+
+    #[test]
+    fn chart_protection_flags_are_runtime_only() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+
+        for member in [
+            "ProtectContents",
+            "ProtectDrawingObjects",
+            "ProtectData",
+            "ProtectFormatting",
+            "ProtectSelection",
+        ] {
+            assert_eq!(
+                runtime
+                    .dispatch_get(chart, member, &[])
+                    .unwrap_or_else(|error| panic!("Chart.{member} default failed: {error:?}")),
+                OmValue::Bool(false)
+            );
+        }
+
+        runtime
+            .dispatch_set(chart, "ProtectData", OmValue::Bool(true), &[])
+            .expect("set Chart.ProtectData");
+        runtime
+            .dispatch_set(chart, "ProtectFormatting", OmValue::Bool(true), &[])
+            .expect("set Chart.ProtectFormatting");
+        runtime
+            .dispatch_set(chart, "ProtectSelection", OmValue::Bool(true), &[])
+            .expect("set Chart.ProtectSelection");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ProtectData", &[])
+                .expect("Chart.ProtectData after set"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ProtectFormatting", &[])
+                .expect("Chart.ProtectFormatting after set"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ProtectSelection", &[])
+                .expect("Chart.ProtectSelection after set"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(chart, "ProtectData", OmValue::Number(1.0), &[])
+                .expect_err("Chart.ProtectData rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(chart, "ProtectContents", OmValue::Bool(true), &[])
+                .expect_err("Chart.ProtectContents is read-only")
+                .code,
+            OmErrorCode::Unsupported
+        );
+
+        runtime
+            .dispatch_invoke(
+                chart,
+                "Protect",
+                &[
+                    OmValue::Text("pw".to_string()),
+                    OmValue::Bool(false),
+                    OmValue::Bool(true),
+                    OmValue::Missing,
+                    OmValue::Bool(true),
+                ],
+            )
+            .expect("Chart.Protect with optional flags");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ProtectDrawingObjects", &[])
+                .expect("Chart.ProtectDrawingObjects after Protect"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ProtectContents", &[])
+                .expect("Chart.ProtectContents after Protect"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "Protect",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Text("bad".to_string()),
+                        OmValue::Missing,
+                    ],
+                )
+                .expect_err("Chart.Protect rejects non-bool DrawingObjects")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        runtime
+            .dispatch_invoke(chart, "Unprotect", &[OmValue::Text("pw".to_string())])
+            .expect("Chart.Unprotect");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ProtectDrawingObjects", &[])
+                .expect("Chart.ProtectDrawingObjects after Unprotect"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ProtectContents", &[])
+                .expect("Chart.ProtectContents after Unprotect"),
+            OmValue::Bool(false)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after transient chart protection");
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after transient chart protection");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        for member in [
+            "ProtectContents",
+            "ProtectDrawingObjects",
+            "ProtectData",
+            "ProtectFormatting",
+            "ProtectSelection",
+        ] {
+            assert_eq!(
+                reopened_runtime
+                    .dispatch_get(reopened_chart, member, &[])
+                    .unwrap_or_else(|error| {
+                        panic!("reopened Chart.{member} failed: {error:?}")
+                    }),
+                OmValue::Bool(false)
+            );
+        }
     }
 
     #[test]
