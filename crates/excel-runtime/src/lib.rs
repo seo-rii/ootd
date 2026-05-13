@@ -7373,7 +7373,16 @@ impl ExcelRuntime {
                     )
                     | (
                         "ChartObjects",
-                        "Count" | "Item" | "Creator" | "Application" | "Parent" | "Delete"
+                        "Count"
+                            | "Item"
+                            | "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Left"
+                            | "Top"
+                            | "Width"
+                            | "Height"
+                            | "Delete"
                     )
                     | (
                         "ChartObject",
@@ -9202,6 +9211,41 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Number(f64::from(XL_CREATOR_CODE)))
+            }
+            "Left" | "Top" | "Width" | "Height" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "ChartObjects.{member} does not accept arguments"
+                    )));
+                }
+                let mut bounds: Option<(f64, f64, f64, f64)> = None;
+                for (chart_object_id, _) in
+                    self.chart_object_entries_for_sheet(workbook, sheet_id)?
+                {
+                    let chart_object = self.chart_object_model(workbook, chart_object_id)?;
+                    let left = Self::chart_object_geometry_value(chart_object, "Left")?;
+                    let top = Self::chart_object_geometry_value(chart_object, "Top")?;
+                    let right = left + Self::chart_object_geometry_value(chart_object, "Width")?;
+                    let bottom = top + Self::chart_object_geometry_value(chart_object, "Height")?;
+                    bounds = Some(match bounds {
+                        Some((current_left, current_top, current_right, current_bottom)) => (
+                            current_left.min(left),
+                            current_top.min(top),
+                            current_right.max(right),
+                            current_bottom.max(bottom),
+                        ),
+                        None => (left, top, right, bottom),
+                    });
+                }
+                let value = match (member, bounds) {
+                    (_, None) => 0.0,
+                    ("Left", Some((left, _, _, _))) => left,
+                    ("Top", Some((_, top, _, _))) => top,
+                    ("Width", Some((left, _, right, _))) => right - left,
+                    ("Height", Some((_, top, _, bottom))) => bottom - top,
+                    _ => unreachable!("ChartObjects geometry member was matched"),
+                };
+                Ok(OmValue::Number(value))
             }
             _ => Err(OmError::unsupported(format!(
                 "ChartObjects.{member} is not implemented"
@@ -70773,6 +70817,38 @@ mod tests {
             ),
             f64::from(super::XL_CREATOR_CODE)
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Left", &[])
+                    .expect("ChartObjects.Left")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Top", &[])
+                    .expect("ChartObjects.Top")
+            ),
+            3.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Width", &[])
+                    .expect("ChartObjects.Width")
+            ),
+            100.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Height", &[])
+                    .expect("ChartObjects.Height")
+            ),
+            50.0
+        );
         let chart_object = expect_object_handle(
             runtime
                 .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
@@ -75439,6 +75515,38 @@ mod tests {
                 _ => None,
             });
         assert_eq!(new_z_order, Some(11));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Left", &[])
+                    .expect("multi ChartObjects.Left")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Top", &[])
+                    .expect("multi ChartObjects.Top")
+            ),
+            3.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Width", &[])
+                    .expect("multi ChartObjects.Width")
+            ),
+            202.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Height", &[])
+                    .expect("multi ChartObjects.Height")
+            ),
+            117.0
+        );
 
         let first_chart_object = expect_object_handle(
             runtime
@@ -75657,6 +75765,16 @@ mod tests {
             ),
             0.0
         );
+        for member in ["Left", "Top", "Width", "Height"] {
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(chart_objects, member, &[])
+                        .expect("empty ChartObjects geometry")
+                ),
+                0.0
+            );
+        }
 
         let chart_object = expect_object_handle(
             runtime
@@ -75679,6 +75797,38 @@ mod tests {
                     .expect("ChartObjects.Count after add")
             ),
             1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Left", &[])
+                    .expect("ChartObjects.Left after add")
+            ),
+            12.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Top", &[])
+                    .expect("ChartObjects.Top after add")
+            ),
+            18.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Width", &[])
+                    .expect("ChartObjects.Width after add")
+            ),
+            240.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Height", &[])
+                    .expect("ChartObjects.Height after add")
+            ),
+            160.0
         );
         assert_eq!(
             expect_text(
