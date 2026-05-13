@@ -11078,18 +11078,11 @@ impl ExcelRuntime {
         if let Some(value) = before.filter(|value| !om_value_is_omitted(value)) {
             let worksheet_index = match value {
                 OmValue::Object(handle) => {
-                    let RuntimeObjectKind::Worksheet {
-                        workbook: target_workbook,
-                        sheet_id,
-                    } = self.runtime_object(*handle)?
-                    else {
-                        return Err(OmError::type_mismatch(format!(
-                            "{operation} Before expects a Worksheet object, numeric index, or worksheet name when provided"
-                        )));
-                    };
+                    let (target_workbook, sheet_id) =
+                        self.placement_sheet_object(*handle, operation, "Before")?;
                     if target_workbook != workbook {
                         return Err(OmError::invalid_argument(format!(
-                            "{operation} Before worksheet must belong to the same workbook"
+                            "{operation} Before sheet must belong to the same workbook"
                         )));
                     }
                     self.runtime_workbook(workbook)?
@@ -11124,18 +11117,11 @@ impl ExcelRuntime {
         if let Some(value) = after.filter(|value| !om_value_is_omitted(value)) {
             let worksheet_index = match value {
                 OmValue::Object(handle) => {
-                    let RuntimeObjectKind::Worksheet {
-                        workbook: target_workbook,
-                        sheet_id,
-                    } = self.runtime_object(*handle)?
-                    else {
-                        return Err(OmError::type_mismatch(format!(
-                            "{operation} After expects a Worksheet object, numeric index, or worksheet name when provided"
-                        )));
-                    };
+                    let (target_workbook, sheet_id) =
+                        self.placement_sheet_object(*handle, operation, "After")?;
                     if target_workbook != workbook {
                         return Err(OmError::invalid_argument(format!(
-                            "{operation} After worksheet must belong to the same workbook"
+                            "{operation} After sheet must belong to the same workbook"
                         )));
                     }
                     self.runtime_workbook(workbook)?
@@ -11188,15 +11174,8 @@ impl ExcelRuntime {
         if let Some(value) = before.filter(|value| !om_value_is_omitted(value)) {
             let (target_workbook, worksheet_index) = match value {
                 OmValue::Object(handle) => {
-                    let RuntimeObjectKind::Worksheet {
-                        workbook: target_workbook,
-                        sheet_id,
-                    } = self.runtime_object(*handle)?
-                    else {
-                        return Err(OmError::type_mismatch(format!(
-                            "{operation} Before expects a Worksheet object, numeric index, or worksheet name when provided"
-                        )));
-                    };
+                    let (target_workbook, sheet_id) =
+                        self.placement_sheet_object(*handle, operation, "Before")?;
                     (
                         target_workbook,
                         self.runtime_workbook(target_workbook)?
@@ -11234,15 +11213,8 @@ impl ExcelRuntime {
         if let Some(value) = after.filter(|value| !om_value_is_omitted(value)) {
             let (target_workbook, worksheet_index) = match value {
                 OmValue::Object(handle) => {
-                    let RuntimeObjectKind::Worksheet {
-                        workbook: target_workbook,
-                        sheet_id,
-                    } = self.runtime_object(*handle)?
-                    else {
-                        return Err(OmError::type_mismatch(format!(
-                            "{operation} After expects a Worksheet object, numeric index, or worksheet name when provided"
-                        )));
-                    };
+                    let (target_workbook, sheet_id) =
+                        self.placement_sheet_object(*handle, operation, "After")?;
                     (
                         target_workbook,
                         self.runtime_workbook(target_workbook)?
@@ -11279,6 +11251,28 @@ impl ExcelRuntime {
         }
 
         Ok(None)
+    }
+
+    fn placement_sheet_object(
+        &self,
+        handle: ObjectHandle,
+        operation: &str,
+        position_label: &str,
+    ) -> OmResult<(WorkbookHandle, SheetId)> {
+        match self.runtime_object(handle)? {
+            RuntimeObjectKind::Worksheet { workbook, sheet_id } => Ok((workbook, sheet_id)),
+            RuntimeObjectKind::Chart { workbook, chart_id } => {
+                let Some(sheet_id) = self.chart_sheet_id_for_chart(workbook, chart_id)? else {
+                    return Err(OmError::type_mismatch(format!(
+                        "{operation} {position_label} expects a Worksheet or chart sheet object, numeric index, or worksheet name when provided"
+                    )));
+                };
+                Ok((workbook, sheet_id))
+            }
+            _ => Err(OmError::type_mismatch(format!(
+                "{operation} {position_label} expects a Worksheet or chart sheet object, numeric index, or worksheet name when provided"
+            ))),
+        }
     }
 
     fn add_worksheet(
@@ -68872,6 +68866,91 @@ mod tests {
         assert!(!saved_package.contains("xl/chartsheets/sheet2.xml"));
         assert!(!saved_package.contains("xl/charts/chart1.xml"));
         assert!(!saved_package.contains("xl/charts/chart2.xml"));
+    }
+
+    #[test]
+    fn charts_add_accepts_chart_sheet_placement_targets() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        let sheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("Workbook.Sheets"),
+        );
+        let first_chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(charts, "Add", &[])
+                .expect("first Charts.Add"),
+        );
+        let second_chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    charts,
+                    "Add",
+                    &[OmValue::Missing, OmValue::Object(first_chart)],
+                )
+                .expect("Charts.Add after chart sheet"),
+        );
+        runtime
+            .dispatch_invoke(charts, "Add", &[OmValue::Object(first_chart)])
+            .expect("Charts.Add before chart sheet");
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(sheets, "Item", &[OmValue::Number(1.0)])
+                    .and_then(|value| {
+                        let sheet = expect_object_handle(value);
+                        runtime.dispatch_get(sheet, "Name", &[])
+                    })
+                    .expect("Sheets.Item(1).Name")
+            ),
+            "Chart3"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(sheets, "Item", &[OmValue::Number(2.0)])
+                    .and_then(|value| {
+                        let sheet = expect_object_handle(value);
+                        runtime.dispatch_get(sheet, "Name", &[])
+                    })
+                    .expect("Sheets.Item(2).Name")
+            ),
+            "Chart1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(sheets, "Item", &[OmValue::Number(3.0)])
+                    .and_then(|value| {
+                        let sheet = expect_object_handle(value);
+                        runtime.dispatch_get(sheet, "Name", &[])
+                    })
+                    .expect("Sheets.Item(3).Name")
+            ),
+            "Chart2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(second_chart, "Name", &[])
+                    .expect("second Chart.Name")
+            ),
+            "Chart2"
+        );
     }
 
     #[test]
