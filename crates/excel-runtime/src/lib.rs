@@ -7110,11 +7110,11 @@ impl ExcelRuntime {
                     validate_optional_integer_arg(args, 3, "Chart.CheckSpelling SpellLang")?;
                     Ok(OmValue::Empty)
                 }
-                "ClearToMatchColorStyle" => {
+                "ClearToMatchColorStyle" | "ClearToMatchStyle" => {
                     if !args.is_empty() {
-                        return Err(OmError::invalid_argument(
-                            "Chart.ClearToMatchColorStyle does not accept arguments",
-                        ));
+                        return Err(OmError::invalid_argument(format!(
+                            "Chart.{member} does not accept arguments"
+                        )));
                     }
                     self.chart_model(workbook, chart_id)?;
                     Ok(OmValue::Empty)
@@ -7150,6 +7150,44 @@ impl ExcelRuntime {
                     if file_name.is_empty() {
                         return Err(OmError::invalid_argument(
                             "Chart.ApplyChartTemplate FileName must not be empty",
+                        ));
+                    }
+                    Ok(OmValue::Empty)
+                }
+                "SaveChartTemplate" => {
+                    let [file_name] = args else {
+                        return Err(OmError::invalid_argument(
+                            "Chart.SaveChartTemplate expects a single FileName argument",
+                        ));
+                    };
+                    self.chart_model(workbook, chart_id)?;
+                    let OmValue::Text(file_name) = file_name else {
+                        return Err(OmError::type_mismatch(
+                            "Chart.SaveChartTemplate FileName expects a text value",
+                        ));
+                    };
+                    if file_name.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "Chart.SaveChartTemplate FileName must not be empty",
+                        ));
+                    }
+                    Ok(OmValue::Empty)
+                }
+                "SetBackgroundPicture" => {
+                    let [file_name] = args else {
+                        return Err(OmError::invalid_argument(
+                            "Chart.SetBackgroundPicture expects a single FileName argument",
+                        ));
+                    };
+                    self.chart_model(workbook, chart_id)?;
+                    let OmValue::Text(file_name) = file_name else {
+                        return Err(OmError::type_mismatch(
+                            "Chart.SetBackgroundPicture FileName expects a text value",
+                        ));
+                    };
+                    if file_name.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "Chart.SetBackgroundPicture FileName must not be empty",
                         ));
                     }
                     Ok(OmValue::Empty)
@@ -8218,8 +8256,11 @@ impl ExcelRuntime {
                             | "Refresh"
                             | "CheckSpelling"
                             | "ClearToMatchColorStyle"
+                            | "ClearToMatchStyle"
                             | "ApplyLayout"
                             | "ApplyChartTemplate"
+                            | "SaveChartTemplate"
+                            | "SetBackgroundPicture"
                             | "Paste"
                             | "CopyPicture"
                             | "SetElement"
@@ -74520,6 +74561,12 @@ mod tests {
         );
         assert_eq!(
             runtime
+                .dispatch_invoke(chart, "ClearToMatchStyle", &[])
+                .expect("Chart.ClearToMatchStyle"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
                 .dispatch_invoke(
                     chart,
                     "ApplyLayout",
@@ -74539,6 +74586,26 @@ mod tests {
                     &[OmValue::Text("standard.crtx".to_string())],
                 )
                 .expect("Chart.ApplyChartTemplate"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "SaveChartTemplate",
+                    &[OmValue::Text("presentation chart.crtx".to_string())],
+                )
+                .expect("Chart.SaveChartTemplate"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "SetBackgroundPicture",
+                    &[OmValue::Text("background.png".to_string())],
+                )
+                .expect("Chart.SetBackgroundPicture"),
             OmValue::Empty
         );
         assert_eq!(
@@ -74700,6 +74767,13 @@ mod tests {
         );
         assert_eq!(
             runtime
+                .dispatch_invoke(chart, "ClearToMatchStyle", &[OmValue::Missing])
+                .expect_err("Chart.ClearToMatchStyle rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
                 .dispatch_invoke(chart, "ApplyLayout", &[OmValue::Number(0.0)])
                 .expect_err("Chart.ApplyLayout rejects out-of-range layout")
                 .code,
@@ -74734,6 +74808,52 @@ mod tests {
             runtime
                 .dispatch_invoke(chart, "ApplyChartTemplate", &[OmValue::Text(String::new())],)
                 .expect_err("Chart.ApplyChartTemplate rejects empty FileName")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "SaveChartTemplate", &[])
+                .expect_err("Chart.SaveChartTemplate requires FileName")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "SaveChartTemplate", &[OmValue::Number(1.0)])
+                .expect_err("Chart.SaveChartTemplate rejects non-text FileName")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "SaveChartTemplate", &[OmValue::Text(String::new())])
+                .expect_err("Chart.SaveChartTemplate rejects empty FileName")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "SetBackgroundPicture", &[])
+                .expect_err("Chart.SetBackgroundPicture requires FileName")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "SetBackgroundPicture", &[OmValue::Number(1.0)])
+                .expect_err("Chart.SetBackgroundPicture rejects non-text FileName")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "SetBackgroundPicture",
+                    &[OmValue::Text(String::new())],
+                )
+                .expect_err("Chart.SetBackgroundPicture rejects empty FileName")
                 .code,
             OmErrorCode::InvalidArgument
         );
