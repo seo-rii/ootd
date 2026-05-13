@@ -7154,6 +7154,68 @@ impl ExcelRuntime {
                     }
                     Ok(OmValue::Empty)
                 }
+                "Paste" => {
+                    if args.len() > 1 {
+                        return Err(OmError::invalid_argument(
+                            "Chart.Paste accepts at most a Type argument",
+                        ));
+                    }
+                    self.chart_model(workbook, chart_id)?;
+                    let paste_type = match args.first() {
+                        None => XL_PASTE_ALL,
+                        Some(value) if om_value_is_omitted(value) => XL_PASTE_ALL,
+                        Some(OmValue::Number(number)) => {
+                            if !number.is_finite()
+                                || number.fract() != 0.0
+                                || *number < i32::MIN as f64
+                                || *number > i32::MAX as f64
+                            {
+                                return Err(OmError::invalid_argument(
+                                    "Chart.Paste Type expects an integer XlPasteType value",
+                                ));
+                            }
+                            let paste_type = *number as i32;
+                            if !matches!(
+                                paste_type,
+                                XL_PASTE_ALL | XL_PASTE_FORMATS | XL_PASTE_FORMULAS
+                            ) {
+                                return Err(OmError::invalid_argument(
+                                    "Chart.Paste Type supports xlPasteAll, xlPasteFormats, and xlPasteFormulas",
+                                ));
+                            }
+                            paste_type
+                        }
+                        Some(_) => {
+                            return Err(OmError::type_mismatch(
+                                "Chart.Paste Type expects a numeric XlPasteType value when provided",
+                            ));
+                        }
+                    };
+                    let clipboard = self.clipboard.ok_or_else(|| {
+                        OmError::new(
+                            OmErrorCode::InvalidState,
+                            "Chart.Paste requires an active copy or cut range",
+                        )
+                    })?;
+                    if !matches!(clipboard.mode, XL_COPY | XL_CUT) {
+                        return Err(OmError::invalid_state(
+                            "Chart.Paste clipboard mode is invalid",
+                        ));
+                    }
+                    if paste_type != XL_PASTE_FORMATS {
+                        let source = self.register_range_handle(
+                            clipboard.workbook,
+                            clipboard.sheet_id,
+                            clipboard.rect,
+                        );
+                        let chart =
+                            self.register_object(RuntimeObjectKind::Chart { workbook, chart_id });
+                        self.dispatch_invoke(chart, "SetSourceData", &[OmValue::Object(source.0)])?;
+                    }
+                    self.cut_copy_mode = None;
+                    self.clipboard = None;
+                    Ok(OmValue::Empty)
+                }
                 "CopyPicture" => {
                     validate_copy_picture_args(args, 3, "Chart.CopyPicture")?;
                     self.chart_model(workbook, chart_id)?;
@@ -8158,6 +8220,7 @@ impl ExcelRuntime {
                             | "ClearToMatchColorStyle"
                             | "ApplyLayout"
                             | "ApplyChartTemplate"
+                            | "Paste"
                             | "CopyPicture"
                             | "SetElement"
                             | "Export"
@@ -74068,6 +74131,150 @@ mod tests {
                     &[OmValue::Missing, OmValue::Missing, OmValue::Number(99.0),],
                 )
                 .expect_err("Chart.CopyPicture rejects unsupported Size")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn chart_paste_uses_copied_range_source_and_validates_type() {
+        let mut runtime = ExcelRuntime::new();
+        let application = runtime.root_application();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("B2:C4".to_string())])
+                .expect("Worksheet.Range(B2:C4)"),
+        );
+
+        runtime
+            .dispatch_invoke(source, "Copy", &[])
+            .expect("Range.Copy before Chart.Paste");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode after Range.Copy")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "Paste",
+                    &[OmValue::Number(f64::from(super::XL_PASTE_FORMULAS))],
+                )
+                .expect("Chart.Paste xlPasteFormulas"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.Paste"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after Chart.Paste source data"),
+            OmValue::Bool(false)
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection after Chart.Paste"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1) after Chart.Paste"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Values", &[])
+                    .expect("Series.Values after Chart.Paste")
+            ),
+            "=Sheet1!$B$2:$C$4"
+        );
+
+        runtime
+            .dispatch_invoke(source, "Copy", &[])
+            .expect("Range.Copy before Chart.Paste formats");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "Paste",
+                    &[OmValue::Number(f64::from(super::XL_PASTE_FORMATS))],
+                )
+                .expect("Chart.Paste xlPasteFormats"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.Paste formats"),
+            OmValue::Bool(false)
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "Paste", &[])
+                .expect_err("Chart.Paste requires clipboard")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "Paste",
+                    &[OmValue::Number(f64::from(super::XL_PASTE_VALUES))],
+                )
+                .expect_err("Chart.Paste rejects unsupported Type")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "Paste", &[OmValue::Text("bad".to_string())])
+                .expect_err("Chart.Paste rejects non-numeric Type")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "Paste", &[OmValue::Missing, OmValue::Missing],)
+                .expect_err("Chart.Paste rejects too many arguments")
                 .code,
             OmErrorCode::InvalidArgument
         );
