@@ -16510,6 +16510,16 @@ fn chart_type_from_group_name(local_name: &[u8]) -> Option<ChartType> {
     }
 }
 
+fn chart_group_xml_name(chart_type: &ChartType) -> Option<&'static str> {
+    match chart_type {
+        ChartType::Bar => Some("barChart"),
+        ChartType::Line => Some("lineChart"),
+        ChartType::Scatter => Some("scatterChart"),
+        ChartType::Pie => Some("pieChart"),
+        ChartType::Unknown | ChartType::Unsupported(_) => None,
+    }
+}
+
 fn chart_axis_kind_from_xml_name(local_name: &[u8]) -> Option<ChartAxisKind> {
     match local_name {
         b"catAx" => Some(ChartAxisKind::Category),
@@ -16577,6 +16587,7 @@ fn patch_loaded_chart_model_xml(
     let mut series_order_written = Vec::<bool>::new();
     let mut patched_sources = 0usize;
     let mut chart_type = None::<ChartType>;
+    let mut chart_type_rewritten = false;
     let mut chart_title_seen = false;
     let mut chart_title_removed = false;
     let mut chart_title_inserted = false;
@@ -16617,6 +16628,17 @@ fn patch_loaded_chart_model_xml(
             b"cat" => Some(ChartSourceXmlSlot::XValues),
             b"val" => Some(ChartSourceXmlSlot::Values),
             _ => None,
+        }
+    };
+    let target_chart_group_name = chart_group_xml_name(&chart.chart_type);
+    let qualified_replacement_name = |qualified_name: &[u8], replacement_local: &str| -> String {
+        if let Some(prefix_len) = qualified_name.iter().position(|byte| *byte == b':') {
+            format!(
+                "{}:{replacement_local}",
+                String::from_utf8_lossy(&qualified_name[..prefix_len])
+            )
+        } else {
+            replacement_local.to_string()
         }
     };
     let source_slots_in_order = [
@@ -16685,6 +16707,23 @@ fn patch_loaded_chart_model_xml(
         }
         if !wrote_value {
             rewritten.push_attribute(("val", replacement));
+        }
+        Ok(rewritten)
+    };
+    let rewrite_element_name = |element: &BytesStart<'_>,
+                                decoder: quick_xml::encoding::Decoder,
+                                replacement_local: &str|
+     -> OmResult<BytesStart<'static>> {
+        let qualified_name = qualified_replacement_name(element.name().as_ref(), replacement_local);
+        let mut rewritten = BytesStart::new(qualified_name);
+        for attr in element.attributes() {
+            let attr = attr.map_err(runtime_xml_error)?;
+            let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+            let value = attr
+                .decode_and_unescape_value(decoder)
+                .map_err(runtime_xml_error)?
+                .into_owned();
+            rewritten.push_attribute((key.as_str(), value.as_str()));
         }
         Ok(rewritten)
     };
@@ -16875,6 +16914,22 @@ fn patch_loaded_chart_model_xml(
                     wrote_start_element = true;
                 }
                 if !wrote_start_element
+                    && let Some(source_chart_type) =
+                        chart_type_from_group_name(local_name.as_slice())
+                    && source_chart_type != chart.chart_type
+                    && let Some(target_local_name) = target_chart_group_name
+                {
+                    writer
+                        .write_event(Event::Start(rewrite_element_name(
+                            &element,
+                            reader.decoder(),
+                            target_local_name,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    chart_type_rewritten = true;
+                    wrote_start_element = true;
+                }
+                if !wrote_start_element
                     && local_name.as_slice() == b"legendPos"
                     && expected_legend_position.is_some()
                     && element_stack
@@ -16933,6 +16988,21 @@ fn patch_loaded_chart_model_xml(
                         buffer.clear();
                         continue;
                     }
+                }
+                if let Some(source_chart_type) = chart_type_from_group_name(local_name.as_slice())
+                    && source_chart_type != chart.chart_type
+                    && let Some(target_local_name) = target_chart_group_name
+                {
+                    writer
+                        .write_event(Event::Empty(rewrite_element_name(
+                            &element,
+                            reader.decoder(),
+                            target_local_name,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    chart_type_rewritten = true;
+                    buffer.clear();
+                    continue;
                 }
                 if local_name.as_slice() == b"title" && parent_name == Some(b"chart".as_slice()) {
                     chart_title_seen = true;
@@ -17265,9 +17335,21 @@ fn patch_loaded_chart_model_xml(
                     }
                 }
 
-                writer
-                    .write_event(Event::End(element.to_owned()))
-                    .map_err(runtime_xml_error)?;
+                if chart_type_from_group_name(local_name.as_slice()).is_some()
+                    && chart_type.as_ref() != Some(&chart.chart_type)
+                    && let Some(target_local_name) = target_chart_group_name
+                {
+                    writer
+                        .write_event(Event::End(BytesEnd::new(qualified_replacement_name(
+                            element.name().as_ref(),
+                            target_local_name,
+                        ))))
+                        .map_err(runtime_xml_error)?;
+                } else {
+                    writer
+                        .write_event(Event::End(element.to_owned()))
+                        .map_err(runtime_xml_error)?;
+                }
 
                 if current_series_index.is_some() {
                     match local_name.as_slice() {
@@ -17301,7 +17383,11 @@ fn patch_loaded_chart_model_xml(
         buffer.clear();
     }
 
-    let chart_type_matches = chart_type.as_ref() == Some(&chart.chart_type);
+    let chart_type_matches = match chart_type.as_ref() {
+        Some(source_chart_type) if source_chart_type == &chart.chart_type => true,
+        Some(_) => chart_type_rewritten,
+        None => false,
+    };
     let series_sources_match = source_slots_seen.len() == chart.series.len()
         && source_slots_seen
             .iter()
@@ -17393,17 +17479,9 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
         }
         series_xml.push_str("</c:ser>");
     }
-    let chart_group_name = match chart.chart_type {
-        ChartType::Bar => "barChart",
-        ChartType::Line => "lineChart",
-        ChartType::Scatter => "scatterChart",
-        ChartType::Pie => "pieChart",
-        ChartType::Unknown | ChartType::Unsupported(_) => {
-            return Err(OmError::unsupported(
-                "saving dirty charts requires a supported chart type",
-            ));
-        }
-    };
+    let chart_group_name = chart_group_xml_name(&chart.chart_type).ok_or_else(|| {
+        OmError::unsupported("saving dirty charts requires a supported chart type")
+    })?;
     let title_xml = chart
         .title
         .as_ref()
@@ -71103,6 +71181,126 @@ mod tests {
                     .expect("reopened Series.Formula")
             ),
             "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$B$1,Sheet1!$A$1:$C$1,1)"
+        );
+    }
+
+    #[test]
+    fn loaded_chart_type_setter_preserves_chart_extensions_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:chart-type-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart extension");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_LINE)),
+                &[],
+            )
+            .expect("set loaded Chart.ChartType");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after loaded chart type edit");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:chart-type-preserve"/>"#));
+        assert!(saved_chart_xml.contains("<c:lineChart>"));
+        assert!(!saved_chart_xml.contains("<c:barChart>"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after loaded chart type edit");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart, "ChartType", &[])
+                    .expect("reopened Chart.ChartType")
+            ),
+            f64::from(super::XL_LINE)
         );
     }
 
