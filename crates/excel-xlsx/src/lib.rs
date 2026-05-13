@@ -663,6 +663,9 @@ pub struct ChartPartSummary {
     pub has_drop_lines: Option<bool>,
     pub has_hi_lo_lines: Option<bool>,
     pub has_up_down_bars: Option<bool>,
+    pub first_slice_angle: Option<u16>,
+    pub bubble_scale: Option<u16>,
+    pub doughnut_hole_size: Option<u16>,
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,
     pub axes: Vec<ChartAxisSummary>,
@@ -3136,6 +3139,9 @@ fn build_chart_model_overlay(
                     has_drop_lines: summary.and_then(|summary| summary.has_drop_lines),
                     has_hi_lo_lines: summary.and_then(|summary| summary.has_hi_lo_lines),
                     has_up_down_bars: summary.and_then(|summary| summary.has_up_down_bars),
+                    first_slice_angle: summary.and_then(|summary| summary.first_slice_angle),
+                    bubble_scale: summary.and_then(|summary| summary.bubble_scale),
+                    doughnut_hole_size: summary.and_then(|summary| summary.doughnut_hole_size),
                     display_blanks_as: summary.and_then(|summary| summary.display_blanks_as),
                     plot_visible_only: summary.and_then(|summary| summary.plot_visible_only),
                     axes: summary
@@ -15814,6 +15820,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut has_drop_lines = None;
     let mut has_hi_lo_lines = None;
     let mut has_up_down_bars = None;
+    let mut first_slice_angle = None;
+    let mut bubble_scale = None;
+    let mut doughnut_hole_size = None;
     let mut display_blanks_as = None;
     let mut plot_visible_only = None;
     let mut axes = Vec::new();
@@ -16012,6 +16021,34 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 {
                     has_up_down_bars = Some(true);
                 }
+                if local_name == b"firstSliceAng"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                    && let Some(value) = parse_i32_val_attr(&element, &reader, "first slice angle")?
+                    && (0..=360).contains(&value)
+                {
+                    first_slice_angle = Some(value as u16);
+                }
+                if local_name == b"bubbleScale"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                    && let Some(value) = parse_i32_val_attr(&element, &reader, "bubble scale")?
+                    && (0..=300).contains(&value)
+                {
+                    bubble_scale = Some(value as u16);
+                }
+                if local_name == b"holeSize"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                    && let Some(value) =
+                        parse_i32_val_attr(&element, &reader, "doughnut hole size")?
+                    && (10..=90).contains(&value)
+                {
+                    doughnut_hole_size = Some(value as u16);
+                }
                 if local_name == b"dispBlanksAs"
                     && element_path.last().is_some_and(|name| name == "chart")
                 {
@@ -16180,6 +16217,34 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
                     has_up_down_bars = Some(true);
+                }
+                if local_name == b"firstSliceAng"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                    && let Some(value) = parse_i32_val_attr(&element, &reader, "first slice angle")?
+                    && (0..=360).contains(&value)
+                {
+                    first_slice_angle = Some(value as u16);
+                }
+                if local_name == b"bubbleScale"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                    && let Some(value) = parse_i32_val_attr(&element, &reader, "bubble scale")?
+                    && (0..=300).contains(&value)
+                {
+                    bubble_scale = Some(value as u16);
+                }
+                if local_name == b"holeSize"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                    && let Some(value) =
+                        parse_i32_val_attr(&element, &reader, "doughnut hole size")?
+                    && (10..=90).contains(&value)
+                {
+                    doughnut_hole_size = Some(value as u16);
                 }
                 if local_name == b"dispBlanksAs"
                     && element_path.last().is_some_and(|name| name == "chart")
@@ -16379,6 +16444,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         has_drop_lines,
         has_hi_lo_lines,
         has_up_down_bars,
+        first_slice_angle,
+        bubble_scale,
+        doughnut_hole_size,
         display_blanks_as,
         plot_visible_only,
         axes,
@@ -20940,6 +21008,9 @@ mod tests {
         </c:ser>
         <c:gapWidth val="150"/>
         <c:overlap val="0"/>
+        <c:firstSliceAng val="25"/>
+        <c:bubbleScale val="125"/>
+        <c:holeSize val="65"/>
         <c:serLines/>
         <c:dropLines/>
         <c:hiLowLines/>
@@ -21155,6 +21226,9 @@ mod tests {
         assert_eq!(chart_summary.has_drop_lines, Some(true));
         assert_eq!(chart_summary.has_hi_lo_lines, Some(true));
         assert_eq!(chart_summary.has_up_down_bars, Some(true));
+        assert_eq!(chart_summary.first_slice_angle, Some(25));
+        assert_eq!(chart_summary.bubble_scale, Some(125));
+        assert_eq!(chart_summary.doughnut_hole_size, Some(65));
         assert_eq!(chart_summary.plot_visible_only, Some(false));
         assert_eq!(
             chart_summary.display_blanks_as,
@@ -21264,6 +21338,9 @@ mod tests {
         assert_eq!(chart_model.has_drop_lines, Some(true));
         assert_eq!(chart_model.has_hi_lo_lines, Some(true));
         assert_eq!(chart_model.has_up_down_bars, Some(true));
+        assert_eq!(chart_model.first_slice_angle, Some(25));
+        assert_eq!(chart_model.bubble_scale, Some(125));
+        assert_eq!(chart_model.doughnut_hole_size, Some(65));
         assert_eq!(chart_model.plot_visible_only, Some(false));
         assert_eq!(
             chart_model.display_blanks_as,

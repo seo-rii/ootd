@@ -3426,12 +3426,16 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
-                    "GapWidth" | "Overlap" => {
+                    "GapWidth" | "Overlap" | "FirstSliceAngle" | "BubbleScale"
+                    | "DoughnutHoleSize" => {
                         let numeric_value = coerce_i32_arg(&value, format!("ChartGroup.{member}"))?;
-                        let (minimum, maximum) = if member == "GapWidth" {
-                            (0, 500)
-                        } else {
-                            (-100, 100)
+                        let (minimum, maximum) = match member {
+                            "GapWidth" => (0, 500),
+                            "Overlap" => (-100, 100),
+                            "FirstSliceAngle" => (0, 360),
+                            "BubbleScale" => (0, 300),
+                            "DoughnutHoleSize" => (10, 90),
+                            _ => unreachable!(),
                         };
                         if numeric_value < minimum || numeric_value > maximum {
                             return Err(OmError::invalid_argument(format!(
@@ -3460,22 +3464,53 @@ impl ExcelRuntime {
                                 "chart group not found",
                             ));
                         }
-                        let changed = if member == "GapWidth" {
-                            let numeric_value = numeric_value as u16;
-                            if chart.gap_width == Some(numeric_value) {
-                                false
-                            } else {
-                                chart.gap_width = Some(numeric_value);
-                                true
+                        let changed = match member {
+                            "GapWidth" => {
+                                let numeric_value = numeric_value as u16;
+                                if chart.gap_width == Some(numeric_value) {
+                                    false
+                                } else {
+                                    chart.gap_width = Some(numeric_value);
+                                    true
+                                }
                             }
-                        } else {
-                            let numeric_value = numeric_value as i16;
-                            if chart.overlap == Some(numeric_value) {
-                                false
-                            } else {
-                                chart.overlap = Some(numeric_value);
-                                true
+                            "Overlap" => {
+                                let numeric_value = numeric_value as i16;
+                                if chart.overlap == Some(numeric_value) {
+                                    false
+                                } else {
+                                    chart.overlap = Some(numeric_value);
+                                    true
+                                }
                             }
+                            "FirstSliceAngle" => {
+                                let numeric_value = numeric_value as u16;
+                                if chart.first_slice_angle == Some(numeric_value) {
+                                    false
+                                } else {
+                                    chart.first_slice_angle = Some(numeric_value);
+                                    true
+                                }
+                            }
+                            "BubbleScale" => {
+                                let numeric_value = numeric_value as u16;
+                                if chart.bubble_scale == Some(numeric_value) {
+                                    false
+                                } else {
+                                    chart.bubble_scale = Some(numeric_value);
+                                    true
+                                }
+                            }
+                            "DoughnutHoleSize" => {
+                                let numeric_value = numeric_value as u16;
+                                if chart.doughnut_hole_size == Some(numeric_value) {
+                                    false
+                                } else {
+                                    chart.doughnut_hole_size = Some(numeric_value);
+                                    true
+                                }
+                            }
+                            _ => unreachable!(),
                         };
                         if changed {
                             chart.dirty = true;
@@ -8801,6 +8836,9 @@ impl ExcelRuntime {
                             | "HasDropLines"
                             | "HasHiLoLines"
                             | "HasUpDownBars"
+                            | "FirstSliceAngle"
+                            | "BubbleScale"
+                            | "DoughnutHoleSize"
                             | "SeriesCollection"
                             | "Creator"
                             | "Application"
@@ -10916,6 +10954,9 @@ impl ExcelRuntime {
                             has_drop_lines: None,
                             has_hi_lo_lines: None,
                             has_up_down_bars: None,
+                            first_slice_angle: None,
+                            bubble_scale: None,
+                            doughnut_hole_size: None,
                             display_blanks_as: None,
                             plot_visible_only: None,
                             raw_part_uri: None,
@@ -11771,6 +11812,15 @@ impl ExcelRuntime {
                     "HasDropLines" => Ok(OmValue::Bool(chart.has_drop_lines.unwrap_or(false))),
                     "HasHiLoLines" => Ok(OmValue::Bool(chart.has_hi_lo_lines.unwrap_or(false))),
                     "HasUpDownBars" => Ok(OmValue::Bool(chart.has_up_down_bars.unwrap_or(false))),
+                    "FirstSliceAngle" => Ok(OmValue::Number(f64::from(
+                        chart.first_slice_angle.unwrap_or(0),
+                    ))),
+                    "BubbleScale" => Ok(OmValue::Number(f64::from(
+                        chart.bubble_scale.unwrap_or(100),
+                    ))),
+                    "DoughnutHoleSize" => Ok(OmValue::Number(f64::from(
+                        chart.doughnut_hole_size.unwrap_or(75),
+                    ))),
                     "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
                     "Application" => Ok(OmValue::Object(self.root_application())),
                     "Parent" => Ok(OmValue::Object(
@@ -13751,6 +13801,9 @@ impl ExcelRuntime {
                         has_drop_lines: None,
                         has_hi_lo_lines: None,
                         has_up_down_bars: None,
+                        first_slice_angle: None,
+                        bubble_scale: None,
+                        doughnut_hole_size: None,
                         display_blanks_as: None,
                         plot_visible_only: None,
                         raw_part_uri: Some(chart_part_uri.clone()),
@@ -18924,13 +18977,28 @@ fn patch_loaded_chart_model_xml(
         .map(|value| if value { "1" } else { "0" });
     let expected_gap_width = chart.gap_width.map(|value| value.to_string());
     let expected_overlap = chart.overlap.map(|value| value.to_string());
+    let expected_first_slice_angle = chart.first_slice_angle.map(|value| value.to_string());
+    let expected_bubble_scale = chart.bubble_scale.map(|value| value.to_string());
+    let expected_doughnut_hole_size = chart.doughnut_hole_size.map(|value| value.to_string());
     let expected_gap_width = expected_gap_width.as_deref();
     let expected_overlap = expected_overlap.as_deref();
+    let expected_first_slice_angle = expected_first_slice_angle.as_deref();
+    let expected_bubble_scale = expected_bubble_scale.as_deref();
+    let expected_doughnut_hole_size = expected_doughnut_hole_size.as_deref();
     let expected_chart_group_line_flags: [(&[u8], &str, Option<bool>); 4] = [
         (b"serLines", "c:serLines", chart.has_series_lines),
         (b"dropLines", "c:dropLines", chart.has_drop_lines),
         (b"hiLowLines", "c:hiLowLines", chart.has_hi_lo_lines),
         (b"upDownBars", "c:upDownBars", chart.has_up_down_bars),
+    ];
+    let expected_chart_group_numeric_settings: [(&[u8], &str, Option<&str>); 3] = [
+        (
+            b"firstSliceAng",
+            "c:firstSliceAng",
+            expected_first_slice_angle,
+        ),
+        (b"bubbleScale", "c:bubbleScale", expected_bubble_scale),
+        (b"holeSize", "c:holeSize", expected_doughnut_hole_size),
     ];
 
     let mut reader = Reader::from_reader(Cursor::new(existing_chart_xml));
@@ -18978,6 +19046,9 @@ fn patch_loaded_chart_model_xml(
     let mut chart_group_line_flag_written = [false; 4];
     let mut chart_group_line_flag_inserted = [false; 4];
     let mut chart_group_line_flag_removed = [false; 4];
+    let mut chart_group_numeric_setting_seen = [false; 3];
+    let mut chart_group_numeric_setting_written = [false; 3];
+    let mut chart_group_numeric_setting_inserted = [false; 3];
     let mut current_axis_index = None::<usize>;
     let mut axis_kinds = Vec::<ChartAxisKind>::new();
     let mut axis_title_texts = Vec::<Option<String>>::new();
@@ -19493,6 +19564,13 @@ fn patch_loaded_chart_model_xml(
                 {
                     overlap_seen = true;
                 } else if current_chart_group_depth == Some(element_stack.len())
+                    && let Some((setting_index, (_, _, _))) = expected_chart_group_numeric_settings
+                        .iter()
+                        .enumerate()
+                        .find(|(_, (name, _, _))| local_name.as_slice() == *name)
+                {
+                    chart_group_numeric_setting_seen[setting_index] = true;
+                } else if current_chart_group_depth == Some(element_stack.len())
                     && let Some((flag_index, (_, _, expected))) = expected_chart_group_line_flags
                         .iter()
                         .enumerate()
@@ -19635,6 +19713,21 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     overlap_written = true;
+                } else if !wrote_start_element
+                    && let Some((setting_index, (_, _, Some(value)))) =
+                        expected_chart_group_numeric_settings
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (name, _, _))| local_name.as_slice() == *name)
+                {
+                    writer
+                        .write_event(Event::Start(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    chart_group_numeric_setting_written[setting_index] = true;
                 } else if !wrote_start_element {
                     writer
                         .write_event(Event::Start(element.into_owned()))
@@ -19770,6 +19863,13 @@ fn patch_loaded_chart_model_xml(
                 {
                     overlap_seen = true;
                 } else if current_chart_group_depth == Some(element_stack.len())
+                    && let Some((setting_index, (_, _, _))) = expected_chart_group_numeric_settings
+                        .iter()
+                        .enumerate()
+                        .find(|(_, (name, _, _))| local_name.as_slice() == *name)
+                {
+                    chart_group_numeric_setting_seen[setting_index] = true;
+                } else if current_chart_group_depth == Some(element_stack.len())
                     && let Some((flag_index, (_, _, expected))) = expected_chart_group_line_flags
                         .iter()
                         .enumerate()
@@ -19843,6 +19943,20 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     overlap_written = true;
+                } else if let Some((setting_index, (_, _, Some(value)))) =
+                    expected_chart_group_numeric_settings
+                        .iter()
+                        .enumerate()
+                        .find(|(_, (name, _, _))| local_name.as_slice() == *name)
+                {
+                    writer
+                        .write_event(Event::Empty(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    chart_group_numeric_setting_written[setting_index] = true;
                 } else {
                     writer
                         .write_event(Event::Empty(element.into_owned()))
@@ -20225,6 +20339,21 @@ fn patch_loaded_chart_model_xml(
                         overlap_inserted = true;
                         overlap_written = true;
                     }
+                    for (setting_index, (_, qualified_name, expected)) in
+                        expected_chart_group_numeric_settings.iter().enumerate()
+                    {
+                        if !chart_group_numeric_setting_seen[setting_index]
+                            && let Some(value) = expected
+                        {
+                            let mut setting = BytesStart::new(*qualified_name);
+                            setting.push_attribute(("val", *value));
+                            writer
+                                .write_event(Event::Empty(setting))
+                                .map_err(runtime_xml_error)?;
+                            chart_group_numeric_setting_inserted[setting_index] = true;
+                            chart_group_numeric_setting_written[setting_index] = true;
+                        }
+                    }
                     for (flag_index, (_, qualified_name, expected)) in
                         expected_chart_group_line_flags.iter().enumerate()
                     {
@@ -20380,6 +20509,16 @@ fn patch_loaded_chart_model_xml(
         (Some(_), false) => overlap_inserted,
         (None, _) => true,
     };
+    let chart_group_numeric_settings_match = expected_chart_group_numeric_settings
+        .iter()
+        .enumerate()
+        .all(|(setting_index, (_, _, expected))| {
+            match (expected, chart_group_numeric_setting_seen[setting_index]) {
+                (Some(_), true) => chart_group_numeric_setting_written[setting_index],
+                (Some(_), false) => chart_group_numeric_setting_inserted[setting_index],
+                (None, _) => true,
+            }
+        });
     let chart_group_line_flags_match =
         expected_chart_group_line_flags
             .iter()
@@ -20418,6 +20557,7 @@ fn patch_loaded_chart_model_xml(
         && vary_colors_matches
         && gap_width_matches
         && overlap_matches
+        && chart_group_numeric_settings_match
         && chart_group_line_flags_match
         && axes_match
     {
@@ -20500,6 +20640,18 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     } else {
         ""
     };
+    let first_slice_angle_xml = chart
+        .first_slice_angle
+        .map(|value| format!(r#"<c:firstSliceAng val="{value}"/>"#))
+        .unwrap_or_default();
+    let bubble_scale_xml = chart
+        .bubble_scale
+        .map(|value| format!(r#"<c:bubbleScale val="{value}"/>"#))
+        .unwrap_or_default();
+    let doughnut_hole_size_xml = chart
+        .doughnut_hole_size
+        .map(|value| format!(r#"<c:holeSize val="{value}"/>"#))
+        .unwrap_or_default();
     let title_xml = chart
         .title
         .as_ref()
@@ -20569,7 +20721,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
+  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{doughnut_hole_size_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -74201,6 +74353,31 @@ mod tests {
             .dispatch_set(chart_group, "Overlap", OmValue::Number(-101.0), &[])
             .expect_err("ChartGroup.Overlap rejects out of range");
         assert_eq!(invalid_overlap.code, OmErrorCode::InvalidArgument);
+        for (member, loaded, updated, invalid) in [
+            ("FirstSliceAngle", 25.0, 90.0, 361.0),
+            ("BubbleScale", 125.0, 150.0, 301.0),
+            ("DoughnutHoleSize", 65.0, 70.0, 9.0),
+        ] {
+            assert_eq!(
+                runtime
+                    .dispatch_get(chart_group, member, &[])
+                    .expect("ChartGroup numeric setting"),
+                OmValue::Number(loaded)
+            );
+            runtime
+                .dispatch_set(chart_group, member, OmValue::Number(updated), &[])
+                .expect("set ChartGroup numeric setting");
+            assert_eq!(
+                runtime
+                    .dispatch_get(chart_group, member, &[])
+                    .expect("ChartGroup numeric setting after set"),
+                OmValue::Number(updated)
+            );
+            let invalid_numeric_setting = runtime
+                .dispatch_set(chart_group, member, OmValue::Number(invalid), &[])
+                .expect_err("ChartGroup numeric setting rejects out of range");
+            assert_eq!(invalid_numeric_setting.code, OmErrorCode::InvalidArgument);
+        }
         for member in [
             "HasSeriesLines",
             "HasDropLines",
@@ -74601,7 +74778,7 @@ mod tests {
     }
 
     #[test]
-    fn chart_group_gap_width_and_overlap_setters_roundtrip() {
+    fn chart_group_numeric_setters_roundtrip() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -74649,12 +74826,33 @@ mod tests {
                 .expect("ChartGroup.Overlap before set"),
             OmValue::Number(0.0)
         );
+        for (member, expected) in [
+            ("FirstSliceAngle", 25.0),
+            ("BubbleScale", 125.0),
+            ("DoughnutHoleSize", 65.0),
+        ] {
+            assert_eq!(
+                runtime
+                    .dispatch_get(chart_group, member, &[])
+                    .expect("ChartGroup numeric setting before set"),
+                OmValue::Number(expected)
+            );
+        }
         runtime
             .dispatch_set(chart_group, "GapWidth", OmValue::Number(250.0), &[])
             .expect("set ChartGroup.GapWidth");
         runtime
             .dispatch_set(chart_group, "Overlap", OmValue::Number(-25.0), &[])
             .expect("set ChartGroup.Overlap");
+        runtime
+            .dispatch_set(chart_group, "FirstSliceAngle", OmValue::Number(90.0), &[])
+            .expect("set ChartGroup.FirstSliceAngle");
+        runtime
+            .dispatch_set(chart_group, "BubbleScale", OmValue::Number(150.0), &[])
+            .expect("set ChartGroup.BubbleScale");
+        runtime
+            .dispatch_set(chart_group, "DoughnutHoleSize", OmValue::Number(70.0), &[])
+            .expect("set ChartGroup.DoughnutHoleSize");
 
         let saved = runtime
             .save_workbook(
@@ -74665,7 +74863,7 @@ mod tests {
                     lossless: true,
                 },
             )
-            .expect("save chart group gap and overlap");
+            .expect("save chart group numeric settings");
         let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
         let saved_chart_xml = String::from_utf8(
             saved_package
@@ -74677,8 +74875,14 @@ mod tests {
         .expect("saved chart xml utf8");
         assert!(saved_chart_xml.contains(r#"<c:gapWidth val="250"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:overlap val="-25"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:firstSliceAng val="90"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:bubbleScale val="150"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:holeSize val="70"/>"#));
         assert!(!saved_chart_xml.contains(r#"<c:gapWidth val="150"/>"#));
         assert!(!saved_chart_xml.contains(r#"<c:overlap val="0"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:firstSliceAng val="25"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:bubbleScale val="125"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:holeSize val="65"/>"#));
 
         let mut reopened_runtime = ExcelRuntime::new();
         let reopened_workbook = reopened_runtime
@@ -74726,6 +74930,18 @@ mod tests {
                 .expect("reopened ChartGroup.Overlap"),
             OmValue::Number(-25.0)
         );
+        for (member, expected) in [
+            ("FirstSliceAngle", 90.0),
+            ("BubbleScale", 150.0),
+            ("DoughnutHoleSize", 70.0),
+        ] {
+            assert_eq!(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_group, member, &[])
+                    .expect("reopened ChartGroup numeric setting"),
+                OmValue::Number(expected)
+            );
+        }
     }
 
     #[test]
@@ -88524,7 +88740,7 @@ mod tests {
                 compression: CompressionMethod::Stored,
                 bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:varyColors val="1"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val></c:ser><c:gapWidth val="150"/><c:overlap val="0"/><c:serLines/><c:dropLines/><c:hiLowLines/><c:upDownBars/></c:barChart><c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx><c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx></c:plotArea><c:legend><c:legendPos val="r"/></c:legend></c:chart>
+  <c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:varyColors val="1"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val></c:ser><c:gapWidth val="150"/><c:overlap val="0"/><c:firstSliceAng val="25"/><c:bubbleScale val="125"/><c:holeSize val="65"/><c:serLines/><c:dropLines/><c:hiLowLines/><c:upDownBars/></c:barChart><c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx><c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx></c:plotArea><c:legend><c:legendPos val="r"/></c:legend></c:chart>
 </c:chartSpace>"#
                     .to_vec(),
             })
