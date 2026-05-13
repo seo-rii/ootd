@@ -92,6 +92,10 @@ const XL_SCREEN: i32 = 1;
 const XL_PRINTER: i32 = 2;
 const XL_PICTURE: i32 = -4147;
 const XL_BITMAP: i32 = 2;
+const XL_TYPE_PDF: i32 = 0;
+const XL_TYPE_XPS: i32 = 1;
+const XL_QUALITY_STANDARD: i32 = 0;
+const XL_QUALITY_MINIMUM: i32 = 1;
 const XL_PASTE_ALL: i32 = -4104;
 const XL_PASTE_COMMENTS: i32 = -4144;
 const XL_PASTE_FORMATS: i32 = -4122;
@@ -7070,6 +7074,127 @@ impl ExcelRuntime {
                     self.set_headless_copy_mode();
                     Ok(OmValue::Empty)
                 }
+                "Export" => {
+                    if args.is_empty() || args.len() > 3 {
+                        return Err(OmError::invalid_argument(
+                            "Chart.Export expects FileName and optional FilterName and Interactive arguments",
+                        ));
+                    }
+                    self.chart_model(workbook, chart_id)?;
+                    let OmValue::Text(file_name) = &args[0] else {
+                        return Err(OmError::type_mismatch(
+                            "Chart.Export FileName expects a text value",
+                        ));
+                    };
+                    if file_name.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "Chart.Export FileName must not be empty",
+                        ));
+                    }
+                    if let Some(value) = args.get(1)
+                        && !om_value_is_omitted(value)
+                        && !matches!(value, OmValue::Text(_))
+                    {
+                        return Err(OmError::type_mismatch(
+                            "Chart.Export FilterName expects a text value when provided",
+                        ));
+                    }
+                    if let Some(value) = args.get(2) {
+                        coerce_optional_bool_arg(value, false, "Chart.Export Interactive")?;
+                    }
+                    Ok(OmValue::Bool(false))
+                }
+                "ExportAsFixedFormat" => {
+                    if args.is_empty() || args.len() > 9 {
+                        return Err(OmError::invalid_argument(
+                            "Chart.ExportAsFixedFormat expects Type and up to 8 optional arguments",
+                        ));
+                    }
+                    self.chart_model(workbook, chart_id)?;
+                    let OmValue::Number(format_type) = &args[0] else {
+                        return Err(OmError::type_mismatch(
+                            "Chart.ExportAsFixedFormat Type expects a numeric value",
+                        ));
+                    };
+                    if !format_type.is_finite()
+                        || format_type.fract() != 0.0
+                        || *format_type < i32::MIN as f64
+                        || *format_type > i32::MAX as f64
+                    {
+                        return Err(OmError::invalid_argument(
+                            "Chart.ExportAsFixedFormat Type expects an integer value",
+                        ));
+                    }
+                    if !matches!(*format_type as i32, XL_TYPE_PDF | XL_TYPE_XPS) {
+                        return Err(OmError::invalid_argument(
+                            "Chart.ExportAsFixedFormat Type supports xlTypePDF and xlTypeXPS",
+                        ));
+                    }
+                    if let Some(value) = args.get(1)
+                        && !om_value_is_omitted(value)
+                        && !matches!(value, OmValue::Text(_))
+                    {
+                        return Err(OmError::type_mismatch(
+                            "Chart.ExportAsFixedFormat FileName expects a text value when provided",
+                        ));
+                    }
+                    if let Some(value) = args.get(2)
+                        && !om_value_is_omitted(value)
+                    {
+                        let OmValue::Number(quality) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Chart.ExportAsFixedFormat Quality expects a numeric value when provided",
+                            ));
+                        };
+                        if !quality.is_finite()
+                            || quality.fract() != 0.0
+                            || *quality < i32::MIN as f64
+                            || *quality > i32::MAX as f64
+                        {
+                            return Err(OmError::invalid_argument(
+                                "Chart.ExportAsFixedFormat Quality expects an integer value when provided",
+                            ));
+                        }
+                        if !matches!(*quality as i32, XL_QUALITY_STANDARD | XL_QUALITY_MINIMUM) {
+                            return Err(OmError::invalid_argument(
+                                "Chart.ExportAsFixedFormat Quality supports xlQualityStandard and xlQualityMinimum",
+                            ));
+                        }
+                    }
+                    if let Some(value) = args.get(3) {
+                        coerce_optional_bool_arg(
+                            value,
+                            true,
+                            "Chart.ExportAsFixedFormat IncludeDocProperties",
+                        )?;
+                    }
+                    if let Some(value) = args.get(4) {
+                        coerce_optional_bool_arg(
+                            value,
+                            false,
+                            "Chart.ExportAsFixedFormat IgnorePrintAreas",
+                        )?;
+                    }
+                    for (index, label) in [
+                        (5, "Chart.ExportAsFixedFormat From"),
+                        (6, "Chart.ExportAsFixedFormat To"),
+                    ] {
+                        if let Some(value) = args.get(index) {
+                            if om_value_is_omitted(value) {
+                                continue;
+                            }
+                            coerce_u32_arg(value, label)?;
+                        }
+                    }
+                    if let Some(value) = args.get(7) {
+                        coerce_optional_bool_arg(
+                            value,
+                            false,
+                            "Chart.ExportAsFixedFormat OpenAfterPublish",
+                        )?;
+                    }
+                    Ok(OmValue::Empty)
+                }
                 "PrintPreview" => {
                     if args.len() > 1 {
                         return Err(OmError::invalid_argument(
@@ -7766,6 +7891,8 @@ impl ExcelRuntime {
                             | "Unprotect"
                             | "Refresh"
                             | "CopyPicture"
+                            | "Export"
+                            | "ExportAsFixedFormat"
                             | "PrintPreview"
                             | "PrintOut"
                             | "Delete"
@@ -73674,6 +73801,185 @@ mod tests {
                 .expect_err("Chart.CopyPicture rejects unsupported Size")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn chart_export_methods_are_headless_noops_and_validate_arguments() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved before chart export methods"),
+            OmValue::Bool(true)
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "Export",
+                    &[
+                        OmValue::Text("chart.gif".to_string()),
+                        OmValue::Text("GIF".to_string()),
+                        OmValue::Bool(false),
+                    ],
+                )
+                .expect("Chart.Export"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "ExportAsFixedFormat",
+                    &[
+                        OmValue::Number(f64::from(super::XL_TYPE_PDF)),
+                        OmValue::Text("chart.pdf".to_string()),
+                        OmValue::Number(f64::from(super::XL_QUALITY_STANDARD)),
+                        OmValue::Bool(true),
+                        OmValue::Bool(false),
+                        OmValue::Number(1.0),
+                        OmValue::Number(1.0),
+                        OmValue::Bool(false),
+                    ],
+                )
+                .expect("Chart.ExportAsFixedFormat"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after chart export methods"),
+            OmValue::Bool(true)
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "Export", &[])
+                .expect_err("Chart.Export requires FileName")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "Export", &[OmValue::Number(1.0)])
+                .expect_err("Chart.Export rejects non-text FileName")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "Export",
+                    &[OmValue::Text("chart.gif".to_string()), OmValue::Number(1.0)],
+                )
+                .expect_err("Chart.Export rejects non-text FilterName")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "Export",
+                    &[
+                        OmValue::Text("chart.gif".to_string()),
+                        OmValue::Missing,
+                        OmValue::Text("bad".to_string()),
+                    ],
+                )
+                .expect_err("Chart.Export rejects non-bool Interactive")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "ExportAsFixedFormat", &[])
+                .expect_err("Chart.ExportAsFixedFormat requires Type")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "ExportAsFixedFormat", &[OmValue::Number(99.0)],)
+                .expect_err("Chart.ExportAsFixedFormat rejects unsupported Type")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "ExportAsFixedFormat",
+                    &[
+                        OmValue::Number(f64::from(super::XL_TYPE_XPS)),
+                        OmValue::Number(1.0),
+                    ],
+                )
+                .expect_err("Chart.ExportAsFixedFormat rejects non-text FileName")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "ExportAsFixedFormat",
+                    &[
+                        OmValue::Number(f64::from(super::XL_TYPE_XPS)),
+                        OmValue::Missing,
+                        OmValue::Number(99.0),
+                    ],
+                )
+                .expect_err("Chart.ExportAsFixedFormat rejects unsupported Quality")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "ExportAsFixedFormat",
+                    &[
+                        OmValue::Number(f64::from(super::XL_TYPE_XPS)),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Text("bad".to_string()),
+                    ],
+                )
+                .expect_err("Chart.ExportAsFixedFormat rejects non-bool IncludeDocProperties")
+                .code,
+            OmErrorCode::TypeMismatch
         );
     }
 
