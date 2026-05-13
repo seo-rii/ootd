@@ -3384,6 +3384,41 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
+                    "HasSeriesLines" => {
+                        let OmValue::Bool(has_series_lines) = value else {
+                            return Err(OmError::type_mismatch(
+                                "ChartGroup.HasSeriesLines expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        if group_index != 0 {
+                            return Err(OmError::new(
+                                OmErrorCode::NotFound,
+                                "chart group not found",
+                            ));
+                        }
+                        if chart.has_series_lines != Some(has_series_lines) {
+                            chart.has_series_lines = Some(has_series_lines);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     "GapWidth" | "Overlap" => {
                         let numeric_value = coerce_i32_arg(&value, format!("ChartGroup.{member}"))?;
                         let (minimum, maximum) = if member == "GapWidth" {
@@ -8755,6 +8790,7 @@ impl ExcelRuntime {
                             | "VaryByCategories"
                             | "GapWidth"
                             | "Overlap"
+                            | "HasSeriesLines"
                             | "SeriesCollection"
                             | "Creator"
                             | "Application"
@@ -10866,6 +10902,7 @@ impl ExcelRuntime {
                             vary_by_categories: None,
                             gap_width: None,
                             overlap: None,
+                            has_series_lines: None,
                             display_blanks_as: None,
                             plot_visible_only: None,
                             raw_part_uri: None,
@@ -11717,6 +11754,7 @@ impl ExcelRuntime {
                     }
                     "GapWidth" => Ok(OmValue::Number(f64::from(chart.gap_width.unwrap_or(150)))),
                     "Overlap" => Ok(OmValue::Number(f64::from(chart.overlap.unwrap_or(0)))),
+                    "HasSeriesLines" => Ok(OmValue::Bool(chart.has_series_lines.unwrap_or(false))),
                     "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
                     "Application" => Ok(OmValue::Object(self.root_application())),
                     "Parent" => Ok(OmValue::Object(
@@ -13693,6 +13731,7 @@ impl ExcelRuntime {
                         vary_by_categories: None,
                         gap_width: None,
                         overlap: None,
+                        has_series_lines: None,
                         display_blanks_as: None,
                         plot_visible_only: None,
                         raw_part_uri: Some(chart_part_uri.clone()),
@@ -18868,6 +18907,7 @@ fn patch_loaded_chart_model_xml(
     let expected_overlap = chart.overlap.map(|value| value.to_string());
     let expected_gap_width = expected_gap_width.as_deref();
     let expected_overlap = expected_overlap.as_deref();
+    let expected_has_series_lines = chart.has_series_lines;
 
     let mut reader = Reader::from_reader(Cursor::new(existing_chart_xml));
     reader.config_mut().trim_text(false);
@@ -18910,6 +18950,10 @@ fn patch_loaded_chart_model_xml(
     let mut overlap_seen = false;
     let mut overlap_written = false;
     let mut overlap_inserted = false;
+    let mut series_lines_seen = false;
+    let mut series_lines_written = false;
+    let mut series_lines_inserted = false;
+    let mut series_lines_removed = false;
     let mut current_axis_index = None::<usize>;
     let mut axis_kinds = Vec::<ChartAxisKind>::new();
     let mut axis_title_texts = Vec::<Option<String>>::new();
@@ -19424,6 +19468,19 @@ fn patch_loaded_chart_model_xml(
                     && current_chart_group_depth == Some(element_stack.len())
                 {
                     overlap_seen = true;
+                } else if local_name.as_slice() == b"serLines"
+                    && current_chart_group_depth == Some(element_stack.len())
+                {
+                    series_lines_seen = true;
+                    if expected_has_series_lines == Some(false) {
+                        series_lines_removed = true;
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    }
+                    if expected_has_series_lines == Some(true) {
+                        series_lines_written = true;
+                    }
                 }
 
                 if local_name.as_slice() == b"plotArea"
@@ -19685,6 +19742,18 @@ fn patch_loaded_chart_model_xml(
                     && current_chart_group_depth == Some(element_stack.len())
                 {
                     overlap_seen = true;
+                } else if local_name.as_slice() == b"serLines"
+                    && current_chart_group_depth == Some(element_stack.len())
+                {
+                    series_lines_seen = true;
+                    if expected_has_series_lines == Some(false) {
+                        series_lines_removed = true;
+                        buffer.clear();
+                        continue;
+                    }
+                    if expected_has_series_lines == Some(true) {
+                        series_lines_written = true;
+                    }
                 }
                 if local_name.as_slice() == b"legendPos"
                     && expected_legend_position.is_some()
@@ -20126,6 +20195,13 @@ fn patch_loaded_chart_model_xml(
                         overlap_inserted = true;
                         overlap_written = true;
                     }
+                    if !series_lines_seen && expected_has_series_lines == Some(true) {
+                        writer
+                            .write_event(Event::Empty(BytesStart::new("c:serLines")))
+                            .map_err(runtime_xml_error)?;
+                        series_lines_inserted = true;
+                        series_lines_written = true;
+                    }
                     if !chart_group_axis_refs_seen.is_empty() {
                         for (axis_index, axis) in chart.axes.iter().enumerate() {
                             let axis_id = chart_axis_id(axis_index, axis);
@@ -20270,6 +20346,13 @@ fn patch_loaded_chart_model_xml(
         (Some(_), false) => overlap_inserted,
         (None, _) => true,
     };
+    let series_lines_matches = match (expected_has_series_lines, series_lines_seen) {
+        (Some(true), true) => series_lines_written,
+        (Some(true), false) => series_lines_inserted,
+        (Some(false), true) => series_lines_removed,
+        (Some(false), false) => true,
+        (None, _) => true,
+    };
     let axes_match = axis_kinds.len() == chart.axes.len()
         && axis_kinds
             .iter()
@@ -20295,6 +20378,7 @@ fn patch_loaded_chart_model_xml(
         && vary_colors_matches
         && gap_width_matches
         && overlap_matches
+        && series_lines_matches
         && axes_match
     {
         Ok(Some(writer.into_inner().into_inner()))
@@ -20356,6 +20440,11 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
         .overlap
         .map(|value| format!(r#"<c:overlap val="{value}"/>"#))
         .unwrap_or_default();
+    let series_lines_xml = if chart.has_series_lines == Some(true) {
+        r#"<c:serLines/>"#
+    } else {
+        ""
+    };
     let title_xml = chart
         .title
         .as_ref()
@@ -20425,7 +20514,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
+  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{series_lines_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -74057,6 +74146,25 @@ mod tests {
             .dispatch_set(chart_group, "Overlap", OmValue::Number(-101.0), &[])
             .expect_err("ChartGroup.Overlap rejects out of range");
         assert_eq!(invalid_overlap.code, OmErrorCode::InvalidArgument);
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "HasSeriesLines", &[])
+                .expect("ChartGroup.HasSeriesLines"),
+            OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_set(chart_group, "HasSeriesLines", OmValue::Bool(false), &[])
+            .expect("set ChartGroup.HasSeriesLines false");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "HasSeriesLines", &[])
+                .expect("ChartGroup.HasSeriesLines after set"),
+            OmValue::Bool(false)
+        );
+        let invalid_has_series_lines = runtime
+            .dispatch_set(chart_group, "HasSeriesLines", OmValue::Number(1.0), &[])
+            .expect_err("ChartGroup.HasSeriesLines rejects non-bool");
+        assert_eq!(invalid_has_series_lines.code, OmErrorCode::TypeMismatch);
         runtime
             .dispatch_set(
                 chart_group,
@@ -74555,6 +74663,116 @@ mod tests {
                 .dispatch_get(reopened_chart_group, "Overlap", &[])
                 .expect("reopened ChartGroup.Overlap"),
             OmValue::Number(-25.0)
+        );
+    }
+
+    #[test]
+    fn chart_group_has_series_lines_setter_roundtrips() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_group = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("Chart.ChartGroups(1)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "HasSeriesLines", &[])
+                .expect("ChartGroup.HasSeriesLines before set"),
+            OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_set(chart_group, "HasSeriesLines", OmValue::Bool(false), &[])
+            .expect("set ChartGroup.HasSeriesLines false");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save chart group series lines");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(!saved_chart_xml.contains("<c:serLines"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen saved chart group workbook");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_chart_group = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("reopened Chart.ChartGroups(1)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart_group, "HasSeriesLines", &[])
+                .expect("reopened ChartGroup.HasSeriesLines"),
+            OmValue::Bool(false)
         );
     }
 
@@ -88228,7 +88446,7 @@ mod tests {
                 compression: CompressionMethod::Stored,
                 bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:varyColors val="1"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val></c:ser><c:gapWidth val="150"/><c:overlap val="0"/></c:barChart><c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx><c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx></c:plotArea><c:legend><c:legendPos val="r"/></c:legend></c:chart>
+  <c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:varyColors val="1"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val></c:ser><c:gapWidth val="150"/><c:overlap val="0"/><c:serLines/></c:barChart><c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx><c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx></c:plotArea><c:legend><c:legendPos val="r"/></c:legend></c:chart>
 </c:chartSpace>"#
                     .to_vec(),
             })
