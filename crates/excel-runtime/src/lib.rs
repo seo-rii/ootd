@@ -16626,8 +16626,8 @@ fn patch_loaded_chart_model_xml(
     let source_container_slot = |local_name: &[u8]| -> Option<ChartSourceXmlSlot> {
         match local_name {
             b"tx" => Some(ChartSourceXmlSlot::Name),
-            b"cat" => Some(ChartSourceXmlSlot::XValues),
-            b"val" => Some(ChartSourceXmlSlot::Values),
+            b"cat" | b"xVal" => Some(ChartSourceXmlSlot::XValues),
+            b"val" | b"yVal" => Some(ChartSourceXmlSlot::Values),
             _ => None,
         }
     };
@@ -16681,7 +16681,10 @@ fn patch_loaded_chart_model_xml(
                         } else {
                             *depth = depth.saturating_sub(1);
                         }
-                    } else if matches!(local_name.as_slice(), b"tx" | b"cat" | b"val") {
+                    } else if matches!(
+                        local_name.as_slice(),
+                        b"tx" | b"cat" | b"val" | b"xVal" | b"yVal"
+                    ) {
                         signature_source_stack.pop();
                     } else if local_name.as_slice() == b"ser"
                         && let Some(signature) = active_signature.take()
@@ -16772,10 +16775,12 @@ fn patch_loaded_chart_model_xml(
         ChartSourceXmlSlot::Values,
     ];
     let source_container_names = |slot: ChartSourceXmlSlot| -> (&'static str, &'static str) {
-        match slot {
-            ChartSourceXmlSlot::Name => ("c:tx", "c:strRef"),
-            ChartSourceXmlSlot::XValues => ("c:cat", "c:strRef"),
-            ChartSourceXmlSlot::Values => ("c:val", "c:numRef"),
+        match (&chart.chart_type, slot) {
+            (_, ChartSourceXmlSlot::Name) => ("c:tx", "c:strRef"),
+            (&ChartType::Scatter, ChartSourceXmlSlot::XValues) => ("c:xVal", "c:numRef"),
+            (&ChartType::Scatter, ChartSourceXmlSlot::Values) => ("c:yVal", "c:numRef"),
+            (_, ChartSourceXmlSlot::XValues) => ("c:cat", "c:strRef"),
+            (_, ChartSourceXmlSlot::Values) => ("c:val", "c:numRef"),
         }
     };
     let write_chart_source_container = |writer: &mut Writer<Cursor<Vec<u8>>>,
@@ -17637,7 +17642,7 @@ fn patch_loaded_chart_model_xml(
 
                 if current_series_index.is_some() {
                     match local_name.as_slice() {
-                        b"tx" | b"cat" | b"val" => {
+                        b"tx" | b"cat" | b"val" | b"xVal" | b"yVal" => {
                             source_stack.pop();
                         }
                         b"ser" => {
@@ -17751,14 +17756,24 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
         }
         if let Some(x_values) = series.x_values.as_ref() {
             let formula = partial_escape(x_values.raw.text.trim_start_matches('=')).to_string();
+            let (container_name, reference_name) = if chart.chart_type == ChartType::Scatter {
+                ("xVal", "numRef")
+            } else {
+                ("cat", "strRef")
+            };
             series_xml.push_str(&format!(
-                r#"<c:cat><c:strRef><c:f>{formula}</c:f></c:strRef></c:cat>"#
+                r#"<c:{container_name}><c:{reference_name}><c:f>{formula}</c:f></c:{reference_name}></c:{container_name}>"#
             ));
         }
         if let Some(values) = series.values.as_ref() {
             let formula = partial_escape(values.raw.text.trim_start_matches('=')).to_string();
+            let (container_name, reference_name) = if chart.chart_type == ChartType::Scatter {
+                ("yVal", "numRef")
+            } else {
+                ("val", "numRef")
+            };
             series_xml.push_str(&format!(
-                r#"<c:val><c:numRef><c:f>{formula}</c:f></c:numRef></c:val>"#
+                r#"<c:{container_name}><c:{reference_name}><c:f>{formula}</c:f></c:{reference_name}></c:{container_name}>"#
             ));
         }
         series_xml.push_str("</c:ser>");
@@ -70351,6 +70366,85 @@ mod tests {
         assert!(saved_chart_xml.contains("<c:f>'Data 2026'!$C$1</c:f>"));
         assert!(saved_chart_xml.contains("<c:f>'Data 2026'!$A$1:$B$1</c:f>"));
         assert!(saved_chart_xml.contains("<c:f>'Data 2026'!$A$1:$C$1</c:f>"));
+        assert!(!saved_chart_xml.contains("Sheet1!$A$1:$C$1"));
+    }
+
+    #[test]
+    fn loaded_scatter_chart_source_rename_preserves_xval_yval_containers() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace("<c:barChart>", "<c:scatterChart>")
+        .replace("</c:barChart>", "</c:scatterChart>")
+        .replace("<c:cat><c:strRef>", "<c:xVal><c:numRef>")
+        .replace("</c:strRef></c:cat>", "</c:numRef></c:xVal>")
+        .replace("<c:val><c:numRef>", "<c:yVal><c:numRef>")
+        .replace("</c:numRef></c:val>", "</c:numRef></c:yVal>")
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:scatter-source-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with scatter chart extension");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+
+        runtime
+            .dispatch_set(
+                worksheet,
+                "Name",
+                OmValue::Text("Data 2026".to_string()),
+                &[],
+            )
+            .expect("rename scatter chart source worksheet");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save renamed scatter chart source workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:scatter-source-preserve"/>"#));
+        assert!(saved_chart_xml.contains("<c:scatterChart>"));
+        assert!(saved_chart_xml.contains("<c:xVal><c:numRef><c:f>'Data 2026'!$A$1:$B$1</c:f>"));
+        assert!(saved_chart_xml.contains("<c:yVal><c:numRef><c:f>'Data 2026'!$A$1:$C$1</c:f>"));
+        assert!(!saved_chart_xml.contains("<c:cat>"));
+        assert!(!saved_chart_xml.contains("<c:val>"));
         assert!(!saved_chart_xml.contains("Sheet1!$A$1:$C$1"));
     }
 
