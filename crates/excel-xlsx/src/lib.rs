@@ -606,6 +606,7 @@ pub struct DrawingAnchorSummary {
     pub non_visual_attrs: BTreeMap<String, String>,
     pub non_visual_child_xml: Option<String>,
     pub non_visual_frame_properties_xml: Option<String>,
+    pub client_data_attrs: BTreeMap<String, String>,
     pub client_data_xml: Option<String>,
     pub anchor_extension_xmls: Vec<String>,
     pub name: Option<String>,
@@ -1359,6 +1360,27 @@ impl XlsxCodec {
                         for (key, value) in &chart_object.non_visual_attrs {
                             if key == "id" || key == "name" || written_preserved_attrs.contains(key)
                             {
+                                continue;
+                            }
+                            rewritten.push_attribute((key.as_str(), value.as_str()));
+                        }
+                        return Ok(Some(rewritten));
+                    }
+                    if local_name == b"clientData" {
+                        let mut rewritten = BytesStart::new(
+                            String::from_utf8_lossy(element.name().as_ref()).into_owned(),
+                        );
+                        let mut written_preserved_attrs = BTreeSet::new();
+                        for attr in element.attributes() {
+                            let attr = attr.map_err(xml_error)?;
+                            let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+                            if let Some(value) = chart_object.client_data_attrs.get(&key) {
+                                rewritten.push_attribute((key.as_str(), value.as_str()));
+                                written_preserved_attrs.insert(key);
+                            }
+                        }
+                        for (key, value) in &chart_object.client_data_attrs {
+                            if written_preserved_attrs.contains(key) {
                                 continue;
                             }
                             rewritten.push_attribute((key.as_str(), value.as_str()));
@@ -3196,6 +3218,7 @@ fn build_chart_model_overlay(
                         non_visual_frame_properties_xml: anchor_summary
                             .non_visual_frame_properties_xml
                             .clone(),
+                        client_data_attrs: anchor_summary.client_data_attrs.clone(),
                         client_data_xml: anchor_summary.client_data_xml.clone(),
                         anchor_extension_xmls: anchor_summary.anchor_extension_xmls.clone(),
                         name: anchor_summary
@@ -15188,6 +15211,7 @@ fn parse_drawing_part_summary(
                             non_visual_attrs: BTreeMap::new(),
                             non_visual_child_xml: None,
                             non_visual_frame_properties_xml: None,
+                            client_data_attrs: BTreeMap::new(),
                             client_data_xml: None,
                             anchor_extension_xmls: Vec::new(),
                             name: None,
@@ -15393,11 +15417,15 @@ fn parse_drawing_part_summary(
                             }
                         }
                         b"clientData" => {
+                            let attrs = decode_attrs(&element, &reader)?;
                             let raw_xml = capture_start_element_xml(&mut reader, element)?;
-                            if let Some(anchor) = active_anchor.as_mut()
-                                && anchor.client_data_xml.is_none()
-                            {
-                                anchor.client_data_xml = Some(raw_xml);
+                            if let Some(anchor) = active_anchor.as_mut() {
+                                if anchor.client_data_attrs.is_empty() {
+                                    anchor.client_data_attrs = attrs;
+                                }
+                                if anchor.client_data_xml.is_none() {
+                                    anchor.client_data_xml = Some(raw_xml);
+                                }
                             }
                             active_anchor_depth = active_anchor_depth.saturating_sub(1);
                         }
@@ -15454,6 +15482,7 @@ fn parse_drawing_part_summary(
                             non_visual_attrs: BTreeMap::new(),
                             non_visual_child_xml: None,
                             non_visual_frame_properties_xml: None,
+                            client_data_attrs: BTreeMap::new(),
                             client_data_xml: None,
                             anchor_extension_xmls: Vec::new(),
                             name: None,
@@ -15624,16 +15653,20 @@ fn parse_drawing_part_summary(
                         }
                     }
                     b"clientData" => {
+                        let attrs = decode_attrs(&element, &reader)?;
                         let mut writer = Writer::new(Cursor::new(Vec::new()));
                         writer
                             .write_event(Event::Empty(element.into_owned()))
                             .map_err(xml_error)?;
                         let raw_xml = String::from_utf8(writer.into_inner().into_inner())
                             .map_err(xml_error)?;
-                        if let Some(anchor) = active_anchor.as_mut()
-                            && anchor.client_data_xml.is_none()
-                        {
-                            anchor.client_data_xml = Some(raw_xml);
+                        if let Some(anchor) = active_anchor.as_mut() {
+                            if anchor.client_data_attrs.is_empty() {
+                                anchor.client_data_attrs = attrs;
+                            }
+                            if anchor.client_data_xml.is_none() {
+                                anchor.client_data_xml = Some(raw_xml);
+                            }
                         }
                     }
                     b"extLst" if active_anchor_depth == 1 => {
@@ -19458,14 +19491,25 @@ fn write_chart_object_anchor(
         ));
     };
     let write_client_data = |writer: &mut Writer<Cursor<Vec<u8>>>| -> OmResult<()> {
-        if let Some(client_data_xml) = chart_object.client_data_xml.as_deref() {
+        if let Some(client_data_xml) = chart_object.client_data_xml.as_deref()
+            && chart_object.client_data_attrs.is_empty()
+        {
             writer
                 .get_mut()
                 .write_all(client_data_xml.as_bytes())
                 .map_err(io_error)?;
         } else {
+            let mut client_data = BytesStart::new("xdr:clientData");
+            let preserved_client_data_attrs = chart_object
+                .client_data_attrs
+                .iter()
+                .map(|(name, value)| (name.as_str(), partial_escape(value.as_str()).to_string()))
+                .collect::<Vec<_>>();
+            for (name, value) in &preserved_client_data_attrs {
+                client_data.push_attribute((*name, value.as_str()));
+            }
             writer
-                .write_event(Event::Empty(BytesStart::new("xdr:clientData")))
+                .write_event(Event::Empty(client_data))
                 .map_err(xml_error)?;
         }
         Ok(())
@@ -19732,6 +19776,7 @@ mod tests {
             non_visual_attrs: BTreeMap::new(),
             non_visual_child_xml: None,
             non_visual_frame_properties_xml: None,
+            client_data_attrs: BTreeMap::new(),
             client_data_xml: None,
             anchor_extension_xmls: Vec::new(),
             workbook_id: WorkbookId(0),
@@ -20508,6 +20553,7 @@ mod tests {
                 non_visual_attrs: BTreeMap::new(),
                 non_visual_child_xml: None,
                 non_visual_frame_properties_xml: None,
+                client_data_attrs: BTreeMap::new(),
                 client_data_xml: Some(r#"<xdr:clientData/>"#.to_string()),
                 anchor_extension_xmls: Vec::new(),
                 name: Some("Chart Sheet Chart".to_string()),
@@ -20831,6 +20877,10 @@ mod tests {
                     r#"<xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1" noChangeAspect="1"/></xdr:cNvGraphicFramePr>"#
                         .to_string()
                 ),
+                client_data_attrs: BTreeMap::from([
+                    ("fLocksWithSheet".to_string(), "1".to_string()),
+                    ("fPrintsWithSheet".to_string(), "0".to_string()),
+                ]),
                 client_data_xml: Some(
                     r#"<xdr:clientData fLocksWithSheet="1" fPrintsWithSheet="0"/>"#.to_string()
                 ),

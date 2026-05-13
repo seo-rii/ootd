@@ -2755,6 +2755,62 @@ impl ExcelRuntime {
                             ))
                         }
                     }
+                    "PrintObject" => {
+                        let OmValue::Bool(print_object) = value else {
+                            return Err(OmError::type_mismatch(
+                                "ChartObject.PrintObject expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let new_value = if print_object { "1" } else { "0" };
+                        let mut found = false;
+                        let mut workbook_dirty = false;
+                        for drawing in runtime.loaded.state.drawings.values_mut() {
+                            for object in &mut drawing.objects {
+                                let DrawingObjectModel::ChartFrame(chart_object) = object else {
+                                    continue;
+                                };
+                                if chart_object.id != chart_object_id {
+                                    continue;
+                                }
+                                found = true;
+                                if chart_object
+                                    .client_data_attrs
+                                    .get("fPrintsWithSheet")
+                                    .map_or(true, |value| value != new_value)
+                                {
+                                    chart_object.client_data_attrs.insert(
+                                        "fPrintsWithSheet".to_string(),
+                                        new_value.to_string(),
+                                    );
+                                    chart_object.dirty = true;
+                                    drawing.dirty = true;
+                                    workbook_dirty = true;
+                                }
+                                break;
+                            }
+                            if found {
+                                break;
+                            }
+                        }
+                        if workbook_dirty {
+                            runtime.dirty = true;
+                        }
+                        if found {
+                            Ok(())
+                        } else {
+                            Err(OmError::new(
+                                OmErrorCode::NotFound,
+                                "chart object not found",
+                            ))
+                        }
+                    }
                     _ => Err(OmError::unsupported(format!(
                         "ChartObject.{member} is not writable"
                     ))),
@@ -7327,6 +7383,7 @@ impl ExcelRuntime {
                             | "Height"
                             | "Visible"
                             | "OnAction"
+                            | "PrintObject"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -9415,6 +9472,7 @@ impl ExcelRuntime {
                             non_visual_attrs: BTreeMap::new(),
                             non_visual_child_xml: None,
                             non_visual_frame_properties_xml: None,
+                            client_data_attrs: BTreeMap::new(),
                             client_data_xml: None,
                             anchor_extension_xmls: Vec::new(),
                             workbook_id,
@@ -9512,6 +9570,18 @@ impl ExcelRuntime {
                     .cloned()
                     .unwrap_or_default(),
             )),
+            "PrintObject" => {
+                let print_object = self
+                    .chart_object_model(workbook, chart_object_id)?
+                    .client_data_attrs
+                    .get("fPrintsWithSheet")
+                    .map_or(true, |value| {
+                        !(value == "0"
+                            || value.eq_ignore_ascii_case("false")
+                            || value.eq_ignore_ascii_case("off"))
+                    });
+                Ok(OmValue::Bool(print_object))
+            }
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Left" | "Top" | "Width" | "Height" => {
                 Ok(OmValue::Number(Self::chart_object_geometry_value(
@@ -11982,6 +12052,7 @@ impl ExcelRuntime {
                             non_visual_attrs: BTreeMap::new(),
                             non_visual_child_xml: None,
                             non_visual_frame_properties_xml: None,
+                            client_data_attrs: BTreeMap::new(),
                             client_data_xml: None,
                             anchor_extension_xmls: Vec::new(),
                             workbook_id: runtime.loaded.state.model.id,
@@ -70443,6 +70514,107 @@ mod tests {
     }
 
     #[test]
+    fn chartobject_printobject_roundtrips_client_data_print_attr() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "PrintObject", &[])
+                .expect("initial ChartObject.PrintObject"),
+            OmValue::Bool(false)
+        );
+        runtime
+            .dispatch_set(chart_object, "PrintObject", OmValue::Bool(true), &[])
+            .expect("set ChartObject.PrintObject true");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "PrintObject", &[])
+                .expect("ChartObject.PrintObject after true"),
+            OmValue::Bool(true)
+        );
+        let printable_bytes = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save printable chart object");
+        let printable_package =
+            OpcPackage::from_bytes(&printable_bytes).expect("printable package");
+        let printable_drawing = String::from_utf8(
+            printable_package
+                .part("xl/drawings/drawing1.xml")
+                .expect("printable drawing part")
+                .bytes
+                .clone(),
+        )
+        .expect("printable drawing utf8");
+        assert!(printable_drawing.contains(r#"fPrintsWithSheet="1""#));
+        assert!(printable_drawing.contains(r#"fLocksWithSheet="1""#));
+
+        runtime
+            .dispatch_set(chart_object, "PrintObject", OmValue::Bool(false), &[])
+            .expect("set ChartObject.PrintObject false");
+        let hidden_print_bytes = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save non-printable chart object");
+        let hidden_print_package =
+            OpcPackage::from_bytes(&hidden_print_bytes).expect("non-printable package");
+        let hidden_print_drawing = String::from_utf8(
+            hidden_print_package
+                .part("xl/drawings/drawing1.xml")
+                .expect("non-printable drawing part")
+                .bytes
+                .clone(),
+        )
+        .expect("non-printable drawing utf8");
+        assert!(hidden_print_drawing.contains(r#"fPrintsWithSheet="0""#));
+
+        let invalid_print_object = runtime
+            .dispatch_set(
+                chart_object,
+                "PrintObject",
+                OmValue::Text("true".to_string()),
+                &[],
+            )
+            .expect_err("ChartObject.PrintObject should reject non-bool");
+        assert_eq!(invalid_print_object.code, OmErrorCode::TypeMismatch);
+    }
+
+    #[test]
     fn worksheet_chartobjects_dispatch_reads_loaded_embedded_chart_models() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -70584,6 +70756,12 @@ mod tests {
                     .expect("ChartObject.OnAction")
             ),
             ""
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "PrintObject", &[])
+                .expect("ChartObject.PrintObject"),
+            OmValue::Bool(false)
         );
         runtime
             .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
