@@ -1294,10 +1294,57 @@ impl XlsxCodec {
                  -> OmResult<Option<BytesStart<'static>>> {
                     let element_name = element.name();
                     let local_name = xml_local_name(element_name.as_ref());
-                    let replacements = match (chart_object.anchor.as_ref(), local_name) {
-                        (Some(_), b"cNvPr") => {
-                            vec![("name".to_string(), chart_object.name.clone())]
+                    if local_name == b"cNvPr" {
+                        let mut rewritten = BytesStart::new(
+                            String::from_utf8_lossy(element.name().as_ref()).into_owned(),
+                        );
+                        let mut wrote_id = false;
+                        let mut wrote_name = false;
+                        let mut written_preserved_attrs = BTreeSet::new();
+                        for attr in element.attributes() {
+                            let attr = attr.map_err(xml_error)?;
+                            let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+                            if key == "id" {
+                                let value = chart_object
+                                    .non_visual_id
+                                    .map(|id| id.to_string())
+                                    .unwrap_or_else(|| chart_object.id.0.to_string());
+                                rewritten.push_attribute((key.as_str(), value.as_str()));
+                                wrote_id = true;
+                                continue;
+                            }
+                            if key == "name" {
+                                rewritten
+                                    .push_attribute((key.as_str(), chart_object.name.as_str()));
+                                wrote_name = true;
+                                continue;
+                            }
+                            if let Some(value) = chart_object.non_visual_attrs.get(&key) {
+                                rewritten.push_attribute((key.as_str(), value.as_str()));
+                                written_preserved_attrs.insert(key);
+                            }
                         }
+                        let id_value;
+                        if !wrote_id {
+                            id_value = chart_object
+                                .non_visual_id
+                                .map(|id| id.to_string())
+                                .unwrap_or_else(|| chart_object.id.0.to_string());
+                            rewritten.push_attribute(("id", id_value.as_str()));
+                        }
+                        if !wrote_name {
+                            rewritten.push_attribute(("name", chart_object.name.as_str()));
+                        }
+                        for (key, value) in &chart_object.non_visual_attrs {
+                            if key == "id" || key == "name" || written_preserved_attrs.contains(key)
+                            {
+                                continue;
+                            }
+                            rewritten.push_attribute((key.as_str(), value.as_str()));
+                        }
+                        return Ok(Some(rewritten));
+                    }
+                    let replacements = match (chart_object.anchor.as_ref(), local_name) {
                         (Some(DrawingAnchor::Absolute(anchor)), b"pos") => vec![
                             ("x".to_string(), anchor.position.x.0.to_string()),
                             ("y".to_string(), anchor.position.y.0.to_string()),
