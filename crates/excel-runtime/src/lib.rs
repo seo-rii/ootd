@@ -11024,6 +11024,36 @@ impl ExcelRuntime {
                     self.register_chart_handle(workbook, chart_id),
                 ))
             }
+            "Delete" if collection_kind == RuntimeSheetCollectionKind::Charts => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Charts.Delete does not accept arguments",
+                    ));
+                }
+                let chart_sheet_ids = {
+                    let runtime = self.runtime_workbook(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    runtime
+                        .loaded
+                        .state
+                        .worksheets
+                        .iter()
+                        .filter(|worksheet| worksheet.kind == SheetKind::ChartSheet)
+                        .map(|worksheet| worksheet.id)
+                        .collect::<Vec<_>>()
+                };
+                for sheet_id in chart_sheet_ids {
+                    if !self.delete_worksheet(workbook, sheet_id, true)? {
+                        return Ok(OmValue::Bool(false));
+                    }
+                }
+                Ok(OmValue::Bool(true))
+            }
             "Item" => self.resolve_sheet_collection_item(workbook, collection_kind, args),
             _ => Err(OmError::unsupported(format!(
                 "{collection_name}.{member} is not implemented as a method"
@@ -68747,6 +68777,101 @@ mod tests {
             office_common::SheetKind::ChartSheet
         );
         assert_eq!(reopened.state.chart_sheets.len(), 1);
+    }
+
+    #[test]
+    fn charts_delete_removes_chart_sheet_collection() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let first_chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(charts, "Add", &[])
+                .expect("first Charts.Add"),
+        );
+        runtime
+            .dispatch_invoke(charts, "Add", &[])
+            .expect("second Charts.Add");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Count", &[])
+                    .expect("Charts.Count before Delete")
+            ),
+            2.0
+        );
+        runtime
+            .dispatch_set(application, "DisplayAlerts", OmValue::Bool(false), &[])
+            .expect("disable DisplayAlerts");
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(charts, "Delete", &[])
+                .expect("Charts.Delete"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Count", &[])
+                    .expect("Charts.Count after Delete")
+            ),
+            0.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(worksheets, "Count", &[])
+                    .expect("Worksheets.Count after Charts.Delete")
+            ),
+            1.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "ActiveChart", &[])
+                .expect("ActiveChart after Charts.Delete"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_chart, "ChartType", &[])
+                .expect_err("deleted collection Chart handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after Charts.Delete");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved Charts.Delete package");
+        assert!(!saved_package.contains("xl/chartsheets/sheet1.xml"));
+        assert!(!saved_package.contains("xl/chartsheets/sheet2.xml"));
+        assert!(!saved_package.contains("xl/charts/chart1.xml"));
+        assert!(!saved_package.contains("xl/charts/chart2.xml"));
     }
 
     #[test]
