@@ -7211,6 +7211,7 @@ impl ExcelRuntime {
                     | (
                         "Chart",
                         "ChartType"
+                            | "Index"
                             | "ChartArea"
                             | "PlotArea"
                             | "HasTitle"
@@ -9443,6 +9444,64 @@ impl ExcelRuntime {
                 Ok(OmValue::Number(f64::from(chart_type_to_excel_value(
                     &self.chart_model(workbook, chart_id)?.chart_type,
                 )?)))
+            }
+            "Index" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Chart.Index does not accept arguments",
+                    ));
+                }
+                self.chart_model(workbook, chart_id)?;
+                let (chart_sheet_index, embedded_chart_object) = {
+                    let state = &self.runtime_workbook(workbook)?.loaded.state;
+                    let chart_sheet_index = state
+                        .worksheets
+                        .iter()
+                        .filter(|worksheet| worksheet.kind == SheetKind::ChartSheet)
+                        .position(|worksheet| {
+                            state
+                                .chart_sheets
+                                .get(&worksheet.id)
+                                .is_some_and(|binding| binding.chart_id == chart_id)
+                        })
+                        .map(|index| index + 1);
+                    let embedded_chart_object = if chart_sheet_index.is_none() {
+                        state.drawings.values().find_map(|drawing| {
+                            if !state.worksheets.iter().any(|worksheet| {
+                                worksheet.id == drawing.host_sheet_id
+                                    && worksheet.kind == SheetKind::Worksheet
+                            }) {
+                                return None;
+                            }
+                            drawing.objects.iter().find_map(|object| match object {
+                                DrawingObjectModel::ChartFrame(chart_object)
+                                    if chart_object.chart_id == chart_id =>
+                                {
+                                    Some((chart_object.host_sheet_id, chart_object.id))
+                                }
+                                _ => None,
+                            })
+                        })
+                    } else {
+                        None
+                    };
+                    (chart_sheet_index, embedded_chart_object)
+                };
+                if let Some(index) = chart_sheet_index {
+                    return Ok(OmValue::Number(index as f64));
+                }
+                if let Some((host_sheet_id, chart_object_id)) = embedded_chart_object {
+                    let index = self
+                        .chart_object_entries_for_sheet(workbook, host_sheet_id)?
+                        .iter()
+                        .position(|(candidate_id, _)| *candidate_id == chart_object_id)
+                        .map(|index| index + 1)
+                        .ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "chart object not found")
+                        })?;
+                    return Ok(OmValue::Number(index as f64));
+                }
+                Err(OmError::new(OmErrorCode::NotFound, "chart not found"))
             }
             "ChartArea" => {
                 if !args.is_empty() {
@@ -68903,9 +68962,11 @@ mod tests {
                 )
                 .expect("Charts.Add after chart sheet"),
         );
-        runtime
-            .dispatch_invoke(charts, "Add", &[OmValue::Object(first_chart)])
-            .expect("Charts.Add before chart sheet");
+        let third_chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(charts, "Add", &[OmValue::Object(first_chart)])
+                .expect("Charts.Add before chart sheet"),
+        );
 
         assert_eq!(
             expect_text(
@@ -68950,6 +69011,30 @@ mod tests {
                     .expect("second Chart.Name")
             ),
             "Chart2"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(third_chart, "Index", &[])
+                    .expect("third Chart.Index")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_chart, "Index", &[])
+                    .expect("first Chart.Index")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_chart, "Index", &[])
+                    .expect("second Chart.Index")
+            ),
+            3.0
         );
     }
 
@@ -69921,6 +70006,14 @@ mod tests {
             runtime
                 .dispatch_get(chart_object, "Chart", &[])
                 .expect("ChartObject.Chart before Chart.Name set"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_for_name, "Index", &[])
+                    .expect("embedded Chart.Index")
+            ),
+            1.0
         );
         runtime
             .dispatch_set(
