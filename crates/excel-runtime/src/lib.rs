@@ -16774,6 +16774,15 @@ fn patch_loaded_chart_model_xml(
         ChartSourceXmlSlot::XValues,
         ChartSourceXmlSlot::Values,
     ];
+    let source_container_target_local_name = |slot: ChartSourceXmlSlot| -> &'static str {
+        match (&chart.chart_type, slot) {
+            (_, ChartSourceXmlSlot::Name) => "tx",
+            (&ChartType::Scatter, ChartSourceXmlSlot::XValues) => "xVal",
+            (&ChartType::Scatter, ChartSourceXmlSlot::Values) => "yVal",
+            (_, ChartSourceXmlSlot::XValues) => "cat",
+            (_, ChartSourceXmlSlot::Values) => "val",
+        }
+    };
     let source_container_names = |slot: ChartSourceXmlSlot| -> (&'static str, &'static str) {
         match (&chart.chart_type, slot) {
             (_, ChartSourceXmlSlot::Name) => ("c:tx", "c:strRef"),
@@ -17119,6 +17128,22 @@ fn patch_loaded_chart_model_xml(
                         *written = true;
                     }
                     wrote_start_element = true;
+                }
+                if !wrote_start_element
+                    && let Some(slot) = source_container_slot(local_name.as_slice())
+                    && current_series_index.is_some()
+                {
+                    let target_local_name = source_container_target_local_name(slot);
+                    if target_local_name.as_bytes() != local_name.as_slice() {
+                        writer
+                            .write_event(Event::Start(rewrite_element_name(
+                                &element,
+                                reader.decoder(),
+                                target_local_name,
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        wrote_start_element = true;
+                    }
                 }
                 if !wrote_start_element
                     && let Some(source_chart_type) =
@@ -17634,6 +17659,22 @@ fn patch_loaded_chart_model_xml(
                             target_local_name,
                         ))))
                         .map_err(runtime_xml_error)?;
+                } else if let Some(slot) = source_container_slot(local_name.as_slice())
+                    && current_series_index.is_some()
+                {
+                    let target_local_name = source_container_target_local_name(slot);
+                    if target_local_name.as_bytes() != local_name.as_slice() {
+                        writer
+                            .write_event(Event::End(BytesEnd::new(qualified_replacement_name(
+                                element.name().as_ref(),
+                                target_local_name,
+                            ))))
+                            .map_err(runtime_xml_error)?;
+                    } else {
+                        writer
+                            .write_event(Event::End(element.to_owned()))
+                            .map_err(runtime_xml_error)?;
+                    }
                 } else {
                     writer
                         .write_event(Event::End(element.to_owned()))
@@ -72132,6 +72173,93 @@ mod tests {
             ),
             f64::from(super::XL_LINE)
         );
+    }
+
+    #[test]
+    fn loaded_chart_type_setter_rewrites_scatter_source_containers_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:chart-type-scatter-source-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart extension");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_XY_SCATTER)),
+                &[],
+            )
+            .expect("set loaded Chart.ChartType to scatter");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after loaded scatter chart type edit");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(
+            saved_chart_xml.contains(r#"<c:ext uri="urn:chart-type-scatter-source-preserve"/>"#)
+        );
+        assert!(saved_chart_xml.contains("<c:scatterChart>"));
+        assert!(saved_chart_xml.contains("<c:xVal>"));
+        assert!(saved_chart_xml.contains("<c:yVal>"));
+        assert!(!saved_chart_xml.contains("<c:cat>"));
+        assert!(!saved_chart_xml.contains("<c:val>"));
     }
 
     #[test]
