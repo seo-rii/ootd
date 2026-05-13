@@ -7325,6 +7325,41 @@ impl ExcelRuntime {
                     self.clipboard = None;
                     Ok(OmValue::Empty)
                 }
+                "Evaluate" => {
+                    let expression = coerce_evaluate_expression_arg(args, "Chart.Evaluate")?;
+                    self.chart_model(workbook, chart_id)?;
+                    if self.chart_sheet_id_for_chart(workbook, chart_id)?.is_some() {
+                        return Err(OmError::unsupported(
+                            "Chart.Evaluate is unsupported for chart sheets",
+                        ));
+                    }
+                    let host_sheet_id = {
+                        let state = &self.runtime_workbook(workbook)?.loaded.state;
+                        state
+                            .drawings
+                            .values()
+                            .find_map(|drawing| {
+                                drawing
+                                    .objects
+                                    .iter()
+                                    .any(|object| match object {
+                                        DrawingObjectModel::ChartFrame(chart_object) => {
+                                            chart_object.chart_id == chart_id
+                                        }
+                                        DrawingObjectModel::UnsupportedRaw { .. } => false,
+                                    })
+                                    .then_some(drawing.host_sheet_id)
+                            })
+                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?
+                    };
+                    self.ensure_grid_worksheet(workbook, host_sheet_id, "Chart.Evaluate")?;
+                    self.evaluate_formula_expression(
+                        workbook,
+                        host_sheet_id,
+                        expression,
+                        "Chart.Evaluate",
+                    )
+                }
                 "CopyPicture" => {
                     validate_copy_picture_args(args, 3, "Chart.CopyPicture")?;
                     self.chart_model(workbook, chart_id)?;
@@ -8335,6 +8370,7 @@ impl ExcelRuntime {
                             | "SetDefaultChart"
                             | "SetBackgroundPicture"
                             | "Paste"
+                            | "Evaluate"
                             | "CopyPicture"
                             | "SetElement"
                             | "Export"
@@ -74391,6 +74427,68 @@ mod tests {
                 .expect_err("Chart.Paste rejects too many arguments")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn chart_evaluate_uses_embedded_host_sheet_context() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(chart, "Evaluate", &[OmValue::Text("=A1+1".to_string())],)
+                    .expect("Chart.Evaluate host sheet formula")
+            ),
+            43.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "Evaluate", &[OmValue::Text("=SQRT(-1)".to_string())],)
+                .expect("Chart.Evaluate formula error"),
+            OmValue::Error(CellError::Num)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "Evaluate", &[])
+                .expect_err("Chart.Evaluate requires expression")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "Evaluate", &[OmValue::Number(1.0)])
+                .expect_err("Chart.Evaluate rejects non-text expression")
+                .code,
+            OmErrorCode::TypeMismatch
         );
     }
 
