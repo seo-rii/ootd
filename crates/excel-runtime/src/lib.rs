@@ -16576,14 +16576,17 @@ fn patch_loaded_chart_model_xml(
     let mut patched_sources = 0usize;
     let mut chart_type = None::<ChartType>;
     let mut chart_title_seen = false;
+    let mut chart_title_removed = false;
     let mut chart_title_text_written = false;
     let mut current_text_target = None::<(ChartTextXmlTarget, bool)>;
     let mut title_stack = Vec::<(usize, ChartTextXmlTarget)>::new();
     let mut legend_seen = false;
+    let mut legend_removed = false;
     let mut legend_position_written = false;
     let mut current_axis_index = None::<usize>;
     let mut axis_kinds = Vec::<ChartAxisKind>::new();
     let mut axis_title_texts = Vec::<Option<String>>::new();
+    let mut skip_depth = 0usize;
 
     let source_for_slot =
         |series_index: usize, slot: ChartSourceXmlSlot| -> Option<&ChartSourceExpr> {
@@ -16632,6 +16635,13 @@ fn patch_loaded_chart_model_xml(
 
     loop {
         match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(_)) if skip_depth > 0 => {
+                skip_depth += 1;
+            }
+            Ok(Event::End(_)) if skip_depth > 0 => {
+                skip_depth -= 1;
+            }
+            Ok(_) if skip_depth > 0 => {}
             Ok(Event::Start(element)) => {
                 let local_name = xml_local_name(element.name().as_ref()).to_vec();
                 let parent_name = element_stack.last().map(Vec::as_slice);
@@ -16670,13 +16680,29 @@ fn patch_loaded_chart_model_xml(
                 }
                 if local_name.as_slice() == b"title" && parent_name == Some(b"chart".as_slice()) {
                     chart_title_seen = true;
-                    title_stack.push((depth, ChartTextXmlTarget::ChartTitle));
+                    if chart.title.is_none() {
+                        chart_title_removed = true;
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    } else {
+                        title_stack.push((depth, ChartTextXmlTarget::ChartTitle));
+                    }
                 } else if local_name.as_slice() == b"title"
                     && parent_name.is_some_and(|parent_name| {
                         chart_axis_kind_from_xml_name(parent_name).is_some()
                     })
                     && let Some(axis_index) = current_axis_index
                 {
+                    if chart
+                        .axes
+                        .get(axis_index)
+                        .is_some_and(|axis| axis.title.is_none())
+                    {
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    }
                     title_stack.push((depth, ChartTextXmlTarget::AxisTitle(axis_index)));
                     if let Some(axis_title_text) = axis_title_texts.get_mut(axis_index) {
                         axis_title_text.get_or_insert_with(String::new);
@@ -16689,6 +16715,12 @@ fn patch_loaded_chart_model_xml(
                     && parent_name == Some(b"chart".as_slice())
                 {
                     legend_seen = true;
+                    if expected_legend_position.is_none() {
+                        legend_removed = true;
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    }
                 }
 
                 if local_name.as_slice() == b"legendPos"
@@ -16714,11 +16746,41 @@ fn patch_loaded_chart_model_xml(
             }
             Ok(Event::Empty(element)) => {
                 let local_name = xml_local_name(element.name().as_ref()).to_vec();
+                let parent_name = element_stack.last().map(Vec::as_slice);
                 if let Some(next_chart_type) = chart_type_from_group_name(local_name.as_slice()) {
                     if chart_type.is_some() {
                         return Ok(None);
                     }
                     chart_type = Some(next_chart_type);
+                }
+                if local_name.as_slice() == b"title" && parent_name == Some(b"chart".as_slice()) {
+                    chart_title_seen = true;
+                    if chart.title.is_none() {
+                        chart_title_removed = true;
+                        buffer.clear();
+                        continue;
+                    }
+                } else if local_name.as_slice() == b"title"
+                    && parent_name.is_some_and(|parent_name| {
+                        chart_axis_kind_from_xml_name(parent_name).is_some()
+                    })
+                    && let Some(axis_index) = current_axis_index
+                    && chart
+                        .axes
+                        .get(axis_index)
+                        .is_some_and(|axis| axis.title.is_none())
+                {
+                    buffer.clear();
+                    continue;
+                } else if local_name.as_slice() == b"legend"
+                    && parent_name == Some(b"chart".as_slice())
+                {
+                    legend_seen = true;
+                    if expected_legend_position.is_none() {
+                        legend_removed = true;
+                        buffer.clear();
+                        continue;
+                    }
                 }
                 if local_name.as_slice() == b"legendPos"
                     && expected_legend_position.is_some()
@@ -16936,11 +16998,13 @@ fn patch_loaded_chart_model_xml(
             });
     let title_matches = match (chart.title.as_ref(), chart_title_seen) {
         (Some(_), true) => chart_title_text_written,
+        (None, true) => chart_title_removed,
         (None, false) => true,
         _ => false,
     };
     let legend_matches = match (expected_legend_position, legend_seen) {
         (Some(_), true) => legend_position_written,
+        (None, true) => legend_removed,
         (None, false) => true,
         _ => false,
     };
@@ -69765,10 +69829,28 @@ mod tests {
 
     #[test]
     fn loaded_chart_child_delete_methods_persist_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:delete-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
-                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                bytes: package.to_bytes().expect("package bytes"),
                 format_hint: Some(FileFormat::Xlsx),
                 profile: ExcelProfile::Excel365,
                 read_only: false,
@@ -69914,6 +69996,21 @@ mod tests {
                 },
             )
             .expect("save workbook after chart child deletes");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:delete-preserve"/>"#));
+        assert!(!saved_chart_xml.contains("<c:legend>"));
+        assert!(!saved_chart_xml.contains("<a:t>Revenue Trend</a:t>"));
+        assert!(!saved_chart_xml.contains("<a:t>Quarter</a:t>"));
+        assert!(saved_chart_xml.contains("<a:t>Revenue</a:t>"));
+
         let mut reopened_runtime = ExcelRuntime::new();
         let reopened_workbook = reopened_runtime
             .open_workbook(OpenWorkbookSpec {
