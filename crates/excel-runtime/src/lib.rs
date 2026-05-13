@@ -7457,6 +7457,7 @@ impl ExcelRuntime {
                         "Name"
                             | "Chart"
                             | "Index"
+                            | "ZOrder"
                             | "Placement"
                             | "Left"
                             | "Top"
@@ -9677,7 +9678,7 @@ impl ExcelRuntime {
                     self.register_chart_handle(workbook, chart_id),
                 ))
             }
-            "Index" => {
+            "Index" | "ZOrder" => {
                 let sheet_id = self
                     .chart_object_model(workbook, chart_object_id)?
                     .host_sheet_id;
@@ -71107,6 +71108,14 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
+                    .dispatch_get(chart_object, "ZOrder", &[])
+                    .expect("ChartObject.ZOrder")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
                     .dispatch_get(chart_object, "Creator", &[])
                     .expect("ChartObject.Creator")
             ),
@@ -75802,8 +75811,24 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
+                    .dispatch_get(existing_chart_object, "ZOrder", &[])
+                    .expect("existing ChartObject.ZOrder after add")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
                     .dispatch_get(new_chart_object, "Index", &[])
                     .expect("new ChartObject.Index after add")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(new_chart_object, "ZOrder", &[])
+                    .expect("new ChartObject.ZOrder after add")
             ),
             2.0
         );
