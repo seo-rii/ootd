@@ -16587,13 +16587,14 @@ fn patch_loaded_chart_model_xml(
     let mut writer = Writer::new(Cursor::new(Vec::new()));
     let mut buffer = Vec::new();
     let mut element_stack = Vec::<Vec<u8>>::new();
-    let mut next_series_index = 0usize;
+    let mut next_loaded_series_index = 0usize;
     let mut current_series_index = None::<usize>;
     let mut source_stack = Vec::<ChartSourceXmlSlot>::new();
     let mut current_formula = None::<(ChartSourceXmlSlot, bool)>;
-    let mut source_slots_seen = Vec::<[bool; 3]>::new();
-    let mut series_order_seen = Vec::<bool>::new();
-    let mut series_order_written = Vec::<bool>::new();
+    let mut source_slots_seen = vec![[false; 3]; chart.series.len()];
+    let mut series_order_seen = vec![false; chart.series.len()];
+    let mut series_order_written = vec![false; chart.series.len()];
+    let mut series_emitted = vec![false; chart.series.len()];
     let mut patched_sources = 0usize;
     let mut chart_type = None::<ChartType>;
     let mut chart_type_rewritten = false;
@@ -16615,17 +16616,6 @@ fn patch_loaded_chart_model_xml(
     let mut chart_group_axis_refs_seen = Vec::<String>::new();
     let mut skip_depth = 0usize;
 
-    let source_for_slot =
-        |series_index: usize, slot: ChartSourceXmlSlot| -> Option<&ChartSourceExpr> {
-            chart
-                .series
-                .get(series_index)
-                .and_then(|series| match slot {
-                    ChartSourceXmlSlot::Name => series.name.as_ref(),
-                    ChartSourceXmlSlot::XValues => series.x_values.as_ref(),
-                    ChartSourceXmlSlot::Values => series.values.as_ref(),
-                })
-        };
     let slot_index = |slot: ChartSourceXmlSlot| -> usize {
         match slot {
             ChartSourceXmlSlot::Name => 0,
@@ -16641,6 +16631,130 @@ fn patch_loaded_chart_model_xml(
             _ => None,
         }
     };
+    let mut loaded_series_signatures = Vec::<[Option<String>; 3]>::new();
+    {
+        let mut signature_reader = Reader::from_reader(Cursor::new(existing_chart_xml));
+        signature_reader.config_mut().trim_text(false);
+        let mut signature_buffer = Vec::new();
+        let mut active_signature = None::<[Option<String>; 3]>;
+        let mut signature_source_stack = Vec::<ChartSourceXmlSlot>::new();
+        let mut signature_formula = None::<(ChartSourceXmlSlot, String, usize)>;
+
+        loop {
+            match signature_reader.read_event_into(&mut signature_buffer) {
+                Ok(Event::Start(element)) => {
+                    let local_name = xml_local_name(element.name().as_ref()).to_vec();
+                    if local_name.as_slice() == b"ser" && active_signature.is_none() {
+                        active_signature = Some([None, None, None]);
+                    } else if active_signature.is_some() {
+                        if let Some((_, _, depth)) = signature_formula.as_mut() {
+                            *depth += 1;
+                        } else if let Some(slot) = source_container_slot(local_name.as_slice()) {
+                            signature_source_stack.push(slot);
+                        } else if local_name.as_slice() == b"f"
+                            && let Some(slot) = signature_source_stack.last().copied()
+                        {
+                            signature_formula = Some((slot, String::new(), 1));
+                        }
+                    }
+                }
+                Ok(Event::Text(text)) => {
+                    if let Some((_, formula, _)) = signature_formula.as_mut() {
+                        formula.push_str(&text.xml_content().map_err(runtime_xml_error)?);
+                    }
+                }
+                Ok(Event::CData(data)) => {
+                    if let Some((_, formula, _)) = signature_formula.as_mut() {
+                        formula.push_str(&data.xml_content().map_err(runtime_xml_error)?);
+                    }
+                }
+                Ok(Event::End(element)) => {
+                    let local_name = xml_local_name(element.name().as_ref()).to_vec();
+                    if let Some((slot, formula, depth)) = signature_formula.as_mut() {
+                        if local_name.as_slice() == b"f" && *depth == 1 {
+                            if !formula.is_empty()
+                                && let Some(signature) = active_signature.as_mut()
+                            {
+                                signature[slot_index(*slot)].get_or_insert_with(|| formula.clone());
+                            }
+                            signature_formula = None;
+                        } else {
+                            *depth = depth.saturating_sub(1);
+                        }
+                    } else if matches!(local_name.as_slice(), b"tx" | b"cat" | b"val") {
+                        signature_source_stack.pop();
+                    } else if local_name.as_slice() == b"ser"
+                        && let Some(signature) = active_signature.take()
+                    {
+                        loaded_series_signatures.push(signature);
+                        signature_source_stack.clear();
+                    }
+                }
+                Ok(Event::Eof) => break,
+                Ok(_) => {}
+                Err(error) => return Err(runtime_xml_error(error)),
+            }
+            signature_buffer.clear();
+        }
+    }
+    let model_series_matches_signature = |series: &SeriesModel,
+                                          signature: &[Option<String>; 3]|
+     -> bool {
+        let sources = [
+            series.name.as_ref(),
+            series.x_values.as_ref(),
+            series.values.as_ref(),
+        ];
+        sources
+            .iter()
+            .zip(signature.iter())
+            .all(|(source, formula)| match (source, formula) {
+                (Some(source), Some(formula)) => source.raw.text.trim_start_matches('=') == formula,
+                (None, None) => true,
+                _ => false,
+            })
+    };
+    let mut used_model_series = vec![false; chart.series.len()];
+    let loaded_series_model_indices = loaded_series_signatures
+        .iter()
+        .enumerate()
+        .map(|(loaded_index, signature)| {
+            if let Some(model_index) =
+                chart
+                    .series
+                    .iter()
+                    .enumerate()
+                    .find_map(|(model_index, series)| {
+                        (!used_model_series[model_index]
+                            && model_series_matches_signature(series, signature))
+                        .then_some(model_index)
+                    })
+            {
+                used_model_series[model_index] = true;
+                Some(model_index)
+            } else if loaded_series_signatures.len() == chart.series.len()
+                && loaded_index < chart.series.len()
+                && !used_model_series[loaded_index]
+            {
+                used_model_series[loaded_index] = true;
+                Some(loaded_index)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let source_for_slot =
+        |series_index: usize, slot: ChartSourceXmlSlot| -> Option<&ChartSourceExpr> {
+            chart
+                .series
+                .get(series_index)
+                .and_then(|series| match slot {
+                    ChartSourceXmlSlot::Name => series.name.as_ref(),
+                    ChartSourceXmlSlot::XValues => series.x_values.as_ref(),
+                    ChartSourceXmlSlot::Values => series.values.as_ref(),
+                })
+        };
     let target_chart_group_name = chart_group_xml_name(&chart.chart_type);
     let qualified_replacement_name = |qualified_name: &[u8], replacement_local: &str| -> String {
         if let Some(prefix_len) = qualified_name.iter().position(|byte| *byte == b':') {
@@ -16859,17 +16973,22 @@ fn patch_loaded_chart_model_xml(
                     chart_group_axis_refs_seen.clear();
                 }
                 if local_name.as_slice() == b"ser" {
-                    if chart.series.get(next_series_index).is_none() {
+                    let Some(series_index) = loaded_series_model_indices
+                        .get(next_loaded_series_index)
+                        .copied()
+                        .flatten()
+                    else {
+                        next_loaded_series_index += 1;
                         skip_depth = 1;
                         buffer.clear();
                         continue;
+                    };
+                    current_series_index = Some(series_index);
+                    next_loaded_series_index += 1;
+                    if let Some(emitted) = series_emitted.get_mut(series_index) {
+                        *emitted = true;
                     }
-                    current_series_index = Some(next_series_index);
-                    next_series_index += 1;
                     source_stack.clear();
-                    source_slots_seen.push([false; 3]);
-                    series_order_seen.push(false);
-                    series_order_written.push(false);
                 } else if let Some(series_index) = current_series_index {
                     if let Some(slot) = source_container_slot(local_name.as_slice()) {
                         if source_for_slot(series_index, slot).is_none() {
@@ -17440,8 +17559,10 @@ fn patch_loaded_chart_model_xml(
                 if chart_type_from_group_name(local_name.as_slice()).is_some()
                     && current_chart_group_depth == Some(element_stack.len())
                 {
-                    while let Some(series) = chart.series.get(next_series_index) {
-                        let series_index = next_series_index;
+                    for (series_index, series) in chart.series.iter().enumerate() {
+                        if series_emitted.get(series_index).copied().unwrap_or(false) {
+                            continue;
+                        }
                         let mut source_seen = [false; 3];
                         writer
                             .write_event(Event::Start(BytesStart::new("c:ser")))
@@ -17470,10 +17591,18 @@ fn patch_loaded_chart_model_xml(
                         writer
                             .write_event(Event::End(BytesEnd::new("c:ser")))
                             .map_err(runtime_xml_error)?;
-                        source_slots_seen.push(source_seen);
-                        series_order_seen.push(true);
-                        series_order_written.push(true);
-                        next_series_index += 1;
+                        if let Some(seen) = source_slots_seen.get_mut(series_index) {
+                            *seen = source_seen;
+                        }
+                        if let Some(seen) = series_order_seen.get_mut(series_index) {
+                            *seen = true;
+                        }
+                        if let Some(written) = series_order_written.get_mut(series_index) {
+                            *written = true;
+                        }
+                        if let Some(emitted) = series_emitted.get_mut(series_index) {
+                            *emitted = true;
+                        }
                     }
                     if !chart_group_axis_refs_seen.is_empty() {
                         for (axis_index, axis) in chart.axes.iter().enumerate() {
@@ -71639,6 +71768,155 @@ mod tests {
                     .expect("reopened SeriesCollection.Count")
             ),
             1.0
+        );
+    }
+
+    #[test]
+    fn loaded_chart_first_series_delete_preserves_remaining_series_xml_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let second_series_xml = r#"<c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:strRef><c:f>Sheet1!$D$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$2:$B$2</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$3:$B$3</c:f></c:numRef></c:val></c:ser>"#;
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            "</c:barChart>",
+            &format!("{second_series_xml}</c:barChart>"),
+        )
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:first-series-delete-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with two loaded series");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let first_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+        runtime
+            .dispatch_invoke(first_series, "Delete", &[])
+            .expect("delete first loaded Series");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after first loaded Series.Delete");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:first-series-delete-preserve"/>"#));
+        assert!(!saved_chart_xml.contains("<c:f>Sheet1!$A$1:$C$1</c:f>"));
+        assert!(saved_chart_xml.contains("<c:f>Sheet1!$A$3:$B$3</c:f>"));
+        assert!(saved_chart_xml.contains(r#"<c:order val="0""#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after first loaded Series.Delete");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_series_collection, "Count", &[])
+                    .expect("reopened SeriesCollection.Count")
+            ),
+            1.0
+        );
+        let reopened_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(reopened_series, "Values", &[])
+                    .expect("reopened Series.Values")
+            ),
+            "=Sheet1!$A$3:$B$3"
         );
     }
 
