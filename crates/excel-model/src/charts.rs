@@ -21,6 +21,8 @@ pub struct ChartModel {
     pub legend: Option<LegendModel>,
     pub axes: Vec<AxisModel>,
     pub vary_by_categories: Option<bool>,
+    pub gap_width: Option<u16>,
+    pub overlap: Option<i16>,
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,
     pub raw_part_uri: Option<String>,

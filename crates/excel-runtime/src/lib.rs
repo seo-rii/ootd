@@ -3384,6 +3384,63 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
+                    "GapWidth" | "Overlap" => {
+                        let numeric_value = coerce_i32_arg(&value, format!("ChartGroup.{member}"))?;
+                        let (minimum, maximum) = if member == "GapWidth" {
+                            (0, 500)
+                        } else {
+                            (-100, 100)
+                        };
+                        if numeric_value < minimum || numeric_value > maximum {
+                            return Err(OmError::invalid_argument(format!(
+                                "ChartGroup.{member} must be between {minimum} and {maximum}"
+                            )));
+                        }
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        if group_index != 0 {
+                            return Err(OmError::new(
+                                OmErrorCode::NotFound,
+                                "chart group not found",
+                            ));
+                        }
+                        let changed = if member == "GapWidth" {
+                            let numeric_value = numeric_value as u16;
+                            if chart.gap_width == Some(numeric_value) {
+                                false
+                            } else {
+                                chart.gap_width = Some(numeric_value);
+                                true
+                            }
+                        } else {
+                            let numeric_value = numeric_value as i16;
+                            if chart.overlap == Some(numeric_value) {
+                                false
+                            } else {
+                                chart.overlap = Some(numeric_value);
+                                true
+                            }
+                        };
+                        if changed {
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     _ => Err(OmError::unsupported(format!(
                         "ChartGroup.{member} is not writable"
                     ))),
@@ -8696,6 +8753,8 @@ impl ExcelRuntime {
                             | "Index"
                             | "AxisGroup"
                             | "VaryByCategories"
+                            | "GapWidth"
+                            | "Overlap"
                             | "SeriesCollection"
                             | "Creator"
                             | "Application"
@@ -10805,6 +10864,8 @@ impl ExcelRuntime {
                             legend: None,
                             axes: default_chart_axes(),
                             vary_by_categories: None,
+                            gap_width: None,
+                            overlap: None,
                             display_blanks_as: None,
                             plot_visible_only: None,
                             raw_part_uri: None,
@@ -11654,6 +11715,8 @@ impl ExcelRuntime {
                     "VaryByCategories" => {
                         Ok(OmValue::Bool(chart.vary_by_categories.unwrap_or(false)))
                     }
+                    "GapWidth" => Ok(OmValue::Number(f64::from(chart.gap_width.unwrap_or(150)))),
+                    "Overlap" => Ok(OmValue::Number(f64::from(chart.overlap.unwrap_or(0)))),
                     "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
                     "Application" => Ok(OmValue::Object(self.root_application())),
                     "Parent" => Ok(OmValue::Object(
@@ -13628,6 +13691,8 @@ impl ExcelRuntime {
                         legend: None,
                         axes: default_chart_axes(),
                         vary_by_categories: None,
+                        gap_width: None,
+                        overlap: None,
                         display_blanks_as: None,
                         plot_visible_only: None,
                         raw_part_uri: Some(chart_part_uri.clone()),
@@ -18799,6 +18864,10 @@ fn patch_loaded_chart_model_xml(
     let expected_vary_colors = chart
         .vary_by_categories
         .map(|value| if value { "1" } else { "0" });
+    let expected_gap_width = chart.gap_width.map(|value| value.to_string());
+    let expected_overlap = chart.overlap.map(|value| value.to_string());
+    let expected_gap_width = expected_gap_width.as_deref();
+    let expected_overlap = expected_overlap.as_deref();
 
     let mut reader = Reader::from_reader(Cursor::new(existing_chart_xml));
     reader.config_mut().trim_text(false);
@@ -18835,6 +18904,12 @@ fn patch_loaded_chart_model_xml(
     let mut vary_colors_seen = false;
     let mut vary_colors_written = false;
     let mut vary_colors_inserted = false;
+    let mut gap_width_seen = false;
+    let mut gap_width_written = false;
+    let mut gap_width_inserted = false;
+    let mut overlap_seen = false;
+    let mut overlap_written = false;
+    let mut overlap_inserted = false;
     let mut current_axis_index = None::<usize>;
     let mut axis_kinds = Vec::<ChartAxisKind>::new();
     let mut axis_title_texts = Vec::<Option<String>>::new();
@@ -19341,6 +19416,14 @@ fn patch_loaded_chart_model_xml(
                         buffer.clear();
                         continue;
                     }
+                } else if local_name.as_slice() == b"gapWidth"
+                    && current_chart_group_depth == Some(element_stack.len())
+                {
+                    gap_width_seen = true;
+                } else if local_name.as_slice() == b"overlap"
+                    && current_chart_group_depth == Some(element_stack.len())
+                {
+                    overlap_seen = true;
                 }
 
                 if local_name.as_slice() == b"plotArea"
@@ -19444,6 +19527,30 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     display_blanks_as_written = true;
+                } else if !wrote_start_element
+                    && local_name.as_slice() == b"gapWidth"
+                    && let Some(value) = expected_gap_width
+                {
+                    writer
+                        .write_event(Event::Start(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    gap_width_written = true;
+                } else if !wrote_start_element
+                    && local_name.as_slice() == b"overlap"
+                    && let Some(value) = expected_overlap
+                {
+                    writer
+                        .write_event(Event::Start(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    overlap_written = true;
                 } else if !wrote_start_element {
                     writer
                         .write_event(Event::Start(element.into_owned()))
@@ -19570,6 +19677,14 @@ fn patch_loaded_chart_model_xml(
                         buffer.clear();
                         continue;
                     }
+                } else if local_name.as_slice() == b"gapWidth"
+                    && current_chart_group_depth == Some(element_stack.len())
+                {
+                    gap_width_seen = true;
+                } else if local_name.as_slice() == b"overlap"
+                    && current_chart_group_depth == Some(element_stack.len())
+                {
+                    overlap_seen = true;
                 }
                 if local_name.as_slice() == b"legendPos"
                     && expected_legend_position.is_some()
@@ -19607,6 +19722,28 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     display_blanks_as_written = true;
+                } else if local_name.as_slice() == b"gapWidth"
+                    && let Some(value) = expected_gap_width
+                {
+                    writer
+                        .write_event(Event::Empty(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    gap_width_written = true;
+                } else if local_name.as_slice() == b"overlap"
+                    && let Some(value) = expected_overlap
+                {
+                    writer
+                        .write_event(Event::Empty(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    overlap_written = true;
                 } else {
                     writer
                         .write_event(Event::Empty(element.into_owned()))
@@ -19971,6 +20108,24 @@ fn patch_loaded_chart_model_xml(
                             *emitted = true;
                         }
                     }
+                    if !gap_width_seen && let Some(value) = expected_gap_width {
+                        let mut gap_width = BytesStart::new("c:gapWidth");
+                        gap_width.push_attribute(("val", value));
+                        writer
+                            .write_event(Event::Empty(gap_width))
+                            .map_err(runtime_xml_error)?;
+                        gap_width_inserted = true;
+                        gap_width_written = true;
+                    }
+                    if !overlap_seen && let Some(value) = expected_overlap {
+                        let mut overlap = BytesStart::new("c:overlap");
+                        overlap.push_attribute(("val", value));
+                        writer
+                            .write_event(Event::Empty(overlap))
+                            .map_err(runtime_xml_error)?;
+                        overlap_inserted = true;
+                        overlap_written = true;
+                    }
                     if !chart_group_axis_refs_seen.is_empty() {
                         for (axis_index, axis) in chart.axes.iter().enumerate() {
                             let axis_id = chart_axis_id(axis_index, axis);
@@ -20105,6 +20260,16 @@ fn patch_loaded_chart_model_xml(
         (Some(_), false) => vary_colors_inserted,
         (None, _) => true,
     };
+    let gap_width_matches = match (expected_gap_width, gap_width_seen) {
+        (Some(_), true) => gap_width_written,
+        (Some(_), false) => gap_width_inserted,
+        (None, _) => true,
+    };
+    let overlap_matches = match (expected_overlap, overlap_seen) {
+        (Some(_), true) => overlap_written,
+        (Some(_), false) => overlap_inserted,
+        (None, _) => true,
+    };
     let axes_match = axis_kinds.len() == chart.axes.len()
         && axis_kinds
             .iter()
@@ -20128,6 +20293,8 @@ fn patch_loaded_chart_model_xml(
         && display_blanks_as_matches
         && plot_visible_only_matches
         && vary_colors_matches
+        && gap_width_matches
+        && overlap_matches
         && axes_match
     {
         Ok(Some(writer.into_inner().into_inner()))
@@ -20180,6 +20347,14 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     let vary_colors_xml = chart
         .vary_by_categories
         .map(|value| format!(r#"<c:varyColors val="{}"/>"#, if value { "1" } else { "0" }))
+        .unwrap_or_default();
+    let gap_width_xml = chart
+        .gap_width
+        .map(|value| format!(r#"<c:gapWidth val="{value}"/>"#))
+        .unwrap_or_default();
+    let overlap_xml = chart
+        .overlap
+        .map(|value| format!(r#"<c:overlap val="{value}"/>"#))
         .unwrap_or_default();
     let title_xml = chart
         .title
@@ -20250,7 +20425,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{vary_colors_xml}{series_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
+  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -20419,6 +20594,24 @@ fn runtime_name_scope(scope: RuntimeNamesScope) -> NameScope {
 fn coerce_u32_arg(value: &OmValue, label: &str) -> OmResult<u32> {
     match value {
         OmValue::Number(number) => coerce_positive_index(*number, label),
+        _ => Err(OmError::type_mismatch(format!("{label} must be numeric"))),
+    }
+}
+
+fn coerce_i32_arg(value: &OmValue, label: impl AsRef<str>) -> OmResult<i32> {
+    let label = label.as_ref();
+    match value {
+        OmValue::Number(number)
+            if number.is_finite()
+                && number.fract() == 0.0
+                && *number >= i32::MIN as f64
+                && *number <= i32::MAX as f64 =>
+        {
+            Ok(*number as i32)
+        }
+        OmValue::Number(_) => Err(OmError::invalid_argument(format!(
+            "{label} must be an integer"
+        ))),
         _ => Err(OmError::type_mismatch(format!("{label} must be numeric"))),
     }
 }
@@ -73826,6 +74019,44 @@ mod tests {
             .dispatch_set(chart_group, "VaryByCategories", OmValue::Number(1.0), &[])
             .expect_err("ChartGroup.VaryByCategories rejects non-bool");
         assert_eq!(invalid_vary_by_categories.code, OmErrorCode::TypeMismatch);
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "GapWidth", &[])
+                .expect("ChartGroup.GapWidth"),
+            OmValue::Number(150.0)
+        );
+        runtime
+            .dispatch_set(chart_group, "GapWidth", OmValue::Number(250.0), &[])
+            .expect("set ChartGroup.GapWidth");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "GapWidth", &[])
+                .expect("ChartGroup.GapWidth after set"),
+            OmValue::Number(250.0)
+        );
+        let invalid_gap_width = runtime
+            .dispatch_set(chart_group, "GapWidth", OmValue::Number(501.0), &[])
+            .expect_err("ChartGroup.GapWidth rejects out of range");
+        assert_eq!(invalid_gap_width.code, OmErrorCode::InvalidArgument);
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "Overlap", &[])
+                .expect("ChartGroup.Overlap"),
+            OmValue::Number(0.0)
+        );
+        runtime
+            .dispatch_set(chart_group, "Overlap", OmValue::Number(-25.0), &[])
+            .expect("set ChartGroup.Overlap");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "Overlap", &[])
+                .expect("ChartGroup.Overlap after set"),
+            OmValue::Number(-25.0)
+        );
+        let invalid_overlap = runtime
+            .dispatch_set(chart_group, "Overlap", OmValue::Number(-101.0), &[])
+            .expect_err("ChartGroup.Overlap rejects out of range");
+        assert_eq!(invalid_overlap.code, OmErrorCode::InvalidArgument);
         runtime
             .dispatch_set(
                 chart_group,
@@ -74196,6 +74427,134 @@ mod tests {
                 .dispatch_get(reopened_chart_group, "VaryByCategories", &[])
                 .expect("reopened ChartGroup.VaryByCategories"),
             OmValue::Bool(false)
+        );
+    }
+
+    #[test]
+    fn chart_group_gap_width_and_overlap_setters_roundtrip() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_group = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("Chart.ChartGroups(1)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "GapWidth", &[])
+                .expect("ChartGroup.GapWidth before set"),
+            OmValue::Number(150.0)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "Overlap", &[])
+                .expect("ChartGroup.Overlap before set"),
+            OmValue::Number(0.0)
+        );
+        runtime
+            .dispatch_set(chart_group, "GapWidth", OmValue::Number(250.0), &[])
+            .expect("set ChartGroup.GapWidth");
+        runtime
+            .dispatch_set(chart_group, "Overlap", OmValue::Number(-25.0), &[])
+            .expect("set ChartGroup.Overlap");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save chart group gap and overlap");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:gapWidth val="250"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:overlap val="-25"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:gapWidth val="150"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:overlap val="0"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen saved chart group workbook");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_chart_group = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("reopened Chart.ChartGroups(1)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart_group, "GapWidth", &[])
+                .expect("reopened ChartGroup.GapWidth"),
+            OmValue::Number(250.0)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart_group, "Overlap", &[])
+                .expect("reopened ChartGroup.Overlap"),
+            OmValue::Number(-25.0)
         );
     }
 
@@ -76528,8 +76887,8 @@ mod tests {
         )
         .expect("chart xml utf8")
         .replace(
-            "</c:ser></c:barChart>",
-            r#"</c:ser><c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:strRef><c:f>Sheet1!$C$2</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$2:$C$2</c:f></c:numRef></c:val></c:ser></c:barChart>"#,
+            r#"</c:ser><c:gapWidth val="150"/>"#,
+            r#"</c:ser><c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:strRef><c:f>Sheet1!$C$2</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$2:$C$2</c:f></c:numRef></c:val></c:ser><c:gapWidth val="150"/>"#,
         )
         .replace(
             "</c:chartSpace>",
@@ -87869,7 +88228,7 @@ mod tests {
                 compression: CompressionMethod::Stored,
                 bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:varyColors val="1"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val></c:ser></c:barChart><c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx><c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx></c:plotArea><c:legend><c:legendPos val="r"/></c:legend></c:chart>
+  <c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:varyColors val="1"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val></c:ser><c:gapWidth val="150"/><c:overlap val="0"/></c:barChart><c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx><c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx></c:plotArea><c:legend><c:legendPos val="r"/></c:legend></c:chart>
 </c:chartSpace>"#
                     .to_vec(),
             })

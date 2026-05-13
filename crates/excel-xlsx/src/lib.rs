@@ -657,6 +657,8 @@ pub struct ChartPartSummary {
     pub has_legend: bool,
     pub legend_position: Option<ChartLegendPosition>,
     pub vary_by_categories: Option<bool>,
+    pub gap_width: Option<u16>,
+    pub overlap: Option<i16>,
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,
     pub axes: Vec<ChartAxisSummary>,
@@ -3124,6 +3126,8 @@ fn build_chart_model_overlay(
                         }
                     }),
                     vary_by_categories: summary.and_then(|summary| summary.vary_by_categories),
+                    gap_width: summary.and_then(|summary| summary.gap_width),
+                    overlap: summary.and_then(|summary| summary.overlap),
                     display_blanks_as: summary.and_then(|summary| summary.display_blanks_as),
                     plot_visible_only: summary.and_then(|summary| summary.plot_visible_only),
                     axes: summary
@@ -15796,6 +15800,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut has_legend = false;
     let mut legend_position = None;
     let mut vary_by_categories = None;
+    let mut gap_width = None;
+    let mut overlap = None;
     let mut display_blanks_as = None;
     let mut plot_visible_only = None;
     let mut axes = Vec::new();
@@ -15857,6 +15863,21 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 .map(|value| parse_ooxml_bool(value.as_str()))
                 .transpose()
         };
+    let parse_i32_val_attr = |element: &BytesStart<'_>,
+                              reader: &Reader<Cursor<&[u8]>>,
+                              context: &str|
+     -> OmResult<Option<i32>> {
+        parse_string_val_attr(element, reader)?
+            .map(|value| {
+                value.trim().parse::<i32>().map_err(|error| {
+                    OmError::new(
+                        OmErrorCode::Parse,
+                        format!("chart {context} value must be an integer: {value}: {error}"),
+                    )
+                })
+            })
+            .transpose()
+    };
 
     let parse_display_blanks_as = |element: &BytesStart<'_>,
                                    reader: &Reader<Cursor<&[u8]>>,
@@ -15932,6 +15953,24 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
                     vary_by_categories = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                }
+                if local_name == b"gapWidth"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                    && let Some(value) = parse_i32_val_attr(&element, &reader, "gap width")?
+                    && (0..=500).contains(&value)
+                {
+                    gap_width = Some(value as u16);
+                }
+                if local_name == b"overlap"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                    && let Some(value) = parse_i32_val_attr(&element, &reader, "overlap")?
+                    && (-100..=100).contains(&value)
+                {
+                    overlap = Some(value as i16);
                 }
                 if local_name == b"dispBlanksAs"
                     && element_path.last().is_some_and(|name| name == "chart")
@@ -16055,6 +16094,24 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
                     vary_by_categories = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                }
+                if local_name == b"gapWidth"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                    && let Some(value) = parse_i32_val_attr(&element, &reader, "gap width")?
+                    && (0..=500).contains(&value)
+                {
+                    gap_width = Some(value as u16);
+                }
+                if local_name == b"overlap"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                    && let Some(value) = parse_i32_val_attr(&element, &reader, "overlap")?
+                    && (-100..=100).contains(&value)
+                {
+                    overlap = Some(value as i16);
                 }
                 if local_name == b"dispBlanksAs"
                     && element_path.last().is_some_and(|name| name == "chart")
@@ -16248,6 +16305,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         has_legend,
         legend_position,
         vary_by_categories,
+        gap_width,
+        overlap,
         display_blanks_as,
         plot_visible_only,
         axes,
@@ -20807,6 +20866,8 @@ mod tests {
           <c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat>
           <c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f><c:numCache><c:ptCount val="3"/></c:numCache></c:numRef></c:val>
         </c:ser>
+        <c:gapWidth val="150"/>
+        <c:overlap val="0"/>
       </c:barChart>
       <c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx>
       <c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx>
@@ -21012,6 +21073,8 @@ mod tests {
             Some(ChartLegendPosition::Right)
         );
         assert_eq!(chart_summary.vary_by_categories, Some(true));
+        assert_eq!(chart_summary.gap_width, Some(150));
+        assert_eq!(chart_summary.overlap, Some(0));
         assert_eq!(chart_summary.plot_visible_only, Some(false));
         assert_eq!(
             chart_summary.display_blanks_as,
@@ -21115,6 +21178,8 @@ mod tests {
         assert!(legend_model.visible);
         assert_eq!(legend_model.position, Some(ChartLegendPosition::Right));
         assert_eq!(chart_model.vary_by_categories, Some(true));
+        assert_eq!(chart_model.gap_width, Some(150));
+        assert_eq!(chart_model.overlap, Some(0));
         assert_eq!(chart_model.plot_visible_only, Some(false));
         assert_eq!(
             chart_model.display_blanks_as,
