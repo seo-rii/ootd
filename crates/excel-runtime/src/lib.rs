@@ -96,6 +96,16 @@ const XL_TYPE_PDF: i32 = 0;
 const XL_TYPE_XPS: i32 = 1;
 const XL_QUALITY_STANDARD: i32 = 0;
 const XL_QUALITY_MINIMUM: i32 = 1;
+const MSO_ELEMENT_CHART_TITLE_NONE: i32 = 0;
+const MSO_ELEMENT_CHART_TITLE_CENTERED_OVERLAY: i32 = 1;
+const MSO_ELEMENT_CHART_TITLE_ABOVE_CHART: i32 = 2;
+const MSO_ELEMENT_LEGEND_NONE: i32 = 100;
+const MSO_ELEMENT_LEGEND_RIGHT: i32 = 101;
+const MSO_ELEMENT_LEGEND_TOP: i32 = 102;
+const MSO_ELEMENT_LEGEND_LEFT: i32 = 103;
+const MSO_ELEMENT_LEGEND_BOTTOM: i32 = 104;
+const MSO_ELEMENT_LEGEND_RIGHT_OVERLAY: i32 = 105;
+const MSO_ELEMENT_LEGEND_LEFT_OVERLAY: i32 = 106;
 const XL_PASTE_ALL: i32 = -4104;
 const XL_PASTE_COMMENTS: i32 = -4144;
 const XL_PASTE_FORMATS: i32 = -4122;
@@ -7068,10 +7078,245 @@ impl ExcelRuntime {
                     self.chart_model(workbook, chart_id)?;
                     Ok(OmValue::Empty)
                 }
+                "CheckSpelling" => {
+                    if args.len() > 4 {
+                        return Err(OmError::invalid_argument(
+                            "Chart.CheckSpelling accepts at most CustomDictionary, IgnoreUppercase, AlwaysSuggest, and SpellLang arguments",
+                        ));
+                    }
+                    self.chart_model(workbook, chart_id)?;
+                    if let Some(value) = args.first()
+                        && !om_value_is_omitted(value)
+                        && !matches!(value, OmValue::Text(_))
+                    {
+                        return Err(OmError::type_mismatch(
+                            "Chart.CheckSpelling CustomDictionary expects a text value when provided",
+                        ));
+                    }
+                    if let Some(value) = args.get(1) {
+                        coerce_optional_bool_arg(
+                            value,
+                            false,
+                            "Chart.CheckSpelling IgnoreUppercase",
+                        )?;
+                    }
+                    if let Some(value) = args.get(2) {
+                        coerce_optional_bool_arg(
+                            value,
+                            false,
+                            "Chart.CheckSpelling AlwaysSuggest",
+                        )?;
+                    }
+                    validate_optional_integer_arg(args, 3, "Chart.CheckSpelling SpellLang")?;
+                    Ok(OmValue::Empty)
+                }
+                "ClearToMatchColorStyle" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "Chart.ClearToMatchColorStyle does not accept arguments",
+                        ));
+                    }
+                    self.chart_model(workbook, chart_id)?;
+                    Ok(OmValue::Empty)
+                }
+                "ApplyLayout" => {
+                    if args.is_empty() || args.len() > 2 {
+                        return Err(OmError::invalid_argument(
+                            "Chart.ApplyLayout expects Layout and optional ChartType arguments",
+                        ));
+                    }
+                    self.chart_model(workbook, chart_id)?;
+                    let layout = coerce_u32_arg(&args[0], "Chart.ApplyLayout Layout")?;
+                    if !(1..=10).contains(&layout) {
+                        return Err(OmError::invalid_argument(
+                            "Chart.ApplyLayout Layout expects a value from 1 to 10",
+                        ));
+                    }
+                    validate_optional_integer_arg(args, 1, "Chart.ApplyLayout ChartType")?;
+                    Ok(OmValue::Empty)
+                }
                 "CopyPicture" => {
                     validate_copy_picture_args(args, 3, "Chart.CopyPicture")?;
                     self.chart_model(workbook, chart_id)?;
                     self.set_headless_copy_mode();
+                    Ok(OmValue::Empty)
+                }
+                "SetElement" => {
+                    let [element] = args else {
+                        return Err(OmError::invalid_argument(
+                            "Chart.SetElement expects a single Element argument",
+                        ));
+                    };
+                    let OmValue::Number(number) = element else {
+                        return Err(OmError::type_mismatch(
+                            "Chart.SetElement Element expects a numeric value",
+                        ));
+                    };
+                    if !number.is_finite()
+                        || number.fract() != 0.0
+                        || *number < i32::MIN as f64
+                        || *number > i32::MAX as f64
+                    {
+                        return Err(OmError::invalid_argument(
+                            "Chart.SetElement Element expects an integer value",
+                        ));
+                    }
+                    let element = *number as i32;
+                    let changed_title_or_legend = matches!(
+                        element,
+                        MSO_ELEMENT_CHART_TITLE_NONE
+                            | MSO_ELEMENT_CHART_TITLE_CENTERED_OVERLAY
+                            | MSO_ELEMENT_CHART_TITLE_ABOVE_CHART
+                            | MSO_ELEMENT_LEGEND_NONE
+                            | MSO_ELEMENT_LEGEND_RIGHT
+                            | MSO_ELEMENT_LEGEND_TOP
+                            | MSO_ELEMENT_LEGEND_LEFT
+                            | MSO_ELEMENT_LEGEND_BOTTOM
+                            | MSO_ELEMENT_LEGEND_RIGHT_OVERLAY
+                            | MSO_ELEMENT_LEGEND_LEFT_OVERLAY
+                    );
+                    if !changed_title_or_legend {
+                        self.chart_model(workbook, chart_id)?;
+                        return Ok(OmValue::Empty);
+                    }
+
+                    let mut stale_titles = false;
+                    let mut stale_legends = false;
+                    {
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        match element {
+                            MSO_ELEMENT_CHART_TITLE_NONE => {
+                                if chart.title.take().is_some() {
+                                    stale_titles = true;
+                                    chart.dirty = true;
+                                    runtime.dirty = true;
+                                }
+                            }
+                            MSO_ELEMENT_CHART_TITLE_CENTERED_OVERLAY
+                            | MSO_ELEMENT_CHART_TITLE_ABOVE_CHART => {
+                                if chart.title.is_none() {
+                                    chart.title = Some(ChartText {
+                                        text: String::new(),
+                                    });
+                                    chart.dirty = true;
+                                    runtime.dirty = true;
+                                }
+                            }
+                            MSO_ELEMENT_LEGEND_NONE => {
+                                if chart.legend.take().is_some() {
+                                    stale_legends = true;
+                                    chart.dirty = true;
+                                    runtime.dirty = true;
+                                }
+                            }
+                            MSO_ELEMENT_LEGEND_RIGHT | MSO_ELEMENT_LEGEND_RIGHT_OVERLAY => {
+                                match chart.legend.as_mut() {
+                                    Some(legend) => {
+                                        if !legend.visible
+                                            || legend.position != Some(ChartLegendPosition::Right)
+                                        {
+                                            legend.visible = true;
+                                            legend.position = Some(ChartLegendPosition::Right);
+                                            chart.dirty = true;
+                                            runtime.dirty = true;
+                                        }
+                                    }
+                                    None => {
+                                        chart.legend = Some(LegendModel {
+                                            visible: true,
+                                            position: Some(ChartLegendPosition::Right),
+                                        });
+                                        chart.dirty = true;
+                                        runtime.dirty = true;
+                                    }
+                                }
+                            }
+                            MSO_ELEMENT_LEGEND_TOP => match chart.legend.as_mut() {
+                                Some(legend) => {
+                                    if !legend.visible
+                                        || legend.position != Some(ChartLegendPosition::Top)
+                                    {
+                                        legend.visible = true;
+                                        legend.position = Some(ChartLegendPosition::Top);
+                                        chart.dirty = true;
+                                        runtime.dirty = true;
+                                    }
+                                }
+                                None => {
+                                    chart.legend = Some(LegendModel {
+                                        visible: true,
+                                        position: Some(ChartLegendPosition::Top),
+                                    });
+                                    chart.dirty = true;
+                                    runtime.dirty = true;
+                                }
+                            },
+                            MSO_ELEMENT_LEGEND_LEFT | MSO_ELEMENT_LEGEND_LEFT_OVERLAY => {
+                                match chart.legend.as_mut() {
+                                    Some(legend) => {
+                                        if !legend.visible
+                                            || legend.position != Some(ChartLegendPosition::Left)
+                                        {
+                                            legend.visible = true;
+                                            legend.position = Some(ChartLegendPosition::Left);
+                                            chart.dirty = true;
+                                            runtime.dirty = true;
+                                        }
+                                    }
+                                    None => {
+                                        chart.legend = Some(LegendModel {
+                                            visible: true,
+                                            position: Some(ChartLegendPosition::Left),
+                                        });
+                                        chart.dirty = true;
+                                        runtime.dirty = true;
+                                    }
+                                }
+                            }
+                            MSO_ELEMENT_LEGEND_BOTTOM => match chart.legend.as_mut() {
+                                Some(legend) => {
+                                    if !legend.visible
+                                        || legend.position != Some(ChartLegendPosition::Bottom)
+                                    {
+                                        legend.visible = true;
+                                        legend.position = Some(ChartLegendPosition::Bottom);
+                                        chart.dirty = true;
+                                        runtime.dirty = true;
+                                    }
+                                }
+                                None => {
+                                    chart.legend = Some(LegendModel {
+                                        visible: true,
+                                        position: Some(ChartLegendPosition::Bottom),
+                                    });
+                                    chart.dirty = true;
+                                    runtime.dirty = true;
+                                }
+                            },
+                            _ => unreachable!("chart SetElement element was matched above"),
+                        }
+                    }
+                    if stale_titles {
+                        self.stale_chart_title_handles_for_chart(workbook, chart_id);
+                    }
+                    if stale_legends {
+                        self.stale_legend_handles_for_chart(workbook, chart_id);
+                    }
                     Ok(OmValue::Empty)
                 }
                 "Export" => {
@@ -7890,7 +8135,11 @@ impl ExcelRuntime {
                             | "Protect"
                             | "Unprotect"
                             | "Refresh"
+                            | "CheckSpelling"
+                            | "ClearToMatchColorStyle"
+                            | "ApplyLayout"
                             | "CopyPicture"
+                            | "SetElement"
                             | "Export"
                             | "ExportAsFixedFormat"
                             | "PrintPreview"
@@ -73980,6 +74229,276 @@ mod tests {
                 .expect_err("Chart.ExportAsFixedFormat rejects non-bool IncludeDocProperties")
                 .code,
             OmErrorCode::TypeMismatch
+        );
+    }
+
+    #[test]
+    fn chart_layout_helper_methods_validate_and_set_basic_elements() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved before layout helper methods"),
+            OmValue::Bool(true)
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "CheckSpelling",
+                    &[
+                        OmValue::Text("custom.dic".to_string()),
+                        OmValue::Bool(true),
+                        OmValue::Bool(false),
+                        OmValue::Number(1033.0),
+                    ],
+                )
+                .expect("Chart.CheckSpelling"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "ClearToMatchColorStyle", &[])
+                .expect("Chart.ClearToMatchColorStyle"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "ApplyLayout",
+                    &[
+                        OmValue::Number(1.0),
+                        OmValue::Number(f64::from(super::XL_LINE)),
+                    ],
+                )
+                .expect("Chart.ApplyLayout"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after no-op layout helper methods"),
+            OmValue::Bool(true)
+        );
+
+        let chart_title = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartTitle", &[])
+                .expect("Chart.ChartTitle before SetElement"),
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_CHART_TITLE_NONE,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementChartTitleNone");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasTitle", &[])
+                .expect("Chart.HasTitle after title none"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_title, "Text", &[])
+                .expect_err("ChartTitle handle should be stale after SetElement title none")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_CHART_TITLE_ABOVE_CHART,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementChartTitleAboveChart");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasTitle", &[])
+                .expect("Chart.HasTitle after title above chart"),
+            OmValue::Bool(true)
+        );
+
+        let legend = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Legend", &[])
+                .expect("Chart.Legend before SetElement"),
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(super::MSO_ELEMENT_LEGEND_LEFT))],
+            )
+            .expect("Chart.SetElement msoElementLegendLeft");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(legend, "Position", &[])
+                    .expect("Legend.Position after SetElement left")
+            ),
+            f64::from(super::XL_LEGEND_POSITION_LEFT)
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(super::MSO_ELEMENT_LEGEND_NONE))],
+            )
+            .expect("Chart.SetElement msoElementLegendNone");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasLegend", &[])
+                .expect("Chart.HasLegend after legend none"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(legend, "Position", &[])
+                .expect_err("Legend handle should be stale after SetElement legend none")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "SetElement",
+                    &[OmValue::Number(f64::from(super::MSO_ELEMENT_LEGEND_BOTTOM))],
+                )
+                .expect("Chart.SetElement msoElementLegendBottom"),
+            OmValue::Empty
+        );
+        let new_legend = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Legend", &[])
+                .expect("Chart.Legend after SetElement bottom"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(new_legend, "Position", &[])
+                    .expect("Legend.Position after SetElement bottom")
+            ),
+            f64::from(super::XL_LEGEND_POSITION_BOTTOM)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "SetElement", &[OmValue::Number(200.0)])
+                .expect("Chart.SetElement unsupported but valid MsoChartElementType"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after SetElement mutations"),
+            OmValue::Bool(false)
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "CheckSpelling",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                    ],
+                )
+                .expect_err("Chart.CheckSpelling rejects too many arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "CheckSpelling", &[OmValue::Number(1.0)])
+                .expect_err("Chart.CheckSpelling rejects non-text CustomDictionary")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "ClearToMatchColorStyle", &[OmValue::Missing])
+                .expect_err("Chart.ClearToMatchColorStyle rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "ApplyLayout", &[OmValue::Number(0.0)])
+                .expect_err("Chart.ApplyLayout rejects out-of-range layout")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "ApplyLayout",
+                    &[OmValue::Number(1.0), OmValue::Text("bad".to_string())],
+                )
+                .expect_err("Chart.ApplyLayout rejects non-numeric ChartType")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "SetElement", &[])
+                .expect_err("Chart.SetElement requires Element")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "SetElement", &[OmValue::Text("bad".to_string())])
+                .expect_err("Chart.SetElement rejects non-numeric Element")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "SetElement", &[OmValue::Number(1.5)])
+                .expect_err("Chart.SetElement rejects non-integer Element")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 
