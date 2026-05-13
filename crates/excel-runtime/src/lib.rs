@@ -30,6 +30,7 @@ const ROOT_APPLICATION_HANDLE_VALUE: u64 = 0;
 const FIRST_DYNAMIC_OBJECT_HANDLE_VALUE: u64 = 1_000_000;
 const APPLICATION_NAME: &str = "Microsoft Excel";
 const APPLICATION_VERSION: &str = "16.0";
+const XL_CREATOR_CODE: i32 = 1_480_803_660;
 const EXCEL_MAX_ROW_INDEX: u32 = 1_048_576;
 const EXCEL_MAX_COLUMN_INDEX: u32 = 16_384;
 const XL_CALCULATION_AUTOMATIC: i32 = -4105;
@@ -7200,7 +7201,7 @@ impl ExcelRuntime {
                     )
                     | (
                         "ChartObjects",
-                        "Count" | "Item" | "Application" | "Parent" | "Delete"
+                        "Count" | "Item" | "Creator" | "Application" | "Parent" | "Delete"
                     )
                     | (
                         "ChartObject",
@@ -7212,6 +7213,7 @@ impl ExcelRuntime {
                             | "Top"
                             | "Width"
                             | "Height"
+                            | "Creator"
                             | "Application"
                             | "Parent"
                             | "Activate"
@@ -7232,6 +7234,7 @@ impl ExcelRuntime {
                             | "Axes"
                             | "SeriesCollection"
                             | "FullSeriesCollection"
+                            | "Creator"
                             | "Application"
                             | "Parent"
                             | "Next"
@@ -7241,23 +7244,33 @@ impl ExcelRuntime {
                             | "Select"
                             | "Delete"
                     )
-                    | ("ChartArea", "Application" | "Parent" | "Select")
-                    | ("PlotArea", "Application" | "Parent" | "Select")
+                    | ("ChartArea", "Creator" | "Application" | "Parent" | "Select")
+                    | ("PlotArea", "Creator" | "Application" | "Parent" | "Select")
                     | (
                         "ChartTitle",
-                        "Text" | "Caption" | "Application" | "Parent" | "Select" | "Delete"
+                        "Text"
+                            | "Caption"
+                            | "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Select"
+                            | "Delete"
                     )
                     | (
                         "Legend",
-                        "Position" | "Application" | "Parent" | "Select" | "Delete"
+                        "Position" | "Creator" | "Application" | "Parent" | "Select" | "Delete"
                     )
-                    | ("Axes", "Count" | "Item" | "Application" | "Parent")
+                    | (
+                        "Axes",
+                        "Count" | "Item" | "Creator" | "Application" | "Parent"
+                    )
                     | (
                         "Axis",
                         "Type"
                             | "AxisGroup"
                             | "HasTitle"
                             | "AxisTitle"
+                            | "Creator"
                             | "Application"
                             | "Parent"
                             | "Select"
@@ -7265,11 +7278,17 @@ impl ExcelRuntime {
                     )
                     | (
                         "AxisTitle",
-                        "Text" | "Caption" | "Application" | "Parent" | "Select" | "Delete"
+                        "Text"
+                            | "Caption"
+                            | "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Select"
+                            | "Delete"
                     )
                     | (
                         "SeriesCollection",
-                        "Count" | "Item" | "Application" | "Parent"
+                        "Count" | "Item" | "Creator" | "Application" | "Parent"
                     )
                     | (
                         "Series",
@@ -7279,6 +7298,7 @@ impl ExcelRuntime {
                             | "Formula"
                             | "AxisGroup"
                             | "PlotOrder"
+                            | "Creator"
                             | "Application"
                             | "Parent"
                             | "Select"
@@ -7904,6 +7924,14 @@ impl ExcelRuntime {
                     )));
                 }
                 Ok(OmValue::Object(self.root_application()))
+            }
+            "Creator" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "{collection_name}.Creator does not accept arguments"
+                    )));
+                }
+                Ok(OmValue::Number(f64::from(XL_CREATOR_CODE)))
             }
             "Item" => self.resolve_sheet_collection_item(workbook, collection_kind, args),
             _ => Err(OmError::unsupported(format!(
@@ -8991,6 +9019,14 @@ impl ExcelRuntime {
                     self.register_worksheet_handle(workbook, sheet_id).0,
                 ))
             }
+            "Creator" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ChartObjects.Creator does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Number(f64::from(XL_CREATOR_CODE)))
+            }
             _ => Err(OmError::unsupported(format!(
                 "ChartObjects.{member} is not implemented"
             ))),
@@ -9343,6 +9379,7 @@ impl ExcelRuntime {
                     .chart_object_model(workbook, chart_object_id)?
                     .placement,
             )?))),
+            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Left" | "Top" | "Width" | "Height" => {
                 Ok(OmValue::Number(Self::chart_object_geometry_value(
                     self.chart_object_model(workbook, chart_object_id)?,
@@ -9457,6 +9494,15 @@ impl ExcelRuntime {
                 Ok(OmValue::Number(f64::from(chart_type_to_excel_value(
                     &self.chart_model(workbook, chart_id)?.chart_type,
                 )?)))
+            }
+            "Creator" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Chart.Creator does not accept arguments",
+                    ));
+                }
+                self.chart_model(workbook, chart_id)?;
+                Ok(OmValue::Number(f64::from(XL_CREATOR_CODE)))
             }
             "Index" => {
                 if !args.is_empty() {
@@ -9782,6 +9828,7 @@ impl ExcelRuntime {
         self.chart_model(workbook, chart_id)?;
 
         match member {
+            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(
                 self.register_chart_handle(workbook, chart_id),
@@ -9825,6 +9872,7 @@ impl ExcelRuntime {
                     ChartLegendPosition::Top => XL_LEGEND_POSITION_TOP,
                 })))
             }
+            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(
                 self.register_chart_handle(workbook, chart_id),
@@ -9854,6 +9902,15 @@ impl ExcelRuntime {
                 ))
             }
             "Item" => self.dispatch_invoke_axes(workbook, chart_id, member, args),
+            "Creator" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Axes.Creator does not accept arguments",
+                    ));
+                }
+                self.chart_model(workbook, chart_id)?;
+                Ok(OmValue::Number(f64::from(XL_CREATOR_CODE)))
+            }
             "Application" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(
@@ -9967,6 +10024,7 @@ impl ExcelRuntime {
                     },
                 )))
             }
+            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(
                 self.register_chart_handle(workbook, chart_id),
@@ -9998,6 +10056,7 @@ impl ExcelRuntime {
 
         match member {
             "Text" | "Caption" => Ok(OmValue::Text(title.text.clone())),
+            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(self.register_object(
                 RuntimeObjectKind::Axis {
@@ -10032,6 +10091,7 @@ impl ExcelRuntime {
 
         match member {
             "Text" | "Caption" => Ok(OmValue::Text(title.text.clone())),
+            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(
                 self.register_chart_handle(workbook, chart_id),
@@ -10061,6 +10121,15 @@ impl ExcelRuntime {
                 ))
             }
             "Item" => self.dispatch_invoke_series_collection(workbook, chart_id, member, args),
+            "Creator" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "SeriesCollection.Creator does not accept arguments",
+                    ));
+                }
+                self.chart_model(workbook, chart_id)?;
+                Ok(OmValue::Number(f64::from(XL_CREATOR_CODE)))
+            }
             "Application" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(
@@ -10191,6 +10260,7 @@ impl ExcelRuntime {
                 series,
                 series_index,
             )))),
+            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(
                 self.register_series_collection_handle(workbook, chart_id),
@@ -68777,6 +68847,14 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
+                    .dispatch_get(charts, "Creator", &[])
+                    .expect("Charts.Creator")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
                     .dispatch_get(charts, "Count", &[])
                     .expect("Charts.Count before Add")
             ),
@@ -68825,6 +68903,14 @@ mod tests {
                     .expect("Charts.Add chart type")
             ),
             f64::from(super::XL_BAR_CLUSTERED)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "Creator", &[])
+                    .expect("Charts.Add chart creator")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
         );
         let active_chart = expect_object_handle(
             runtime
@@ -70056,6 +70142,14 @@ mod tests {
             ),
             1.0
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Creator", &[])
+                    .expect("ChartObjects.Creator")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
+        );
         let chart_object = expect_object_handle(
             runtime
                 .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
@@ -70093,6 +70187,14 @@ mod tests {
                     .expect("ChartObject.Index")
             ),
             1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_object, "Creator", &[])
+                    .expect("ChartObject.Creator")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
         );
         assert_eq!(
             expect_number(
@@ -70190,6 +70292,14 @@ mod tests {
                     .expect("embedded Chart.Index")
             ),
             1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_for_name, "Creator", &[])
+                    .expect("embedded Chart.Creator")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
         );
         assert_eq!(
             runtime
@@ -70533,6 +70643,14 @@ mod tests {
                 .expect("Chart.ChartArea"),
         );
         assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_area, "Creator", &[])
+                    .expect("ChartArea.Creator")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
+        );
+        assert_eq!(
             expect_object_handle(
                 runtime
                     .dispatch_get(chart_area, "Application", &[])
@@ -70557,6 +70675,14 @@ mod tests {
             runtime
                 .dispatch_get(chart, "PlotArea", &[])
                 .expect("Chart.PlotArea"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(plot_area, "Creator", &[])
+                    .expect("PlotArea.Creator")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
         );
         let plot_area_parent = expect_object_handle(
             runtime
@@ -70584,6 +70710,14 @@ mod tests {
             ),
             2.0
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(axes, "Creator", &[])
+                    .expect("Axes.Creator")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
+        );
         let axis = expect_object_handle(
             runtime
                 .dispatch_invoke(axes, "Item", &[OmValue::Number(1.0)])
@@ -70605,6 +70739,14 @@ mod tests {
         assert_eq!(
             expect_number(runtime.dispatch_get(axis, "Type", &[]).expect("Axis.Type")),
             f64::from(super::XL_CATEGORY)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(axis, "Creator", &[])
+                    .expect("Axis.Creator")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
         );
         assert_eq!(
             expect_number(
@@ -70632,6 +70774,14 @@ mod tests {
                     .expect("AxisTitle.Text")
             ),
             "Quarter"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(axis_title, "Creator", &[])
+                    .expect("AxisTitle.Creator")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
         );
         let axis_title_parent = expect_object_handle(
             runtime
@@ -70679,6 +70829,14 @@ mod tests {
             "Revenue Trend"
         );
         assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_title, "Creator", &[])
+                    .expect("ChartTitle.Creator")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
+        );
+        assert_eq!(
             runtime
                 .dispatch_get(chart, "HasLegend", &[])
                 .expect("Chart.HasLegend"),
@@ -70705,6 +70863,14 @@ mod tests {
             ),
             f64::from(super::XL_LEGEND_POSITION_RIGHT)
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(legend, "Creator", &[])
+                    .expect("Legend.Creator")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
+        );
         let legend_parent = expect_object_handle(
             runtime
                 .dispatch_get(legend, "Parent", &[])
@@ -70730,6 +70896,14 @@ mod tests {
                     .expect("SeriesCollection.Count")
             ),
             1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Creator", &[])
+                    .expect("SeriesCollection.Creator")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
         );
         let series = expect_object_handle(
             runtime
@@ -70781,6 +70955,14 @@ mod tests {
                     .expect("Series.AxisGroup")
             ),
             f64::from(super::XL_PRIMARY)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series, "Creator", &[])
+                    .expect("Series.Creator")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
         );
         let series_by_chart_property = expect_object_handle(
             runtime
