@@ -7224,6 +7224,8 @@ impl ExcelRuntime {
                             | "FullSeriesCollection"
                             | "Application"
                             | "Parent"
+                            | "Next"
+                            | "Previous"
                             | "Activate"
                             | "Select"
                             | "Delete"
@@ -9502,6 +9504,67 @@ impl ExcelRuntime {
                     return Ok(OmValue::Number(index as f64));
                 }
                 Err(OmError::new(OmErrorCode::NotFound, "chart not found"))
+            }
+            "Next" | "Previous" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "Chart.{member} does not accept arguments"
+                    )));
+                }
+                self.chart_model(workbook, chart_id)?;
+                let adjacent_sheet_id = {
+                    let state = &self.runtime_workbook(workbook)?.loaded.state;
+                    let base_sheet_id = state
+                        .chart_sheets
+                        .iter()
+                        .find_map(|(sheet_id, binding)| {
+                            (binding.chart_id == chart_id).then_some(*sheet_id)
+                        })
+                        .or_else(|| {
+                            state.drawings.values().find_map(|drawing| {
+                                if !state.worksheets.iter().any(|worksheet| {
+                                    worksheet.id == drawing.host_sheet_id
+                                        && worksheet.kind == SheetKind::Worksheet
+                                }) {
+                                    return None;
+                                }
+                                drawing
+                                    .objects
+                                    .iter()
+                                    .any(|object| match object {
+                                        DrawingObjectModel::ChartFrame(chart_object) => {
+                                            chart_object.chart_id == chart_id
+                                        }
+                                        DrawingObjectModel::UnsupportedRaw { .. } => false,
+                                    })
+                                    .then_some(drawing.host_sheet_id)
+                            })
+                        })
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    let index = state
+                        .worksheets
+                        .iter()
+                        .position(|worksheet| worksheet.id == base_sheet_id)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?;
+                    if member == "Next" {
+                        state
+                            .worksheets
+                            .get(index + 1)
+                            .map(|worksheet| worksheet.id)
+                    } else if index == 0 {
+                        None
+                    } else {
+                        state
+                            .worksheets
+                            .get(index - 1)
+                            .map(|worksheet| worksheet.id)
+                    }
+                };
+                Ok(adjacent_sheet_id
+                    .map(|sheet_id| {
+                        OmValue::Object(self.register_worksheet_handle(workbook, sheet_id).0)
+                    })
+                    .unwrap_or(OmValue::Empty))
             }
             "ChartArea" => {
                 if !args.is_empty() {
@@ -69036,6 +69099,51 @@ mod tests {
             ),
             3.0
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(third_chart, "Previous", &[])
+                .expect("third Chart.Previous"),
+            OmValue::Empty
+        );
+        let third_next = expect_object_handle(
+            runtime
+                .dispatch_get(third_chart, "Next", &[])
+                .expect("third Chart.Next"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(third_next, "Name", &[])
+                    .expect("third Chart.Next.Name")
+            ),
+            "Chart1"
+        );
+        let first_previous = expect_object_handle(
+            runtime
+                .dispatch_get(first_chart, "Previous", &[])
+                .expect("first Chart.Previous"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(first_previous, "Name", &[])
+                    .expect("first Chart.Previous.Name")
+            ),
+            "Chart3"
+        );
+        let second_next = expect_object_handle(
+            runtime
+                .dispatch_get(second_chart, "Next", &[])
+                .expect("second Chart.Next"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(second_next, "Name", &[])
+                    .expect("second Chart.Next.Name")
+            ),
+            "Sheet1"
+        );
     }
 
     #[test]
@@ -70014,6 +70122,18 @@ mod tests {
                     .expect("embedded Chart.Index")
             ),
             1.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_for_name, "Next", &[])
+                .expect("embedded Chart.Next"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_for_name, "Previous", &[])
+                .expect("embedded Chart.Previous"),
+            OmValue::Empty
         );
         runtime
             .dispatch_set(
