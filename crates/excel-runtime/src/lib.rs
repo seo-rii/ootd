@@ -7128,6 +7128,15 @@ impl ExcelRuntime {
                     validate_optional_integer_arg(args, 3, "Chart.CheckSpelling SpellLang")?;
                     Ok(OmValue::Empty)
                 }
+                "Deselect" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "Chart.Deselect does not accept arguments",
+                        ));
+                    }
+                    self.chart_model(workbook, chart_id)?;
+                    Ok(OmValue::Empty)
+                }
                 "ClearToMatchColorStyle" | "ClearToMatchStyle" => {
                     if !args.is_empty() {
                         return Err(OmError::invalid_argument(format!(
@@ -7151,6 +7160,162 @@ impl ExcelRuntime {
                         ));
                     }
                     validate_optional_integer_arg(args, 1, "Chart.ApplyLayout ChartType")?;
+                    Ok(OmValue::Empty)
+                }
+                "ChartWizard" => {
+                    if args.len() > 11 {
+                        return Err(OmError::invalid_argument(
+                            "Chart.ChartWizard accepts at most Source, Gallery, Format, PlotBy, CategoryLabels, SeriesLabels, HasLegend, Title, CategoryTitle, ValueTitle, and ExtraTitle arguments",
+                        ));
+                    }
+                    self.chart_model(workbook, chart_id)?;
+                    let chart = self.register_chart_handle(workbook, chart_id);
+
+                    if let Some(value) = args.get(1)
+                        && !om_value_is_omitted(value)
+                    {
+                        self.dispatch_set(chart, "ChartType", value.clone(), &[])?;
+                    }
+                    if let Some(value) = args.get(2)
+                        && !om_value_is_omitted(value)
+                    {
+                        let format = coerce_u32_arg(value, "Chart.ChartWizard Format")?;
+                        if !(1..=10).contains(&format) {
+                            return Err(OmError::invalid_argument(
+                                "Chart.ChartWizard Format expects a value from 1 to 10",
+                            ));
+                        }
+                    }
+                    if let Some(value) = args.get(3)
+                        && !om_value_is_omitted(value)
+                    {
+                        let OmValue::Number(number) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Chart.ChartWizard PlotBy expects a numeric value when provided",
+                            ));
+                        };
+                        if !number.is_finite()
+                            || number.fract() != 0.0
+                            || *number < i32::MIN as f64
+                            || *number > i32::MAX as f64
+                        {
+                            return Err(OmError::invalid_argument(
+                                "Chart.ChartWizard PlotBy expects an integer value when provided",
+                            ));
+                        }
+                        if !matches!(*number as i32, XL_PLOT_BY_ROWS | XL_PLOT_BY_COLUMNS) {
+                            return Err(OmError::invalid_argument(
+                                "Chart.ChartWizard PlotBy supports xlRows and xlColumns",
+                            ));
+                        }
+                    }
+                    validate_optional_integer_arg(args, 4, "Chart.ChartWizard CategoryLabels")?;
+                    validate_optional_integer_arg(args, 5, "Chart.ChartWizard SeriesLabels")?;
+
+                    if let Some(value) = args.first()
+                        && !om_value_is_omitted(value)
+                    {
+                        match value {
+                            OmValue::Object(_) => {
+                                let mut source_args = vec![value.clone()];
+                                if let Some(plot_by) = args.get(3)
+                                    && !om_value_is_omitted(plot_by)
+                                {
+                                    source_args.push(plot_by.clone());
+                                }
+                                self.dispatch_invoke(chart, "SetSourceData", &source_args)?;
+                            }
+                            _ => {
+                                return Err(OmError::type_mismatch(
+                                    "Chart.ChartWizard Source expects a Range object when provided",
+                                ));
+                            }
+                        }
+                    }
+
+                    if let Some(value) = args.get(6)
+                        && !om_value_is_omitted(value)
+                    {
+                        let has_legend =
+                            coerce_optional_bool_arg(value, false, "Chart.ChartWizard HasLegend")?;
+                        self.dispatch_set(chart, "HasLegend", OmValue::Bool(has_legend), &[])?;
+                    }
+                    if let Some(value) = args.get(7)
+                        && !om_value_is_omitted(value)
+                    {
+                        let OmValue::Text(title) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Chart.ChartWizard Title expects a text value when provided",
+                            ));
+                        };
+                        self.dispatch_set(chart, "HasTitle", OmValue::Bool(true), &[])?;
+                        let OmValue::Object(chart_title) =
+                            self.dispatch_get(chart, "ChartTitle", &[])?
+                        else {
+                            unreachable!("Chart.ChartTitle returned a non-object value")
+                        };
+                        self.dispatch_set(chart_title, "Text", OmValue::Text(title.clone()), &[])?;
+                    }
+                    if let Some(value) = args.get(8)
+                        && !om_value_is_omitted(value)
+                    {
+                        let OmValue::Text(title) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Chart.ChartWizard CategoryTitle expects a text value when provided",
+                            ));
+                        };
+                        let OmValue::Object(axis) = self.dispatch_get(
+                            chart,
+                            "Axes",
+                            &[OmValue::Number(f64::from(XL_CATEGORY))],
+                        )?
+                        else {
+                            unreachable!("Chart.Axes returned a non-object value")
+                        };
+                        self.dispatch_set(axis, "HasTitle", OmValue::Bool(true), &[])?;
+                        let OmValue::Object(axis_title) =
+                            self.dispatch_get(axis, "AxisTitle", &[])?
+                        else {
+                            unreachable!("Axis.AxisTitle returned a non-object value")
+                        };
+                        self.dispatch_set(axis_title, "Text", OmValue::Text(title.clone()), &[])?;
+                    }
+                    if let Some(value) = args.get(9)
+                        && !om_value_is_omitted(value)
+                    {
+                        let OmValue::Text(title) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Chart.ChartWizard ValueTitle expects a text value when provided",
+                            ));
+                        };
+                        let OmValue::Object(axis) = self.dispatch_get(
+                            chart,
+                            "Axes",
+                            &[OmValue::Number(f64::from(XL_VALUE))],
+                        )?
+                        else {
+                            unreachable!("Chart.Axes returned a non-object value")
+                        };
+                        self.dispatch_set(axis, "HasTitle", OmValue::Bool(true), &[])?;
+                        let OmValue::Object(axis_title) =
+                            self.dispatch_get(axis, "AxisTitle", &[])?
+                        else {
+                            unreachable!("Axis.AxisTitle returned a non-object value")
+                        };
+                        self.dispatch_set(axis_title, "Text", OmValue::Text(title.clone()), &[])?;
+                    }
+                    if let Some(value) = args.get(10)
+                        && !om_value_is_omitted(value)
+                    {
+                        let OmValue::Text(_) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Chart.ChartWizard ExtraTitle expects a text value when provided",
+                            ));
+                        };
+                        return Err(OmError::unsupported(
+                            "Chart.ChartWizard ExtraTitle is not supported",
+                        ));
+                    }
                     Ok(OmValue::Empty)
                 }
                 "ApplyDataLabels" => {
@@ -8381,9 +8546,11 @@ impl ExcelRuntime {
                             | "Unprotect"
                             | "Refresh"
                             | "CheckSpelling"
+                            | "Deselect"
                             | "ClearToMatchColorStyle"
                             | "ClearToMatchStyle"
                             | "ApplyLayout"
+                            | "ChartWizard"
                             | "ApplyDataLabels"
                             | "ApplyChartTemplate"
                             | "SaveChartTemplate"
@@ -74820,6 +74987,203 @@ mod tests {
                     ],
                 )
                 .expect_err("Chart.ExportAsFixedFormat rejects non-bool IncludeDocProperties")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+    }
+
+    #[test]
+    fn chart_wizard_updates_basic_chart_surface_and_validates_arguments() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range source"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "ChartWizard",
+                    &[
+                        OmValue::Object(source),
+                        OmValue::Number(f64::from(super::XL_LINE)),
+                        OmValue::Number(5.0),
+                        OmValue::Number(f64::from(super::XL_PLOT_BY_COLUMNS)),
+                        OmValue::Number(1.0),
+                        OmValue::Number(1.0),
+                        OmValue::Bool(false),
+                        OmValue::Text("Sales".to_string()),
+                        OmValue::Text("Quarter".to_string()),
+                        OmValue::Text("Amount".to_string()),
+                    ],
+                )
+                .expect("Chart.ChartWizard"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ChartType", &[])
+                .expect("Chart.ChartType after ChartWizard"),
+            OmValue::Number(f64::from(super::XL_LINE))
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasLegend", &[])
+                .expect("Chart.HasLegend after ChartWizard"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasTitle", &[])
+                .expect("Chart.HasTitle after ChartWizard"),
+            OmValue::Bool(true)
+        );
+        let chart_title = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartTitle", &[])
+                .expect("Chart.ChartTitle after ChartWizard"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(chart_title, "Text", &[])
+                    .expect("ChartTitle.Text after ChartWizard")
+            ),
+            "Sales"
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection after ChartWizard"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection.Count after ChartWizard")
+            ),
+            2.0
+        );
+        let category_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.Axes category after ChartWizard"),
+        );
+        let category_title = expect_object_handle(
+            runtime
+                .dispatch_get(category_axis, "AxisTitle", &[])
+                .expect("category AxisTitle after ChartWizard"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(category_title, "Text", &[])
+                    .expect("category AxisTitle.Text after ChartWizard")
+            ),
+            "Quarter"
+        );
+        let value_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.Axes value after ChartWizard"),
+        );
+        let value_title = expect_object_handle(
+            runtime
+                .dispatch_get(value_axis, "AxisTitle", &[])
+                .expect("value AxisTitle after ChartWizard"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(value_title, "Text", &[])
+                    .expect("value AxisTitle.Text after ChartWizard")
+            ),
+            "Amount"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after ChartWizard"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "Deselect", &[])
+                .expect("Chart.Deselect"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "Deselect", &[OmValue::Missing])
+                .expect_err("Chart.Deselect rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "ChartWizard",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Text("Depth".to_string()),
+                    ],
+                )
+                .expect_err("Chart.ChartWizard ExtraTitle should be unsupported")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "ChartWizard", &[OmValue::Number(1.0)])
+                .expect_err("Chart.ChartWizard rejects non-range Source")
                 .code,
             OmErrorCode::TypeMismatch
         );
