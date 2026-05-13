@@ -7135,6 +7135,25 @@ impl ExcelRuntime {
                     validate_optional_integer_arg(args, 1, "Chart.ApplyLayout ChartType")?;
                     Ok(OmValue::Empty)
                 }
+                "ApplyChartTemplate" => {
+                    let [file_name] = args else {
+                        return Err(OmError::invalid_argument(
+                            "Chart.ApplyChartTemplate expects a single FileName argument",
+                        ));
+                    };
+                    self.chart_model(workbook, chart_id)?;
+                    let OmValue::Text(file_name) = file_name else {
+                        return Err(OmError::type_mismatch(
+                            "Chart.ApplyChartTemplate FileName expects a text value",
+                        ));
+                    };
+                    if file_name.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "Chart.ApplyChartTemplate FileName must not be empty",
+                        ));
+                    }
+                    Ok(OmValue::Empty)
+                }
                 "CopyPicture" => {
                     validate_copy_picture_args(args, 3, "Chart.CopyPicture")?;
                     self.chart_model(workbook, chart_id)?;
@@ -8138,6 +8157,7 @@ impl ExcelRuntime {
                             | "CheckSpelling"
                             | "ClearToMatchColorStyle"
                             | "ApplyLayout"
+                            | "ApplyChartTemplate"
                             | "CopyPicture"
                             | "SetElement"
                             | "Export"
@@ -74306,6 +74326,16 @@ mod tests {
         );
         assert_eq!(
             runtime
+                .dispatch_invoke(
+                    chart,
+                    "ApplyChartTemplate",
+                    &[OmValue::Text("standard.crtx".to_string())],
+                )
+                .expect("Chart.ApplyChartTemplate"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
                 .dispatch_get(workbook.0, "Saved", &[])
                 .expect("Workbook.Saved after no-op layout helper methods"),
             OmValue::Bool(true)
@@ -74478,6 +74508,27 @@ mod tests {
                 .expect_err("Chart.ApplyLayout rejects non-numeric ChartType")
                 .code,
             OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "ApplyChartTemplate", &[])
+                .expect_err("Chart.ApplyChartTemplate requires FileName")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "ApplyChartTemplate", &[OmValue::Number(1.0)])
+                .expect_err("Chart.ApplyChartTemplate rejects non-text FileName")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "ApplyChartTemplate", &[OmValue::Text(String::new())],)
+                .expect_err("Chart.ApplyChartTemplate rejects empty FileName")
+                .code,
+            OmErrorCode::InvalidArgument
         );
         assert_eq!(
             runtime
