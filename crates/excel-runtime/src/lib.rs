@@ -17168,6 +17168,21 @@ fn patch_loaded_chart_model_xml(
                     legend_inserted = true;
                     legend_position_written = true;
                 }
+                if chart_axis_kind_from_xml_name(local_name.as_slice()).is_some()
+                    && let Some(axis_index) = current_axis_index
+                    && axis_title_texts
+                        .get(axis_index)
+                        .is_some_and(|title_text| title_text.is_none())
+                    && let Some(title) = chart
+                        .axes
+                        .get(axis_index)
+                        .and_then(|axis| axis.title.as_ref())
+                {
+                    write_chart_text_element(&mut writer, "c:title", &title.text)?;
+                    if let Some(written) = axis_title_text_written.get_mut(axis_index) {
+                        *written = true;
+                    }
+                }
 
                 writer
                     .write_event(Event::End(element.to_owned()))
@@ -70816,6 +70831,171 @@ mod tests {
                 .dispatch_get(reopened_chart_title, "Text", &[])
                 .expect("reopened ChartTitle.Text"),
             OmValue::Text("Restored Revenue".to_string())
+        );
+    }
+
+    #[test]
+    fn loaded_chart_axis_has_title_setter_preserves_chart_extensions_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            r#"<c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx>"#,
+            r#"<c:catAx><c:axId val="10"/></c:catAx>"#,
+        )
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:axis-title-add-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook without category axis title");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let category_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.Axes(xlCategory)"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis, "HasTitle", &[])
+                .expect("Axis.HasTitle before set"),
+            OmValue::Bool(false)
+        );
+        runtime
+            .dispatch_set(category_axis, "HasTitle", OmValue::Bool(true), &[])
+            .expect("set loaded Axis.HasTitle");
+        let axis_title = expect_object_handle(
+            runtime
+                .dispatch_get(category_axis, "AxisTitle", &[])
+                .expect("Axis.AxisTitle after set"),
+        );
+        runtime
+            .dispatch_set(
+                axis_title,
+                "Text",
+                OmValue::Text("Fiscal Quarter".to_string()),
+                &[],
+            )
+            .expect("set restored AxisTitle.Text");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after loaded axis title add");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:axis-title-add-preserve"/>"#));
+        assert!(saved_chart_xml.contains("<a:t>Fiscal Quarter</a:t>"));
+        assert!(saved_chart_xml.contains("<a:t>Revenue</a:t>"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after loaded axis title add");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_category_axis = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("reopened Chart.Axes(xlCategory)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_category_axis, "HasTitle", &[])
+                .expect("reopened Axis.HasTitle"),
+            OmValue::Bool(true)
+        );
+        let reopened_axis_title = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_category_axis, "AxisTitle", &[])
+                .expect("reopened Axis.AxisTitle"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_axis_title, "Text", &[])
+                .expect("reopened AxisTitle.Text"),
+            OmValue::Text("Fiscal Quarter".to_string())
         );
     }
 
