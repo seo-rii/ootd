@@ -72263,6 +72263,97 @@ mod tests {
     }
 
     #[test]
+    fn loaded_scatter_chart_type_setter_rewrites_line_source_containers_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace("<c:barChart>", "<c:scatterChart>")
+        .replace("</c:barChart>", "</c:scatterChart>")
+        .replace("<c:cat><c:strRef>", "<c:xVal><c:numRef>")
+        .replace("</c:strRef></c:cat>", "</c:numRef></c:xVal>")
+        .replace("<c:val><c:numRef>", "<c:yVal><c:numRef>")
+        .replace("</c:numRef></c:val>", "</c:numRef></c:yVal>")
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:chart-type-line-source-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with scatter chart extension");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_LINE)),
+                &[],
+            )
+            .expect("set loaded scatter Chart.ChartType to line");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after loaded line chart type edit");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:chart-type-line-source-preserve"/>"#));
+        assert!(saved_chart_xml.contains("<c:lineChart>"));
+        assert!(saved_chart_xml.contains("<c:cat>"));
+        assert!(saved_chart_xml.contains("<c:val>"));
+        assert!(!saved_chart_xml.contains("<c:xVal>"));
+        assert!(!saved_chart_xml.contains("<c:yVal>"));
+    }
+
+    #[test]
     fn loaded_chart_has_legend_setter_preserves_chart_extensions_on_save() {
         let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
             .expect("embedded chart package");
