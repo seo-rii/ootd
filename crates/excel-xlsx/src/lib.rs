@@ -656,6 +656,7 @@ pub struct ChartPartSummary {
     pub title_text: Option<String>,
     pub has_legend: bool,
     pub legend_position: Option<ChartLegendPosition>,
+    pub vary_by_categories: Option<bool>,
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,
     pub axes: Vec<ChartAxisSummary>,
@@ -3122,6 +3123,7 @@ fn build_chart_model_overlay(
                             position: summary.legend_position,
                         }
                     }),
+                    vary_by_categories: summary.and_then(|summary| summary.vary_by_categories),
                     display_blanks_as: summary.and_then(|summary| summary.display_blanks_as),
                     plot_visible_only: summary.and_then(|summary| summary.plot_visible_only),
                     axes: summary
@@ -15793,6 +15795,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut title_text_depth = 0usize;
     let mut has_legend = false;
     let mut legend_position = None;
+    let mut vary_by_categories = None;
     let mut display_blanks_as = None;
     let mut plot_visible_only = None;
     let mut axes = Vec::new();
@@ -15923,6 +15926,13 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         _ => legend_position,
                     };
                 }
+                if local_name == b"varyColors"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                {
+                    vary_by_categories = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                }
                 if local_name == b"dispBlanksAs"
                     && element_path.last().is_some_and(|name| name == "chart")
                 {
@@ -16038,6 +16048,13 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "t" => Some(ChartLegendPosition::Top),
                         _ => legend_position,
                     };
+                }
+                if local_name == b"varyColors"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                {
+                    vary_by_categories = parse_bool_val_attr(&element, &reader)?.or(Some(true));
                 }
                 if local_name == b"dispBlanksAs"
                     && element_path.last().is_some_and(|name| name == "chart")
@@ -16230,6 +16247,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         title_text: title_text.filter(|text| !text.is_empty()),
         has_legend,
         legend_position,
+        vary_by_categories,
         display_blanks_as,
         plot_visible_only,
         axes,
@@ -20782,6 +20800,7 @@ mod tests {
     <c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title>
     <c:plotArea>
       <c:barChart>
+        <c:varyColors val="1"/>
         <c:ser>
           <c:idx val="0"/><c:order val="0"/>
           <c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx>
@@ -20992,6 +21011,7 @@ mod tests {
             chart_summary.legend_position,
             Some(ChartLegendPosition::Right)
         );
+        assert_eq!(chart_summary.vary_by_categories, Some(true));
         assert_eq!(chart_summary.plot_visible_only, Some(false));
         assert_eq!(
             chart_summary.display_blanks_as,
@@ -21094,6 +21114,7 @@ mod tests {
         let legend_model = chart_model.legend.as_ref().expect("chart legend");
         assert!(legend_model.visible);
         assert_eq!(legend_model.position, Some(ChartLegendPosition::Right));
+        assert_eq!(chart_model.vary_by_categories, Some(true));
         assert_eq!(chart_model.plot_visible_only, Some(false));
         assert_eq!(
             chart_model.display_blanks_as,

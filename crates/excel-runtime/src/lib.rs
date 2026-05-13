@@ -3349,6 +3349,41 @@ impl ExcelRuntime {
                             )),
                         }
                     }
+                    "VaryByCategories" => {
+                        let OmValue::Bool(vary_by_categories) = value else {
+                            return Err(OmError::type_mismatch(
+                                "ChartGroup.VaryByCategories expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        if group_index != 0 {
+                            return Err(OmError::new(
+                                OmErrorCode::NotFound,
+                                "chart group not found",
+                            ));
+                        }
+                        if chart.vary_by_categories != Some(vary_by_categories) {
+                            chart.vary_by_categories = Some(vary_by_categories);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     _ => Err(OmError::unsupported(format!(
                         "ChartGroup.{member} is not writable"
                     ))),
@@ -8660,6 +8695,7 @@ impl ExcelRuntime {
                         "ChartType"
                             | "Index"
                             | "AxisGroup"
+                            | "VaryByCategories"
                             | "SeriesCollection"
                             | "Creator"
                             | "Application"
@@ -10768,6 +10804,7 @@ impl ExcelRuntime {
                             title: None,
                             legend: None,
                             axes: default_chart_axes(),
+                            vary_by_categories: None,
                             display_blanks_as: None,
                             plot_visible_only: None,
                             raw_part_uri: None,
@@ -11614,6 +11651,9 @@ impl ExcelRuntime {
                     )?))),
                     "Index" => Ok(OmValue::Number((group_index + 1) as f64)),
                     "AxisGroup" => Ok(OmValue::Number(f64::from(XL_PRIMARY))),
+                    "VaryByCategories" => {
+                        Ok(OmValue::Bool(chart.vary_by_categories.unwrap_or(false)))
+                    }
                     "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
                     "Application" => Ok(OmValue::Object(self.root_application())),
                     "Parent" => Ok(OmValue::Object(
@@ -13587,6 +13627,7 @@ impl ExcelRuntime {
                         title: None,
                         legend: None,
                         axes: default_chart_axes(),
+                        vary_by_categories: None,
                         display_blanks_as: None,
                         plot_visible_only: None,
                         raw_part_uri: Some(chart_part_uri.clone()),
@@ -18755,6 +18796,9 @@ fn patch_loaded_chart_model_xml(
     let expected_plot_visible_only = chart
         .plot_visible_only
         .map(|value| if value { "1" } else { "0" });
+    let expected_vary_colors = chart
+        .vary_by_categories
+        .map(|value| if value { "1" } else { "0" });
 
     let mut reader = Reader::from_reader(Cursor::new(existing_chart_xml));
     reader.config_mut().trim_text(false);
@@ -18788,6 +18832,9 @@ fn patch_loaded_chart_model_xml(
     let mut plot_visible_only_seen = false;
     let mut plot_visible_only_written = false;
     let mut plot_visible_only_inserted = false;
+    let mut vary_colors_seen = false;
+    let mut vary_colors_written = false;
+    let mut vary_colors_inserted = false;
     let mut current_axis_index = None::<usize>;
     let mut axis_kinds = Vec::<ChartAxisKind>::new();
     let mut axis_title_texts = Vec::<Option<String>>::new();
@@ -19285,6 +19332,15 @@ fn patch_loaded_chart_model_xml(
                     && parent_name == Some(b"chart".as_slice())
                 {
                     display_blanks_as_seen = true;
+                } else if local_name.as_slice() == b"varyColors"
+                    && current_chart_group_depth == Some(element_stack.len())
+                {
+                    vary_colors_seen = true;
+                    if expected_vary_colors.is_some() {
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    }
                 }
 
                 if local_name.as_slice() == b"plotArea"
@@ -19393,6 +19449,17 @@ fn patch_loaded_chart_model_xml(
                         .write_event(Event::Start(element.into_owned()))
                         .map_err(runtime_xml_error)?;
                 }
+                if chart_type_from_group_name(local_name.as_slice()).is_some()
+                    && let Some(value) = expected_vary_colors
+                {
+                    let mut vary_colors = BytesStart::new("c:varyColors");
+                    vary_colors.push_attribute(("val", value));
+                    writer
+                        .write_event(Event::Empty(vary_colors))
+                        .map_err(runtime_xml_error)?;
+                    vary_colors_inserted = true;
+                    vary_colors_written = true;
+                }
                 element_stack.push(local_name);
             }
             Ok(Event::Empty(element)) => {
@@ -19495,6 +19562,14 @@ fn patch_loaded_chart_model_xml(
                     && parent_name == Some(b"chart".as_slice())
                 {
                     display_blanks_as_seen = true;
+                } else if local_name.as_slice() == b"varyColors"
+                    && current_chart_group_depth == Some(element_stack.len())
+                {
+                    vary_colors_seen = true;
+                    if expected_vary_colors.is_some() {
+                        buffer.clear();
+                        continue;
+                    }
                 }
                 if local_name.as_slice() == b"legendPos"
                     && expected_legend_position.is_some()
@@ -20025,6 +20100,11 @@ fn patch_loaded_chart_model_xml(
         (Some(_), false) => plot_visible_only_inserted,
         (None, _) => true,
     };
+    let vary_colors_matches = match (expected_vary_colors, vary_colors_seen) {
+        (Some(_), true) => vary_colors_written,
+        (Some(_), false) => vary_colors_inserted,
+        (None, _) => true,
+    };
     let axes_match = axis_kinds.len() == chart.axes.len()
         && axis_kinds
             .iter()
@@ -20047,6 +20127,7 @@ fn patch_loaded_chart_model_xml(
         && legend_matches
         && display_blanks_as_matches
         && plot_visible_only_matches
+        && vary_colors_matches
         && axes_match
     {
         Ok(Some(writer.into_inner().into_inner()))
@@ -20096,6 +20177,10 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     let chart_group_name = chart_group_xml_name(&chart.chart_type).ok_or_else(|| {
         OmError::unsupported("saving dirty charts requires a supported chart type")
     })?;
+    let vary_colors_xml = chart
+        .vary_by_categories
+        .map(|value| format!(r#"<c:varyColors val="{}"/>"#, if value { "1" } else { "0" }))
+        .unwrap_or_default();
     let title_xml = chart
         .title
         .as_ref()
@@ -20165,7 +20250,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{series_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
+  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{vary_colors_xml}{series_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -73722,6 +73807,25 @@ mod tests {
             ),
             f64::from(super::XL_PRIMARY)
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "VaryByCategories", &[])
+                .expect("ChartGroup.VaryByCategories"),
+            OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_set(chart_group, "VaryByCategories", OmValue::Bool(false), &[])
+            .expect("set ChartGroup.VaryByCategories false");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "VaryByCategories", &[])
+                .expect("ChartGroup.VaryByCategories after set"),
+            OmValue::Bool(false)
+        );
+        let invalid_vary_by_categories = runtime
+            .dispatch_set(chart_group, "VaryByCategories", OmValue::Number(1.0), &[])
+            .expect_err("ChartGroup.VaryByCategories rejects non-bool");
+        assert_eq!(invalid_vary_by_categories.code, OmErrorCode::TypeMismatch);
         runtime
             .dispatch_set(
                 chart_group,
@@ -73981,6 +74085,117 @@ mod tests {
                     .expect("Axis.Type from Chart.Axes method")
             ),
             f64::from(super::XL_VALUE)
+        );
+    }
+
+    #[test]
+    fn chart_group_vary_by_categories_setter_roundtrips() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_group = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("Chart.ChartGroups(1)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "VaryByCategories", &[])
+                .expect("ChartGroup.VaryByCategories before set"),
+            OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_set(chart_group, "VaryByCategories", OmValue::Bool(false), &[])
+            .expect("set ChartGroup.VaryByCategories false");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save chart group vary by categories");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:varyColors val="0"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:varyColors val="1"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen saved chart group workbook");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_chart_group = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("reopened Chart.ChartGroups(1)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart_group, "VaryByCategories", &[])
+                .expect("reopened ChartGroup.VaryByCategories"),
+            OmValue::Bool(false)
         );
     }
 
@@ -87654,7 +87869,7 @@ mod tests {
                 compression: CompressionMethod::Stored,
                 bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val></c:ser></c:barChart><c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx><c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx></c:plotArea><c:legend><c:legendPos val="r"/></c:legend></c:chart>
+  <c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:varyColors val="1"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val></c:ser></c:barChart><c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx><c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx></c:plotArea><c:legend><c:legendPos val="r"/></c:legend></c:chart>
 </c:chartSpace>"#
                     .to_vec(),
             })
