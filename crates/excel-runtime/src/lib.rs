@@ -88,6 +88,10 @@ const XL_SHIFT_TO_RIGHT: i32 = -4161;
 const XL_SHIFT_UP: i32 = -4162;
 const XL_COPY: i32 = 1;
 const XL_CUT: i32 = 2;
+const XL_SCREEN: i32 = 1;
+const XL_PRINTER: i32 = 2;
+const XL_PICTURE: i32 = -4147;
+const XL_BITMAP: i32 = 2;
 const XL_PASTE_ALL: i32 = -4104;
 const XL_PASTE_COMMENTS: i32 = -4144;
 const XL_PASTE_FORMATS: i32 = -4122;
@@ -6907,6 +6911,24 @@ impl ExcelRuntime {
                 workbook,
                 chart_object_id,
             } => match member {
+                "Copy" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "ChartObject.Copy does not accept arguments",
+                        ));
+                    }
+                    let chart_object = self.chart_object_model(workbook, chart_object_id)?;
+                    self.chart_model(workbook, chart_object.chart_id)?;
+                    self.set_headless_copy_mode();
+                    Ok(OmValue::Empty)
+                }
+                "CopyPicture" => {
+                    validate_copy_picture_args(args, 2, "ChartObject.CopyPicture")?;
+                    let chart_object = self.chart_object_model(workbook, chart_object_id)?;
+                    self.chart_model(workbook, chart_object.chart_id)?;
+                    self.set_headless_copy_mode();
+                    Ok(OmValue::Empty)
+                }
                 "Delete" => {
                     if !args.is_empty() {
                         return Err(OmError::invalid_argument(
@@ -7040,6 +7062,12 @@ impl ExcelRuntime {
                         ));
                     }
                     self.chart_model(workbook, chart_id)?;
+                    Ok(OmValue::Empty)
+                }
+                "CopyPicture" => {
+                    validate_copy_picture_args(args, 3, "Chart.CopyPicture")?;
+                    self.chart_model(workbook, chart_id)?;
+                    self.set_headless_copy_mode();
                     Ok(OmValue::Empty)
                 }
                 "PrintPreview" => {
@@ -7647,6 +7675,11 @@ impl ExcelRuntime {
         handle
     }
 
+    fn set_headless_copy_mode(&mut self) {
+        self.cut_copy_mode = Some(XL_COPY);
+        self.clipboard = None;
+    }
+
     fn focus_member_supported(&self, surface: &str, member: &str, write: bool) -> OmResult<()> {
         if !write
             && matches!(
@@ -7672,6 +7705,8 @@ impl ExcelRuntime {
                             | "Height"
                             | "Visible"
                             | "Select"
+                            | "Copy"
+                            | "CopyPicture"
                             | "Delete"
                     )
                     | (
@@ -7694,6 +7729,8 @@ impl ExcelRuntime {
                             | "Parent"
                             | "Activate"
                             | "Select"
+                            | "Copy"
+                            | "CopyPicture"
                             | "Delete"
                     )
                     | (
@@ -7728,6 +7765,7 @@ impl ExcelRuntime {
                             | "Protect"
                             | "Unprotect"
                             | "Refresh"
+                            | "CopyPicture"
                             | "PrintPreview"
                             | "PrintOut"
                             | "Delete"
@@ -9649,6 +9687,22 @@ impl ExcelRuntime {
                 for chart_object_id in chart_object_ids {
                     self.delete_chart_object(workbook, chart_object_id)?;
                 }
+                Ok(OmValue::Empty)
+            }
+            "Copy" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ChartObjects.Copy does not accept arguments",
+                    ));
+                }
+                self.chart_object_entries_for_sheet(workbook, sheet_id)?;
+                self.set_headless_copy_mode();
+                Ok(OmValue::Empty)
+            }
+            "CopyPicture" => {
+                validate_copy_picture_args(args, 2, "ChartObjects.CopyPicture")?;
+                self.chart_object_entries_for_sheet(workbook, sheet_id)?;
+                self.set_headless_copy_mode();
                 Ok(OmValue::Empty)
             }
             "Select" => {
@@ -15989,6 +16043,56 @@ fn xml_local_name(name: &[u8]) -> &[u8] {
 
 fn om_value_is_omitted(value: &OmValue) -> bool {
     matches!(value, OmValue::Missing | OmValue::Empty | OmValue::Null)
+}
+
+fn validate_copy_picture_args(args: &[OmValue], max_args: usize, context: &str) -> OmResult<()> {
+    if args.len() > max_args {
+        return Err(OmError::invalid_argument(format!(
+            "{context} accepts at most {}",
+            if max_args == 3 {
+                "Appearance, Format, and Size arguments"
+            } else {
+                "Appearance and Format arguments"
+            }
+        )));
+    }
+
+    let validate_enum = |index: usize, label: &str, valid_values: &[i32]| -> OmResult<()> {
+        let Some(value) = args.get(index) else {
+            return Ok(());
+        };
+        if om_value_is_omitted(value) {
+            return Ok(());
+        }
+        let OmValue::Number(number) = value else {
+            return Err(OmError::type_mismatch(format!(
+                "{context} {label} expects a numeric value when provided"
+            )));
+        };
+        if !number.is_finite()
+            || number.fract() != 0.0
+            || *number < i32::MIN as f64
+            || *number > i32::MAX as f64
+        {
+            return Err(OmError::invalid_argument(format!(
+                "{context} {label} expects an integer value when provided"
+            )));
+        }
+        let value = *number as i32;
+        if !valid_values.contains(&value) {
+            return Err(OmError::invalid_argument(format!(
+                "{context} {label} is not a supported Excel constant"
+            )));
+        }
+        Ok(())
+    };
+
+    validate_enum(0, "Appearance", &[XL_SCREEN, XL_PRINTER])?;
+    validate_enum(1, "Format", &[XL_PICTURE, XL_BITMAP])?;
+    if max_args == 3 {
+        validate_enum(2, "Size", &[XL_SCREEN, XL_PRINTER])?;
+    }
+    Ok(())
 }
 
 fn validate_optional_integer_arg(args: &[OmValue], index: usize, label: &str) -> OmResult<()> {
@@ -73423,6 +73527,153 @@ mod tests {
                 .expect_err("Chart.PrintOut rejects non-text PrToFileName")
                 .code,
             OmErrorCode::TypeMismatch
+        );
+    }
+
+    #[test]
+    fn chart_copy_picture_methods_set_copy_mode_without_dirtying() {
+        let mut runtime = ExcelRuntime::new();
+        let application = runtime.root_application();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved before chart copy methods"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[])
+                .expect("Application.CutCopyMode default"),
+            OmValue::Bool(false)
+        );
+
+        for (handle, member, args) in [
+            (chart_object, "Copy", Vec::new()),
+            (
+                chart_object,
+                "CopyPicture",
+                vec![
+                    OmValue::Number(f64::from(super::XL_PRINTER)),
+                    OmValue::Number(f64::from(super::XL_BITMAP)),
+                ],
+            ),
+            (chart_objects, "Copy", Vec::new()),
+            (
+                chart_objects,
+                "CopyPicture",
+                vec![
+                    OmValue::Missing,
+                    OmValue::Number(f64::from(super::XL_PICTURE)),
+                ],
+            ),
+            (
+                chart,
+                "CopyPicture",
+                vec![
+                    OmValue::Number(f64::from(super::XL_SCREEN)),
+                    OmValue::Number(f64::from(super::XL_PICTURE)),
+                    OmValue::Number(f64::from(super::XL_PRINTER)),
+                ],
+            ),
+        ] {
+            runtime
+                .dispatch_set(application, "CutCopyMode", OmValue::Bool(false), &[])
+                .expect("reset Application.CutCopyMode");
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(handle, member, &args)
+                    .unwrap_or_else(|error| {
+                        panic!("{member} should be a headless copy no-op: {error:?}")
+                    }),
+                OmValue::Empty
+            );
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(application, "CutCopyMode", &[])
+                        .expect("Application.CutCopyMode after chart copy method")
+                ),
+                f64::from(super::XL_COPY)
+            );
+            assert!(
+                runtime.clipboard.is_none(),
+                "{member} should not populate a Range clipboard payload"
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(workbook.0, "Saved", &[])
+                    .expect("Workbook.Saved after chart copy method"),
+                OmValue::Bool(true)
+            );
+        }
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_object, "Copy", &[OmValue::Missing])
+                .expect_err("ChartObject.Copy rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "CopyPicture",
+                    &[OmValue::Missing, OmValue::Missing, OmValue::Missing],
+                )
+                .expect_err("ChartObjects.CopyPicture rejects too many arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart_object,
+                    "CopyPicture",
+                    &[OmValue::Text("bad".to_string())],
+                )
+                .expect_err("ChartObject.CopyPicture rejects non-numeric Appearance")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "CopyPicture",
+                    &[OmValue::Missing, OmValue::Missing, OmValue::Number(99.0),],
+                )
+                .expect_err("Chart.CopyPicture rejects unsupported Size")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 
