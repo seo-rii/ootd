@@ -76669,6 +76669,107 @@ mod tests {
     }
 
     #[test]
+    fn scatter_chart_series_source_setters_write_xval_yval_on_save() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let x_values_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:A3".to_string())])
+                .expect("Worksheet.Range(A1:A3)"),
+        );
+        let values_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("B1:B3".to_string())])
+                .expect("Worksheet.Range(B1:B3)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_XY_SCATTER)),
+                &[],
+            )
+            .expect("set Chart.ChartType to scatter");
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries"),
+        );
+        runtime
+            .dispatch_set(series, "XValues", OmValue::Object(x_values_range), &[])
+            .expect("set scatter Series.XValues from Range");
+        runtime
+            .dispatch_set(series, "Values", OmValue::Object(values_range), &[])
+            .expect("set scatter Series.Values from Range");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after scatter Range series setters");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved chart package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:scatterChart>"));
+        assert!(saved_chart_xml.contains("<c:xVal><c:numRef><c:f>Sheet1!$A$1:$A$3</c:f>"));
+        assert!(saved_chart_xml.contains("<c:yVal><c:numRef><c:f>Sheet1!$B$1:$B$3</c:f>"));
+        assert!(!saved_chart_xml.contains("<c:cat>"));
+        assert!(!saved_chart_xml.contains("<c:val>"));
+    }
+
+    #[test]
     fn chart_series_plot_order_setter_roundtrips() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
