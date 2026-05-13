@@ -16579,6 +16579,7 @@ fn patch_loaded_chart_model_xml(
     let mut chart_type = None::<ChartType>;
     let mut chart_title_seen = false;
     let mut chart_title_removed = false;
+    let mut chart_title_inserted = false;
     let mut chart_title_text_written = false;
     let mut current_text_target = None::<(ChartTextXmlTarget, bool)>;
     let mut title_stack = Vec::<(usize, ChartTextXmlTarget)>::new();
@@ -16644,6 +16645,49 @@ fn patch_loaded_chart_model_xml(
         }
         Ok(rewritten)
     };
+    let write_chart_text_element =
+        |writer: &mut Writer<Cursor<Vec<u8>>>, root_name: &str, text: &str| -> OmResult<()> {
+            writer
+                .write_event(Event::Start(BytesStart::new(root_name)))
+                .map_err(runtime_xml_error)?;
+            writer
+                .write_event(Event::Start(BytesStart::new("c:tx")))
+                .map_err(runtime_xml_error)?;
+            writer
+                .write_event(Event::Start(BytesStart::new("c:rich")))
+                .map_err(runtime_xml_error)?;
+            writer
+                .write_event(Event::Start(BytesStart::new("a:p")))
+                .map_err(runtime_xml_error)?;
+            writer
+                .write_event(Event::Start(BytesStart::new("a:r")))
+                .map_err(runtime_xml_error)?;
+            writer
+                .write_event(Event::Start(BytesStart::new("a:t")))
+                .map_err(runtime_xml_error)?;
+            writer
+                .write_event(Event::Text(BytesText::from_escaped(partial_escape(text))))
+                .map_err(runtime_xml_error)?;
+            writer
+                .write_event(Event::End(BytesEnd::new("a:t")))
+                .map_err(runtime_xml_error)?;
+            writer
+                .write_event(Event::End(BytesEnd::new("a:r")))
+                .map_err(runtime_xml_error)?;
+            writer
+                .write_event(Event::End(BytesEnd::new("a:p")))
+                .map_err(runtime_xml_error)?;
+            writer
+                .write_event(Event::End(BytesEnd::new("c:rich")))
+                .map_err(runtime_xml_error)?;
+            writer
+                .write_event(Event::End(BytesEnd::new("c:tx")))
+                .map_err(runtime_xml_error)?;
+            writer
+                .write_event(Event::End(BytesEnd::new(root_name)))
+                .map_err(runtime_xml_error)?;
+            Ok(())
+        };
 
     loop {
         match reader.read_event_into(&mut buffer) {
@@ -16737,6 +16781,15 @@ fn patch_loaded_chart_model_xml(
                         buffer.clear();
                         continue;
                     }
+                }
+
+                if local_name.as_slice() == b"plotArea"
+                    && !chart_title_seen
+                    && let Some(title) = chart.title.as_ref()
+                {
+                    write_chart_text_element(&mut writer, "c:title", &title.text)?;
+                    chart_title_inserted = true;
+                    chart_title_text_written = true;
                 }
 
                 let mut wrote_start_element = false;
@@ -17178,9 +17231,9 @@ fn patch_loaded_chart_model_xml(
             });
     let title_matches = match (chart.title.as_ref(), chart_title_seen) {
         (Some(_), true) => chart_title_text_written,
+        (Some(_), false) => chart_title_inserted,
         (None, true) => chart_title_removed,
         (None, false) => true,
-        _ => false,
     };
     let legend_matches = match (expected_legend_position, legend_seen) {
         (Some(_), true) => legend_position_written,
@@ -70609,6 +70662,160 @@ mod tests {
                     .expect("reopened Legend.Position")
             ),
             f64::from(super::XL_LEGEND_POSITION_RIGHT)
+        );
+    }
+
+    #[test]
+    fn loaded_chart_has_title_setter_preserves_chart_extensions_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            r#"<c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title>"#,
+            "",
+        )
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:title-add-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook without chart title");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasTitle", &[])
+                .expect("Chart.HasTitle before set"),
+            OmValue::Bool(false)
+        );
+        runtime
+            .dispatch_set(chart, "HasTitle", OmValue::Bool(true), &[])
+            .expect("set loaded Chart.HasTitle");
+        let chart_title = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartTitle", &[])
+                .expect("Chart.ChartTitle after set"),
+        );
+        runtime
+            .dispatch_set(
+                chart_title,
+                "Text",
+                OmValue::Text("Restored Revenue".to_string()),
+                &[],
+            )
+            .expect("set restored ChartTitle.Text");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after loaded chart title add");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:title-add-preserve"/>"#));
+        assert!(saved_chart_xml.contains("<a:t>Restored Revenue</a:t>"));
+        assert!(
+            saved_chart_xml
+                .find("<c:title>")
+                .expect("inserted chart title")
+                < saved_chart_xml
+                    .find("<c:plotArea>")
+                    .expect("existing plot area")
+        );
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after loaded chart title add");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "HasTitle", &[])
+                .expect("reopened Chart.HasTitle"),
+            OmValue::Bool(true)
+        );
+        let reopened_chart_title = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "ChartTitle", &[])
+                .expect("reopened Chart.ChartTitle"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart_title, "Text", &[])
+                .expect("reopened ChartTitle.Text"),
+            OmValue::Text("Restored Revenue".to_string())
         );
     }
 
