@@ -2755,11 +2755,11 @@ impl ExcelRuntime {
                             ))
                         }
                     }
-                    "PrintObject" => {
-                        let OmValue::Bool(print_object) = value else {
-                            return Err(OmError::type_mismatch(
-                                "ChartObject.PrintObject expects a boolean value",
-                            ));
+                    "PrintObject" | "Locked" => {
+                        let OmValue::Bool(enabled) = value else {
+                            return Err(OmError::type_mismatch(format!(
+                                "ChartObject.{member} expects a boolean value"
+                            )));
                         };
                         let runtime = self.runtime_workbook_mut(workbook)?;
                         if runtime.read_only {
@@ -2768,7 +2768,12 @@ impl ExcelRuntime {
                                 "cannot modify a read-only workbook",
                             ));
                         }
-                        let new_value = if print_object { "1" } else { "0" };
+                        let attr_name = match member {
+                            "PrintObject" => "fPrintsWithSheet",
+                            "Locked" => "fLocksWithSheet",
+                            _ => unreachable!("ChartObject clientData boolean was matched"),
+                        };
+                        let new_value = if enabled { "1" } else { "0" };
                         let mut found = false;
                         let mut workbook_dirty = false;
                         for drawing in runtime.loaded.state.drawings.values_mut() {
@@ -2782,13 +2787,12 @@ impl ExcelRuntime {
                                 found = true;
                                 if chart_object
                                     .client_data_attrs
-                                    .get("fPrintsWithSheet")
+                                    .get(attr_name)
                                     .map_or(true, |value| value != new_value)
                                 {
-                                    chart_object.client_data_attrs.insert(
-                                        "fPrintsWithSheet".to_string(),
-                                        new_value.to_string(),
-                                    );
+                                    chart_object
+                                        .client_data_attrs
+                                        .insert(attr_name.to_string(), new_value.to_string());
                                     chart_object.dirty = true;
                                     drawing.dirty = true;
                                     workbook_dirty = true;
@@ -7384,6 +7388,7 @@ impl ExcelRuntime {
                             | "Visible"
                             | "OnAction"
                             | "PrintObject"
+                            | "Locked"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -9581,6 +9586,18 @@ impl ExcelRuntime {
                             || value.eq_ignore_ascii_case("off"))
                     });
                 Ok(OmValue::Bool(print_object))
+            }
+            "Locked" => {
+                let locked = self
+                    .chart_object_model(workbook, chart_object_id)?
+                    .client_data_attrs
+                    .get("fLocksWithSheet")
+                    .map_or(true, |value| {
+                        !(value == "0"
+                            || value.eq_ignore_ascii_case("false")
+                            || value.eq_ignore_ascii_case("off"))
+                    });
+                Ok(OmValue::Bool(locked))
             }
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Left" | "Top" | "Width" | "Height" => {
@@ -70615,6 +70632,105 @@ mod tests {
     }
 
     #[test]
+    fn chartobject_locked_roundtrips_client_data_lock_attr() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "Locked", &[])
+                .expect("initial ChartObject.Locked"),
+            OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_set(chart_object, "Locked", OmValue::Bool(false), &[])
+            .expect("set ChartObject.Locked false");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "Locked", &[])
+                .expect("ChartObject.Locked after false"),
+            OmValue::Bool(false)
+        );
+        let unlocked_bytes = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save unlocked chart object");
+        let unlocked_package = OpcPackage::from_bytes(&unlocked_bytes).expect("unlocked package");
+        let unlocked_drawing = String::from_utf8(
+            unlocked_package
+                .part("xl/drawings/drawing1.xml")
+                .expect("unlocked drawing part")
+                .bytes
+                .clone(),
+        )
+        .expect("unlocked drawing utf8");
+        assert!(unlocked_drawing.contains(r#"fLocksWithSheet="0""#));
+        assert!(unlocked_drawing.contains(r#"fPrintsWithSheet="0""#));
+
+        runtime
+            .dispatch_set(chart_object, "Locked", OmValue::Bool(true), &[])
+            .expect("set ChartObject.Locked true");
+        let locked_bytes = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save locked chart object");
+        let locked_package = OpcPackage::from_bytes(&locked_bytes).expect("locked package");
+        let locked_drawing = String::from_utf8(
+            locked_package
+                .part("xl/drawings/drawing1.xml")
+                .expect("locked drawing part")
+                .bytes
+                .clone(),
+        )
+        .expect("locked drawing utf8");
+        assert!(locked_drawing.contains(r#"fLocksWithSheet="1""#));
+
+        let invalid_locked = runtime
+            .dispatch_set(
+                chart_object,
+                "Locked",
+                OmValue::Text("false".to_string()),
+                &[],
+            )
+            .expect_err("ChartObject.Locked should reject non-bool");
+        assert_eq!(invalid_locked.code, OmErrorCode::TypeMismatch);
+    }
+
+    #[test]
     fn worksheet_chartobjects_dispatch_reads_loaded_embedded_chart_models() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -70762,6 +70878,12 @@ mod tests {
                 .dispatch_get(chart_object, "PrintObject", &[])
                 .expect("ChartObject.PrintObject"),
             OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "Locked", &[])
+                .expect("ChartObject.Locked"),
+            OmValue::Bool(true)
         );
         runtime
             .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
