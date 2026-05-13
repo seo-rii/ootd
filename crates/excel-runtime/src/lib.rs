@@ -7019,6 +7019,24 @@ impl ExcelRuntime {
                     self.active_chart = Some((workbook, chart_id));
                     Ok(OmValue::Empty)
                 }
+                "Copy" => {
+                    let Some(sheet_id) = self.chart_sheet_id_for_chart(workbook, chart_id)? else {
+                        return Err(OmError::unsupported(
+                            "Chart.Copy is not supported for chart objects",
+                        ));
+                    };
+                    let sheet_handle = self.register_worksheet_handle(workbook, sheet_id);
+                    self.dispatch_invoke(sheet_handle.0, "Copy", args)
+                }
+                "Move" => {
+                    let Some(sheet_id) = self.chart_sheet_id_for_chart(workbook, chart_id)? else {
+                        return Err(OmError::unsupported(
+                            "Chart.Move is only supported for chart sheets",
+                        ));
+                    };
+                    self.move_worksheet(workbook, sheet_id, args)?;
+                    Ok(OmValue::Empty)
+                }
                 "Protect" => {
                     if args.len() > 5 {
                         return Err(OmError::invalid_argument(
@@ -8357,6 +8375,8 @@ impl ExcelRuntime {
                             | "Visible"
                             | "Activate"
                             | "Select"
+                            | "Copy"
+                            | "Move"
                             | "Protect"
                             | "Unprotect"
                             | "Refresh"
@@ -71127,6 +71147,126 @@ mod tests {
     }
 
     #[test]
+    fn chart_sheet_chart_handle_copy_and_move_use_sheet_semantics() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(charts, "Add", &[])
+                .expect("Charts.Add"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "Copy",
+                    &[OmValue::Missing, OmValue::Object(worksheet)]
+                )
+                .expect_err("chart sheet Chart.Copy placement should be unsupported")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "Move",
+                &[OmValue::Missing, OmValue::Object(worksheet)],
+            )
+            .expect("chart sheet Chart.Move should reorder sheet entries");
+        let sheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("Workbook.Sheets"),
+        );
+        let moved_chart_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(sheets, "Item", &[OmValue::Number(2.0)])
+                .expect("Sheets.Item(2)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(moved_chart_sheet, "Name", &[])
+                    .expect("moved chart sheet name")
+            ),
+            "Chart1"
+        );
+
+        runtime
+            .dispatch_invoke(chart, "Copy", &[])
+            .expect("chart sheet Chart.Copy without targets");
+        let copied_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("copied ActiveWorkbook"),
+        );
+        assert_ne!(copied_workbook, workbook.0);
+        let copied_sheets = expect_object_handle(
+            runtime
+                .dispatch_get(copied_workbook, "Sheets", &[])
+                .expect("copied Workbook.Sheets"),
+        );
+        let copied_charts = expect_object_handle(
+            runtime
+                .dispatch_get(copied_workbook, "Charts", &[])
+                .expect("copied Workbook.Charts"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_sheets, "Count", &[])
+                    .expect("copied Sheets.Count")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_charts, "Count", &[])
+                    .expect("copied Charts.Count")
+            ),
+            1.0
+        );
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveChart", &[])
+                .expect("copied ActiveChart"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_chart, "Name", &[])
+                    .expect("copied ActiveChart.Name")
+            ),
+            "Chart1"
+        );
+    }
+
+    #[test]
     fn chart_sheet_chart_handle_activate_and_delete() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -71446,6 +71586,20 @@ mod tests {
                     .expect("ActiveChart.Name after embedded Chart.Select")
             ),
             "Embedded Revenue Chart"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "Copy", &[])
+                .expect_err("embedded Chart.Copy should be unsupported")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "Move", &[])
+                .expect_err("embedded Chart.Move should be unsupported")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert_eq!(
             runtime
