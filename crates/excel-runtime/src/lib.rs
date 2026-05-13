@@ -7450,6 +7450,7 @@ impl ExcelRuntime {
                             | "Width"
                             | "Height"
                             | "Visible"
+                            | "Select"
                             | "Delete"
                     )
                     | (
@@ -9415,6 +9416,34 @@ impl ExcelRuntime {
                 for chart_object_id in chart_object_ids {
                     self.delete_chart_object(workbook, chart_object_id)?;
                 }
+                Ok(OmValue::Empty)
+            }
+            "Select" => {
+                if args.len() > 1 {
+                    return Err(OmError::invalid_argument(
+                        "ChartObjects.Select accepts at most a Replace argument",
+                    ));
+                }
+                if let Some(value) = args.first()
+                    && !om_value_is_omitted(value)
+                {
+                    coerce_optional_bool_arg(value, true, "ChartObjects.Select Replace")?;
+                }
+                let Some((chart_object_id, _)) = self
+                    .chart_object_entries_for_sheet(workbook, sheet_id)?
+                    .into_iter()
+                    .next()
+                else {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        "chart object not found",
+                    ));
+                };
+                let chart_object = self.chart_object_model(workbook, chart_object_id)?.clone();
+                self.chart_model(workbook, chart_object.chart_id)?;
+                self.ensure_worksheet_visible(workbook, sheet_id, "ChartObjects.Select")?;
+                self.set_selection(workbook, sheet_id, Rect::single_cell(1, 1));
+                self.active_chart = Some((workbook, chart_object.chart_id));
                 Ok(OmValue::Empty)
             }
             "Add" => {
@@ -70178,6 +70207,43 @@ mod tests {
                 .dispatch_get(runtime.root_application(), "ActiveChart", &[])
                 .expect("ActiveChart after Worksheet.Activate following ChartObject.Select"),
             OmValue::Empty
+        );
+        runtime
+            .dispatch_invoke(chart_objects, "Select", &[OmValue::Bool(false)])
+            .expect("ChartObjects.Select with Replace");
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                .expect("ActiveChart after ChartObjects.Select"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_chart, "Name", &[])
+                    .expect("ActiveChart.Name after ChartObjects.Select")
+            ),
+            "Embedded Revenue Chart"
+        );
+        runtime
+            .dispatch_invoke(worksheet, "Activate", &[])
+            .expect("Worksheet.Activate clears ChartObjects.Select");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_objects, "Select", &[OmValue::Text("bad".to_string())])
+                .expect_err("ChartObjects.Select rejects non-bool Replace")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Select",
+                    &[OmValue::Bool(true), OmValue::Bool(false)]
+                )
+                .expect_err("ChartObjects.Select rejects extra args")
+                .code,
+            OmErrorCode::InvalidArgument
         );
         assert_eq!(
             runtime
