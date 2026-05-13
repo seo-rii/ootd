@@ -17435,6 +17435,41 @@ fn patch_loaded_chart_model_xml(
                 if chart_type_from_group_name(local_name.as_slice()).is_some()
                     && current_chart_group_depth == Some(element_stack.len())
                 {
+                    while let Some(series) = chart.series.get(next_series_index) {
+                        let series_index = next_series_index;
+                        let mut source_seen = [false; 3];
+                        writer
+                            .write_event(Event::Start(BytesStart::new("c:ser")))
+                            .map_err(runtime_xml_error)?;
+                        let series_index_text = series_index.to_string();
+                        let mut idx_element = BytesStart::new("c:idx");
+                        idx_element.push_attribute(("val", series_index_text.as_str()));
+                        writer
+                            .write_event(Event::Empty(idx_element))
+                            .map_err(runtime_xml_error)?;
+                        let order_text = series.order.unwrap_or(series_index as u32).to_string();
+                        let mut order_element = BytesStart::new("c:order");
+                        order_element.push_attribute(("val", order_text.as_str()));
+                        writer
+                            .write_event(Event::Empty(order_element))
+                            .map_err(runtime_xml_error)?;
+                        for slot in source_slots_in_order {
+                            if let Some(source) = source_for_slot(series_index, slot) {
+                                write_chart_source_container(&mut writer, slot, source)?;
+                                source_seen[slot_index(slot)] = true;
+                                if source.dirty {
+                                    patched_sources += 1;
+                                }
+                            }
+                        }
+                        writer
+                            .write_event(Event::End(BytesEnd::new("c:ser")))
+                            .map_err(runtime_xml_error)?;
+                        source_slots_seen.push(source_seen);
+                        series_order_seen.push(true);
+                        series_order_written.push(true);
+                        next_series_index += 1;
+                    }
                     if !chart_group_axis_refs_seen.is_empty() {
                         for (axis_index, axis) in chart.axes.iter().enumerate() {
                             let axis_id = chart_axis_id(axis_index, axis);
@@ -71291,6 +71326,170 @@ mod tests {
                     .expect("reopened Series.Formula")
             ),
             "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$B$1,Sheet1!$A$1:$C$1,1)"
+        );
+    }
+
+    #[test]
+    fn loaded_chart_new_series_preserves_chart_extensions_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:new-series-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries"),
+        );
+        runtime
+            .dispatch_set(
+                series,
+                "Name",
+                OmValue::Text("=Sheet1!$D$1".to_string()),
+                &[],
+            )
+            .expect("set new Series.Name");
+        runtime
+            .dispatch_set(
+                series,
+                "XValues",
+                OmValue::Text("=Sheet1!$A$2:$B$2".to_string()),
+                &[],
+            )
+            .expect("set new Series.XValues");
+        runtime
+            .dispatch_set(
+                series,
+                "Values",
+                OmValue::Text("=Sheet1!$A$3:$B$3".to_string()),
+                &[],
+            )
+            .expect("set new Series.Values");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after loaded new series");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:new-series-preserve"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:idx val="1""#));
+        assert!(saved_chart_xml.contains("<c:f>Sheet1!$D$1</c:f>"));
+        assert!(saved_chart_xml.contains("<c:f>Sheet1!$A$2:$B$2</c:f>"));
+        assert!(saved_chart_xml.contains("<c:f>Sheet1!$A$3:$B$3</c:f>"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after loaded new series");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_series_collection, "Count", &[])
+                    .expect("reopened SeriesCollection.Count")
+            ),
+            2.0
+        );
+        let reopened_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(2.0)])
+                .expect("reopened SeriesCollection.Item(2)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_series, "Values", &[])
+                .expect("reopened Series.Values"),
+            OmValue::Text("=Sheet1!$A$3:$B$3".to_string())
         );
     }
 
