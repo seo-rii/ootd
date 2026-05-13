@@ -16801,6 +16801,13 @@ fn patch_loaded_chart_model_xml(
             .clone()
             .unwrap_or_else(|| ((axis_index + 1) * 10).to_string())
     };
+    let chart_axis_ref_matches_model = |axis_id: &str| -> bool {
+        chart
+            .axes
+            .iter()
+            .enumerate()
+            .any(|(axis_index, axis)| chart_axis_id(axis_index, axis) == axis_id)
+    };
     let write_chart_axis_ref_element =
         |writer: &mut Writer<Cursor<Vec<u8>>>, axis_id: &str| -> OmResult<()> {
             let escaped_axis_id = partial_escape(axis_id).to_string();
@@ -17033,9 +17040,14 @@ fn patch_loaded_chart_model_xml(
                 }
                 if local_name.as_slice() == b"axId"
                     && current_chart_group_depth == Some(element_stack.len())
-                    && let Some(axis_id) = element_val_attribute(&element, reader.decoder())?
                 {
-                    chart_group_axis_refs_seen.push(axis_id);
+                    if let Some(axis_id) = element_val_attribute(&element, reader.decoder())? {
+                        if !chart_axis_ref_matches_model(&axis_id) {
+                            buffer.clear();
+                            continue;
+                        }
+                        chart_group_axis_refs_seen.push(axis_id);
+                    }
                 }
                 if let Some(series_index) = current_series_index
                     && let Some(slot) = source_container_slot(local_name.as_slice())
@@ -72201,6 +72213,96 @@ mod tests {
             .expect("bar chart end")];
         assert!(bar_chart_xml.contains(r#"<c:axId val="10""#));
         assert!(bar_chart_xml.contains(r#"<c:axId val="20""#));
+    }
+
+    #[test]
+    fn loaded_chart_has_axis_clear_removes_chart_group_axis_refs_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            "</c:barChart>",
+            r#"<c:axId val="10"/><c:axId val="20"/></c:barChart>"#,
+        )
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:axis-ref-remove-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart axis refs");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "HasAxis",
+                OmValue::Bool(false),
+                &[OmValue::Number(f64::from(super::XL_VALUE))],
+            )
+            .expect("clear loaded Chart.HasAxis(xlValue)");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after loaded axis ref removal");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:axis-ref-remove-preserve"/>"#));
+        assert!(!saved_chart_xml.contains("<c:valAx>"));
+        let bar_chart_xml = &saved_chart_xml[..saved_chart_xml
+            .find("</c:barChart>")
+            .expect("bar chart end")];
+        assert!(bar_chart_xml.contains(r#"<c:axId val="10""#));
+        assert!(!bar_chart_xml.contains(r#"<c:axId val="20""#));
     }
 
     #[test]
