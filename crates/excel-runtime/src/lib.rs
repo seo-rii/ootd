@@ -3384,11 +3384,11 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
-                    "HasSeriesLines" => {
-                        let OmValue::Bool(has_series_lines) = value else {
-                            return Err(OmError::type_mismatch(
-                                "ChartGroup.HasSeriesLines expects a boolean value",
-                            ));
+                    "HasSeriesLines" | "HasDropLines" | "HasHiLoLines" | "HasUpDownBars" => {
+                        let OmValue::Bool(enabled) = value else {
+                            return Err(OmError::type_mismatch(format!(
+                                "ChartGroup.{member} expects a boolean value"
+                            )));
                         };
                         let runtime = self.runtime_workbook_mut(workbook)?;
                         if runtime.read_only {
@@ -3412,8 +3412,15 @@ impl ExcelRuntime {
                                 "chart group not found",
                             ));
                         }
-                        if chart.has_series_lines != Some(has_series_lines) {
-                            chart.has_series_lines = Some(has_series_lines);
+                        let target = match member {
+                            "HasSeriesLines" => &mut chart.has_series_lines,
+                            "HasDropLines" => &mut chart.has_drop_lines,
+                            "HasHiLoLines" => &mut chart.has_hi_lo_lines,
+                            "HasUpDownBars" => &mut chart.has_up_down_bars,
+                            _ => unreachable!(),
+                        };
+                        if *target != Some(enabled) {
+                            *target = Some(enabled);
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -8791,6 +8798,9 @@ impl ExcelRuntime {
                             | "GapWidth"
                             | "Overlap"
                             | "HasSeriesLines"
+                            | "HasDropLines"
+                            | "HasHiLoLines"
+                            | "HasUpDownBars"
                             | "SeriesCollection"
                             | "Creator"
                             | "Application"
@@ -10903,6 +10913,9 @@ impl ExcelRuntime {
                             gap_width: None,
                             overlap: None,
                             has_series_lines: None,
+                            has_drop_lines: None,
+                            has_hi_lo_lines: None,
+                            has_up_down_bars: None,
                             display_blanks_as: None,
                             plot_visible_only: None,
                             raw_part_uri: None,
@@ -11755,6 +11768,9 @@ impl ExcelRuntime {
                     "GapWidth" => Ok(OmValue::Number(f64::from(chart.gap_width.unwrap_or(150)))),
                     "Overlap" => Ok(OmValue::Number(f64::from(chart.overlap.unwrap_or(0)))),
                     "HasSeriesLines" => Ok(OmValue::Bool(chart.has_series_lines.unwrap_or(false))),
+                    "HasDropLines" => Ok(OmValue::Bool(chart.has_drop_lines.unwrap_or(false))),
+                    "HasHiLoLines" => Ok(OmValue::Bool(chart.has_hi_lo_lines.unwrap_or(false))),
+                    "HasUpDownBars" => Ok(OmValue::Bool(chart.has_up_down_bars.unwrap_or(false))),
                     "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
                     "Application" => Ok(OmValue::Object(self.root_application())),
                     "Parent" => Ok(OmValue::Object(
@@ -13732,6 +13748,9 @@ impl ExcelRuntime {
                         gap_width: None,
                         overlap: None,
                         has_series_lines: None,
+                        has_drop_lines: None,
+                        has_hi_lo_lines: None,
+                        has_up_down_bars: None,
                         display_blanks_as: None,
                         plot_visible_only: None,
                         raw_part_uri: Some(chart_part_uri.clone()),
@@ -18907,7 +18926,12 @@ fn patch_loaded_chart_model_xml(
     let expected_overlap = chart.overlap.map(|value| value.to_string());
     let expected_gap_width = expected_gap_width.as_deref();
     let expected_overlap = expected_overlap.as_deref();
-    let expected_has_series_lines = chart.has_series_lines;
+    let expected_chart_group_line_flags: [(&[u8], &str, Option<bool>); 4] = [
+        (b"serLines", "c:serLines", chart.has_series_lines),
+        (b"dropLines", "c:dropLines", chart.has_drop_lines),
+        (b"hiLowLines", "c:hiLowLines", chart.has_hi_lo_lines),
+        (b"upDownBars", "c:upDownBars", chart.has_up_down_bars),
+    ];
 
     let mut reader = Reader::from_reader(Cursor::new(existing_chart_xml));
     reader.config_mut().trim_text(false);
@@ -18950,10 +18974,10 @@ fn patch_loaded_chart_model_xml(
     let mut overlap_seen = false;
     let mut overlap_written = false;
     let mut overlap_inserted = false;
-    let mut series_lines_seen = false;
-    let mut series_lines_written = false;
-    let mut series_lines_inserted = false;
-    let mut series_lines_removed = false;
+    let mut chart_group_line_flag_seen = [false; 4];
+    let mut chart_group_line_flag_written = [false; 4];
+    let mut chart_group_line_flag_inserted = [false; 4];
+    let mut chart_group_line_flag_removed = [false; 4];
     let mut current_axis_index = None::<usize>;
     let mut axis_kinds = Vec::<ChartAxisKind>::new();
     let mut axis_title_texts = Vec::<Option<String>>::new();
@@ -19468,18 +19492,21 @@ fn patch_loaded_chart_model_xml(
                     && current_chart_group_depth == Some(element_stack.len())
                 {
                     overlap_seen = true;
-                } else if local_name.as_slice() == b"serLines"
-                    && current_chart_group_depth == Some(element_stack.len())
+                } else if current_chart_group_depth == Some(element_stack.len())
+                    && let Some((flag_index, (_, _, expected))) = expected_chart_group_line_flags
+                        .iter()
+                        .enumerate()
+                        .find(|(_, (name, _, _))| local_name.as_slice() == *name)
                 {
-                    series_lines_seen = true;
-                    if expected_has_series_lines == Some(false) {
-                        series_lines_removed = true;
+                    chart_group_line_flag_seen[flag_index] = true;
+                    if *expected == Some(false) {
+                        chart_group_line_flag_removed[flag_index] = true;
                         skip_depth = 1;
                         buffer.clear();
                         continue;
                     }
-                    if expected_has_series_lines == Some(true) {
-                        series_lines_written = true;
+                    if *expected == Some(true) {
+                        chart_group_line_flag_written[flag_index] = true;
                     }
                 }
 
@@ -19742,17 +19769,20 @@ fn patch_loaded_chart_model_xml(
                     && current_chart_group_depth == Some(element_stack.len())
                 {
                     overlap_seen = true;
-                } else if local_name.as_slice() == b"serLines"
-                    && current_chart_group_depth == Some(element_stack.len())
+                } else if current_chart_group_depth == Some(element_stack.len())
+                    && let Some((flag_index, (_, _, expected))) = expected_chart_group_line_flags
+                        .iter()
+                        .enumerate()
+                        .find(|(_, (name, _, _))| local_name.as_slice() == *name)
                 {
-                    series_lines_seen = true;
-                    if expected_has_series_lines == Some(false) {
-                        series_lines_removed = true;
+                    chart_group_line_flag_seen[flag_index] = true;
+                    if *expected == Some(false) {
+                        chart_group_line_flag_removed[flag_index] = true;
                         buffer.clear();
                         continue;
                     }
-                    if expected_has_series_lines == Some(true) {
-                        series_lines_written = true;
+                    if *expected == Some(true) {
+                        chart_group_line_flag_written[flag_index] = true;
                     }
                 }
                 if local_name.as_slice() == b"legendPos"
@@ -20195,12 +20225,16 @@ fn patch_loaded_chart_model_xml(
                         overlap_inserted = true;
                         overlap_written = true;
                     }
-                    if !series_lines_seen && expected_has_series_lines == Some(true) {
-                        writer
-                            .write_event(Event::Empty(BytesStart::new("c:serLines")))
-                            .map_err(runtime_xml_error)?;
-                        series_lines_inserted = true;
-                        series_lines_written = true;
+                    for (flag_index, (_, qualified_name, expected)) in
+                        expected_chart_group_line_flags.iter().enumerate()
+                    {
+                        if !chart_group_line_flag_seen[flag_index] && *expected == Some(true) {
+                            writer
+                                .write_event(Event::Empty(BytesStart::new(*qualified_name)))
+                                .map_err(runtime_xml_error)?;
+                            chart_group_line_flag_inserted[flag_index] = true;
+                            chart_group_line_flag_written[flag_index] = true;
+                        }
                     }
                     if !chart_group_axis_refs_seen.is_empty() {
                         for (axis_index, axis) in chart.axes.iter().enumerate() {
@@ -20346,13 +20380,19 @@ fn patch_loaded_chart_model_xml(
         (Some(_), false) => overlap_inserted,
         (None, _) => true,
     };
-    let series_lines_matches = match (expected_has_series_lines, series_lines_seen) {
-        (Some(true), true) => series_lines_written,
-        (Some(true), false) => series_lines_inserted,
-        (Some(false), true) => series_lines_removed,
-        (Some(false), false) => true,
-        (None, _) => true,
-    };
+    let chart_group_line_flags_match =
+        expected_chart_group_line_flags
+            .iter()
+            .enumerate()
+            .all(|(flag_index, (_, _, expected))| {
+                match (*expected, chart_group_line_flag_seen[flag_index]) {
+                    (Some(true), true) => chart_group_line_flag_written[flag_index],
+                    (Some(true), false) => chart_group_line_flag_inserted[flag_index],
+                    (Some(false), true) => chart_group_line_flag_removed[flag_index],
+                    (Some(false), false) => true,
+                    (None, _) => true,
+                }
+            });
     let axes_match = axis_kinds.len() == chart.axes.len()
         && axis_kinds
             .iter()
@@ -20378,7 +20418,7 @@ fn patch_loaded_chart_model_xml(
         && vary_colors_matches
         && gap_width_matches
         && overlap_matches
-        && series_lines_matches
+        && chart_group_line_flags_match
         && axes_match
     {
         Ok(Some(writer.into_inner().into_inner()))
@@ -20442,6 +20482,21 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
         .unwrap_or_default();
     let series_lines_xml = if chart.has_series_lines == Some(true) {
         r#"<c:serLines/>"#
+    } else {
+        ""
+    };
+    let drop_lines_xml = if chart.has_drop_lines == Some(true) {
+        r#"<c:dropLines/>"#
+    } else {
+        ""
+    };
+    let hi_lo_lines_xml = if chart.has_hi_lo_lines == Some(true) {
+        r#"<c:hiLowLines/>"#
+    } else {
+        ""
+    };
+    let up_down_bars_xml = if chart.has_up_down_bars == Some(true) {
+        r#"<c:upDownBars/>"#
     } else {
         ""
     };
@@ -20514,7 +20569,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{series_lines_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
+  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -74146,25 +74201,32 @@ mod tests {
             .dispatch_set(chart_group, "Overlap", OmValue::Number(-101.0), &[])
             .expect_err("ChartGroup.Overlap rejects out of range");
         assert_eq!(invalid_overlap.code, OmErrorCode::InvalidArgument);
-        assert_eq!(
+        for member in [
+            "HasSeriesLines",
+            "HasDropLines",
+            "HasHiLoLines",
+            "HasUpDownBars",
+        ] {
+            assert_eq!(
+                runtime
+                    .dispatch_get(chart_group, member, &[])
+                    .expect("ChartGroup line flag"),
+                OmValue::Bool(true)
+            );
             runtime
-                .dispatch_get(chart_group, "HasSeriesLines", &[])
-                .expect("ChartGroup.HasSeriesLines"),
-            OmValue::Bool(true)
-        );
-        runtime
-            .dispatch_set(chart_group, "HasSeriesLines", OmValue::Bool(false), &[])
-            .expect("set ChartGroup.HasSeriesLines false");
-        assert_eq!(
-            runtime
-                .dispatch_get(chart_group, "HasSeriesLines", &[])
-                .expect("ChartGroup.HasSeriesLines after set"),
-            OmValue::Bool(false)
-        );
-        let invalid_has_series_lines = runtime
-            .dispatch_set(chart_group, "HasSeriesLines", OmValue::Number(1.0), &[])
-            .expect_err("ChartGroup.HasSeriesLines rejects non-bool");
-        assert_eq!(invalid_has_series_lines.code, OmErrorCode::TypeMismatch);
+                .dispatch_set(chart_group, member, OmValue::Bool(false), &[])
+                .expect("set ChartGroup line flag false");
+            assert_eq!(
+                runtime
+                    .dispatch_get(chart_group, member, &[])
+                    .expect("ChartGroup line flag after set"),
+                OmValue::Bool(false)
+            );
+            let invalid_line_flag = runtime
+                .dispatch_set(chart_group, member, OmValue::Number(1.0), &[])
+                .expect_err("ChartGroup line flag rejects non-bool");
+            assert_eq!(invalid_line_flag.code, OmErrorCode::TypeMismatch);
+        }
         runtime
             .dispatch_set(
                 chart_group,
@@ -74667,7 +74729,7 @@ mod tests {
     }
 
     #[test]
-    fn chart_group_has_series_lines_setter_roundtrips() {
+    fn chart_group_line_flag_setters_roundtrip() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -74703,15 +74765,22 @@ mod tests {
                 .expect("Chart.ChartGroups(1)"),
         );
 
-        assert_eq!(
+        for member in [
+            "HasSeriesLines",
+            "HasDropLines",
+            "HasHiLoLines",
+            "HasUpDownBars",
+        ] {
+            assert_eq!(
+                runtime
+                    .dispatch_get(chart_group, member, &[])
+                    .expect("ChartGroup line flag before set"),
+                OmValue::Bool(true)
+            );
             runtime
-                .dispatch_get(chart_group, "HasSeriesLines", &[])
-                .expect("ChartGroup.HasSeriesLines before set"),
-            OmValue::Bool(true)
-        );
-        runtime
-            .dispatch_set(chart_group, "HasSeriesLines", OmValue::Bool(false), &[])
-            .expect("set ChartGroup.HasSeriesLines false");
+                .dispatch_set(chart_group, member, OmValue::Bool(false), &[])
+                .expect("set ChartGroup line flag false");
+        }
 
         let saved = runtime
             .save_workbook(
@@ -74722,7 +74791,7 @@ mod tests {
                     lossless: true,
                 },
             )
-            .expect("save chart group series lines");
+            .expect("save chart group line flags");
         let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
         let saved_chart_xml = String::from_utf8(
             saved_package
@@ -74732,7 +74801,9 @@ mod tests {
                 .clone(),
         )
         .expect("saved chart xml utf8");
-        assert!(!saved_chart_xml.contains("<c:serLines"));
+        for element in ["serLines", "dropLines", "hiLowLines", "upDownBars"] {
+            assert!(!saved_chart_xml.contains(&format!("<c:{element}")));
+        }
 
         let mut reopened_runtime = ExcelRuntime::new();
         let reopened_workbook = reopened_runtime
@@ -74768,12 +74839,19 @@ mod tests {
                 .dispatch_get(reopened_chart, "ChartGroups", &[OmValue::Number(1.0)])
                 .expect("reopened Chart.ChartGroups(1)"),
         );
-        assert_eq!(
-            reopened_runtime
-                .dispatch_get(reopened_chart_group, "HasSeriesLines", &[])
-                .expect("reopened ChartGroup.HasSeriesLines"),
-            OmValue::Bool(false)
-        );
+        for member in [
+            "HasSeriesLines",
+            "HasDropLines",
+            "HasHiLoLines",
+            "HasUpDownBars",
+        ] {
+            assert_eq!(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_group, member, &[])
+                    .expect("reopened ChartGroup line flag"),
+                OmValue::Bool(false)
+            );
+        }
     }
 
     #[test]
@@ -88446,7 +88524,7 @@ mod tests {
                 compression: CompressionMethod::Stored,
                 bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:varyColors val="1"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val></c:ser><c:gapWidth val="150"/><c:overlap val="0"/><c:serLines/></c:barChart><c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx><c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx></c:plotArea><c:legend><c:legendPos val="r"/></c:legend></c:chart>
+  <c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:varyColors val="1"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val></c:ser><c:gapWidth val="150"/><c:overlap val="0"/><c:serLines/><c:dropLines/><c:hiLowLines/><c:upDownBars/></c:barChart><c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx><c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx></c:plotArea><c:legend><c:legendPos val="r"/></c:legend></c:chart>
 </c:chartSpace>"#
                     .to_vec(),
             })

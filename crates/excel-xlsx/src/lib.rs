@@ -660,6 +660,9 @@ pub struct ChartPartSummary {
     pub gap_width: Option<u16>,
     pub overlap: Option<i16>,
     pub has_series_lines: Option<bool>,
+    pub has_drop_lines: Option<bool>,
+    pub has_hi_lo_lines: Option<bool>,
+    pub has_up_down_bars: Option<bool>,
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,
     pub axes: Vec<ChartAxisSummary>,
@@ -3130,6 +3133,9 @@ fn build_chart_model_overlay(
                     gap_width: summary.and_then(|summary| summary.gap_width),
                     overlap: summary.and_then(|summary| summary.overlap),
                     has_series_lines: summary.and_then(|summary| summary.has_series_lines),
+                    has_drop_lines: summary.and_then(|summary| summary.has_drop_lines),
+                    has_hi_lo_lines: summary.and_then(|summary| summary.has_hi_lo_lines),
+                    has_up_down_bars: summary.and_then(|summary| summary.has_up_down_bars),
                     display_blanks_as: summary.and_then(|summary| summary.display_blanks_as),
                     plot_visible_only: summary.and_then(|summary| summary.plot_visible_only),
                     axes: summary
@@ -15805,6 +15811,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut gap_width = None;
     let mut overlap = None;
     let mut has_series_lines = None;
+    let mut has_drop_lines = None;
+    let mut has_hi_lo_lines = None;
+    let mut has_up_down_bars = None;
     let mut display_blanks_as = None;
     let mut plot_visible_only = None;
     let mut axes = Vec::new();
@@ -15982,6 +15991,27 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 {
                     has_series_lines = Some(true);
                 }
+                if local_name == b"dropLines"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                {
+                    has_drop_lines = Some(true);
+                }
+                if local_name == b"hiLowLines"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                {
+                    has_hi_lo_lines = Some(true);
+                }
+                if local_name == b"upDownBars"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                {
+                    has_up_down_bars = Some(true);
+                }
                 if local_name == b"dispBlanksAs"
                     && element_path.last().is_some_and(|name| name == "chart")
                 {
@@ -16129,6 +16159,27 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
                     has_series_lines = Some(true);
+                }
+                if local_name == b"dropLines"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                {
+                    has_drop_lines = Some(true);
+                }
+                if local_name == b"hiLowLines"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                {
+                    has_hi_lo_lines = Some(true);
+                }
+                if local_name == b"upDownBars"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                {
+                    has_up_down_bars = Some(true);
                 }
                 if local_name == b"dispBlanksAs"
                     && element_path.last().is_some_and(|name| name == "chart")
@@ -16325,6 +16376,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         gap_width,
         overlap,
         has_series_lines,
+        has_drop_lines,
+        has_hi_lo_lines,
+        has_up_down_bars,
         display_blanks_as,
         plot_visible_only,
         axes,
@@ -20887,6 +20941,9 @@ mod tests {
         <c:gapWidth val="150"/>
         <c:overlap val="0"/>
         <c:serLines/>
+        <c:dropLines/>
+        <c:hiLowLines/>
+        <c:upDownBars/>
       </c:barChart>
       <c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx>
       <c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx>
@@ -21095,6 +21152,9 @@ mod tests {
         assert_eq!(chart_summary.gap_width, Some(150));
         assert_eq!(chart_summary.overlap, Some(0));
         assert_eq!(chart_summary.has_series_lines, Some(true));
+        assert_eq!(chart_summary.has_drop_lines, Some(true));
+        assert_eq!(chart_summary.has_hi_lo_lines, Some(true));
+        assert_eq!(chart_summary.has_up_down_bars, Some(true));
         assert_eq!(chart_summary.plot_visible_only, Some(false));
         assert_eq!(
             chart_summary.display_blanks_as,
@@ -21201,6 +21261,9 @@ mod tests {
         assert_eq!(chart_model.gap_width, Some(150));
         assert_eq!(chart_model.overlap, Some(0));
         assert_eq!(chart_model.has_series_lines, Some(true));
+        assert_eq!(chart_model.has_drop_lines, Some(true));
+        assert_eq!(chart_model.has_hi_lo_lines, Some(true));
+        assert_eq!(chart_model.has_up_down_bars, Some(true));
         assert_eq!(chart_model.plot_visible_only, Some(false));
         assert_eq!(
             chart_model.display_blanks_as,
