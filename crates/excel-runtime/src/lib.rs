@@ -16530,6 +16530,15 @@ fn chart_axis_kind_from_xml_name(local_name: &[u8]) -> Option<ChartAxisKind> {
     }
 }
 
+fn chart_axis_xml_name(kind: ChartAxisKind) -> &'static str {
+    match kind {
+        ChartAxisKind::Category => "catAx",
+        ChartAxisKind::Value => "valAx",
+        ChartAxisKind::Date => "dateAx",
+        ChartAxisKind::Series => "serAx",
+    }
+}
+
 fn chart_legend_position_xml_value(position: ChartLegendPosition) -> &'static str {
     match position {
         ChartLegendPosition::Bottom => "b",
@@ -16770,6 +16779,32 @@ fn patch_loaded_chart_model_xml(
                 .map_err(runtime_xml_error)?;
             Ok(())
         };
+    let write_chart_axis_element = |writer: &mut Writer<Cursor<Vec<u8>>>,
+                                    axis_index: usize,
+                                    axis: &AxisModel|
+     -> OmResult<()> {
+        let axis_name = format!("c:{}", chart_axis_xml_name(axis.kind));
+        writer
+            .write_event(Event::Start(BytesStart::new(axis_name.as_str())))
+            .map_err(runtime_xml_error)?;
+        let axis_id = axis
+            .raw_id
+            .clone()
+            .unwrap_or_else(|| ((axis_index + 1) * 10).to_string());
+        let escaped_axis_id = partial_escape(&axis_id).to_string();
+        let mut axis_id_element = BytesStart::new("c:axId");
+        axis_id_element.push_attribute(("val", escaped_axis_id.as_str()));
+        writer
+            .write_event(Event::Empty(axis_id_element))
+            .map_err(runtime_xml_error)?;
+        if let Some(title) = axis.title.as_ref() {
+            write_chart_text_element(writer, "c:title", &title.text)?;
+        }
+        writer
+            .write_event(Event::End(BytesEnd::new(axis_name.as_str())))
+            .map_err(runtime_xml_error)?;
+        Ok(())
+    };
 
     loop {
         match reader.read_event_into(&mut buffer) {
@@ -17344,6 +17379,15 @@ fn patch_loaded_chart_model_xml(
                         *written = true;
                     }
                 }
+                if local_name.as_slice() == b"plotArea" {
+                    while let Some(axis) = chart.axes.get(axis_kinds.len()) {
+                        let axis_index = axis_kinds.len();
+                        write_chart_axis_element(&mut writer, axis_index, axis)?;
+                        axis_kinds.push(axis.kind);
+                        axis_title_texts.push(axis.title.as_ref().map(|title| title.text.clone()));
+                        axis_title_text_written.push(axis.title.is_some());
+                    }
+                }
 
                 if chart_type_from_group_name(local_name.as_slice()).is_some()
                     && chart_type.as_ref() != Some(&chart.chart_type)
@@ -17524,12 +17568,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
                 .unwrap_or_else(|| ((axis_index + 1) * 10).to_string());
             let escaped_axis_id = partial_escape(&axis_id).to_string();
             chart_group_axis_refs.push_str(&format!(r#"<c:axId val="{escaped_axis_id}"/>"#));
-            let axis_tag = match axis.kind {
-                ChartAxisKind::Category => "catAx",
-                ChartAxisKind::Value => "valAx",
-                ChartAxisKind::Date => "dateAx",
-                ChartAxisKind::Series => "serAx",
-            };
+            let axis_tag = chart_axis_xml_name(axis.kind);
             let axis_title_xml = axis
                 .title
                 .as_ref()
@@ -71884,6 +71923,143 @@ mod tests {
                 )
                 .expect("reopened Chart.HasAxis(xlValue)"),
             OmValue::Bool(false)
+        );
+    }
+
+    #[test]
+    fn loaded_chart_has_axis_add_preserves_chart_extensions_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            r#"<c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx>"#,
+            "",
+        )
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:axis-add-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook without value axis");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "HasAxis",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.HasAxis(xlValue) before set"),
+            OmValue::Bool(false)
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "HasAxis",
+                OmValue::Bool(true),
+                &[OmValue::Number(f64::from(super::XL_VALUE))],
+            )
+            .expect("restore loaded Chart.HasAxis(xlValue)");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after loaded axis add");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:axis-add-preserve"/>"#));
+        assert!(saved_chart_xml.contains("<c:catAx>"));
+        assert!(saved_chart_xml.contains("<c:valAx>"));
+        assert!(saved_chart_xml.contains(r#"<c:axId val="20""#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after loaded axis add");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "HasAxis",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("reopened Chart.HasAxis(xlValue)"),
+            OmValue::Bool(true)
         );
     }
 
