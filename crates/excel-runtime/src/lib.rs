@@ -9335,6 +9335,46 @@ impl ExcelRuntime {
                     member,
                 )?))
             }
+            "TopLeftCell" | "BottomRightCell" => {
+                let chart_object = self.chart_object_model(workbook, chart_object_id)?.clone();
+                let Some(anchor) = chart_object.anchor.as_ref() else {
+                    return Err(OmError::unsupported(format!(
+                        "ChartObject.{member} is unavailable for unsupported drawing anchors"
+                    )));
+                };
+                let marker = match (member, anchor) {
+                    ("TopLeftCell", DrawingAnchor::OneCell(anchor)) => &anchor.from,
+                    ("TopLeftCell", DrawingAnchor::TwoCell(anchor)) => &anchor.from,
+                    ("BottomRightCell", DrawingAnchor::TwoCell(anchor)) => &anchor.to,
+                    (_, DrawingAnchor::Absolute(_) | DrawingAnchor::UnsupportedRaw)
+                    | ("BottomRightCell", DrawingAnchor::OneCell(_)) => {
+                        return Err(OmError::unsupported(format!(
+                            "ChartObject.{member} is unavailable for this drawing anchor"
+                        )));
+                    }
+                    _ => {
+                        return Err(OmError::unsupported(format!(
+                            "ChartObject.{member} is not supported"
+                        )));
+                    }
+                };
+                let row = marker
+                    .row_zero_based
+                    .checked_add(1)
+                    .ok_or_else(|| OmError::invalid_argument("chart marker row is out of range"))?;
+                let col = marker.col_zero_based.checked_add(1).ok_or_else(|| {
+                    OmError::invalid_argument("chart marker column is out of range")
+                })?;
+                let workbook_id = self.workbook_model(workbook)?.id;
+                let range = RangeSet::single_rect(
+                    workbook_id,
+                    chart_object.host_sheet_id,
+                    Rect::single_cell(row, col),
+                )?;
+                Ok(OmValue::Object(
+                    self.register_range_set_handle(workbook, range).0,
+                ))
+            }
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => {
                 let sheet_id = self
@@ -70331,6 +70371,85 @@ mod tests {
                     .expect("Axis.Type from Chart.Axes method")
             ),
             f64::from(super::XL_VALUE)
+        );
+    }
+
+    #[test]
+    fn chartobject_anchor_cell_properties_return_marker_ranges() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let drawing_xml = String::from_utf8(
+            package
+                .part("xl/drawings/drawing1.xml")
+                .expect("drawing part")
+                .bytes
+                .clone(),
+        )
+        .expect("drawing xml utf8")
+        .replace(
+            r#"  <xdr:absoluteAnchor ar:tag="keep" xmlns:ar="urn:anchor-root">
+  <xdr:pos x="25400" y="38100" pg:tag="keep" xmlns:pg="urn:pos"/>
+  <xdr:ext cx="1270000" cy="635000" eg:tag="keep" xmlns:eg="urn:ext"/>"#,
+            r#"  <xdr:twoCellAnchor editAs="twoCell" ar:tag="keep" xmlns:ar="urn:anchor-root">
+    <xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>6</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>"#,
+        )
+        .replace("</xdr:absoluteAnchor>", "</xdr:twoCellAnchor>");
+        assert!(drawing_xml.contains("<xdr:twoCellAnchor"));
+        package
+            .replace_part_bytes("xl/drawings/drawing1.xml", drawing_xml.into_bytes())
+            .expect("replace drawing xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with two-cell chart anchor");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+
+        let top_left_cell = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "TopLeftCell", &[])
+                .expect("ChartObject.TopLeftCell"),
+        );
+        let bottom_right_cell = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "BottomRightCell", &[])
+                .expect("ChartObject.BottomRightCell"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(top_left_cell, "Address", &[])
+                    .expect("TopLeftCell.Address")
+            ),
+            "$B$3"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(bottom_right_cell, "Address", &[])
+                    .expect("BottomRightCell.Address")
+            ),
+            "$E$7"
         );
     }
 
