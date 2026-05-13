@@ -70454,6 +70454,72 @@ mod tests {
     }
 
     #[test]
+    fn chartobject_top_left_cell_supports_one_cell_anchor() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let drawing_xml = String::from_utf8(
+            package
+                .part("xl/drawings/drawing1.xml")
+                .expect("drawing part")
+                .bytes
+                .clone(),
+        )
+        .expect("drawing xml utf8")
+        .replace(
+            r#"  <xdr:absoluteAnchor ar:tag="keep" xmlns:ar="urn:anchor-root">
+  <xdr:pos x="25400" y="38100" pg:tag="keep" xmlns:pg="urn:pos"/>
+  <xdr:ext cx="1270000" cy="635000" eg:tag="keep" xmlns:eg="urn:ext"/>"#,
+            r#"  <xdr:oneCellAnchor ar:tag="keep" xmlns:ar="urn:anchor-root">
+    <xdr:from><xdr:col>2</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>3</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:ext cx="1270000" cy="635000" eg:tag="keep" xmlns:eg="urn:ext"/>"#,
+        )
+        .replace("</xdr:absoluteAnchor>", "</xdr:oneCellAnchor>");
+        assert!(drawing_xml.contains("<xdr:oneCellAnchor"));
+        package
+            .replace_part_bytes("xl/drawings/drawing1.xml", drawing_xml.into_bytes())
+            .expect("replace drawing xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with one-cell chart anchor");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+
+        let top_left_cell = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "TopLeftCell", &[])
+                .expect("ChartObject.TopLeftCell"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(top_left_cell, "Address", &[])
+                    .expect("TopLeftCell.Address")
+            ),
+            "$C$4"
+        );
+    }
+
+    #[test]
     fn loaded_chart_source_rename_patches_formulas_without_dropping_extensions() {
         let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
             .expect("embedded chart package");
