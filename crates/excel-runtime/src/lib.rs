@@ -70942,6 +70942,171 @@ mod tests {
     }
 
     #[test]
+    fn loaded_chart_series_formula_adds_missing_sources_without_dropping_extensions() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            "<c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx>",
+            "",
+        )
+        .replace(
+            "<c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat>",
+            "",
+        )
+        .replace(
+            "<c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val>",
+            "",
+        )
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:series-formula-source-add-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart missing formula sources");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+        runtime
+            .dispatch_set(
+                series,
+                "Formula",
+                OmValue::Text(
+                    "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$B$1,Sheet1!$A$1:$C$1,1)".to_string(),
+                ),
+                &[],
+            )
+            .expect("set loaded Series.Formula");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after loaded Series.Formula source add");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(
+            saved_chart_xml.contains(r#"<c:ext uri="urn:series-formula-source-add-preserve"/>"#)
+        );
+        assert!(
+            saved_chart_xml.contains("<c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx>")
+        );
+        assert!(
+            saved_chart_xml
+                .contains("<c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat>")
+        );
+        assert!(
+            saved_chart_xml
+                .contains("<c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val>")
+        );
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after loaded Series.Formula source add");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(reopened_series, "Formula", &[])
+                    .expect("reopened Series.Formula")
+            ),
+            "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$B$1,Sheet1!$A$1:$C$1,1)"
+        );
+    }
+
+    #[test]
     fn loaded_chart_has_legend_setter_preserves_chart_extensions_on_save() {
         let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
             .expect("embedded chart package");
