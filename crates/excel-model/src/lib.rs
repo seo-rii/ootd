@@ -12,9 +12,10 @@ mod names;
 
 pub use charts::{
     AxisModel, ChartAxisKind, ChartCacheKind, ChartCacheSnapshot, ChartCellMarkerXmlAttrs,
-    ChartLegendPosition, ChartMarkerXmlAttrs, ChartModel, ChartObjectModel, ChartSheetBinding,
-    ChartSourceExpr, ChartText, ChartType, DrawingModel, DrawingObjectModel, LegendModel,
-    SeriesModel, resolve_chart_source_reference, resolve_chart_source_reference_with_names,
+    ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerXmlAttrs, ChartModel, ChartObjectModel,
+    ChartSheetBinding, ChartSourceExpr, ChartText, ChartType, DrawingModel, DrawingObjectModel,
+    LegendModel, SeriesModel, resolve_chart_source_reference,
+    resolve_chart_source_reference_with_names,
 };
 pub use names::DefinedNameTable;
 
@@ -614,6 +615,8 @@ mod tests {
                 title: None,
                 legend: None,
                 axes: Vec::new(),
+                display_blanks_as: None,
+                plot_visible_only: None,
                 raw_part_uri: Some("xl/charts/chart1.xml".to_string()),
                 dirty: false,
             },
@@ -1178,6 +1181,8 @@ mod tests {
                 title: None,
                 legend: None,
                 axes: Vec::new(),
+                display_blanks_as: None,
+                plot_visible_only: None,
                 raw_part_uri: Some("xl/charts/chart1.xml".to_string()),
                 dirty: false,
             },

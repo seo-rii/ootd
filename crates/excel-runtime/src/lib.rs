@@ -1,7 +1,8 @@
 use excel_model::{
-    AxisModel, ChartAxisKind, ChartLegendPosition, ChartModel, ChartObjectModel, ChartSheetBinding,
-    ChartSourceExpr, ChartText, ChartType, DrawingModel, DrawingObjectModel, LegendModel,
-    SeriesModel, WorkbookState, WorksheetData, resolve_chart_source_reference_with_names,
+    AxisModel, ChartAxisKind, ChartDisplayBlanksAs, ChartLegendPosition, ChartModel,
+    ChartObjectModel, ChartSheetBinding, ChartSourceExpr, ChartText, ChartType, DrawingModel,
+    DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
+    resolve_chart_source_reference_with_names,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
@@ -54,6 +55,9 @@ const XL_PRIMARY: u32 = 1;
 const XL_SECONDARY: u32 = 2;
 const XL_PLOT_BY_ROWS: i32 = 1;
 const XL_PLOT_BY_COLUMNS: i32 = 2;
+const XL_NOT_PLOTTED: i32 = 1;
+const XL_ZERO: i32 = 2;
+const XL_INTERPOLATED: i32 = 3;
 const XL_LEGEND_POSITION_BOTTOM: i32 = -4107;
 const XL_LEGEND_POSITION_CORNER: i32 = 2;
 const XL_LEGEND_POSITION_CUSTOM: i32 = -4161;
@@ -3383,6 +3387,67 @@ impl ExcelRuntime {
                         }
                         if stale_axis_handles {
                             self.stale_axis_handles_for_chart(workbook, chart_id);
+                        }
+                        Ok(())
+                    }
+                    "DisplayBlanksAs" => {
+                        let OmValue::Number(number) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Chart.DisplayBlanksAs expects an XlDisplayBlanksAs numeric value",
+                            ));
+                        };
+                        if !number.is_finite()
+                            || number.fract() != 0.0
+                            || number < i32::MIN as f64
+                            || number > i32::MAX as f64
+                        {
+                            return Err(OmError::invalid_argument(
+                                "Chart.DisplayBlanksAs expects an integral XlDisplayBlanksAs value",
+                            ));
+                        }
+                        let display_blanks_as =
+                            chart_display_blanks_as_from_excel_value(number as i32)?;
+                        {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            if chart.display_blanks_as != Some(display_blanks_as) {
+                                chart.display_blanks_as = Some(display_blanks_as);
+                                chart.dirty = true;
+                                runtime.dirty = true;
+                            }
+                        }
+                        Ok(())
+                    }
+                    "PlotVisibleOnly" => {
+                        let OmValue::Bool(plot_visible_only) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Chart.PlotVisibleOnly expects a boolean value",
+                            ));
+                        };
+                        {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            if chart.plot_visible_only != Some(plot_visible_only) {
+                                chart.plot_visible_only = Some(plot_visible_only);
+                                chart.dirty = true;
+                                runtime.dirty = true;
+                            }
                         }
                         Ok(())
                     }
@@ -7479,6 +7544,8 @@ impl ExcelRuntime {
                         "Chart",
                         "ChartType"
                             | "Index"
+                            | "DisplayBlanksAs"
+                            | "PlotVisibleOnly"
                             | "ChartArea"
                             | "PlotArea"
                             | "HasTitle"
@@ -9602,6 +9669,8 @@ impl ExcelRuntime {
                             title: None,
                             legend: None,
                             axes: default_chart_axes(),
+                            display_blanks_as: None,
+                            plot_visible_only: None,
                             raw_part_uri: None,
                             dirty: true,
                         },
@@ -9882,6 +9951,32 @@ impl ExcelRuntime {
                 Ok(OmValue::Number(f64::from(chart_type_to_excel_value(
                     &self.chart_model(workbook, chart_id)?.chart_type,
                 )?)))
+            }
+            "DisplayBlanksAs" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Chart.DisplayBlanksAs does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Number(f64::from(
+                    chart_display_blanks_as_to_excel_value(
+                        self.chart_model(workbook, chart_id)?
+                            .display_blanks_as
+                            .unwrap_or(ChartDisplayBlanksAs::Gap),
+                    ),
+                )))
+            }
+            "PlotVisibleOnly" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Chart.PlotVisibleOnly does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Bool(
+                    self.chart_model(workbook, chart_id)?
+                        .plot_visible_only
+                        .unwrap_or(true),
+                ))
             }
             "Creator" => {
                 if !args.is_empty() {
@@ -12213,6 +12308,8 @@ impl ExcelRuntime {
                         title: None,
                         legend: None,
                         axes: default_chart_axes(),
+                        display_blanks_as: None,
+                        plot_visible_only: None,
                         raw_part_uri: Some(chart_part_uri.clone()),
                         dirty: false,
                     };
@@ -17220,6 +17317,33 @@ fn chart_legend_position_xml_value(position: ChartLegendPosition) -> &'static st
     }
 }
 
+fn chart_display_blanks_as_xml_value(value: ChartDisplayBlanksAs) -> &'static str {
+    match value {
+        ChartDisplayBlanksAs::Gap => "gap",
+        ChartDisplayBlanksAs::Span => "span",
+        ChartDisplayBlanksAs::Zero => "zero",
+    }
+}
+
+fn chart_display_blanks_as_to_excel_value(value: ChartDisplayBlanksAs) -> i32 {
+    match value {
+        ChartDisplayBlanksAs::Gap => XL_NOT_PLOTTED,
+        ChartDisplayBlanksAs::Span => XL_INTERPOLATED,
+        ChartDisplayBlanksAs::Zero => XL_ZERO,
+    }
+}
+
+fn chart_display_blanks_as_from_excel_value(value: i32) -> OmResult<ChartDisplayBlanksAs> {
+    match value {
+        XL_NOT_PLOTTED => Ok(ChartDisplayBlanksAs::Gap),
+        XL_INTERPOLATED => Ok(ChartDisplayBlanksAs::Span),
+        XL_ZERO => Ok(ChartDisplayBlanksAs::Zero),
+        _ => Err(OmError::unsupported(
+            "Chart.DisplayBlanksAs supports xlNotPlotted, xlZero, and xlInterpolated",
+        )),
+    }
+}
+
 fn patch_loaded_chart_model_xml(
     existing_chart_xml: &[u8],
     chart: &ChartModel,
@@ -17251,6 +17375,12 @@ fn patch_loaded_chart_model_xml(
                     legend.position.unwrap_or(ChartLegendPosition::Right),
                 )
             });
+    let expected_display_blanks_as = chart
+        .display_blanks_as
+        .map(chart_display_blanks_as_xml_value);
+    let expected_plot_visible_only = chart
+        .plot_visible_only
+        .map(|value| if value { "1" } else { "0" });
 
     let mut reader = Reader::from_reader(Cursor::new(existing_chart_xml));
     reader.config_mut().trim_text(false);
@@ -17278,6 +17408,12 @@ fn patch_loaded_chart_model_xml(
     let mut legend_removed = false;
     let mut legend_inserted = false;
     let mut legend_position_written = false;
+    let mut display_blanks_as_seen = false;
+    let mut display_blanks_as_written = false;
+    let mut display_blanks_as_inserted = false;
+    let mut plot_visible_only_seen = false;
+    let mut plot_visible_only_written = false;
+    let mut plot_visible_only_inserted = false;
     let mut current_axis_index = None::<usize>;
     let mut axis_kinds = Vec::<ChartAxisKind>::new();
     let mut axis_title_texts = Vec::<Option<String>>::new();
@@ -17767,6 +17903,14 @@ fn patch_loaded_chart_model_xml(
                         buffer.clear();
                         continue;
                     }
+                } else if local_name.as_slice() == b"plotVisOnly"
+                    && parent_name == Some(b"chart".as_slice())
+                {
+                    plot_visible_only_seen = true;
+                } else if local_name.as_slice() == b"dispBlanksAs"
+                    && parent_name == Some(b"chart".as_slice())
+                {
+                    display_blanks_as_seen = true;
                 }
 
                 if local_name.as_slice() == b"plotArea"
@@ -17846,6 +17990,30 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     legend_position_written = true;
+                } else if !wrote_start_element
+                    && local_name.as_slice() == b"plotVisOnly"
+                    && let Some(value) = expected_plot_visible_only
+                {
+                    writer
+                        .write_event(Event::Start(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    plot_visible_only_written = true;
+                } else if !wrote_start_element
+                    && local_name.as_slice() == b"dispBlanksAs"
+                    && let Some(value) = expected_display_blanks_as
+                {
+                    writer
+                        .write_event(Event::Start(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    display_blanks_as_written = true;
                 } else if !wrote_start_element {
                     writer
                         .write_event(Event::Start(element.into_owned()))
@@ -17945,6 +18113,14 @@ fn patch_loaded_chart_model_xml(
                         buffer.clear();
                         continue;
                     }
+                } else if local_name.as_slice() == b"plotVisOnly"
+                    && parent_name == Some(b"chart".as_slice())
+                {
+                    plot_visible_only_seen = true;
+                } else if local_name.as_slice() == b"dispBlanksAs"
+                    && parent_name == Some(b"chart".as_slice())
+                {
+                    display_blanks_as_seen = true;
                 }
                 if local_name.as_slice() == b"legendPos"
                     && expected_legend_position.is_some()
@@ -17960,6 +18136,28 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     legend_position_written = true;
+                } else if local_name.as_slice() == b"plotVisOnly"
+                    && let Some(value) = expected_plot_visible_only
+                {
+                    writer
+                        .write_event(Event::Empty(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    plot_visible_only_written = true;
+                } else if local_name.as_slice() == b"dispBlanksAs"
+                    && let Some(value) = expected_display_blanks_as
+                {
+                    writer
+                        .write_event(Event::Empty(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    display_blanks_as_written = true;
                 } else {
                     writer
                         .write_event(Event::Empty(element.into_owned()))
@@ -18232,6 +18430,26 @@ fn patch_loaded_chart_model_xml(
                     legend_inserted = true;
                     legend_position_written = true;
                 }
+                if local_name.as_slice() == b"chart" {
+                    if !plot_visible_only_seen && let Some(value) = expected_plot_visible_only {
+                        let mut plot_visible_only = BytesStart::new("c:plotVisOnly");
+                        plot_visible_only.push_attribute(("val", value));
+                        writer
+                            .write_event(Event::Empty(plot_visible_only))
+                            .map_err(runtime_xml_error)?;
+                        plot_visible_only_inserted = true;
+                        plot_visible_only_written = true;
+                    }
+                    if !display_blanks_as_seen && let Some(value) = expected_display_blanks_as {
+                        let mut display_blanks_as = BytesStart::new("c:dispBlanksAs");
+                        display_blanks_as.push_attribute(("val", value));
+                        writer
+                            .write_event(Event::Empty(display_blanks_as))
+                            .map_err(runtime_xml_error)?;
+                        display_blanks_as_inserted = true;
+                        display_blanks_as_written = true;
+                    }
+                }
                 if chart_axis_kind_from_xml_name(local_name.as_slice()).is_some()
                     && let Some(axis_index) = current_axis_index
                     && axis_title_texts
@@ -18423,6 +18641,16 @@ fn patch_loaded_chart_model_xml(
         (None, true) => legend_removed,
         (None, false) => true,
     };
+    let display_blanks_as_matches = match (expected_display_blanks_as, display_blanks_as_seen) {
+        (Some(_), true) => display_blanks_as_written,
+        (Some(_), false) => display_blanks_as_inserted,
+        (None, _) => true,
+    };
+    let plot_visible_only_matches = match (expected_plot_visible_only, plot_visible_only_seen) {
+        (Some(_), true) => plot_visible_only_written,
+        (Some(_), false) => plot_visible_only_inserted,
+        (None, _) => true,
+    };
     let axes_match = axis_kinds.len() == chart.axes.len()
         && axis_kinds
             .iter()
@@ -18443,6 +18671,8 @@ fn patch_loaded_chart_model_xml(
         && patched_sources == expected_dirty_sources
         && title_matches
         && legend_matches
+        && display_blanks_as_matches
+        && plot_visible_only_matches
         && axes_match
     {
         Ok(Some(writer.into_inner().into_inner()))
@@ -18513,6 +18743,24 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             format!(r#"<c:legend><c:legendPos val="{legend_position}"/></c:legend>"#)
         })
         .unwrap_or_default();
+    let plot_visible_only_xml = chart
+        .plot_visible_only
+        .map(|value| {
+            format!(
+                r#"<c:plotVisOnly val="{}"/>"#,
+                if value { "1" } else { "0" }
+            )
+        })
+        .unwrap_or_default();
+    let display_blanks_as_xml = chart
+        .display_blanks_as
+        .map(|value| {
+            format!(
+                r#"<c:dispBlanksAs val="{}"/>"#,
+                chart_display_blanks_as_xml_value(value)
+            )
+        })
+        .unwrap_or_default();
     let chart_has_axes = !matches!(chart.chart_type, ChartType::Pie);
     let mut chart_group_axis_refs = String::new();
     let mut axes_xml = String::new();
@@ -18543,7 +18791,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{series_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}</c:chart>
+  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{series_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -72419,6 +72667,20 @@ mod tests {
                 .dispatch_get(chart_object, "Chart", &[])
                 .expect("ChartObject.Chart"),
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "PlotVisibleOnly", &[])
+                .expect("Chart.PlotVisibleOnly default"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "DisplayBlanksAs", &[])
+                    .expect("Chart.DisplayBlanksAs default")
+            ),
+            f64::from(super::XL_NOT_PLOTTED)
+        );
         let chart_title = expect_object_handle(
             runtime
                 .dispatch_get(chart, "ChartTitle", &[])
@@ -72445,6 +72707,31 @@ mod tests {
                 &[],
             )
             .expect("set loaded Legend.Position");
+        runtime
+            .dispatch_set(chart, "PlotVisibleOnly", OmValue::Bool(false), &[])
+            .expect("set loaded Chart.PlotVisibleOnly");
+        runtime
+            .dispatch_set(
+                chart,
+                "DisplayBlanksAs",
+                OmValue::Number(f64::from(super::XL_ZERO)),
+                &[],
+            )
+            .expect("set loaded Chart.DisplayBlanksAs");
+        assert_eq!(
+            runtime
+                .dispatch_set(chart, "PlotVisibleOnly", OmValue::Number(0.0), &[])
+                .expect_err("Chart.PlotVisibleOnly rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(chart, "DisplayBlanksAs", OmValue::Number(99.0), &[])
+                .expect_err("Chart.DisplayBlanksAs rejects unsupported constants")
+                .code,
+            OmErrorCode::Unsupported
+        );
 
         let saved = runtime
             .save_workbook(
@@ -72468,6 +72755,8 @@ mod tests {
         assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:content-preserve"/>"#));
         assert!(saved_chart_xml.contains("<a:t>Updated Revenue</a:t>"));
         assert!(saved_chart_xml.contains(r#"<c:legendPos val="l""#));
+        assert!(saved_chart_xml.contains(r#"<c:plotVisOnly val="0"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:dispBlanksAs val="zero"/>"#));
 
         let mut reopened_runtime = ExcelRuntime::new();
         let reopened_workbook = reopened_runtime
@@ -72526,6 +72815,20 @@ mod tests {
                     .expect("reopened Legend.Position")
             ),
             f64::from(super::XL_LEGEND_POSITION_LEFT)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "PlotVisibleOnly", &[])
+                .expect("reopened Chart.PlotVisibleOnly"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart, "DisplayBlanksAs", &[])
+                    .expect("reopened Chart.DisplayBlanksAs")
+            ),
+            f64::from(super::XL_ZERO)
         );
     }
 

@@ -20,6 +20,8 @@ pub struct ChartModel {
     pub title: Option<ChartText>,
     pub legend: Option<LegendModel>,
     pub axes: Vec<AxisModel>,
+    pub display_blanks_as: Option<ChartDisplayBlanksAs>,
+    pub plot_visible_only: Option<bool>,
     pub raw_part_uri: Option<String>,
     pub dirty: bool,
 }
@@ -32,6 +34,13 @@ pub enum ChartType {
     Scatter,
     Pie,
     Unsupported(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartDisplayBlanksAs {
+    Gap,
+    Span,
+    Zero,
 }
 
 #[derive(Debug, Clone, PartialEq)]

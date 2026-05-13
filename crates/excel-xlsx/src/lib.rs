@@ -3,10 +3,10 @@ use std::io::{Cursor, Write};
 
 use excel_model::{
     AxisModel, CellData, ChartAxisKind, ChartCacheKind, ChartCacheSnapshot,
-    ChartCellMarkerXmlAttrs, ChartLegendPosition, ChartMarkerXmlAttrs, ChartModel,
-    ChartObjectModel, ChartSheetBinding, ChartSourceExpr, ChartText, ChartType, DefinedNameTable,
-    DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
-    resolve_chart_source_reference_with_names,
+    ChartCellMarkerXmlAttrs, ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerXmlAttrs,
+    ChartModel, ChartObjectModel, ChartSheetBinding, ChartSourceExpr, ChartText, ChartType,
+    DefinedNameTable, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState,
+    WorksheetData, resolve_chart_source_reference_with_names,
 };
 use office_common::{
     AbsoluteAnchor, CellError, CellMarker, CellValue, ChartId, ChartObjectId, DefinedName,
@@ -656,6 +656,8 @@ pub struct ChartPartSummary {
     pub title_text: Option<String>,
     pub has_legend: bool,
     pub legend_position: Option<ChartLegendPosition>,
+    pub display_blanks_as: Option<ChartDisplayBlanksAs>,
+    pub plot_visible_only: Option<bool>,
     pub axes: Vec<ChartAxisSummary>,
     pub series: Vec<ChartSeriesSummary>,
     pub formula_refs: Vec<String>,
@@ -3120,6 +3122,8 @@ fn build_chart_model_overlay(
                             position: summary.legend_position,
                         }
                     }),
+                    display_blanks_as: summary.and_then(|summary| summary.display_blanks_as),
+                    plot_visible_only: summary.and_then(|summary| summary.plot_visible_only),
                     axes: summary
                         .into_iter()
                         .flat_map(|summary| summary.axes.iter())
@@ -15789,6 +15793,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut title_text_depth = 0usize;
     let mut has_legend = false;
     let mut legend_position = None;
+    let mut display_blanks_as = None;
+    let mut plot_visible_only = None;
     let mut axes = Vec::new();
     let mut series = Vec::new();
     let mut formula_refs = Vec::new();
@@ -15842,6 +15848,24 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
             }
             Ok(None)
         };
+    let parse_bool_val_attr =
+        |element: &BytesStart<'_>, reader: &Reader<Cursor<&[u8]>>| -> OmResult<Option<bool>> {
+            parse_string_val_attr(element, reader)?
+                .map(|value| parse_ooxml_bool(value.as_str()))
+                .transpose()
+        };
+
+    let parse_display_blanks_as = |element: &BytesStart<'_>,
+                                   reader: &Reader<Cursor<&[u8]>>,
+                                   current: Option<ChartDisplayBlanksAs>|
+     -> OmResult<Option<ChartDisplayBlanksAs>> {
+        Ok(match parse_string_val_attr(element, reader)?.as_deref() {
+            Some("gap") => Some(ChartDisplayBlanksAs::Gap),
+            Some("span") => Some(ChartDisplayBlanksAs::Span),
+            Some("zero") => Some(ChartDisplayBlanksAs::Zero),
+            Some(_) | None => current,
+        })
+    };
 
     let detect_series_formula_slot = |path: &[String]| -> Option<ChartSeriesFormulaSlot> {
         let series_position = path.iter().rposition(|name| name == "ser")?;
@@ -15898,6 +15922,18 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "t" => Some(ChartLegendPosition::Top),
                         _ => legend_position,
                     };
+                }
+                if local_name == b"dispBlanksAs"
+                    && element_path.last().is_some_and(|name| name == "chart")
+                {
+                    display_blanks_as =
+                        parse_display_blanks_as(&element, &reader, display_blanks_as)?;
+                }
+                if local_name == b"plotVisOnly"
+                    && element_path.last().is_some_and(|name| name == "chart")
+                    && let Some(value) = parse_bool_val_attr(&element, &reader)?
+                {
+                    plot_visible_only = Some(value);
                 }
                 if let Some(kind) = match local_name {
                     b"catAx" => Some(ChartAxisKind::Category),
@@ -16002,6 +16038,18 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "t" => Some(ChartLegendPosition::Top),
                         _ => legend_position,
                     };
+                }
+                if local_name == b"dispBlanksAs"
+                    && element_path.last().is_some_and(|name| name == "chart")
+                {
+                    display_blanks_as =
+                        parse_display_blanks_as(&element, &reader, display_blanks_as)?;
+                }
+                if local_name == b"plotVisOnly"
+                    && element_path.last().is_some_and(|name| name == "chart")
+                    && let Some(value) = parse_bool_val_attr(&element, &reader)?
+                {
+                    plot_visible_only = Some(value);
                 }
                 if local_name == b"axId"
                     && let Some(axis_index) = active_axis_index
@@ -16182,6 +16230,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         title_text: title_text.filter(|text| !text.is_empty()),
         has_legend,
         legend_position,
+        display_blanks_as,
+        plot_visible_only,
         axes,
         series,
         formula_refs,
@@ -19705,8 +19755,8 @@ mod tests {
         parse_workbook_relationships, parse_worksheet_cells, rewrite_worksheet_xml,
     };
     use excel_model::{
-        ChartCacheKind, ChartCellMarkerXmlAttrs, ChartMarkerXmlAttrs, ChartObjectModel, ChartType,
-        DrawingObjectModel, resolve_chart_source_reference,
+        ChartCacheKind, ChartCellMarkerXmlAttrs, ChartDisplayBlanksAs, ChartMarkerXmlAttrs,
+        ChartObjectModel, ChartType, DrawingObjectModel, resolve_chart_source_reference,
     };
     use office_common::{
         CellError, CellMarker, CellValue, ChartId, ChartObjectId, DrawingAnchor, Emu,
@@ -20743,6 +20793,8 @@ mod tests {
       <c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx>
     </c:plotArea>
     <c:legend><c:legendPos val="r"/></c:legend>
+    <c:plotVisOnly val="0"/>
+    <c:dispBlanksAs val="span"/>
   </c:chart>
   <c:extLst><c:ext uri="urn:test"/></c:extLst>
 </c:chartSpace>"#
@@ -20940,6 +20992,11 @@ mod tests {
             chart_summary.legend_position,
             Some(ChartLegendPosition::Right)
         );
+        assert_eq!(chart_summary.plot_visible_only, Some(false));
+        assert_eq!(
+            chart_summary.display_blanks_as,
+            Some(ChartDisplayBlanksAs::Span)
+        );
         assert_eq!(
             chart_summary.axes,
             vec![
@@ -21037,6 +21094,11 @@ mod tests {
         let legend_model = chart_model.legend.as_ref().expect("chart legend");
         assert!(legend_model.visible);
         assert_eq!(legend_model.position, Some(ChartLegendPosition::Right));
+        assert_eq!(chart_model.plot_visible_only, Some(false));
+        assert_eq!(
+            chart_model.display_blanks_as,
+            Some(ChartDisplayBlanksAs::Span)
+        );
         assert_eq!(
             chart_model
                 .axes
