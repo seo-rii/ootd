@@ -16584,6 +16584,7 @@ fn patch_loaded_chart_model_xml(
     let mut title_stack = Vec::<(usize, ChartTextXmlTarget)>::new();
     let mut legend_seen = false;
     let mut legend_removed = false;
+    let mut legend_inserted = false;
     let mut legend_position_written = false;
     let mut current_axis_index = None::<usize>;
     let mut axis_kinds = Vec::<ChartAxisKind>::new();
@@ -17096,6 +17097,25 @@ fn patch_loaded_chart_model_xml(
                     }
                 }
 
+                if local_name.as_slice() == b"chart"
+                    && !legend_seen
+                    && let Some(position) = expected_legend_position
+                {
+                    writer
+                        .write_event(Event::Start(BytesStart::new("c:legend")))
+                        .map_err(runtime_xml_error)?;
+                    let mut legend_pos = BytesStart::new("c:legendPos");
+                    legend_pos.push_attribute(("val", position));
+                    writer
+                        .write_event(Event::Empty(legend_pos))
+                        .map_err(runtime_xml_error)?;
+                    writer
+                        .write_event(Event::End(BytesEnd::new("c:legend")))
+                        .map_err(runtime_xml_error)?;
+                    legend_inserted = true;
+                    legend_position_written = true;
+                }
+
                 writer
                     .write_event(Event::End(element.to_owned()))
                     .map_err(runtime_xml_error)?;
@@ -17164,9 +17184,9 @@ fn patch_loaded_chart_model_xml(
     };
     let legend_matches = match (expected_legend_position, legend_seen) {
         (Some(_), true) => legend_position_written,
+        (Some(_), false) => legend_inserted,
         (None, true) => legend_removed,
         (None, false) => true,
-        _ => false,
     };
     let axes_match = axis_kinds.len() == chart.axes.len()
         && axis_kinds
@@ -70457,6 +70477,138 @@ mod tests {
                 .dispatch_get(reopened_series, "XValues", &[])
                 .expect("reopened Series.XValues"),
             OmValue::Text("=Sheet1!$A$1:$B$1".to_string())
+        );
+    }
+
+    #[test]
+    fn loaded_chart_has_legend_setter_preserves_chart_extensions_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(r#"<c:legend><c:legendPos val="r"/></c:legend>"#, "")
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:legend-add-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook without chart legend");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasLegend", &[])
+                .expect("Chart.HasLegend before set"),
+            OmValue::Bool(false)
+        );
+        runtime
+            .dispatch_set(chart, "HasLegend", OmValue::Bool(true), &[])
+            .expect("set loaded Chart.HasLegend");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after loaded legend add");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:legend-add-preserve"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:legend><c:legendPos val="r"/></c:legend>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after loaded legend add");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "HasLegend", &[])
+                .expect("reopened Chart.HasLegend"),
+            OmValue::Bool(true)
+        );
+        let reopened_legend = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "Legend", &[])
+                .expect("reopened Chart.Legend"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_legend, "Position", &[])
+                    .expect("reopened Legend.Position")
+            ),
+            f64::from(super::XL_LEGEND_POSITION_RIGHT)
         );
     }
 
