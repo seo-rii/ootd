@@ -3187,8 +3187,75 @@ impl ExcelRuntime {
                     ))),
                 }
             }
-            RuntimeObjectKind::ChartObjects { .. }
-            | RuntimeObjectKind::ChartArea { .. }
+            RuntimeObjectKind::ChartObjects { workbook, sheet_id } => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "ChartObjects.{member} does not accept index arguments"
+                    )));
+                }
+                match member {
+                    "Visible" => {
+                        let OmValue::Bool(visible) = value else {
+                            return Err(OmError::type_mismatch(
+                                "ChartObjects.Visible expects a boolean value",
+                            ));
+                        };
+                        let chart_object_ids = self
+                            .chart_object_entries_for_sheet(workbook, sheet_id)?
+                            .into_iter()
+                            .map(|(chart_object_id, _)| chart_object_id)
+                            .collect::<Vec<_>>();
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let mut workbook_dirty = false;
+                        for drawing in runtime.loaded.state.drawings.values_mut() {
+                            if drawing.host_sheet_id != sheet_id {
+                                continue;
+                            }
+                            for object in &mut drawing.objects {
+                                let DrawingObjectModel::ChartFrame(chart_object) = object else {
+                                    continue;
+                                };
+                                if !chart_object_ids.contains(&chart_object.id) {
+                                    continue;
+                                }
+                                let changed = if visible {
+                                    chart_object.non_visual_attrs.remove("hidden").is_some()
+                                } else if chart_object
+                                    .non_visual_attrs
+                                    .get("hidden")
+                                    .is_some_and(|value| value == "1")
+                                {
+                                    false
+                                } else {
+                                    chart_object
+                                        .non_visual_attrs
+                                        .insert("hidden".to_string(), "1".to_string());
+                                    true
+                                };
+                                if changed {
+                                    chart_object.dirty = true;
+                                    drawing.dirty = true;
+                                    workbook_dirty = true;
+                                }
+                            }
+                        }
+                        if workbook_dirty {
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "ChartObjects.{member} is not writable"
+                    ))),
+                }
+            }
+            RuntimeObjectKind::ChartArea { .. }
             | RuntimeObjectKind::PlotArea { .. }
             | RuntimeObjectKind::Axes { .. }
             | RuntimeObjectKind::SeriesCollection { .. } => Err(OmError::unsupported(format!(
@@ -7382,6 +7449,7 @@ impl ExcelRuntime {
                             | "Top"
                             | "Width"
                             | "Height"
+                            | "Visible"
                             | "Delete"
                     )
                     | (
@@ -9246,6 +9314,32 @@ impl ExcelRuntime {
                     _ => unreachable!("ChartObjects geometry member was matched"),
                 };
                 Ok(OmValue::Number(value))
+            }
+            "Visible" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ChartObjects.Visible does not accept arguments",
+                    ));
+                }
+                let mut visible = true;
+                for (chart_object_id, _) in
+                    self.chart_object_entries_for_sheet(workbook, sheet_id)?
+                {
+                    if self
+                        .chart_object_model(workbook, chart_object_id)?
+                        .non_visual_attrs
+                        .get("hidden")
+                        .is_some_and(|value| {
+                            value == "1"
+                                || value.eq_ignore_ascii_case("true")
+                                || value.eq_ignore_ascii_case("on")
+                        })
+                    {
+                        visible = false;
+                        break;
+                    }
+                }
+                Ok(OmValue::Bool(visible))
             }
             _ => Err(OmError::unsupported(format!(
                 "ChartObjects.{member} is not implemented"
@@ -70472,6 +70566,123 @@ mod tests {
     }
 
     #[test]
+    fn chartobjects_visible_sets_each_chart_object() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let first_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let second_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(24.0),
+                        OmValue::Number(30.0),
+                        OmValue::Number(180.0),
+                        OmValue::Number(90.0),
+                    ],
+                )
+                .expect("ChartObjects.Add second chart"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_objects, "Visible", &[])
+                .expect("mixed ChartObjects.Visible"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_chart_object, "Visible", &[])
+                .expect("new ChartObject.Visible"),
+            OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_set(chart_objects, "Visible", OmValue::Bool(true), &[])
+            .expect("set ChartObjects.Visible true");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_objects, "Visible", &[])
+                .expect("ChartObjects.Visible after true"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_chart_object, "Visible", &[])
+                .expect("first ChartObject.Visible after true"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_chart_object, "Visible", &[])
+                .expect("second ChartObject.Visible after true"),
+            OmValue::Bool(true)
+        );
+
+        runtime
+            .dispatch_set(chart_objects, "Visible", OmValue::Bool(false), &[])
+            .expect("set ChartObjects.Visible false");
+        assert_eq!(
+            runtime
+                .dispatch_get(first_chart_object, "Visible", &[])
+                .expect("first ChartObject.Visible after false"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_chart_object, "Visible", &[])
+                .expect("second ChartObject.Visible after false"),
+            OmValue::Bool(false)
+        );
+        let hidden_bytes = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save hidden chart objects");
+        let hidden_package = OpcPackage::from_bytes(&hidden_bytes).expect("hidden package");
+        let hidden_drawing = String::from_utf8(
+            hidden_package
+                .part("xl/drawings/drawing1.xml")
+                .expect("hidden drawing part")
+                .bytes
+                .clone(),
+        )
+        .expect("hidden drawing utf8");
+        assert_eq!(hidden_drawing.matches(r#"hidden="1""#).count(), 2);
+
+        let invalid_visible = runtime
+            .dispatch_set(chart_objects, "Visible", OmValue::Number(1.0), &[])
+            .expect_err("ChartObjects.Visible should reject non-bool");
+        assert_eq!(invalid_visible.code, OmErrorCode::TypeMismatch);
+    }
+
+    #[test]
     fn chartobject_onaction_roundtrips_graphic_frame_macro_attr() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -70848,6 +71059,12 @@ mod tests {
                     .expect("ChartObjects.Height")
             ),
             50.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_objects, "Visible", &[])
+                .expect("ChartObjects.Visible"),
+            OmValue::Bool(false)
         );
         let chart_object = expect_object_handle(
             runtime
