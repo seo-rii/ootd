@@ -16573,6 +16573,8 @@ fn patch_loaded_chart_model_xml(
     let mut source_stack = Vec::<ChartSourceXmlSlot>::new();
     let mut current_formula = None::<(ChartSourceXmlSlot, bool)>;
     let mut source_slots_seen = Vec::<[bool; 3]>::new();
+    let mut series_order_seen = Vec::<bool>::new();
+    let mut series_order_written = Vec::<bool>::new();
     let mut patched_sources = 0usize;
     let mut chart_type = None::<ChartType>;
     let mut chart_title_seen = false;
@@ -16607,9 +16609,9 @@ fn patch_loaded_chart_model_xml(
             ChartSourceXmlSlot::Values => 2,
         }
     };
-    let rewrite_legend_position_element = |element: &BytesStart<'_>,
-                                           decoder: quick_xml::encoding::Decoder,
-                                           position: &'static str|
+    let rewrite_val_attribute_element = |element: &BytesStart<'_>,
+                                         decoder: quick_xml::encoding::Decoder,
+                                         replacement: &str|
      -> OmResult<BytesStart<'static>> {
         let qualified_name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
         let mut rewritten = BytesStart::new(qualified_name);
@@ -16622,14 +16624,14 @@ fn patch_loaded_chart_model_xml(
                 .map_err(runtime_xml_error)?
                 .into_owned();
             if xml_local_name(attr.key.as_ref()) == b"val" {
-                rewritten.push_attribute((key.as_str(), position));
+                rewritten.push_attribute((key.as_str(), replacement));
                 wrote_value = true;
             } else {
                 rewritten.push_attribute((key.as_str(), value.as_str()));
             }
         }
         if !wrote_value {
-            rewritten.push_attribute(("val", position));
+            rewritten.push_attribute(("val", replacement));
         }
         Ok(rewritten)
     };
@@ -16658,6 +16660,8 @@ fn patch_loaded_chart_model_xml(
                     next_series_index += 1;
                     source_stack.clear();
                     source_slots_seen.push([false; 3]);
+                    series_order_seen.push(false);
+                    series_order_written.push(false);
                 } else if let Some(series_index) = current_series_index {
                     match local_name.as_slice() {
                         b"tx" => source_stack.push(ChartSourceXmlSlot::Name),
@@ -16725,21 +16729,43 @@ fn patch_loaded_chart_model_xml(
                     }
                 }
 
-                if local_name.as_slice() == b"legendPos"
+                let mut wrote_start_element = false;
+                if local_name.as_slice() == b"order"
+                    && let Some(series_index) = current_series_index
+                    && let Some(series) = chart.series.get(series_index)
+                {
+                    if let Some(seen) = series_order_seen.get_mut(series_index) {
+                        *seen = true;
+                    }
+                    let order = series.order.unwrap_or(series_index as u32).to_string();
+                    writer
+                        .write_event(Event::Start(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            order.as_str(),
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    if let Some(written) = series_order_written.get_mut(series_index) {
+                        *written = true;
+                    }
+                    wrote_start_element = true;
+                }
+                if !wrote_start_element
+                    && local_name.as_slice() == b"legendPos"
                     && expected_legend_position.is_some()
                     && element_stack
                         .iter()
                         .any(|name| name.as_slice() == b"legend")
                 {
                     writer
-                        .write_event(Event::Start(rewrite_legend_position_element(
+                        .write_event(Event::Start(rewrite_val_attribute_element(
                             &element,
                             reader.decoder(),
                             expected_legend_position.expect("checked is_some"),
                         )?))
                         .map_err(runtime_xml_error)?;
                     legend_position_written = true;
-                } else {
+                } else if !wrote_start_element {
                     writer
                         .write_event(Event::Start(element.into_owned()))
                         .map_err(runtime_xml_error)?;
@@ -16754,6 +16780,28 @@ fn patch_loaded_chart_model_xml(
                         return Ok(None);
                     }
                     chart_type = Some(next_chart_type);
+                }
+                if local_name.as_slice() == b"order"
+                    && let Some(series_index) = current_series_index
+                {
+                    if let Some(seen) = series_order_seen.get_mut(series_index) {
+                        *seen = true;
+                    }
+                    if let Some(series) = chart.series.get(series_index) {
+                        let order = series.order.unwrap_or(series_index as u32).to_string();
+                        writer
+                            .write_event(Event::Empty(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                order.as_str(),
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = series_order_written.get_mut(series_index) {
+                            *written = true;
+                        }
+                        buffer.clear();
+                        continue;
+                    }
                 }
                 if local_name.as_slice() == b"title" && parent_name == Some(b"chart".as_slice()) {
                     chart_title_seen = true;
@@ -16791,7 +16839,7 @@ fn patch_loaded_chart_model_xml(
                         .any(|name| name.as_slice() == b"legend")
                 {
                     writer
-                        .write_event(Event::Empty(rewrite_legend_position_element(
+                        .write_event(Event::Empty(rewrite_val_attribute_element(
                             &element,
                             reader.decoder(),
                             expected_legend_position.expect("checked is_some"),
@@ -17078,6 +17126,20 @@ fn patch_loaded_chart_model_xml(
                     && seen[1] == series.x_values.is_some()
                     && seen[2] == series.values.is_some()
             });
+    let series_orders_match = series_order_seen.len() == chart.series.len()
+        && series_order_seen
+            .iter()
+            .zip(series_order_written.iter())
+            .zip(chart.series.iter())
+            .enumerate()
+            .all(|(series_index, ((seen, written), series))| {
+                let expected_order = series.order.unwrap_or(series_index as u32);
+                if *seen {
+                    *written
+                } else {
+                    expected_order == series_index as u32
+                }
+            });
     let title_matches = match (chart.title.as_ref(), chart_title_seen) {
         (Some(_), true) => chart_title_text_written,
         (None, true) => chart_title_removed,
@@ -17106,6 +17168,7 @@ fn patch_loaded_chart_model_xml(
 
     if chart_type_matches
         && series_sources_match
+        && series_orders_match
         && patched_sources == expected_dirty_sources
         && title_matches
         && legend_matches
@@ -70057,6 +70120,187 @@ mod tests {
                 .dispatch_get(reopened_axis_title, "Text", &[])
                 .expect("reopened AxisTitle.Text"),
             OmValue::Text("Fiscal Quarter".to_string())
+        );
+    }
+
+    #[test]
+    fn loaded_chart_series_plot_order_setter_preserves_chart_extensions_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            "</c:ser></c:barChart>",
+            r#"</c:ser><c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:strRef><c:f>Sheet1!$C$2</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$2:$C$2</c:f></c:numRef></c:val></c:ser></c:barChart>"#,
+        )
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:series-order-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with two-series chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection.Count")
+            ),
+            2.0
+        );
+        let first_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+        let second_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(2.0)])
+                .expect("SeriesCollection.Item(2)"),
+        );
+        runtime
+            .dispatch_set(second_series, "PlotOrder", OmValue::Number(1.0), &[])
+            .expect("set loaded second Series.PlotOrder");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_series, "PlotOrder", &[])
+                    .expect("first Series.PlotOrder")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_series, "PlotOrder", &[])
+                    .expect("second Series.PlotOrder")
+            ),
+            1.0
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after loaded plot order edit");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:series-order-preserve"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:idx val="0"/><c:order val="1"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:idx val="1"/><c:order val="0"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after loaded plot order edit");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_first_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        let reopened_second_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(2.0)])
+                .expect("reopened SeriesCollection.Item(2)"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_first_series, "PlotOrder", &[])
+                    .expect("reopened first Series.PlotOrder")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_second_series, "PlotOrder", &[])
+                    .expect("reopened second Series.PlotOrder")
+            ),
+            1.0
         );
     }
 
