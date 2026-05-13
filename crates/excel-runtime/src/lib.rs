@@ -7033,6 +7033,15 @@ impl ExcelRuntime {
                     state.contents = false;
                     Ok(OmValue::Empty)
                 }
+                "Refresh" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "Chart.Refresh does not accept arguments",
+                        ));
+                    }
+                    self.chart_model(workbook, chart_id)?;
+                    Ok(OmValue::Empty)
+                }
                 "Delete" => {
                     if !args.is_empty() {
                         return Err(OmError::invalid_argument(
@@ -7654,6 +7663,7 @@ impl ExcelRuntime {
                             | "Select"
                             | "Protect"
                             | "Unprotect"
+                            | "Refresh"
                             | "Delete"
                     )
                     | ("ChartArea", "Creator" | "Application" | "Parent" | "Select")
@@ -73148,6 +73158,65 @@ mod tests {
                 OmValue::Bool(false)
             );
         }
+    }
+
+    #[test]
+    fn chart_refresh_is_noop_and_validates_arguments() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved before Chart.Refresh"),
+            OmValue::Bool(true)
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "Refresh", &[])
+                .expect("Chart.Refresh"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after Chart.Refresh"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "Refresh", &[OmValue::Bool(true)])
+                .expect_err("Chart.Refresh rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
     }
 
     #[test]
