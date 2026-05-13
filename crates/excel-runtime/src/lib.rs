@@ -428,6 +428,15 @@ enum RuntimeObjectKind {
         workbook: WorkbookHandle,
         chart_id: ChartId,
     },
+    ChartGroups {
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+    },
+    ChartGroup {
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        group_index: usize,
+    },
     Axes {
         workbook: WorkbookHandle,
         chart_id: ChartId,
@@ -1820,6 +1829,14 @@ impl ExcelRuntime {
             RuntimeObjectKind::Legend { workbook, chart_id } => {
                 self.dispatch_get_legend(workbook, chart_id, member, args)
             }
+            RuntimeObjectKind::ChartGroups { workbook, chart_id } => {
+                self.dispatch_get_chart_groups(workbook, chart_id, member, args)
+            }
+            RuntimeObjectKind::ChartGroup {
+                workbook,
+                chart_id,
+                group_index,
+            } => self.dispatch_get_chart_group(workbook, chart_id, group_index, member, args),
             RuntimeObjectKind::Axes { workbook, chart_id } => {
                 self.dispatch_get_axes(workbook, chart_id, member, args)
             }
@@ -3290,6 +3307,8 @@ impl ExcelRuntime {
             }
             RuntimeObjectKind::ChartArea { .. }
             | RuntimeObjectKind::PlotArea { .. }
+            | RuntimeObjectKind::ChartGroups { .. }
+            | RuntimeObjectKind::ChartGroup { .. }
             | RuntimeObjectKind::Axes { .. }
             | RuntimeObjectKind::SeriesCollection { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
@@ -8097,7 +8116,7 @@ impl ExcelRuntime {
                     self.stale_series_handles_for_chart(workbook, chart_id);
                     Ok(OmValue::Empty)
                 }
-                "Axes" => self.dispatch_get_chart(workbook, chart_id, "Axes", args),
+                "Axes" | "ChartGroups" => self.dispatch_get_chart(workbook, chart_id, member, args),
                 "SeriesCollection" | "FullSeriesCollection" => {
                     self.dispatch_get_chart(workbook, chart_id, member, args)
                 }
@@ -8108,6 +8127,14 @@ impl ExcelRuntime {
             RuntimeObjectKind::Axes { workbook, chart_id } => {
                 self.dispatch_invoke_axes(workbook, chart_id, member, args)
             }
+            RuntimeObjectKind::ChartGroups { workbook, chart_id } => {
+                self.dispatch_invoke_chart_groups(workbook, chart_id, member, args)
+            }
+            RuntimeObjectKind::ChartGroup {
+                workbook,
+                chart_id,
+                group_index,
+            } => self.dispatch_invoke_chart_group(workbook, chart_id, group_index, member, args),
             RuntimeObjectKind::SeriesCollection { workbook, chart_id } => {
                 self.dispatch_invoke_series_collection(workbook, chart_id, member, args)
             }
@@ -8529,6 +8556,7 @@ impl ExcelRuntime {
                             | "HasAxis"
                             | "HasLegend"
                             | "Legend"
+                            | "ChartGroups"
                             | "Axes"
                             | "SeriesCollection"
                             | "FullSeriesCollection"
@@ -8581,6 +8609,19 @@ impl ExcelRuntime {
                     | (
                         "Legend",
                         "Position" | "Creator" | "Application" | "Parent" | "Select" | "Delete"
+                    )
+                    | (
+                        "ChartGroups",
+                        "Count" | "Item" | "Creator" | "Application" | "Parent"
+                    )
+                    | (
+                        "ChartGroup",
+                        "ChartType"
+                            | "Index"
+                            | "SeriesCollection"
+                            | "Creator"
+                            | "Application"
+                            | "Parent"
                     )
                     | (
                         "Axes",
@@ -11268,6 +11309,14 @@ impl ExcelRuntime {
                     self.register_legend_handle(workbook, chart_id),
                 ))
             }
+            "ChartGroups" => {
+                let handle = self.register_chart_groups_handle(workbook, chart_id);
+                if args.is_empty() {
+                    Ok(OmValue::Object(handle))
+                } else {
+                    self.dispatch_invoke(handle, "Item", args)
+                }
+            }
             "Axes" => {
                 let handle = self.register_axes_handle(workbook, chart_id);
                 if args.is_empty() {
@@ -11403,6 +11452,152 @@ impl ExcelRuntime {
             )),
             _ => Err(OmError::unsupported(format!(
                 "Legend.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_get_chart_groups(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        match member {
+            "Count" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ChartGroups.Count does not accept arguments",
+                    ));
+                }
+                self.chart_model(workbook, chart_id)?;
+                Ok(OmValue::Number(1.0))
+            }
+            "Item" => self.dispatch_invoke_chart_groups(workbook, chart_id, member, args),
+            "Creator" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ChartGroups.Creator does not accept arguments",
+                    ));
+                }
+                self.chart_model(workbook, chart_id)?;
+                Ok(OmValue::Number(f64::from(XL_CREATOR_CODE)))
+            }
+            "Application" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ChartGroups.Application does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Object(self.root_application()))
+            }
+            "Parent" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ChartGroups.Parent does not accept arguments",
+                    ));
+                }
+                self.chart_model(workbook, chart_id)?;
+                Ok(OmValue::Object(
+                    self.register_chart_handle(workbook, chart_id),
+                ))
+            }
+            _ => Err(OmError::unsupported(format!(
+                "ChartGroups.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_invoke_chart_groups(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        match member {
+            "Item" => {
+                let [index] = args else {
+                    return Err(OmError::invalid_argument(
+                        "ChartGroups.Item expects a single 1-based index",
+                    ));
+                };
+                let index = coerce_u32_arg(index, "ChartGroups.Item index")? as usize;
+                if index != 1 {
+                    return Err(OmError::invalid_argument(
+                        "ChartGroups.Item index is out of bounds",
+                    ));
+                }
+                self.chart_model(workbook, chart_id)?;
+                Ok(OmValue::Object(self.register_chart_group_handle(
+                    workbook,
+                    chart_id,
+                    index - 1,
+                )))
+            }
+            _ => Err(OmError::unsupported(format!(
+                "ChartGroups.{member} is not implemented as a method"
+            ))),
+        }
+    }
+
+    fn dispatch_get_chart_group(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        group_index: usize,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        match member {
+            "SeriesCollection" => {
+                self.chart_group_model(workbook, chart_id, group_index)?;
+                let handle = self.register_series_collection_handle(workbook, chart_id);
+                if args.is_empty() {
+                    Ok(OmValue::Object(handle))
+                } else {
+                    self.dispatch_invoke(handle, "Item", args)
+                }
+            }
+            _ => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "ChartGroup.{member} does not accept arguments"
+                    )));
+                }
+                let chart = self.chart_group_model(workbook, chart_id, group_index)?;
+                match member {
+                    "ChartType" => Ok(OmValue::Number(f64::from(chart_type_to_excel_value(
+                        &chart.chart_type,
+                    )?))),
+                    "Index" => Ok(OmValue::Number((group_index + 1) as f64)),
+                    "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+                    "Application" => Ok(OmValue::Object(self.root_application())),
+                    "Parent" => Ok(OmValue::Object(
+                        self.register_chart_handle(workbook, chart_id),
+                    )),
+                    _ => Err(OmError::unsupported(format!(
+                        "ChartGroup.{member} is not implemented"
+                    ))),
+                }
+            }
+        }
+    }
+
+    fn dispatch_invoke_chart_group(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        group_index: usize,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        match member {
+            "SeriesCollection" => {
+                self.dispatch_get_chart_group(workbook, chart_id, group_index, member, args)
+            }
+            _ => Err(OmError::unsupported(format!(
+                "ChartGroup.{member} is not implemented as a method"
             ))),
         }
     }
@@ -15041,6 +15236,27 @@ impl ExcelRuntime {
         self.register_object(RuntimeObjectKind::Legend { workbook, chart_id })
     }
 
+    fn register_chart_groups_handle(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+    ) -> ObjectHandle {
+        self.register_object(RuntimeObjectKind::ChartGroups { workbook, chart_id })
+    }
+
+    fn register_chart_group_handle(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        group_index: usize,
+    ) -> ObjectHandle {
+        self.register_object(RuntimeObjectKind::ChartGroup {
+            workbook,
+            chart_id,
+            group_index,
+        })
+    }
+
     fn register_axes_handle(
         &mut self,
         workbook: WorkbookHandle,
@@ -15755,6 +15971,20 @@ impl ExcelRuntime {
             .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))
     }
 
+    fn chart_group_model(
+        &self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        group_index: usize,
+    ) -> OmResult<&ChartModel> {
+        let chart = self.chart_model(workbook, chart_id)?;
+        if group_index == 0 {
+            Ok(chart)
+        } else {
+            Err(OmError::new(OmErrorCode::NotFound, "chart group not found"))
+        }
+    }
+
     fn chart_axis_index_for_type(
         &self,
         workbook: WorkbookHandle,
@@ -15852,6 +16082,15 @@ impl ExcelRuntime {
                 | RuntimeObjectKind::Legend {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
+                }
+                | RuntimeObjectKind::ChartGroups {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                }
+                | RuntimeObjectKind::ChartGroup {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    ..
                 }
                 | RuntimeObjectKind::Axes {
                     workbook: object_workbook,
@@ -20032,6 +20271,8 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         | RuntimeObjectKind::PlotArea { workbook, .. }
         | RuntimeObjectKind::ChartTitle { workbook, .. }
         | RuntimeObjectKind::Legend { workbook, .. }
+        | RuntimeObjectKind::ChartGroups { workbook, .. }
+        | RuntimeObjectKind::ChartGroup { workbook, .. }
         | RuntimeObjectKind::Axes { workbook, .. }
         | RuntimeObjectKind::Axis { workbook, .. }
         | RuntimeObjectKind::AxisTitle { workbook, .. }
@@ -73375,6 +73616,138 @@ mod tests {
             ),
             f64::from(super::XL_BAR_CLUSTERED)
         );
+        let chart_groups = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[])
+                .expect("Chart.ChartGroups"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_groups, "Count", &[])
+                    .expect("ChartGroups.Count")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_groups, "Creator", &[])
+                    .expect("ChartGroups.Creator")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
+        );
+        let chart_groups_parent = expect_object_handle(
+            runtime
+                .dispatch_get(chart_groups, "Parent", &[])
+                .expect("ChartGroups.Parent"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_groups_parent, "ChartType", &[])
+                    .expect("ChartGroups.Parent.ChartType")
+            ),
+            f64::from(super::XL_BAR_CLUSTERED)
+        );
+        let chart_group = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_groups, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartGroups.Item(1)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_group, "Index", &[])
+                    .expect("ChartGroup.Index")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_group, "ChartType", &[])
+                    .expect("ChartGroup.ChartType")
+            ),
+            f64::from(super::XL_BAR_CLUSTERED)
+        );
+        assert_eq!(
+            expect_object_handle(
+                runtime
+                    .dispatch_get(chart_group, "Application", &[])
+                    .expect("ChartGroup.Application")
+            ),
+            runtime.root_application()
+        );
+        let chart_group_parent = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "Parent", &[])
+                .expect("ChartGroup.Parent"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_group_parent, "ChartType", &[])
+                    .expect("ChartGroup.Parent.ChartType")
+            ),
+            f64::from(super::XL_BAR_CLUSTERED)
+        );
+        let chart_group_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "SeriesCollection", &[])
+                .expect("ChartGroup.SeriesCollection"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_group_series_collection, "Count", &[])
+                    .expect("ChartGroup.SeriesCollection.Count")
+            ),
+            1.0
+        );
+        let chart_group_series = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "SeriesCollection", &[OmValue::Number(1.0)])
+                .expect("ChartGroup.SeriesCollection(1)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(chart_group_series, "Values", &[])
+                    .expect("Series.Values from ChartGroup.SeriesCollection(1)")
+            ),
+            "=Sheet1!$A$1:$C$1"
+        );
+        let chart_group_by_chart_property = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("Chart.ChartGroups(1)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_group_by_chart_property, "ChartType", &[])
+                    .expect("Chart.ChartGroups(1).ChartType")
+            ),
+            f64::from(super::XL_BAR_CLUSTERED)
+        );
+        let chart_group_by_chart_method = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("Chart.ChartGroups(1) method"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_group_by_chart_method, "Index", &[])
+                    .expect("Chart.ChartGroups method Index")
+            ),
+            1.0
+        );
+        let invalid_chart_group = runtime
+            .dispatch_invoke(chart_groups, "Item", &[OmValue::Number(2.0)])
+            .expect_err("ChartGroups.Item(2) should fail");
+        assert_eq!(invalid_chart_group.code, OmErrorCode::InvalidArgument);
         let series_collection = expect_object_handle(
             runtime
                 .dispatch_get(chart, "SeriesCollection", &[])
