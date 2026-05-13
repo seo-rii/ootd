@@ -16586,6 +16586,7 @@ fn patch_loaded_chart_model_xml(
     let mut current_axis_index = None::<usize>;
     let mut axis_kinds = Vec::<ChartAxisKind>::new();
     let mut axis_title_texts = Vec::<Option<String>>::new();
+    let mut axis_title_text_written = Vec::<bool>::new();
     let mut skip_depth = 0usize;
 
     let source_for_slot =
@@ -16677,6 +16678,7 @@ fn patch_loaded_chart_model_xml(
                     current_axis_index = Some(axis_kinds.len());
                     axis_kinds.push(axis_kind);
                     axis_title_texts.push(None);
+                    axis_title_text_written.push(false);
                 }
                 if local_name.as_slice() == b"title" && parent_name == Some(b"chart".as_slice()) {
                     chart_title_seen = true;
@@ -16827,16 +16829,44 @@ fn patch_loaded_chart_model_xml(
                             }
                         }
                         ChartTextXmlTarget::AxisTitle(axis_index) => {
-                            if let Some(axis_title_text) = axis_title_texts
-                                .get_mut(*axis_index)
-                                .and_then(Option::as_mut)
+                            if let Some(title) = chart
+                                .axes
+                                .get(*axis_index)
+                                .and_then(|axis| axis.title.as_ref())
                             {
-                                axis_title_text
-                                    .push_str(&text.xml_content().map_err(runtime_xml_error)?);
+                                if !axis_title_text_written
+                                    .get(*axis_index)
+                                    .copied()
+                                    .unwrap_or(false)
+                                {
+                                    writer
+                                        .write_event(Event::Text(BytesText::from_escaped(
+                                            partial_escape(&title.text),
+                                        )))
+                                        .map_err(runtime_xml_error)?;
+                                    if let Some(written) =
+                                        axis_title_text_written.get_mut(*axis_index)
+                                    {
+                                        *written = true;
+                                    }
+                                } else {
+                                    writer
+                                        .write_event(Event::Text(BytesText::new("")))
+                                        .map_err(runtime_xml_error)?;
+                                }
+                                *written = true;
+                            } else {
+                                if let Some(axis_title_text) = axis_title_texts
+                                    .get_mut(*axis_index)
+                                    .and_then(Option::as_mut)
+                                {
+                                    axis_title_text
+                                        .push_str(&text.xml_content().map_err(runtime_xml_error)?);
+                                }
+                                writer
+                                    .write_event(Event::Text(text.into_owned()))
+                                    .map_err(runtime_xml_error)?;
                             }
-                            writer
-                                .write_event(Event::Text(text.into_owned()))
-                                .map_err(runtime_xml_error)?;
                         }
                     }
                 } else if let Some((slot, written)) = current_formula.as_mut()
@@ -16884,16 +16914,44 @@ fn patch_loaded_chart_model_xml(
                             }
                         }
                         ChartTextXmlTarget::AxisTitle(axis_index) => {
-                            if let Some(axis_title_text) = axis_title_texts
-                                .get_mut(*axis_index)
-                                .and_then(Option::as_mut)
+                            if let Some(title) = chart
+                                .axes
+                                .get(*axis_index)
+                                .and_then(|axis| axis.title.as_ref())
                             {
-                                axis_title_text
-                                    .push_str(&data.xml_content().map_err(runtime_xml_error)?);
+                                if !axis_title_text_written
+                                    .get(*axis_index)
+                                    .copied()
+                                    .unwrap_or(false)
+                                {
+                                    writer
+                                        .write_event(Event::Text(BytesText::from_escaped(
+                                            partial_escape(&title.text),
+                                        )))
+                                        .map_err(runtime_xml_error)?;
+                                    if let Some(written) =
+                                        axis_title_text_written.get_mut(*axis_index)
+                                    {
+                                        *written = true;
+                                    }
+                                } else {
+                                    writer
+                                        .write_event(Event::Text(BytesText::new("")))
+                                        .map_err(runtime_xml_error)?;
+                                }
+                                *written = true;
+                            } else {
+                                if let Some(axis_title_text) = axis_title_texts
+                                    .get_mut(*axis_index)
+                                    .and_then(Option::as_mut)
+                                {
+                                    axis_title_text
+                                        .push_str(&data.xml_content().map_err(runtime_xml_error)?);
+                                }
+                                writer
+                                    .write_event(Event::CData(data.into_owned()))
+                                    .map_err(runtime_xml_error)?;
                             }
-                            writer
-                                .write_event(Event::CData(data.into_owned()))
-                                .map_err(runtime_xml_error)?;
                         }
                     }
                 } else if let Some((slot, written)) = current_formula.as_mut()
@@ -16934,20 +16992,44 @@ fn patch_loaded_chart_model_xml(
                     patched_sources += 1;
                 }
                 if local_name.as_slice() == b"t"
-                    && let Some((ChartTextXmlTarget::ChartTitle, written)) =
-                        current_text_target.take()
-                    && !written
-                    && !chart_title_text_written
-                    && let Some(title) = chart.title.as_ref()
+                    && let Some((target, written)) = current_text_target.take()
                 {
-                    writer
-                        .write_event(Event::Text(BytesText::from_escaped(partial_escape(
-                            &title.text,
-                        ))))
-                        .map_err(runtime_xml_error)?;
-                    chart_title_text_written = true;
-                } else if local_name.as_slice() == b"t" {
-                    current_text_target = None;
+                    match target {
+                        ChartTextXmlTarget::ChartTitle => {
+                            if !written
+                                && !chart_title_text_written
+                                && let Some(title) = chart.title.as_ref()
+                            {
+                                writer
+                                    .write_event(Event::Text(BytesText::from_escaped(
+                                        partial_escape(&title.text),
+                                    )))
+                                    .map_err(runtime_xml_error)?;
+                                chart_title_text_written = true;
+                            }
+                        }
+                        ChartTextXmlTarget::AxisTitle(axis_index) => {
+                            if !written
+                                && !axis_title_text_written
+                                    .get(axis_index)
+                                    .copied()
+                                    .unwrap_or(false)
+                                && let Some(title) = chart
+                                    .axes
+                                    .get(axis_index)
+                                    .and_then(|axis| axis.title.as_ref())
+                            {
+                                writer
+                                    .write_event(Event::Text(BytesText::from_escaped(
+                                        partial_escape(&title.text),
+                                    )))
+                                    .map_err(runtime_xml_error)?;
+                                if let Some(written) = axis_title_text_written.get_mut(axis_index) {
+                                    *written = true;
+                                }
+                            }
+                        }
+                    }
                 }
 
                 writer
@@ -17012,10 +17094,14 @@ fn patch_loaded_chart_model_xml(
         && axis_kinds
             .iter()
             .zip(axis_title_texts.iter())
+            .zip(axis_title_text_written.iter())
             .zip(chart.axes.iter())
-            .all(|((kind, title_text), axis)| {
+            .all(|(((kind, title_text), title_written), axis)| {
                 *kind == axis.kind
-                    && title_text.as_ref() == axis.title.as_ref().map(|title| &title.text)
+                    && match axis.title.as_ref() {
+                        Some(title) => *title_written || title_text.as_ref() == Some(&title.text),
+                        None => title_text.is_none(),
+                    }
             });
 
     if chart_type_matches
@@ -69824,6 +69910,153 @@ mod tests {
                     .expect("reopened Legend.Position")
             ),
             f64::from(super::XL_LEGEND_POSITION_LEFT)
+        );
+    }
+
+    #[test]
+    fn loaded_chart_axis_title_setter_preserves_chart_extensions_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:axis-title-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let category_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.Axes(xlCategory)"),
+        );
+        let axis_title = expect_object_handle(
+            runtime
+                .dispatch_get(category_axis, "AxisTitle", &[])
+                .expect("Axis.AxisTitle"),
+        );
+        runtime
+            .dispatch_set(
+                axis_title,
+                "Text",
+                OmValue::Text("Fiscal Quarter".to_string()),
+                &[],
+            )
+            .expect("set loaded AxisTitle.Text");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after loaded axis title edit");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:axis-title-preserve"/>"#));
+        assert!(saved_chart_xml.contains("<a:t>Fiscal Quarter</a:t>"));
+        assert!(!saved_chart_xml.contains("<a:t>Quarter</a:t>"));
+        assert!(saved_chart_xml.contains("<a:t>Revenue</a:t>"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after loaded axis title edit");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_category_axis = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("reopened Chart.Axes(xlCategory)"),
+        );
+        let reopened_axis_title = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_category_axis, "AxisTitle", &[])
+                .expect("reopened Axis.AxisTitle"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_axis_title, "Text", &[])
+                .expect("reopened AxisTitle.Text"),
+            OmValue::Text("Fiscal Quarter".to_string())
         );
     }
 
