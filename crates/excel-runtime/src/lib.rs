@@ -4171,6 +4171,10 @@ impl ExcelRuntime {
                                 "Chart.HasAxis axis group supports xlPrimary and xlSecondary",
                             ));
                         }
+                        if axis_group == XL_SECONDARY && !has_axis {
+                            self.chart_model(workbook, chart_id)?;
+                            return Ok(());
+                        }
                         if axis_group == XL_SECONDARY {
                             return Err(OmError::unsupported(
                                 "Chart.HasAxis secondary axes are not supported yet",
@@ -85353,6 +85357,30 @@ mod tests {
                 )
                 .expect("Chart.HasAxis(xlCategory) after restore"),
             OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "HasAxis",
+                OmValue::Bool(false),
+                &[
+                    OmValue::Number(f64::from(super::XL_VALUE)),
+                    OmValue::Number(f64::from(super::XL_SECONDARY)),
+                ],
+            )
+            .expect("clearing absent secondary Chart.HasAxis is a no-op");
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "HasAxis",
+                    &[
+                        OmValue::Number(f64::from(super::XL_VALUE)),
+                        OmValue::Number(f64::from(super::XL_SECONDARY)),
+                    ],
+                )
+                .expect("Chart.HasAxis secondary value axis after no-op clear"),
+            OmValue::Bool(false)
         );
         assert_eq!(
             runtime
