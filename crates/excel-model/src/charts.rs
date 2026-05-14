@@ -47,6 +47,7 @@ pub enum ChartType {
     Unknown,
     Area,
     Bar,
+    Column,
     Line,
     Scatter,
     Bubble,

@@ -654,6 +654,7 @@ pub struct DrawingSizeSummary {
 pub struct ChartPartSummary {
     pub root_name: Option<String>,
     pub chart_type_names: Vec<String>,
+    pub bar_direction: Option<String>,
     pub title_text: Option<String>,
     pub has_legend: bool,
     pub legend_position: Option<ChartLegendPosition>,
@@ -3323,6 +3324,7 @@ fn chart_type_from_summary(summary: Option<&ChartPartSummary>) -> ChartType {
     };
     match summary.chart_type_names.first().map(String::as_str) {
         Some("areaChart") => ChartType::Area,
+        Some("barChart") if summary.bar_direction.as_deref() == Some("col") => ChartType::Column,
         Some("barChart") => ChartType::Bar,
         Some("lineChart") => ChartType::Line,
         Some("scatterChart") => ChartType::Scatter,
@@ -15827,6 +15829,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut buffer = Vec::new();
     let mut root_name = None;
     let mut chart_type_names = Vec::new();
+    let mut bar_direction = None::<String>;
     let mut title_text = None::<String>;
     let mut title_text_depth = 0usize;
     let mut has_legend = false;
@@ -16021,6 +16024,15 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
                     vary_by_categories = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                }
+                if local_name == b"barDir"
+                    && element_path.last().is_some_and(|name| name == "barChart")
+                    && let Some(value) = parse_string_val_attr(&element, &reader)?
+                {
+                    bar_direction = match value.as_str() {
+                        "bar" | "col" => Some(value),
+                        _ => bar_direction,
+                    };
                 }
                 if local_name == b"gapWidth"
                     && element_path
@@ -16275,6 +16287,15 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
                     vary_by_categories = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                }
+                if local_name == b"barDir"
+                    && element_path.last().is_some_and(|name| name == "barChart")
+                    && let Some(value) = parse_string_val_attr(&element, &reader)?
+                {
+                    bar_direction = match value.as_str() {
+                        "bar" | "col" => Some(value),
+                        _ => bar_direction,
+                    };
                 }
                 if local_name == b"gapWidth"
                     && element_path
@@ -16595,6 +16616,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     Ok(ChartPartSummary {
         root_name,
         chart_type_names,
+        bar_direction,
         title_text: title_text.filter(|text| !text.is_empty()),
         has_legend,
         legend_position,
@@ -21387,6 +21409,7 @@ mod tests {
             .expect("chart summary");
         assert_eq!(chart_summary.root_name.as_deref(), Some("chartSpace"));
         assert_eq!(chart_summary.chart_type_names, vec!["barChart".to_string()]);
+        assert_eq!(chart_summary.bar_direction, None);
         assert_eq!(chart_summary.title_text.as_deref(), Some("Revenue Trend"));
         assert!(chart_summary.has_legend);
         assert_eq!(
