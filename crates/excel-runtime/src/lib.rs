@@ -48,6 +48,8 @@ const XL_RADAR: i32 = -4151;
 const XL_DOUGHNUT: i32 = -4120;
 const XL_AREA: i32 = 1;
 const XL_LINE: i32 = 4;
+const XL_LINE_STACKED: i32 = 63;
+const XL_LINE_STACKED_100: i32 = 64;
 const XL_PIE: i32 = 5;
 const XL_BUBBLE: i32 = 15;
 const XL_AREA_STACKED: i32 = 76;
@@ -3807,6 +3809,8 @@ impl ExcelRuntime {
                             XL_COLUMN_STACKED => ChartType::ColumnStacked,
                             XL_COLUMN_STACKED_100 => ChartType::ColumnStacked100,
                             XL_LINE => ChartType::Line,
+                            XL_LINE_STACKED => ChartType::LineStacked,
+                            XL_LINE_STACKED_100 => ChartType::LineStacked100,
                             XL_XY_SCATTER => ChartType::Scatter,
                             XL_BUBBLE => ChartType::Bubble,
                             XL_DOUGHNUT => ChartType::Doughnut,
@@ -19122,7 +19126,7 @@ fn chart_group_xml_name(chart_type: &ChartType) -> Option<&'static str> {
         | ChartType::Column
         | ChartType::ColumnStacked
         | ChartType::ColumnStacked100 => Some("barChart"),
-        ChartType::Line => Some("lineChart"),
+        ChartType::Line | ChartType::LineStacked | ChartType::LineStacked100 => Some("lineChart"),
         ChartType::Scatter => Some("scatterChart"),
         ChartType::Bubble => Some("bubbleChart"),
         ChartType::Doughnut => Some("doughnutChart"),
@@ -19148,6 +19152,9 @@ fn chart_type_grouping_xml_value(chart_type: &ChartType) -> Option<&'static str>
         ChartType::Bar | ChartType::Column => Some("clustered"),
         ChartType::BarStacked | ChartType::ColumnStacked => Some("stacked"),
         ChartType::BarStacked100 | ChartType::ColumnStacked100 => Some("percentStacked"),
+        ChartType::Line => Some("standard"),
+        ChartType::LineStacked => Some("stacked"),
+        ChartType::LineStacked100 => Some("percentStacked"),
         _ => None,
     }
 }
@@ -21222,6 +21229,8 @@ fn chart_type_to_excel_value(chart_type: &ChartType) -> OmResult<i32> {
         ChartType::ColumnStacked => Ok(XL_COLUMN_STACKED),
         ChartType::ColumnStacked100 => Ok(XL_COLUMN_STACKED_100),
         ChartType::Line => Ok(XL_LINE),
+        ChartType::LineStacked => Ok(XL_LINE_STACKED),
+        ChartType::LineStacked100 => Ok(XL_LINE_STACKED_100),
         ChartType::Scatter => Ok(XL_XY_SCATTER),
         ChartType::Bubble => Ok(XL_BUBBLE),
         ChartType::Doughnut => Ok(XL_DOUGHNUT),
@@ -79819,6 +79828,20 @@ mod tests {
                 "barChart",
                 true,
                 Some("bar"),
+                Some("percentStacked"),
+            ),
+            (
+                super::XL_LINE_STACKED,
+                "lineChart",
+                true,
+                None,
+                Some("stacked"),
+            ),
+            (
+                super::XL_LINE_STACKED_100,
+                "lineChart",
+                true,
+                None,
                 Some("percentStacked"),
             ),
             (super::XL_DOUGHNUT, "doughnutChart", false, None, None),

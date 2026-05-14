@@ -3340,7 +3340,11 @@ fn chart_type_from_summary(summary: Option<&ChartPartSummary>) -> ChartType {
             (_, Some("percentStacked")) => ChartType::BarStacked100,
             _ => ChartType::Bar,
         },
-        Some("lineChart") => ChartType::Line,
+        Some("lineChart") => match summary.chart_grouping.as_deref() {
+            Some("stacked") => ChartType::LineStacked,
+            Some("percentStacked") => ChartType::LineStacked100,
+            _ => ChartType::Line,
+        },
         Some("scatterChart") => ChartType::Scatter,
         Some("bubbleChart") => ChartType::Bubble,
         Some("doughnutChart") => ChartType::Doughnut,

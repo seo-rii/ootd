@@ -55,6 +55,8 @@ pub enum ChartType {
     ColumnStacked,
     ColumnStacked100,
     Line,
+    LineStacked,
+    LineStacked100,
     Scatter,
     Bubble,
     Doughnut,
