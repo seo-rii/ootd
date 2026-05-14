@@ -9072,11 +9072,11 @@ impl ExcelRuntime {
                         let chart = self.register_chart_handle(workbook, chart_id);
                         self.dispatch_invoke(chart, "Select", &[])
                     }
-                    "Delete" => {
+                    "Clear" | "Delete" => {
                         if !args.is_empty() {
-                            return Err(OmError::invalid_argument(
-                                "Legend.Delete does not accept arguments",
-                            ));
+                            return Err(OmError::invalid_argument(format!(
+                                "Legend.{member} does not accept arguments"
+                            )));
                         }
                         {
                             let runtime = self.runtime_workbook_mut(workbook)?;
@@ -9369,7 +9369,13 @@ impl ExcelRuntime {
                     )
                     | (
                         "Legend",
-                        "Position" | "Creator" | "Application" | "Parent" | "Select" | "Delete"
+                        "Position"
+                            | "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Select"
+                            | "Clear"
+                            | "Delete"
                     )
                     | (
                         "ChartGroups",
@@ -84581,6 +84587,152 @@ mod tests {
             reopened_runtime
                 .dispatch_get(reopened_category_axis, "HasTitle", &[])
                 .expect("reopened Axis.HasTitle"),
+            OmValue::Bool(false)
+        );
+    }
+
+    #[test]
+    fn legend_clear_removes_legend_and_preserves_extensions_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:legend-clear-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let legend = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Legend", &[])
+                .expect("Chart.Legend"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasLegend", &[])
+                .expect("Chart.HasLegend before Legend.Clear"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(legend, "Clear", &[OmValue::Missing])
+                .expect_err("Legend.Clear rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(legend, "Clear", &[])
+                .expect("Legend.Clear"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(legend, "Position", &[])
+                .expect_err("cleared Legend handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasLegend", &[])
+                .expect("Chart.HasLegend after Legend.Clear"),
+            OmValue::Bool(false)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after Legend.Clear");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:legend-clear-preserve"/>"#));
+        assert!(!saved_chart_xml.contains("<c:legend>"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after Legend.Clear");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "HasLegend", &[])
+                .expect("reopened Chart.HasLegend"),
             OmValue::Bool(false)
         );
     }
