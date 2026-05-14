@@ -656,6 +656,7 @@ pub struct ChartPartSummary {
     pub chart_type_names: Vec<String>,
     pub bar_direction: Option<String>,
     pub chart_grouping: Option<String>,
+    pub line_has_markers: Option<bool>,
     pub title_text: Option<String>,
     pub has_legend: bool,
     pub legend_position: Option<ChartLegendPosition>,
@@ -3340,9 +3341,12 @@ fn chart_type_from_summary(summary: Option<&ChartPartSummary>) -> ChartType {
             (_, Some("percentStacked")) => ChartType::BarStacked100,
             _ => ChartType::Bar,
         },
-        Some("lineChart") => match summary.chart_grouping.as_deref() {
-            Some("stacked") => ChartType::LineStacked,
-            Some("percentStacked") => ChartType::LineStacked100,
+        Some("lineChart") => match (summary.chart_grouping.as_deref(), summary.line_has_markers) {
+            (Some("stacked"), Some(true)) => ChartType::LineMarkersStacked,
+            (Some("percentStacked"), Some(true)) => ChartType::LineMarkersStacked100,
+            (_, Some(true)) => ChartType::LineMarkers,
+            (Some("stacked"), _) => ChartType::LineStacked,
+            (Some("percentStacked"), _) => ChartType::LineStacked100,
             _ => ChartType::Line,
         },
         Some("scatterChart") => ChartType::Scatter,
@@ -15849,6 +15853,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut chart_type_names = Vec::new();
     let mut bar_direction = None::<String>;
     let mut chart_grouping = None::<String>;
+    let mut line_has_markers = None;
     let mut title_text = None::<String>;
     let mut title_text_depth = 0usize;
     let mut has_legend = false;
@@ -16064,6 +16069,11 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "clustered" | "stacked" | "percentStacked" | "standard" => Some(value),
                         _ => chart_grouping,
                     };
+                }
+                if local_name == b"marker"
+                    && element_path.last().is_some_and(|name| name == "lineChart")
+                {
+                    line_has_markers = parse_bool_val_attr(&element, &reader)?.or(Some(true));
                 }
                 if local_name == b"gapWidth"
                     && element_path
@@ -16339,6 +16349,11 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "clustered" | "stacked" | "percentStacked" | "standard" => Some(value),
                         _ => chart_grouping,
                     };
+                }
+                if local_name == b"marker"
+                    && element_path.last().is_some_and(|name| name == "lineChart")
+                {
+                    line_has_markers = parse_bool_val_attr(&element, &reader)?.or(Some(true));
                 }
                 if local_name == b"gapWidth"
                     && element_path
@@ -16661,6 +16676,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         chart_type_names,
         bar_direction,
         chart_grouping,
+        line_has_markers,
         title_text: title_text.filter(|text| !text.is_empty()),
         has_legend,
         legend_position,
@@ -21455,6 +21471,7 @@ mod tests {
         assert_eq!(chart_summary.chart_type_names, vec!["barChart".to_string()]);
         assert_eq!(chart_summary.bar_direction, None);
         assert_eq!(chart_summary.chart_grouping, None);
+        assert_eq!(chart_summary.line_has_markers, None);
         assert_eq!(chart_summary.title_text.as_deref(), Some("Revenue Trend"));
         assert!(chart_summary.has_legend);
         assert_eq!(
