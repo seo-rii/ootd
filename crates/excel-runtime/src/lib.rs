@@ -506,6 +506,12 @@ enum RuntimeObjectKind {
         chart_id: ChartId,
         series_index: usize,
     },
+    DataLabel {
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
+        point_index: usize,
+    },
     ChartGroups {
         workbook: WorkbookHandle,
         chart_id: ChartId,
@@ -1923,6 +1929,19 @@ impl ExcelRuntime {
                 chart_id,
                 series_index,
             } => self.dispatch_get_data_labels(workbook, chart_id, series_index, member, args),
+            RuntimeObjectKind::DataLabel {
+                workbook,
+                chart_id,
+                series_index,
+                point_index,
+            } => self.dispatch_get_data_label(
+                workbook,
+                chart_id,
+                series_index,
+                point_index,
+                member,
+                args,
+            ),
             RuntimeObjectKind::ChartGroups { workbook, chart_id } => {
                 self.dispatch_get_chart_groups(workbook, chart_id, member, args)
             }
@@ -3516,7 +3535,8 @@ impl ExcelRuntime {
             | RuntimeObjectKind::Axes { .. }
             | RuntimeObjectKind::SeriesCollection { .. }
             | RuntimeObjectKind::Points { .. }
-            | RuntimeObjectKind::Point { .. } => Err(OmError::unsupported(format!(
+            | RuntimeObjectKind::Point { .. }
+            | RuntimeObjectKind::DataLabel { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
             ))),
             RuntimeObjectKind::ChartGroup {
@@ -9368,6 +9388,9 @@ impl ExcelRuntime {
                 chart_id,
                 series_index,
             } => match member {
+                "Item" => {
+                    self.dispatch_invoke_data_labels(workbook, chart_id, series_index, member, args)
+                }
                 "Delete" => {
                     if !args.is_empty() {
                         return Err(OmError::invalid_argument(
@@ -9405,6 +9428,26 @@ impl ExcelRuntime {
                 }
                 _ => Err(OmError::unsupported(format!(
                     "DataLabels.{member} is not implemented as a method"
+                ))),
+            },
+            RuntimeObjectKind::DataLabel {
+                workbook,
+                chart_id,
+                series_index,
+                point_index,
+            } => match member {
+                "Select" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "DataLabel.Select does not accept arguments",
+                        ));
+                    }
+                    self.validate_data_label_index(workbook, chart_id, series_index, point_index)?;
+                    let chart = self.register_chart_handle(workbook, chart_id);
+                    self.dispatch_invoke(chart, "Select", &[])
+                }
+                _ => Err(OmError::unsupported(format!(
+                    "DataLabel.{member} is not implemented as a method"
                 ))),
             },
             RuntimeObjectKind::AxisTitle {
@@ -9764,6 +9807,7 @@ impl ExcelRuntime {
                         "DataLabels",
                         "Name"
                             | "Count"
+                            | "Item"
                             | "ShowLegendKey"
                             | "ShowSeriesName"
                             | "ShowCategoryName"
@@ -9778,12 +9822,35 @@ impl ExcelRuntime {
                             | "Select"
                     )
                     | (
+                        "DataLabel",
+                        "Name"
+                            | "Index"
+                            | "ShowLegendKey"
+                            | "ShowSeriesName"
+                            | "ShowCategoryName"
+                            | "ShowValue"
+                            | "ShowPercentage"
+                            | "ShowBubbleSize"
+                            | "Separator"
+                            | "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Select"
+                    )
+                    | (
                         "Points",
                         "Count" | "Item" | "Creator" | "Application" | "Parent"
                     )
                     | (
                         "Point",
-                        "Name" | "Index" | "Creator" | "Application" | "Parent" | "Select"
+                        "Name"
+                            | "Index"
+                            | "HasDataLabel"
+                            | "DataLabel"
+                            | "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Select"
                     )
             )
         {
@@ -13328,50 +13395,70 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
-        if !args.is_empty() {
+        if !args.is_empty() && member != "Item" {
             return Err(OmError::invalid_argument(format!(
                 "DataLabels.{member} does not accept arguments"
             )));
         }
 
-        let series = self.series_model(workbook, chart_id, series_index)?;
-        let data_labels = self.chart_model(workbook, chart_id)?.data_labels.as_ref();
         match member {
+            "Item" => {
+                self.dispatch_invoke_data_labels(workbook, chart_id, series_index, member, args)
+            }
             "Name" => Ok(OmValue::Text("Data Labels".to_string())),
-            "Count" => Ok(OmValue::Number(
-                chart_data_labels_count_for_series(data_labels, series) as f64,
-            )),
+            "Count" => {
+                let series = self.series_model(workbook, chart_id, series_index)?;
+                let data_labels = self.chart_model(workbook, chart_id)?.data_labels.as_ref();
+                Ok(OmValue::Number(
+                    chart_data_labels_count_for_series(data_labels, series) as f64,
+                ))
+            }
             "ShowLegendKey" => Ok(OmValue::Bool(
-                data_labels
+                self.chart_model(workbook, chart_id)?
+                    .data_labels
+                    .as_ref()
                     .and_then(|labels| labels.show_legend_key)
                     .unwrap_or(false),
             )),
             "ShowSeriesName" => Ok(OmValue::Bool(
-                data_labels
+                self.chart_model(workbook, chart_id)?
+                    .data_labels
+                    .as_ref()
                     .and_then(|labels| labels.show_series_name)
                     .unwrap_or(false),
             )),
             "ShowCategoryName" => Ok(OmValue::Bool(
-                data_labels
+                self.chart_model(workbook, chart_id)?
+                    .data_labels
+                    .as_ref()
                     .and_then(|labels| labels.show_category_name)
                     .unwrap_or(false),
             )),
             "ShowValue" => Ok(OmValue::Bool(
-                data_labels
+                self.chart_model(workbook, chart_id)?
+                    .data_labels
+                    .as_ref()
                     .and_then(|labels| labels.show_value)
                     .unwrap_or(false),
             )),
             "ShowPercentage" => Ok(OmValue::Bool(
-                data_labels
+                self.chart_model(workbook, chart_id)?
+                    .data_labels
+                    .as_ref()
                     .and_then(|labels| labels.show_percentage)
                     .unwrap_or(false),
             )),
             "ShowBubbleSize" => Ok(OmValue::Bool(
-                data_labels
+                self.chart_model(workbook, chart_id)?
+                    .data_labels
+                    .as_ref()
                     .and_then(|labels| labels.show_bubble_size)
                     .unwrap_or(false),
             )),
-            "Separator" => Ok(data_labels
+            "Separator" => Ok(self
+                .chart_model(workbook, chart_id)?
+                .data_labels
+                .as_ref()
                 .and_then(|labels| labels.separator.clone())
                 .map(OmValue::Text)
                 .unwrap_or(OmValue::Empty)),
@@ -13384,6 +13471,118 @@ impl ExcelRuntime {
             ))),
             _ => Err(OmError::unsupported(format!(
                 "DataLabels.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_invoke_data_labels(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        match member {
+            "Item" => {
+                let [index] = args else {
+                    return Err(OmError::invalid_argument(
+                        "DataLabels.Item expects a single 1-based index",
+                    ));
+                };
+                let index = coerce_u32_arg(index, "DataLabels.Item index")? as usize;
+                let series = self.series_model(workbook, chart_id, series_index)?;
+                let data_labels = self.chart_model(workbook, chart_id)?.data_labels.as_ref();
+                let label_count = chart_data_labels_count_for_series(data_labels, series);
+                if index == 0 || index > label_count {
+                    return Err(OmError::invalid_argument(
+                        "DataLabels.Item index is out of bounds",
+                    ));
+                }
+                Ok(OmValue::Object(self.register_data_label_handle(
+                    workbook,
+                    chart_id,
+                    series_index,
+                    index - 1,
+                )))
+            }
+            _ => Err(OmError::unsupported(format!(
+                "DataLabels.{member} is not implemented as a method"
+            ))),
+        }
+    }
+
+    fn dispatch_get_data_label(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
+        point_index: usize,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        if !args.is_empty() {
+            return Err(OmError::invalid_argument(format!(
+                "DataLabel.{member} does not accept arguments"
+            )));
+        }
+        let data_labels = self
+            .validate_data_label_index(workbook, chart_id, series_index, point_index)?
+            .cloned();
+
+        match member {
+            "Name" => Ok(OmValue::Text(format!("Data Label {}", point_index + 1))),
+            "Index" => Ok(OmValue::Number((point_index + 1) as f64)),
+            "ShowLegendKey" => Ok(OmValue::Bool(
+                data_labels
+                    .as_ref()
+                    .and_then(|labels| labels.show_legend_key)
+                    .unwrap_or(false),
+            )),
+            "ShowSeriesName" => Ok(OmValue::Bool(
+                data_labels
+                    .as_ref()
+                    .and_then(|labels| labels.show_series_name)
+                    .unwrap_or(false),
+            )),
+            "ShowCategoryName" => Ok(OmValue::Bool(
+                data_labels
+                    .as_ref()
+                    .and_then(|labels| labels.show_category_name)
+                    .unwrap_or(false),
+            )),
+            "ShowValue" => Ok(OmValue::Bool(
+                data_labels
+                    .as_ref()
+                    .and_then(|labels| labels.show_value)
+                    .unwrap_or(false),
+            )),
+            "ShowPercentage" => Ok(OmValue::Bool(
+                data_labels
+                    .as_ref()
+                    .and_then(|labels| labels.show_percentage)
+                    .unwrap_or(false),
+            )),
+            "ShowBubbleSize" => Ok(OmValue::Bool(
+                data_labels
+                    .as_ref()
+                    .and_then(|labels| labels.show_bubble_size)
+                    .unwrap_or(false),
+            )),
+            "Separator" => Ok(data_labels
+                .as_ref()
+                .and_then(|labels| labels.separator.clone())
+                .map(OmValue::Text)
+                .unwrap_or(OmValue::Empty)),
+            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+            "Application" => Ok(OmValue::Object(self.root_application())),
+            "Parent" => Ok(OmValue::Object(self.register_data_labels_handle(
+                workbook,
+                chart_id,
+                series_index,
+            ))),
+            _ => Err(OmError::unsupported(format!(
+                "DataLabel.{member} is not implemented"
             ))),
         }
     }
@@ -13505,6 +13704,19 @@ impl ExcelRuntime {
         match member {
             "Name" => Ok(OmValue::Text(format!("Point {}", point_index + 1))),
             "Index" => Ok(OmValue::Number((point_index + 1) as f64)),
+            "HasDataLabel" => Ok(OmValue::Bool(
+                self.validate_data_label_index(workbook, chart_id, series_index, point_index)
+                    .is_ok(),
+            )),
+            "DataLabel" => {
+                self.validate_data_label_index(workbook, chart_id, series_index, point_index)?;
+                Ok(OmValue::Object(self.register_data_label_handle(
+                    workbook,
+                    chart_id,
+                    series_index,
+                    point_index,
+                )))
+            }
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(self.register_points_handle(
@@ -16796,6 +17008,21 @@ impl ExcelRuntime {
         })
     }
 
+    fn register_data_label_handle(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
+        point_index: usize,
+    ) -> ObjectHandle {
+        self.register_object(RuntimeObjectKind::DataLabel {
+            workbook,
+            chart_id,
+            series_index,
+            point_index,
+        })
+    }
+
     fn register_chart_groups_handle(
         &mut self,
         workbook: WorkbookHandle,
@@ -17813,6 +18040,22 @@ impl ExcelRuntime {
         Ok(())
     }
 
+    fn validate_data_label_index(
+        &self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
+        point_index: usize,
+    ) -> OmResult<Option<&ChartDataLabelsModel>> {
+        let series = self.series_model(workbook, chart_id, series_index)?;
+        let data_labels = self.chart_model(workbook, chart_id)?.data_labels.as_ref();
+        let label_count = chart_data_labels_count_for_series(data_labels, series);
+        if point_index >= label_count {
+            return Err(OmError::new(OmErrorCode::NotFound, "data label not found"));
+        }
+        Ok(data_labels)
+    }
+
     fn axis_model(
         &self,
         workbook: WorkbookHandle,
@@ -17938,6 +18181,11 @@ impl ExcelRuntime {
                     chart_id: object_chart_id,
                 }
                 | RuntimeObjectKind::DataLabels {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    ..
+                }
+                | RuntimeObjectKind::DataLabel {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
                     ..
@@ -18085,6 +18333,11 @@ impl ExcelRuntime {
                     ..
                 }
                 | RuntimeObjectKind::DataLabels {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    ..
+                }
+                | RuntimeObjectKind::DataLabel {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
                     ..
@@ -23968,6 +24221,7 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         | RuntimeObjectKind::ChartTitle { workbook, .. }
         | RuntimeObjectKind::Legend { workbook, .. }
         | RuntimeObjectKind::DataLabels { workbook, .. }
+        | RuntimeObjectKind::DataLabel { workbook, .. }
         | RuntimeObjectKind::ChartGroups { workbook, .. }
         | RuntimeObjectKind::ChartGroup { workbook, .. }
         | RuntimeObjectKind::Axes { workbook, .. }
@@ -79641,6 +79895,184 @@ mod tests {
             runtime
                 .dispatch_invoke(first_point, "Select", &[OmValue::Bool(true)])
                 .expect_err("Point.Select rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn data_labels_item_and_point_data_label_return_basic_handles() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+        let first_point = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Points", &[OmValue::Number(1.0)])
+                .expect("Series.Points(1)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(first_point, "HasDataLabel", &[])
+                .expect("Point.HasDataLabel before labels"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_point, "DataLabel", &[])
+                .expect_err("Point.DataLabel before labels")
+                .code,
+            OmErrorCode::NotFound
+        );
+
+        runtime
+            .dispatch_set(series, "HasDataLabels", OmValue::Bool(true), &[])
+            .expect("Series.HasDataLabels = true");
+        let data_labels = expect_object_handle(
+            runtime
+                .dispatch_get(series, "DataLabels", &[])
+                .expect("Series.DataLabels"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(data_labels, "Count", &[])
+                    .expect("DataLabels.Count")
+            ),
+            3.0
+        );
+        let second_label = expect_object_handle(
+            runtime
+                .dispatch_invoke(data_labels, "Item", &[OmValue::Number(2.0)])
+                .expect("DataLabels.Item(2)"),
+        );
+        let third_label = expect_object_handle(
+            runtime
+                .dispatch_get(data_labels, "Item", &[OmValue::Number(3.0)])
+                .expect("DataLabels.Item property args"),
+        );
+        let first_point_label = expect_object_handle(
+            runtime
+                .dispatch_get(first_point, "DataLabel", &[])
+                .expect("Point.DataLabel after labels"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(first_point, "HasDataLabel", &[])
+                .expect("Point.HasDataLabel after labels"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_label, "Index", &[])
+                    .expect("DataLabel.Index")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(third_label, "Name", &[])
+                    .expect("DataLabel.Name")
+            ),
+            "Data Label 3"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_point_label, "ShowValue", &[])
+                .expect("DataLabel.ShowValue"),
+            OmValue::Bool(true)
+        );
+        let labels_parent = expect_object_handle(
+            runtime
+                .dispatch_get(second_label, "Parent", &[])
+                .expect("DataLabel.Parent"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(labels_parent, "Count", &[])
+                    .expect("DataLabel.Parent.Count")
+            ),
+            3.0
+        );
+
+        runtime
+            .dispatch_invoke(worksheet, "Activate", &[])
+            .expect("Worksheet.Activate clears ActiveChart");
+        runtime
+            .dispatch_invoke(second_label, "Select", &[])
+            .expect("DataLabel.Select");
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                .expect("ActiveChart after DataLabel.Select"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_chart, "Name", &[])
+                    .expect("ActiveChart.Name after DataLabel.Select")
+            ),
+            "Embedded Revenue Chart"
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(data_labels, "Item", &[OmValue::Number(4.0)])
+                .expect_err("DataLabels.Item(4) should be out of bounds")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(data_labels, "Item", &[])
+                .expect_err("DataLabels.Item rejects missing index")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(second_label, "Select", &[OmValue::Bool(true)])
+                .expect_err("DataLabel.Select rejects arguments")
                 .code,
             OmErrorCode::InvalidArgument
         );
