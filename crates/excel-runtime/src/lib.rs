@@ -9217,11 +9217,21 @@ impl ExcelRuntime {
                     )
                     | (
                         "ChartArea",
-                        "Creator" | "Application" | "Parent" | "Select" | "Copy" | "ClearFormats"
+                        "Name"
+                            | "Left"
+                            | "Top"
+                            | "Width"
+                            | "Height"
+                            | "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Select"
+                            | "Copy"
+                            | "ClearFormats"
                     )
                     | (
                         "PlotArea",
-                        "Creator" | "Application" | "Parent" | "Select" | "ClearFormats"
+                        "Name" | "Creator" | "Application" | "Parent" | "Select" | "ClearFormats"
                     )
                     | (
                         "ChartTitle",
@@ -12064,6 +12074,36 @@ impl ExcelRuntime {
         self.chart_model(workbook, chart_id)?;
 
         match member {
+            "Name" => Ok(OmValue::Text(match surface {
+                "ChartArea" => "Chart Area".to_string(),
+                "PlotArea" => "Plot Area".to_string(),
+                _ => unreachable!("chart child surface was provided by runtime dispatch"),
+            })),
+            "Left" | "Top" | "Width" | "Height" if surface == "ChartArea" => {
+                let state = &self.runtime_workbook(workbook)?.loaded.state;
+                let chart_object = state
+                    .drawings
+                    .values()
+                    .flat_map(|drawing| drawing.objects.iter())
+                    .find_map(|object| match object {
+                        DrawingObjectModel::ChartFrame(chart_object)
+                            if chart_object.chart_id == chart_id =>
+                        {
+                            Some(chart_object)
+                        }
+                        DrawingObjectModel::UnsupportedRaw { .. } => None,
+                        _ => None,
+                    })
+                    .ok_or_else(|| {
+                        OmError::unsupported(
+                            "ChartArea geometry is only available for embedded charts",
+                        )
+                    })?;
+                Ok(OmValue::Number(Self::chart_object_geometry_value(
+                    chart_object,
+                    member,
+                )?))
+            }
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(
@@ -75528,6 +75568,28 @@ mod tests {
                 .expect("Chart.ChartArea"),
         );
         assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(chart_area, "Name", &[])
+                    .expect("ChartArea.Name")
+            ),
+            "Chart Area"
+        );
+        for member in ["Left", "Top", "Width", "Height"] {
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(chart_area, member, &[])
+                        .unwrap_or_else(|error| panic!("ChartArea.{member} failed: {error:?}"))
+                ),
+                expect_number(
+                    runtime
+                        .dispatch_get(chart_object, member, &[])
+                        .unwrap_or_else(|error| panic!("ChartObject.{member} failed: {error:?}"))
+                )
+            );
+        }
+        assert_eq!(
             expect_number(
                 runtime
                     .dispatch_get(chart_area, "Creator", &[])
@@ -75560,6 +75622,14 @@ mod tests {
             runtime
                 .dispatch_get(chart, "PlotArea", &[])
                 .expect("Chart.PlotArea"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(plot_area, "Name", &[])
+                    .expect("PlotArea.Name")
+            ),
+            "Plot Area"
         );
         assert_eq!(
             expect_number(
