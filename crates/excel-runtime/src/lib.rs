@@ -7551,6 +7551,17 @@ impl ExcelRuntime {
                     self.set_headless_cut_mode();
                     Ok(OmValue::Empty)
                 }
+                "Duplicate" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "ChartObject.Duplicate does not accept arguments",
+                        ));
+                    }
+                    let duplicate_id = self.duplicate_chart_object(workbook, chart_object_id)?;
+                    Ok(OmValue::Object(
+                        self.register_chart_object_handle(workbook, duplicate_id),
+                    ))
+                }
                 "CopyPicture" => {
                     validate_copy_picture_args(args, 2, "ChartObject.CopyPicture")?;
                     let chart_object = self.chart_object_model(workbook, chart_object_id)?;
@@ -9149,6 +9160,7 @@ impl ExcelRuntime {
                             | "Select"
                             | "Copy"
                             | "Cut"
+                            | "Duplicate"
                             | "CopyPicture"
                             | "Delete"
                     )
@@ -9174,6 +9186,7 @@ impl ExcelRuntime {
                             | "Select"
                             | "Copy"
                             | "Cut"
+                            | "Duplicate"
                             | "CopyPicture"
                             | "Delete"
                     )
@@ -11219,6 +11232,35 @@ impl ExcelRuntime {
                 self.chart_object_entries_for_sheet(workbook, sheet_id)?;
                 self.set_headless_cut_mode();
                 Ok(OmValue::Empty)
+            }
+            "Duplicate" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ChartObjects.Duplicate does not accept arguments",
+                    ));
+                }
+                let chart_object_ids = self
+                    .chart_object_entries_for_sheet(workbook, sheet_id)?
+                    .into_iter()
+                    .map(|(chart_object_id, _)| chart_object_id)
+                    .collect::<Vec<_>>();
+                let mut duplicated_chart_object_ids = Vec::with_capacity(chart_object_ids.len());
+                for chart_object_id in chart_object_ids {
+                    duplicated_chart_object_ids
+                        .push(self.duplicate_chart_object(workbook, chart_object_id)?);
+                }
+                match duplicated_chart_object_ids.as_slice() {
+                    [] => Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        "chart object not found",
+                    )),
+                    [chart_object_id] => Ok(OmValue::Object(
+                        self.register_chart_object_handle(workbook, *chart_object_id),
+                    )),
+                    _ => Ok(OmValue::Object(
+                        self.register_chart_objects_handle(workbook, sheet_id),
+                    )),
+                }
             }
             "CopyPicture" => {
                 validate_copy_picture_args(args, 2, "ChartObjects.CopyPicture")?;
@@ -16739,6 +16781,179 @@ impl ExcelRuntime {
         }
 
         Ok(true)
+    }
+
+    fn duplicate_chart_object(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_object_id: ChartObjectId,
+    ) -> OmResult<ChartObjectId> {
+        let source_chart_object = self.chart_object_model(workbook, chart_object_id)?.clone();
+        if matches!(
+            source_chart_object.anchor.as_ref(),
+            None | Some(DrawingAnchor::UnsupportedRaw)
+        ) {
+            return Err(OmError::unsupported(
+                "ChartObject.Duplicate requires a supported drawing anchor",
+            ));
+        }
+        let source_chart = self
+            .chart_model(workbook, source_chart_object.chart_id)?
+            .clone();
+        let host_sheet_id = source_chart_object.host_sheet_id;
+
+        let runtime = self.runtime_workbook_mut(workbook)?;
+        if runtime.read_only {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                "cannot modify a read-only workbook",
+            ));
+        }
+        let Some(worksheet) = runtime
+            .loaded
+            .state
+            .worksheets
+            .iter()
+            .find(|worksheet| worksheet.id == host_sheet_id)
+        else {
+            return Err(OmError::new(
+                OmErrorCode::NotFound,
+                "chart object host worksheet was not found",
+            ));
+        };
+        if worksheet.kind != SheetKind::Worksheet {
+            return Err(OmError::unsupported(
+                "ChartObject.Duplicate is only available for embedded chart objects",
+            ));
+        }
+        let Some(drawing_id) =
+            runtime
+                .loaded
+                .state
+                .drawings
+                .iter()
+                .find_map(|(drawing_id, drawing)| {
+                    drawing
+                        .objects
+                        .iter()
+                        .any(|object| match object {
+                            DrawingObjectModel::ChartFrame(candidate) => {
+                                candidate.id == chart_object_id
+                            }
+                            DrawingObjectModel::UnsupportedRaw { .. } => false,
+                        })
+                        .then_some(*drawing_id)
+                })
+        else {
+            return Err(OmError::new(
+                OmErrorCode::NotFound,
+                "chart object not found",
+            ));
+        };
+
+        let workbook_id = runtime.loaded.state.model.id;
+        let new_chart_id = ChartId(
+            runtime
+                .loaded
+                .state
+                .charts
+                .keys()
+                .map(|chart_id| chart_id.0)
+                .max()
+                .unwrap_or_default()
+                + 1,
+        );
+        let new_chart_object_id = ChartObjectId(
+            runtime
+                .loaded
+                .state
+                .drawings
+                .values()
+                .flat_map(|drawing| drawing.objects.iter())
+                .filter_map(|object| match object {
+                    DrawingObjectModel::ChartFrame(chart_object) => Some(chart_object.id.0),
+                    DrawingObjectModel::UnsupportedRaw { id, .. } => Some(id.0),
+                })
+                .max()
+                .unwrap_or_default()
+                + 1,
+        );
+        let existing_chart_object_names = runtime
+            .loaded
+            .state
+            .drawings
+            .values()
+            .filter(|drawing| drawing.host_sheet_id == host_sheet_id)
+            .flat_map(|drawing| drawing.objects.iter())
+            .filter_map(|object| match object {
+                DrawingObjectModel::ChartFrame(chart_object) => Some(chart_object.name.as_str()),
+                DrawingObjectModel::UnsupportedRaw { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        let mut chart_object_number = existing_chart_object_names.len() + 1;
+        let chart_object_name = loop {
+            let candidate = format!("Chart {chart_object_number}");
+            if !existing_chart_object_names
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(&candidate))
+            {
+                break candidate;
+            }
+            chart_object_number += 1;
+        };
+        let z_order = runtime
+            .loaded
+            .state
+            .drawings
+            .get(&drawing_id)
+            .expect("drawing id located above")
+            .objects
+            .iter()
+            .enumerate()
+            .filter_map(|(fallback_index, object)| match object {
+                DrawingObjectModel::ChartFrame(chart_object) => chart_object
+                    .z_order
+                    .or_else(|| u32::try_from(fallback_index).ok()),
+                DrawingObjectModel::UnsupportedRaw { .. } => u32::try_from(fallback_index).ok(),
+            })
+            .max()
+            .map_or(Some(0), |existing_z_order| existing_z_order.checked_add(1));
+
+        let mut duplicated_chart = source_chart;
+        duplicated_chart.id = new_chart_id;
+        duplicated_chart.workbook_id = workbook_id;
+        duplicated_chart.raw_part_uri = None;
+        duplicated_chart.dirty = true;
+        runtime
+            .loaded
+            .state
+            .charts
+            .insert(new_chart_id, duplicated_chart);
+
+        let mut duplicated_chart_object = source_chart_object;
+        duplicated_chart_object.id = new_chart_object_id;
+        duplicated_chart_object.workbook_id = workbook_id;
+        duplicated_chart_object.host_sheet_id = host_sheet_id;
+        duplicated_chart_object.chart_id = new_chart_id;
+        duplicated_chart_object.name = chart_object_name;
+        duplicated_chart_object.non_visual_id = u32::try_from(new_chart_object_id.0).ok();
+        duplicated_chart_object.raw_binding = None;
+        duplicated_chart_object.z_order = z_order;
+        duplicated_chart_object.dirty = true;
+
+        let drawing = runtime
+            .loaded
+            .state
+            .drawings
+            .get_mut(&drawing_id)
+            .expect("drawing id located above");
+        drawing
+            .objects
+            .push(DrawingObjectModel::ChartFrame(duplicated_chart_object));
+        drawing.dirty = true;
+        runtime.dirty = true;
+
+        Ok(new_chart_object_id)
     }
 
     fn series_model(
@@ -78107,6 +78322,264 @@ mod tests {
                 .expect_err("Chart.CopyPicture rejects unsupported Size")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn chartobject_duplicate_clones_embedded_chart_and_persists() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let original_geometry = ["Left", "Top", "Width", "Height"]
+            .into_iter()
+            .map(|member| {
+                expect_number(
+                    runtime
+                        .dispatch_get(chart_object, member, &[])
+                        .unwrap_or_else(|error| {
+                            panic!("ChartObject.{member} should read geometry: {error:?}")
+                        }),
+                )
+            })
+            .collect::<Vec<_>>();
+        let original_chart_type = expect_number(
+            runtime
+                .dispatch_get(chart, "ChartType", &[])
+                .expect("original Chart.ChartType"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_object, "Duplicate", &[OmValue::Missing])
+                .expect_err("ChartObject.Duplicate rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+
+        let duplicate_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_object, "Duplicate", &[])
+                .expect("ChartObject.Duplicate"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count after duplicate")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(duplicate_chart_object, "Name", &[])
+                    .expect("duplicate ChartObject.Name")
+            ),
+            "Chart 2"
+        );
+        for (member, expected) in ["Left", "Top", "Width", "Height"]
+            .into_iter()
+            .zip(original_geometry)
+        {
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(duplicate_chart_object, member, &[])
+                        .unwrap_or_else(|error| {
+                            panic!("duplicate ChartObject.{member} should read geometry: {error:?}")
+                        })
+                ),
+                expected
+            );
+        }
+        let duplicate_chart = expect_object_handle(
+            runtime
+                .dispatch_get(duplicate_chart_object, "Chart", &[])
+                .expect("duplicate ChartObject.Chart"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(duplicate_chart, "ChartType", &[])
+                    .expect("duplicate Chart.ChartType")
+            ),
+            original_chart_type
+        );
+        runtime
+            .dispatch_set(
+                duplicate_chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_LINE)),
+                &[],
+            )
+            .expect("set duplicate Chart.ChartType");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "ChartType", &[])
+                    .expect("original Chart.ChartType after duplicate edit")
+            ),
+            original_chart_type
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after duplicate"),
+            OmValue::Bool(false)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after ChartObject.Duplicate");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved duplicate package");
+        assert!(saved_package.contains("xl/charts/chart1.xml"));
+        assert!(saved_package.contains("xl/charts/chart2.xml"));
+        let drawing_xml = String::from_utf8(
+            saved_package
+                .part("xl/drawings/drawing1.xml")
+                .expect("saved drawing part")
+                .bytes
+                .clone(),
+        )
+        .expect("drawing XML utf8");
+        assert!(drawing_xml.contains("Chart 2"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after ChartObject.Duplicate");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_objects, "Count", &[])
+                    .expect("reopened ChartObjects.Count")
+            ),
+            2.0
+        );
+        let reopened_duplicate = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(2.0)])
+                .expect("reopened ChartObjects.Item(2)"),
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(reopened_duplicate, "Name", &[])
+                    .expect("reopened duplicate ChartObject.Name")
+            ),
+            "Chart 2"
+        );
+        let reopened_duplicate_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_duplicate, "Chart", &[])
+                .expect("reopened duplicate ChartObject.Chart"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_duplicate_chart, "ChartType", &[])
+                    .expect("reopened duplicate Chart.ChartType")
+            ),
+            f64::from(super::XL_LINE)
+        );
+    }
+
+    #[test]
+    fn chartobjects_duplicate_duplicates_single_collection_member() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_objects, "Duplicate", &[OmValue::Missing])
+                .expect_err("ChartObjects.Duplicate rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+
+        let duplicate_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Duplicate", &[])
+                .expect("ChartObjects.Duplicate"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count after collection duplicate")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(duplicate_chart_object, "Name", &[])
+                    .expect("collection duplicate ChartObject.Name")
+            ),
+            "Chart 2"
         );
     }
 
