@@ -183,6 +183,7 @@ pub struct ChartText {
 pub struct LegendModel {
     pub visible: bool,
     pub position: Option<ChartLegendPosition>,
+    pub include_in_layout: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

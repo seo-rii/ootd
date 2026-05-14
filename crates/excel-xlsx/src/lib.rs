@@ -665,6 +665,7 @@ pub struct ChartPartSummary {
     pub title_text: Option<String>,
     pub has_legend: bool,
     pub legend_position: Option<ChartLegendPosition>,
+    pub legend_include_in_layout: Option<bool>,
     pub vary_by_categories: Option<bool>,
     pub gap_width: Option<u16>,
     pub overlap: Option<i16>,
@@ -3149,6 +3150,7 @@ fn build_chart_model_overlay(
                         LegendModel {
                             visible: true,
                             position: summary.legend_position,
+                            include_in_layout: summary.legend_include_in_layout,
                         }
                     }),
                     vary_by_categories: summary.and_then(|summary| summary.vary_by_categories),
@@ -15986,6 +15988,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut title_text_depth = 0usize;
     let mut has_legend = false;
     let mut legend_position = None;
+    let mut legend_include_in_layout = None;
     let mut vary_by_categories = None;
     let mut gap_width = None;
     let mut overlap = None;
@@ -16172,6 +16175,12 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "t" => Some(ChartLegendPosition::Top),
                         _ => legend_position,
                     };
+                }
+                if local_name == b"overlay"
+                    && element_path.last().is_some_and(|name| name == "legend")
+                {
+                    let overlay = parse_bool_val_attr(&element, &reader)?.unwrap_or(true);
+                    legend_include_in_layout = Some(!overlay);
                 }
                 if local_name == b"varyColors"
                     && element_path
@@ -16516,6 +16525,12 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "t" => Some(ChartLegendPosition::Top),
                         _ => legend_position,
                     };
+                }
+                if local_name == b"overlay"
+                    && element_path.last().is_some_and(|name| name == "legend")
+                {
+                    let overlay = parse_bool_val_attr(&element, &reader)?.unwrap_or(true);
+                    legend_include_in_layout = Some(!overlay);
                 }
                 if local_name == b"varyColors"
                     && element_path
@@ -16955,6 +16970,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         title_text: title_text.filter(|text| !text.is_empty()),
         has_legend,
         legend_position,
+        legend_include_in_layout,
         vary_by_categories,
         gap_width,
         overlap,
@@ -21553,7 +21569,7 @@ mod tests {
       <c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx>
       <c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx>
     </c:plotArea>
-    <c:legend><c:legendPos val="r"/></c:legend>
+    <c:legend><c:legendPos val="r"/><c:overlay val="1"/></c:legend>
     <c:plotVisOnly val="0"/>
     <c:dispBlanksAs val="span"/>
   </c:chart>
@@ -21761,6 +21777,7 @@ mod tests {
             chart_summary.legend_position,
             Some(ChartLegendPosition::Right)
         );
+        assert_eq!(chart_summary.legend_include_in_layout, Some(false));
         assert_eq!(chart_summary.vary_by_categories, Some(true));
         assert_eq!(chart_summary.gap_width, Some(150));
         assert_eq!(chart_summary.overlap, Some(0));
@@ -21886,6 +21903,7 @@ mod tests {
         let legend_model = chart_model.legend.as_ref().expect("chart legend");
         assert!(legend_model.visible);
         assert_eq!(legend_model.position, Some(ChartLegendPosition::Right));
+        assert_eq!(legend_model.include_in_layout, Some(false));
         assert_eq!(chart_model.vary_by_categories, Some(true));
         assert_eq!(chart_model.gap_width, Some(150));
         assert_eq!(chart_model.overlap, Some(0));

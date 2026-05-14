@@ -4337,6 +4337,7 @@ impl ExcelRuntime {
                                         chart.legend = Some(LegendModel {
                                             visible: true,
                                             position: Some(ChartLegendPosition::Right),
+                                            include_in_layout: None,
                                         });
                                         true
                                     }
@@ -4468,6 +4469,42 @@ impl ExcelRuntime {
                             })?;
                         if legend.position != Some(position) {
                             legend.position = Some(position);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "IncludeInLayout" => {
+                        let OmValue::Bool(include_in_layout) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Legend.IncludeInLayout expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let legend = chart
+                            .legend
+                            .as_mut()
+                            .filter(|legend| legend.visible)
+                            .ok_or_else(|| {
+                                OmError::new(OmErrorCode::NotFound, "chart legend not found")
+                            })?;
+                        if legend.include_in_layout != Some(include_in_layout) {
+                            legend.include_in_layout = Some(include_in_layout);
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -8324,13 +8361,16 @@ impl ExcelRuntime {
                                 }
                             }
                             MSO_ELEMENT_LEGEND_RIGHT | MSO_ELEMENT_LEGEND_RIGHT_OVERLAY => {
+                                let include_in_layout = element != MSO_ELEMENT_LEGEND_RIGHT_OVERLAY;
                                 match chart.legend.as_mut() {
                                     Some(legend) => {
                                         if !legend.visible
                                             || legend.position != Some(ChartLegendPosition::Right)
+                                            || legend.include_in_layout != Some(include_in_layout)
                                         {
                                             legend.visible = true;
                                             legend.position = Some(ChartLegendPosition::Right);
+                                            legend.include_in_layout = Some(include_in_layout);
                                             chart.dirty = true;
                                             runtime.dirty = true;
                                         }
@@ -8339,6 +8379,7 @@ impl ExcelRuntime {
                                         chart.legend = Some(LegendModel {
                                             visible: true,
                                             position: Some(ChartLegendPosition::Right),
+                                            include_in_layout: Some(include_in_layout),
                                         });
                                         chart.dirty = true;
                                         runtime.dirty = true;
@@ -8349,9 +8390,11 @@ impl ExcelRuntime {
                                 Some(legend) => {
                                     if !legend.visible
                                         || legend.position != Some(ChartLegendPosition::Top)
+                                        || legend.include_in_layout != Some(true)
                                     {
                                         legend.visible = true;
                                         legend.position = Some(ChartLegendPosition::Top);
+                                        legend.include_in_layout = Some(true);
                                         chart.dirty = true;
                                         runtime.dirty = true;
                                     }
@@ -8360,19 +8403,23 @@ impl ExcelRuntime {
                                     chart.legend = Some(LegendModel {
                                         visible: true,
                                         position: Some(ChartLegendPosition::Top),
+                                        include_in_layout: Some(true),
                                     });
                                     chart.dirty = true;
                                     runtime.dirty = true;
                                 }
                             },
                             MSO_ELEMENT_LEGEND_LEFT | MSO_ELEMENT_LEGEND_LEFT_OVERLAY => {
+                                let include_in_layout = element != MSO_ELEMENT_LEGEND_LEFT_OVERLAY;
                                 match chart.legend.as_mut() {
                                     Some(legend) => {
                                         if !legend.visible
                                             || legend.position != Some(ChartLegendPosition::Left)
+                                            || legend.include_in_layout != Some(include_in_layout)
                                         {
                                             legend.visible = true;
                                             legend.position = Some(ChartLegendPosition::Left);
+                                            legend.include_in_layout = Some(include_in_layout);
                                             chart.dirty = true;
                                             runtime.dirty = true;
                                         }
@@ -8381,6 +8428,7 @@ impl ExcelRuntime {
                                         chart.legend = Some(LegendModel {
                                             visible: true,
                                             position: Some(ChartLegendPosition::Left),
+                                            include_in_layout: Some(include_in_layout),
                                         });
                                         chart.dirty = true;
                                         runtime.dirty = true;
@@ -8391,9 +8439,11 @@ impl ExcelRuntime {
                                 Some(legend) => {
                                     if !legend.visible
                                         || legend.position != Some(ChartLegendPosition::Bottom)
+                                        || legend.include_in_layout != Some(true)
                                     {
                                         legend.visible = true;
                                         legend.position = Some(ChartLegendPosition::Bottom);
+                                        legend.include_in_layout = Some(true);
                                         chart.dirty = true;
                                         runtime.dirty = true;
                                     }
@@ -8402,6 +8452,7 @@ impl ExcelRuntime {
                                     chart.legend = Some(LegendModel {
                                         visible: true,
                                         position: Some(ChartLegendPosition::Bottom),
+                                        include_in_layout: Some(true),
                                     });
                                     chart.dirty = true;
                                     runtime.dirty = true;
@@ -9372,6 +9423,7 @@ impl ExcelRuntime {
                         "Legend",
                         "Name"
                             | "Position"
+                            | "IncludeInLayout"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -12343,6 +12395,7 @@ impl ExcelRuntime {
 
         match member {
             "Name" => Ok(OmValue::Text("Legend".to_string())),
+            "IncludeInLayout" => Ok(OmValue::Bool(legend.include_in_layout.unwrap_or(true))),
             "Position" => {
                 let position = legend.position.ok_or_else(|| {
                     OmError::unsupported("Legend.Position is unavailable for unknown position")
@@ -20244,6 +20297,12 @@ fn patch_loaded_chart_model_xml(
                     legend.position.unwrap_or(ChartLegendPosition::Right),
                 )
             });
+    let expected_legend_include_in_layout = chart
+        .legend
+        .as_ref()
+        .filter(|legend| legend.visible)
+        .and_then(|legend| legend.include_in_layout)
+        .map(|include_in_layout| if include_in_layout { "0" } else { "1" });
     let expected_display_blanks_as = chart
         .display_blanks_as
         .map(chart_display_blanks_as_xml_value);
@@ -20358,6 +20417,9 @@ fn patch_loaded_chart_model_xml(
     let mut legend_removed = false;
     let mut legend_inserted = false;
     let mut legend_position_written = false;
+    let mut legend_overlay_seen = false;
+    let mut legend_overlay_written = false;
+    let mut legend_overlay_inserted = false;
     let mut display_blanks_as_seen = false;
     let mut display_blanks_as_written = false;
     let mut display_blanks_as_inserted = false;
@@ -20927,6 +20989,10 @@ fn patch_loaded_chart_model_xml(
                         buffer.clear();
                         continue;
                     }
+                } else if local_name.as_slice() == b"overlay"
+                    && parent_name == Some(b"legend".as_slice())
+                {
+                    legend_overlay_seen = true;
                 } else if local_name.as_slice() == b"plotVisOnly"
                     && parent_name == Some(b"chart".as_slice())
                 {
@@ -21136,6 +21202,19 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     legend_position_written = true;
+                } else if !wrote_start_element
+                    && local_name.as_slice() == b"overlay"
+                    && parent_name == Some(b"legend".as_slice())
+                    && let Some(value) = expected_legend_include_in_layout
+                {
+                    writer
+                        .write_event(Event::Start(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    legend_overlay_written = true;
                 } else if !wrote_start_element
                     && local_name.as_slice() == b"plotVisOnly"
                     && let Some(value) = expected_plot_visible_only
@@ -21440,6 +21519,10 @@ fn patch_loaded_chart_model_xml(
                         buffer.clear();
                         continue;
                     }
+                } else if local_name.as_slice() == b"overlay"
+                    && parent_name == Some(b"legend".as_slice())
+                {
+                    legend_overlay_seen = true;
                 } else if local_name.as_slice() == b"plotVisOnly"
                     && parent_name == Some(b"chart".as_slice())
                 {
@@ -21541,6 +21624,18 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     legend_position_written = true;
+                } else if local_name.as_slice() == b"overlay"
+                    && parent_name == Some(b"legend".as_slice())
+                    && let Some(value) = expected_legend_include_in_layout
+                {
+                    writer
+                        .write_event(Event::Empty(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    legend_overlay_written = true;
                 } else if local_name.as_slice() == b"plotVisOnly"
                     && let Some(value) = expected_plot_visible_only
                 {
@@ -21982,6 +22077,15 @@ fn patch_loaded_chart_model_xml(
                     writer
                         .write_event(Event::Empty(legend_pos))
                         .map_err(runtime_xml_error)?;
+                    if let Some(value) = expected_legend_include_in_layout {
+                        let mut overlay = BytesStart::new("c:overlay");
+                        overlay.push_attribute(("val", value));
+                        writer
+                            .write_event(Event::Empty(overlay))
+                            .map_err(runtime_xml_error)?;
+                        legend_overlay_inserted = true;
+                        legend_overlay_written = true;
+                    }
                     writer
                         .write_event(Event::End(BytesEnd::new("c:legend")))
                         .map_err(runtime_xml_error)?;
@@ -22228,6 +22332,20 @@ fn patch_loaded_chart_model_xml(
                     current_chart_group_depth = None;
                 }
 
+                if local_name.as_slice() == b"legend"
+                    && expected_legend_position.is_some()
+                    && !legend_overlay_seen
+                    && let Some(value) = expected_legend_include_in_layout
+                {
+                    let mut overlay = BytesStart::new("c:overlay");
+                    overlay.push_attribute(("val", value));
+                    writer
+                        .write_event(Event::Empty(overlay))
+                        .map_err(runtime_xml_error)?;
+                    legend_overlay_inserted = true;
+                    legend_overlay_written = true;
+                }
+
                 if chart_type_from_group_name(local_name.as_slice()).is_some()
                     && chart_type.as_ref() != Some(&chart.chart_type)
                     && let Some(target_local_name) = target_chart_group_name
@@ -22349,6 +22467,16 @@ fn patch_loaded_chart_model_xml(
         (None, true) => legend_removed,
         (None, false) => true,
     };
+    let legend_overlay_matches = match (
+        expected_legend_include_in_layout,
+        legend_seen,
+        legend_overlay_seen,
+    ) {
+        (Some(_), true, true) => legend_overlay_written,
+        (Some(_), true, false) => legend_overlay_inserted,
+        (Some(_), false, _) => legend_overlay_inserted,
+        (None, _, _) => true,
+    };
     let display_blanks_as_matches = match (expected_display_blanks_as, display_blanks_as_seen) {
         (Some(_), true) => display_blanks_as_written,
         (Some(_), false) => display_blanks_as_inserted,
@@ -22463,6 +22591,7 @@ fn patch_loaded_chart_model_xml(
         && patched_sources == expected_dirty_sources
         && title_matches
         && legend_matches
+        && legend_overlay_matches
         && display_blanks_as_matches
         && plot_visible_only_matches
         && rounded_corners_matches
@@ -22671,7 +22800,18 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             let legend_position = chart_legend_position_xml_value(
                 legend.position.unwrap_or(ChartLegendPosition::Right),
             );
-            format!(r#"<c:legend><c:legendPos val="{legend_position}"/></c:legend>"#)
+            let legend_overlay_xml = legend
+                .include_in_layout
+                .map(|include_in_layout| {
+                    format!(
+                        r#"<c:overlay val="{}"/>"#,
+                        if include_in_layout { "0" } else { "1" }
+                    )
+                })
+                .unwrap_or_default();
+            format!(
+                r#"<c:legend><c:legendPos val="{legend_position}"/>{legend_overlay_xml}</c:legend>"#
+            )
         })
         .unwrap_or_default();
     let plot_visible_only_xml = chart
@@ -77927,6 +78067,12 @@ mod tests {
                 .dispatch_get(chart, "Legend", &[])
                 .expect("Chart.Legend"),
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(legend, "IncludeInLayout", &[])
+                .expect("Legend.IncludeInLayout default"),
+            OmValue::Bool(true)
+        );
         runtime
             .dispatch_set(
                 legend,
@@ -77935,6 +78081,9 @@ mod tests {
                 &[],
             )
             .expect("set loaded Legend.Position");
+        runtime
+            .dispatch_set(legend, "IncludeInLayout", OmValue::Bool(false), &[])
+            .expect("set loaded Legend.IncludeInLayout");
         runtime
             .dispatch_set(chart, "PlotVisibleOnly", OmValue::Bool(false), &[])
             .expect("set loaded Chart.PlotVisibleOnly");
@@ -77970,6 +78119,13 @@ mod tests {
                 .code,
             OmErrorCode::Unsupported
         );
+        assert_eq!(
+            runtime
+                .dispatch_set(legend, "IncludeInLayout", OmValue::Number(0.0), &[])
+                .expect_err("Legend.IncludeInLayout rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
 
         let saved = runtime
             .save_workbook(
@@ -77993,6 +78149,7 @@ mod tests {
         assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:content-preserve"/>"#));
         assert!(saved_chart_xml.contains("<a:t>Updated Revenue</a:t>"));
         assert!(saved_chart_xml.contains(r#"<c:legendPos val="l""#));
+        assert!(saved_chart_xml.contains(r#"<c:overlay val="1""#));
         assert!(saved_chart_xml.contains(r#"<c:roundedCorners val="1"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:plotVisOnly val="0"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:dispBlanksAs val="zero"/>"#));
@@ -78060,6 +78217,12 @@ mod tests {
                     .expect("reopened Legend.Position")
             ),
             f64::from(super::XL_LEGEND_POSITION_LEFT)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_legend, "IncludeInLayout", &[])
+                .expect("reopened Legend.IncludeInLayout"),
+            OmValue::Bool(false)
         );
         assert_eq!(
             reopened_runtime
@@ -79932,6 +80095,27 @@ mod tests {
                     .expect("Legend.Position after SetElement left")
             ),
             f64::from(super::XL_LEGEND_POSITION_LEFT)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(legend, "IncludeInLayout", &[])
+                .expect("Legend.IncludeInLayout after SetElement left"),
+            OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_LEGEND_LEFT_OVERLAY,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementLegendLeftOverlay");
+        assert_eq!(
+            runtime
+                .dispatch_get(legend, "IncludeInLayout", &[])
+                .expect("Legend.IncludeInLayout after SetElement left overlay"),
+            OmValue::Bool(false)
         );
         runtime
             .dispatch_invoke(
