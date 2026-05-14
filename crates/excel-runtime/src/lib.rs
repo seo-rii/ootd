@@ -84,6 +84,27 @@ const XL_SURFACE: i32 = 83;
 const XL_SURFACE_WIREFRAME: i32 = 84;
 const XL_SURFACE_TOP_VIEW: i32 = 85;
 const XL_SURFACE_TOP_VIEW_WIREFRAME: i32 = 86;
+const XL_CYLINDER_COL_CLUSTERED: i32 = 92;
+const XL_CYLINDER_COL_STACKED: i32 = 93;
+const XL_CYLINDER_COL_STACKED_100: i32 = 94;
+const XL_CYLINDER_BAR_CLUSTERED: i32 = 95;
+const XL_CYLINDER_BAR_STACKED: i32 = 96;
+const XL_CYLINDER_BAR_STACKED_100: i32 = 97;
+const XL_CYLINDER_COL: i32 = 98;
+const XL_CONE_COL_CLUSTERED: i32 = 99;
+const XL_CONE_COL_STACKED: i32 = 100;
+const XL_CONE_COL_STACKED_100: i32 = 101;
+const XL_CONE_BAR_CLUSTERED: i32 = 102;
+const XL_CONE_BAR_STACKED: i32 = 103;
+const XL_CONE_BAR_STACKED_100: i32 = 104;
+const XL_CONE_COL: i32 = 105;
+const XL_PYRAMID_COL_CLUSTERED: i32 = 106;
+const XL_PYRAMID_COL_STACKED: i32 = 107;
+const XL_PYRAMID_COL_STACKED_100: i32 = 108;
+const XL_PYRAMID_BAR_CLUSTERED: i32 = 109;
+const XL_PYRAMID_BAR_STACKED: i32 = 110;
+const XL_PYRAMID_BAR_STACKED_100: i32 = 111;
+const XL_PYRAMID_COL: i32 = 112;
 const XL_XY_SCATTER: i32 = -4169;
 const XL_XY_SCATTER_SMOOTH: i32 = 72;
 const XL_XY_SCATTER_SMOOTH_NO_MARKERS: i32 = 73;
@@ -3872,9 +3893,30 @@ impl ExcelRuntime {
                             XL_SURFACE_WIREFRAME => ChartType::SurfaceWireframe,
                             XL_SURFACE_TOP_VIEW => ChartType::SurfaceTopView,
                             XL_SURFACE_TOP_VIEW_WIREFRAME => ChartType::SurfaceTopViewWireframe,
+                            XL_CYLINDER_COL => ChartType::CylinderColumn,
+                            XL_CYLINDER_COL_CLUSTERED => ChartType::CylinderColumnClustered,
+                            XL_CYLINDER_COL_STACKED => ChartType::CylinderColumnStacked,
+                            XL_CYLINDER_COL_STACKED_100 => ChartType::CylinderColumnStacked100,
+                            XL_CYLINDER_BAR_CLUSTERED => ChartType::CylinderBarClustered,
+                            XL_CYLINDER_BAR_STACKED => ChartType::CylinderBarStacked,
+                            XL_CYLINDER_BAR_STACKED_100 => ChartType::CylinderBarStacked100,
+                            XL_CONE_COL => ChartType::ConeColumn,
+                            XL_CONE_COL_CLUSTERED => ChartType::ConeColumnClustered,
+                            XL_CONE_COL_STACKED => ChartType::ConeColumnStacked,
+                            XL_CONE_COL_STACKED_100 => ChartType::ConeColumnStacked100,
+                            XL_CONE_BAR_CLUSTERED => ChartType::ConeBarClustered,
+                            XL_CONE_BAR_STACKED => ChartType::ConeBarStacked,
+                            XL_CONE_BAR_STACKED_100 => ChartType::ConeBarStacked100,
+                            XL_PYRAMID_COL => ChartType::PyramidColumn,
+                            XL_PYRAMID_COL_CLUSTERED => ChartType::PyramidColumnClustered,
+                            XL_PYRAMID_COL_STACKED => ChartType::PyramidColumnStacked,
+                            XL_PYRAMID_COL_STACKED_100 => ChartType::PyramidColumnStacked100,
+                            XL_PYRAMID_BAR_CLUSTERED => ChartType::PyramidBarClustered,
+                            XL_PYRAMID_BAR_STACKED => ChartType::PyramidBarStacked,
+                            XL_PYRAMID_BAR_STACKED_100 => ChartType::PyramidBarStacked100,
                             _ => {
                                 return Err(OmError::unsupported(
-                                    "Chart.ChartType supports area, bar, column, line, scatter, bubble, doughnut, pie, and radar chart types",
+                                    "Chart.ChartType supports area, bar, column, line, scatter, bubble, doughnut, pie, radar, surface, and shaped 3D chart types",
                                 ));
                             }
                         };
@@ -19206,7 +19248,28 @@ fn chart_group_xml_name(chart_type: &ChartType) -> Option<&'static str> {
         | ChartType::Column3D
         | ChartType::Column3DClustered
         | ChartType::Column3DStacked
-        | ChartType::Column3DStacked100 => Some("bar3DChart"),
+        | ChartType::Column3DStacked100
+        | ChartType::CylinderColumn
+        | ChartType::CylinderColumnClustered
+        | ChartType::CylinderColumnStacked
+        | ChartType::CylinderColumnStacked100
+        | ChartType::CylinderBarClustered
+        | ChartType::CylinderBarStacked
+        | ChartType::CylinderBarStacked100
+        | ChartType::ConeColumn
+        | ChartType::ConeColumnClustered
+        | ChartType::ConeColumnStacked
+        | ChartType::ConeColumnStacked100
+        | ChartType::ConeBarClustered
+        | ChartType::ConeBarStacked
+        | ChartType::ConeBarStacked100
+        | ChartType::PyramidColumn
+        | ChartType::PyramidColumnClustered
+        | ChartType::PyramidColumnStacked
+        | ChartType::PyramidColumnStacked100
+        | ChartType::PyramidBarClustered
+        | ChartType::PyramidBarStacked
+        | ChartType::PyramidBarStacked100 => Some("bar3DChart"),
         ChartType::Line
         | ChartType::LineMarkers
         | ChartType::LineMarkersStacked
@@ -19251,14 +19314,35 @@ fn chart_type_bar_direction_xml_value(chart_type: &ChartType) -> Option<&'static
         | ChartType::BarStacked100
         | ChartType::Bar3DClustered
         | ChartType::Bar3DStacked
-        | ChartType::Bar3DStacked100 => Some("bar"),
+        | ChartType::Bar3DStacked100
+        | ChartType::CylinderBarClustered
+        | ChartType::CylinderBarStacked
+        | ChartType::CylinderBarStacked100
+        | ChartType::ConeBarClustered
+        | ChartType::ConeBarStacked
+        | ChartType::ConeBarStacked100
+        | ChartType::PyramidBarClustered
+        | ChartType::PyramidBarStacked
+        | ChartType::PyramidBarStacked100 => Some("bar"),
         ChartType::Column
         | ChartType::ColumnStacked
         | ChartType::ColumnStacked100
         | ChartType::Column3D
         | ChartType::Column3DClustered
         | ChartType::Column3DStacked
-        | ChartType::Column3DStacked100 => Some("col"),
+        | ChartType::Column3DStacked100
+        | ChartType::CylinderColumn
+        | ChartType::CylinderColumnClustered
+        | ChartType::CylinderColumnStacked
+        | ChartType::CylinderColumnStacked100
+        | ChartType::ConeColumn
+        | ChartType::ConeColumnClustered
+        | ChartType::ConeColumnStacked
+        | ChartType::ConeColumnStacked100
+        | ChartType::PyramidColumn
+        | ChartType::PyramidColumnClustered
+        | ChartType::PyramidColumnStacked
+        | ChartType::PyramidColumnStacked100 => Some("col"),
         _ => None,
     }
 }
@@ -19271,19 +19355,67 @@ fn chart_type_grouping_xml_value(chart_type: &ChartType) -> Option<&'static str>
         ChartType::Bar
         | ChartType::Column
         | ChartType::Bar3DClustered
-        | ChartType::Column3DClustered => Some("clustered"),
-        ChartType::Column3D => Some("standard"),
+        | ChartType::Column3DClustered
+        | ChartType::CylinderColumnClustered
+        | ChartType::CylinderBarClustered
+        | ChartType::ConeColumnClustered
+        | ChartType::ConeBarClustered
+        | ChartType::PyramidColumnClustered
+        | ChartType::PyramidBarClustered => Some("clustered"),
+        ChartType::Column3D
+        | ChartType::CylinderColumn
+        | ChartType::ConeColumn
+        | ChartType::PyramidColumn => Some("standard"),
         ChartType::BarStacked
         | ChartType::ColumnStacked
         | ChartType::Bar3DStacked
-        | ChartType::Column3DStacked => Some("stacked"),
+        | ChartType::Column3DStacked
+        | ChartType::CylinderColumnStacked
+        | ChartType::CylinderBarStacked
+        | ChartType::ConeColumnStacked
+        | ChartType::ConeBarStacked
+        | ChartType::PyramidColumnStacked
+        | ChartType::PyramidBarStacked => Some("stacked"),
         ChartType::BarStacked100
         | ChartType::ColumnStacked100
         | ChartType::Bar3DStacked100
-        | ChartType::Column3DStacked100 => Some("percentStacked"),
+        | ChartType::Column3DStacked100
+        | ChartType::CylinderColumnStacked100
+        | ChartType::CylinderBarStacked100
+        | ChartType::ConeColumnStacked100
+        | ChartType::ConeBarStacked100
+        | ChartType::PyramidColumnStacked100
+        | ChartType::PyramidBarStacked100 => Some("percentStacked"),
         ChartType::Line | ChartType::LineMarkers => Some("standard"),
         ChartType::LineStacked | ChartType::LineMarkersStacked => Some("stacked"),
         ChartType::LineStacked100 | ChartType::LineMarkersStacked100 => Some("percentStacked"),
+        _ => None,
+    }
+}
+
+fn chart_type_bar_shape_xml_value(chart_type: &ChartType) -> Option<&'static str> {
+    match chart_type {
+        ChartType::CylinderColumn
+        | ChartType::CylinderColumnClustered
+        | ChartType::CylinderColumnStacked
+        | ChartType::CylinderColumnStacked100
+        | ChartType::CylinderBarClustered
+        | ChartType::CylinderBarStacked
+        | ChartType::CylinderBarStacked100 => Some("cylinder"),
+        ChartType::ConeColumn
+        | ChartType::ConeColumnClustered
+        | ChartType::ConeColumnStacked
+        | ChartType::ConeColumnStacked100
+        | ChartType::ConeBarClustered
+        | ChartType::ConeBarStacked
+        | ChartType::ConeBarStacked100 => Some("cone"),
+        ChartType::PyramidColumn
+        | ChartType::PyramidColumnClustered
+        | ChartType::PyramidColumnStacked
+        | ChartType::PyramidColumnStacked100
+        | ChartType::PyramidBarClustered
+        | ChartType::PyramidBarStacked
+        | ChartType::PyramidBarStacked100 => Some("pyramid"),
         _ => None,
     }
 }
@@ -19468,6 +19600,7 @@ fn patch_loaded_chart_model_xml(
         .map(|value| if value { "1" } else { "0" });
     let expected_bar_direction = chart_type_bar_direction_xml_value(&chart.chart_type);
     let expected_chart_grouping = chart_type_grouping_xml_value(&chart.chart_type);
+    let expected_bar_shape = chart_type_bar_shape_xml_value(&chart.chart_type);
     let expected_line_marker = chart_type_line_marker_xml_value(&chart.chart_type);
     let expected_scatter_style = chart_type_scatter_style_xml_value(&chart.chart_type);
     let expected_radar_style = chart_type_radar_style_xml_value(&chart.chart_type);
@@ -19570,6 +19703,9 @@ fn patch_loaded_chart_model_xml(
     let mut chart_grouping_seen = false;
     let mut chart_grouping_written = false;
     let mut chart_grouping_inserted = false;
+    let mut bar_shape_seen = false;
+    let mut bar_shape_written = false;
+    let mut bar_shape_inserted = false;
     let mut line_marker_seen = false;
     let mut line_marker_written = false;
     let mut line_marker_inserted = false;
@@ -20120,6 +20256,15 @@ fn patch_loaded_chart_model_xml(
                     && current_chart_group_depth == Some(element_stack.len())
                 {
                     chart_grouping_seen = true;
+                } else if local_name.as_slice() == b"shape"
+                    && current_chart_group_depth == Some(element_stack.len())
+                {
+                    bar_shape_seen = true;
+                    if expected_bar_shape.is_none() {
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    }
                 } else if local_name.as_slice() == b"marker"
                     && current_chart_group_depth == Some(element_stack.len())
                 {
@@ -20298,6 +20443,18 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     chart_grouping_written = true;
+                } else if !wrote_start_element
+                    && local_name.as_slice() == b"shape"
+                    && let Some(value) = expected_bar_shape
+                {
+                    writer
+                        .write_event(Event::Start(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    bar_shape_written = true;
                 } else if !wrote_start_element
                     && local_name.as_slice() == b"marker"
                     && let Some(value) = expected_line_marker
@@ -20531,6 +20688,14 @@ fn patch_loaded_chart_model_xml(
                     && current_chart_group_depth == Some(element_stack.len())
                 {
                     chart_grouping_seen = true;
+                } else if local_name.as_slice() == b"shape"
+                    && current_chart_group_depth == Some(element_stack.len())
+                {
+                    bar_shape_seen = true;
+                    if expected_bar_shape.is_none() {
+                        buffer.clear();
+                        continue;
+                    }
                 } else if local_name.as_slice() == b"marker"
                     && current_chart_group_depth == Some(element_stack.len())
                 {
@@ -20640,6 +20805,17 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     chart_grouping_written = true;
+                } else if local_name.as_slice() == b"shape"
+                    && let Some(value) = expected_bar_shape
+                {
+                    writer
+                        .write_event(Event::Empty(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    bar_shape_written = true;
                 } else if local_name.as_slice() == b"marker"
                     && let Some(value) = expected_line_marker
                 {
@@ -21113,6 +21289,15 @@ fn patch_loaded_chart_model_xml(
                         chart_grouping_inserted = true;
                         chart_grouping_written = true;
                     }
+                    if !bar_shape_seen && let Some(value) = expected_bar_shape {
+                        let mut bar_shape = BytesStart::new("c:shape");
+                        bar_shape.push_attribute(("val", value));
+                        writer
+                            .write_event(Event::Empty(bar_shape))
+                            .map_err(runtime_xml_error)?;
+                        bar_shape_inserted = true;
+                        bar_shape_written = true;
+                    }
                     if !line_marker_seen && let Some(value) = expected_line_marker {
                         let mut line_marker = BytesStart::new("c:marker");
                         line_marker.push_attribute(("val", value));
@@ -21346,6 +21531,11 @@ fn patch_loaded_chart_model_xml(
         (Some(_), false) => chart_grouping_inserted,
         (None, _) => true,
     };
+    let bar_shape_matches = match (expected_bar_shape, bar_shape_seen) {
+        (Some(_), true) => bar_shape_written,
+        (Some(_), false) => bar_shape_inserted,
+        (None, _) => true,
+    };
     let line_marker_matches = match (expected_line_marker, line_marker_seen) {
         (Some(_), true) => line_marker_written,
         (Some(_), false) => line_marker_inserted,
@@ -21429,6 +21619,7 @@ fn patch_loaded_chart_model_xml(
         && vary_colors_matches
         && bar_direction_matches
         && chart_grouping_matches
+        && bar_shape_matches
         && line_marker_matches
         && scatter_style_matches
         && radar_style_matches
@@ -21496,6 +21687,9 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
         .unwrap_or_default();
     let chart_grouping_xml = chart_type_grouping_xml_value(&chart.chart_type)
         .map(|value| format!(r#"<c:grouping val="{value}"/>"#))
+        .unwrap_or_default();
+    let bar_shape_xml = chart_type_bar_shape_xml_value(&chart.chart_type)
+        .map(|value| format!(r#"<c:shape val="{value}"/>"#))
         .unwrap_or_default();
     let line_marker_xml = chart_type_line_marker_xml_value(&chart.chart_type)
         .map(|value| format!(r#"<c:marker val="{value}"/>"#))
@@ -21661,7 +21855,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
+  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{bar_shape_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -21714,6 +21908,27 @@ fn chart_type_to_excel_value(chart_type: &ChartType) -> OmResult<i32> {
         ChartType::SurfaceWireframe => Ok(XL_SURFACE_WIREFRAME),
         ChartType::SurfaceTopView => Ok(XL_SURFACE_TOP_VIEW),
         ChartType::SurfaceTopViewWireframe => Ok(XL_SURFACE_TOP_VIEW_WIREFRAME),
+        ChartType::CylinderColumn => Ok(XL_CYLINDER_COL),
+        ChartType::CylinderColumnClustered => Ok(XL_CYLINDER_COL_CLUSTERED),
+        ChartType::CylinderColumnStacked => Ok(XL_CYLINDER_COL_STACKED),
+        ChartType::CylinderColumnStacked100 => Ok(XL_CYLINDER_COL_STACKED_100),
+        ChartType::CylinderBarClustered => Ok(XL_CYLINDER_BAR_CLUSTERED),
+        ChartType::CylinderBarStacked => Ok(XL_CYLINDER_BAR_STACKED),
+        ChartType::CylinderBarStacked100 => Ok(XL_CYLINDER_BAR_STACKED_100),
+        ChartType::ConeColumn => Ok(XL_CONE_COL),
+        ChartType::ConeColumnClustered => Ok(XL_CONE_COL_CLUSTERED),
+        ChartType::ConeColumnStacked => Ok(XL_CONE_COL_STACKED),
+        ChartType::ConeColumnStacked100 => Ok(XL_CONE_COL_STACKED_100),
+        ChartType::ConeBarClustered => Ok(XL_CONE_BAR_CLUSTERED),
+        ChartType::ConeBarStacked => Ok(XL_CONE_BAR_STACKED),
+        ChartType::ConeBarStacked100 => Ok(XL_CONE_BAR_STACKED_100),
+        ChartType::PyramidColumn => Ok(XL_PYRAMID_COL),
+        ChartType::PyramidColumnClustered => Ok(XL_PYRAMID_COL_CLUSTERED),
+        ChartType::PyramidColumnStacked => Ok(XL_PYRAMID_COL_STACKED),
+        ChartType::PyramidColumnStacked100 => Ok(XL_PYRAMID_COL_STACKED_100),
+        ChartType::PyramidBarClustered => Ok(XL_PYRAMID_BAR_CLUSTERED),
+        ChartType::PyramidBarStacked => Ok(XL_PYRAMID_BAR_STACKED),
+        ChartType::PyramidBarStacked100 => Ok(XL_PYRAMID_BAR_STACKED_100),
         ChartType::Unknown => Err(OmError::unsupported(
             "Chart.ChartType is unavailable for unknown chart types",
         )),
@@ -80225,6 +80440,195 @@ mod tests {
                     read_only: false,
                 })
                 .expect("reopen workbook after loaded chart type edit");
+            let reopened_worksheet = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                    .expect("reopened Workbook.Worksheets(1)"),
+            );
+            let reopened_chart_objects = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                    .expect("reopened Worksheet.ChartObjects"),
+            );
+            let reopened_chart_object = expect_object_handle(
+                reopened_runtime
+                    .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                    .expect("reopened ChartObjects.Item(1)"),
+            );
+            let reopened_chart = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_object, "Chart", &[])
+                    .expect("reopened ChartObject.Chart"),
+            );
+            assert_eq!(
+                expect_number(
+                    reopened_runtime
+                        .dispatch_get(reopened_chart, "ChartType", &[])
+                        .expect("reopened Chart.ChartType")
+                ),
+                f64::from(chart_type_value)
+            );
+        }
+    }
+
+    #[test]
+    fn loaded_chart_type_setter_rewrites_shaped_3d_chart_types_on_save() {
+        for (chart_type_value, expected_bar_direction, expected_grouping, expected_shape) in [
+            (
+                super::XL_CYLINDER_COL_CLUSTERED,
+                "col",
+                "clustered",
+                "cylinder",
+            ),
+            (super::XL_CYLINDER_COL_STACKED, "col", "stacked", "cylinder"),
+            (
+                super::XL_CYLINDER_COL_STACKED_100,
+                "col",
+                "percentStacked",
+                "cylinder",
+            ),
+            (super::XL_CYLINDER_COL, "col", "standard", "cylinder"),
+            (
+                super::XL_CYLINDER_BAR_CLUSTERED,
+                "bar",
+                "clustered",
+                "cylinder",
+            ),
+            (super::XL_CYLINDER_BAR_STACKED, "bar", "stacked", "cylinder"),
+            (
+                super::XL_CYLINDER_BAR_STACKED_100,
+                "bar",
+                "percentStacked",
+                "cylinder",
+            ),
+            (super::XL_CONE_COL_CLUSTERED, "col", "clustered", "cone"),
+            (super::XL_CONE_COL_STACKED, "col", "stacked", "cone"),
+            (
+                super::XL_CONE_COL_STACKED_100,
+                "col",
+                "percentStacked",
+                "cone",
+            ),
+            (super::XL_CONE_COL, "col", "standard", "cone"),
+            (super::XL_CONE_BAR_CLUSTERED, "bar", "clustered", "cone"),
+            (super::XL_CONE_BAR_STACKED, "bar", "stacked", "cone"),
+            (
+                super::XL_CONE_BAR_STACKED_100,
+                "bar",
+                "percentStacked",
+                "cone",
+            ),
+            (
+                super::XL_PYRAMID_COL_CLUSTERED,
+                "col",
+                "clustered",
+                "pyramid",
+            ),
+            (super::XL_PYRAMID_COL_STACKED, "col", "stacked", "pyramid"),
+            (
+                super::XL_PYRAMID_COL_STACKED_100,
+                "col",
+                "percentStacked",
+                "pyramid",
+            ),
+            (super::XL_PYRAMID_COL, "col", "standard", "pyramid"),
+            (
+                super::XL_PYRAMID_BAR_CLUSTERED,
+                "bar",
+                "clustered",
+                "pyramid",
+            ),
+            (super::XL_PYRAMID_BAR_STACKED, "bar", "stacked", "pyramid"),
+            (
+                super::XL_PYRAMID_BAR_STACKED_100,
+                "bar",
+                "percentStacked",
+                "pyramid",
+            ),
+        ] {
+            let mut runtime = ExcelRuntime::new();
+            let workbook = runtime
+                .open_workbook(OpenWorkbookSpec {
+                    bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                })
+                .expect("open workbook with embedded chart");
+            let worksheet = expect_object_handle(
+                runtime
+                    .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                    .expect("Workbook.Worksheets(1)"),
+            );
+            let chart_objects = expect_object_handle(
+                runtime
+                    .dispatch_get(worksheet, "ChartObjects", &[])
+                    .expect("Worksheet.ChartObjects"),
+            );
+            let chart_object = expect_object_handle(
+                runtime
+                    .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                    .expect("ChartObjects.Item(1)"),
+            );
+            let chart = expect_object_handle(
+                runtime
+                    .dispatch_get(chart_object, "Chart", &[])
+                    .expect("ChartObject.Chart"),
+            );
+            runtime
+                .dispatch_set(
+                    chart,
+                    "ChartType",
+                    OmValue::Number(f64::from(chart_type_value)),
+                    &[],
+                )
+                .expect("set loaded Chart.ChartType");
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(chart, "ChartType", &[])
+                        .expect("Chart.ChartType after set")
+                ),
+                f64::from(chart_type_value)
+            );
+
+            let saved = runtime
+                .save_workbook(
+                    workbook,
+                    SaveWorkbookSpec {
+                        format: FileFormat::Xlsx,
+                        profile: ExcelProfile::Excel365,
+                        lossless: true,
+                    },
+                )
+                .expect("save workbook after shaped chart type edit");
+            let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+            let saved_chart_xml = std::str::from_utf8(
+                saved_package
+                    .part("xl/charts/chart1.xml")
+                    .expect("saved chart part")
+                    .bytes
+                    .as_slice(),
+            )
+            .expect("saved chart xml utf8");
+            assert!(saved_chart_xml.contains("<c:bar3DChart>"));
+            assert!(
+                saved_chart_xml.contains(&format!(r#"<c:barDir val="{expected_bar_direction}"/>"#))
+            );
+            assert!(
+                saved_chart_xml.contains(&format!(r#"<c:grouping val="{expected_grouping}"/>"#))
+            );
+            assert!(saved_chart_xml.contains(&format!(r#"<c:shape val="{expected_shape}"/>"#)));
+
+            let mut reopened_runtime = ExcelRuntime::new();
+            let reopened_workbook = reopened_runtime
+                .open_workbook(OpenWorkbookSpec {
+                    bytes: saved,
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                })
+                .expect("reopen workbook after shaped chart type edit");
             let reopened_worksheet = expect_object_handle(
                 reopened_runtime
                     .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])

@@ -656,6 +656,7 @@ pub struct ChartPartSummary {
     pub chart_type_names: Vec<String>,
     pub bar_direction: Option<String>,
     pub chart_grouping: Option<String>,
+    pub bar_shape: Option<String>,
     pub line_has_markers: Option<bool>,
     pub scatter_style: Option<String>,
     pub radar_style: Option<String>,
@@ -3353,13 +3354,41 @@ fn chart_type_from_summary(summary: Option<&ChartPartSummary>) -> ChartType {
         Some("bar3DChart") => match (
             summary.bar_direction.as_deref(),
             summary.chart_grouping.as_deref(),
+            summary.bar_shape.as_deref(),
         ) {
-            (Some("col"), Some("stacked")) => ChartType::Column3DStacked,
-            (Some("col"), Some("percentStacked")) => ChartType::Column3DStacked100,
-            (Some("col"), Some("clustered")) => ChartType::Column3DClustered,
-            (Some("col"), _) => ChartType::Column3D,
-            (_, Some("stacked")) => ChartType::Bar3DStacked,
-            (_, Some("percentStacked")) => ChartType::Bar3DStacked100,
+            (Some("col"), Some("stacked"), Some("cylinder")) => ChartType::CylinderColumnStacked,
+            (Some("col"), Some("percentStacked"), Some("cylinder")) => {
+                ChartType::CylinderColumnStacked100
+            }
+            (Some("col"), Some("clustered"), Some("cylinder")) => {
+                ChartType::CylinderColumnClustered
+            }
+            (Some("col"), _, Some("cylinder")) => ChartType::CylinderColumn,
+            (_, Some("stacked"), Some("cylinder")) => ChartType::CylinderBarStacked,
+            (_, Some("percentStacked"), Some("cylinder")) => ChartType::CylinderBarStacked100,
+            (_, _, Some("cylinder")) => ChartType::CylinderBarClustered,
+            (Some("col"), Some("stacked"), Some("cone")) => ChartType::ConeColumnStacked,
+            (Some("col"), Some("percentStacked"), Some("cone")) => ChartType::ConeColumnStacked100,
+            (Some("col"), Some("clustered"), Some("cone")) => ChartType::ConeColumnClustered,
+            (Some("col"), _, Some("cone")) => ChartType::ConeColumn,
+            (_, Some("stacked"), Some("cone")) => ChartType::ConeBarStacked,
+            (_, Some("percentStacked"), Some("cone")) => ChartType::ConeBarStacked100,
+            (_, _, Some("cone")) => ChartType::ConeBarClustered,
+            (Some("col"), Some("stacked"), Some("pyramid")) => ChartType::PyramidColumnStacked,
+            (Some("col"), Some("percentStacked"), Some("pyramid")) => {
+                ChartType::PyramidColumnStacked100
+            }
+            (Some("col"), Some("clustered"), Some("pyramid")) => ChartType::PyramidColumnClustered,
+            (Some("col"), _, Some("pyramid")) => ChartType::PyramidColumn,
+            (_, Some("stacked"), Some("pyramid")) => ChartType::PyramidBarStacked,
+            (_, Some("percentStacked"), Some("pyramid")) => ChartType::PyramidBarStacked100,
+            (_, _, Some("pyramid")) => ChartType::PyramidBarClustered,
+            (Some("col"), Some("stacked"), _) => ChartType::Column3DStacked,
+            (Some("col"), Some("percentStacked"), _) => ChartType::Column3DStacked100,
+            (Some("col"), Some("clustered"), _) => ChartType::Column3DClustered,
+            (Some("col"), _, _) => ChartType::Column3D,
+            (_, Some("stacked"), _) => ChartType::Bar3DStacked,
+            (_, Some("percentStacked"), _) => ChartType::Bar3DStacked100,
             _ => ChartType::Bar3DClustered,
         },
         Some("lineChart") => match (summary.chart_grouping.as_deref(), summary.line_has_markers) {
@@ -15910,6 +15939,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut chart_type_names = Vec::new();
     let mut bar_direction = None::<String>;
     let mut chart_grouping = None::<String>;
+    let mut bar_shape = None::<String>;
     let mut line_has_markers = None;
     let mut scatter_style = None::<String>;
     let mut radar_style = None::<String>;
@@ -16131,6 +16161,16 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     chart_grouping = match value.as_str() {
                         "clustered" | "stacked" | "percentStacked" | "standard" => Some(value),
                         _ => chart_grouping,
+                    };
+                }
+                if local_name == b"shape"
+                    && element_path.last().is_some_and(|name| name == "bar3DChart")
+                    && bar_shape.is_none()
+                    && let Some(value) = parse_string_val_attr(&element, &reader)?
+                {
+                    bar_shape = match value.as_str() {
+                        "box" | "cone" | "cylinder" | "pyramid" => Some(value),
+                        _ => bar_shape,
                     };
                 }
                 if local_name == b"marker"
@@ -16452,6 +16492,16 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     chart_grouping = match value.as_str() {
                         "clustered" | "stacked" | "percentStacked" | "standard" => Some(value),
                         _ => chart_grouping,
+                    };
+                }
+                if local_name == b"shape"
+                    && element_path.last().is_some_and(|name| name == "bar3DChart")
+                    && bar_shape.is_none()
+                    && let Some(value) = parse_string_val_attr(&element, &reader)?
+                {
+                    bar_shape = match value.as_str() {
+                        "box" | "cone" | "cylinder" | "pyramid" => Some(value),
+                        _ => bar_shape,
                     };
                 }
                 if local_name == b"marker"
@@ -16819,6 +16869,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         chart_type_names,
         bar_direction,
         chart_grouping,
+        bar_shape,
         line_has_markers,
         scatter_style,
         radar_style,
@@ -21618,6 +21669,7 @@ mod tests {
         assert_eq!(chart_summary.chart_type_names, vec!["barChart".to_string()]);
         assert_eq!(chart_summary.bar_direction, None);
         assert_eq!(chart_summary.chart_grouping, None);
+        assert_eq!(chart_summary.bar_shape, None);
         assert_eq!(chart_summary.line_has_markers, None);
         assert_eq!(chart_summary.scatter_style, None);
         assert_eq!(chart_summary.radar_style, None);
