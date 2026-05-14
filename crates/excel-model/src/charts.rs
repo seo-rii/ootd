@@ -29,6 +29,8 @@ pub struct ChartModel {
     pub has_up_down_bars: Option<bool>,
     pub first_slice_angle: Option<u16>,
     pub bubble_scale: Option<u16>,
+    pub show_negative_bubbles: Option<bool>,
+    pub has_3d_shading: Option<bool>,
     pub doughnut_hole_size: Option<u16>,
     pub second_plot_size: Option<u16>,
     pub size_represents: Option<ChartSizeRepresents>,
@@ -46,6 +48,7 @@ pub enum ChartType {
     Bar,
     Line,
     Scatter,
+    Bubble,
     Pie,
     Unsupported(String),
 }

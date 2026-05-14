@@ -666,6 +666,8 @@ pub struct ChartPartSummary {
     pub has_up_down_bars: Option<bool>,
     pub first_slice_angle: Option<u16>,
     pub bubble_scale: Option<u16>,
+    pub show_negative_bubbles: Option<bool>,
+    pub has_3d_shading: Option<bool>,
     pub doughnut_hole_size: Option<u16>,
     pub second_plot_size: Option<u16>,
     pub size_represents: Option<ChartSizeRepresents>,
@@ -3146,6 +3148,9 @@ fn build_chart_model_overlay(
                     has_up_down_bars: summary.and_then(|summary| summary.has_up_down_bars),
                     first_slice_angle: summary.and_then(|summary| summary.first_slice_angle),
                     bubble_scale: summary.and_then(|summary| summary.bubble_scale),
+                    show_negative_bubbles: summary
+                        .and_then(|summary| summary.show_negative_bubbles),
+                    has_3d_shading: summary.and_then(|summary| summary.has_3d_shading),
                     doughnut_hole_size: summary.and_then(|summary| summary.doughnut_hole_size),
                     second_plot_size: summary.and_then(|summary| summary.second_plot_size),
                     size_represents: summary.and_then(|summary| summary.size_represents),
@@ -3320,6 +3325,7 @@ fn chart_type_from_summary(summary: Option<&ChartPartSummary>) -> ChartType {
         Some("barChart") => ChartType::Bar,
         Some("lineChart") => ChartType::Line,
         Some("scatterChart") => ChartType::Scatter,
+        Some("bubbleChart") => ChartType::Bubble,
         Some("pieChart") => ChartType::Pie,
         Some(chart_type_name) => ChartType::Unsupported(chart_type_name.to_string()),
         None => ChartType::Unknown,
@@ -15831,6 +15837,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut has_up_down_bars = None;
     let mut first_slice_angle = None;
     let mut bubble_scale = None;
+    let mut show_negative_bubbles = None;
+    let mut has_3d_shading = None;
     let mut doughnut_hole_size = None;
     let mut second_plot_size = None;
     let mut size_represents = None;
@@ -16075,6 +16083,20 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 {
                     bubble_scale = Some(value as u16);
                 }
+                if local_name == b"showNegBubbles"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                {
+                    show_negative_bubbles = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                }
+                if local_name == b"bubble3D"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                {
+                    has_3d_shading = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                }
                 if local_name == b"holeSize"
                     && element_path
                         .last()
@@ -16314,6 +16336,20 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && (0..=300).contains(&value)
                 {
                     bubble_scale = Some(value as u16);
+                }
+                if local_name == b"showNegBubbles"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                {
+                    show_negative_bubbles = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                }
+                if local_name == b"bubble3D"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                {
+                    has_3d_shading = parse_bool_val_attr(&element, &reader)?.or(Some(true));
                 }
                 if local_name == b"holeSize"
                     && element_path
@@ -16568,6 +16604,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         has_up_down_bars,
         first_slice_angle,
         bubble_scale,
+        show_negative_bubbles,
+        has_3d_shading,
         doughnut_hole_size,
         second_plot_size,
         size_represents,
@@ -21137,6 +21175,8 @@ mod tests {
         <c:overlap val="0"/>
         <c:firstSliceAng val="25"/>
         <c:bubbleScale val="125"/>
+        <c:showNegBubbles val="1"/>
+        <c:bubble3D val="1"/>
         <c:holeSize val="65"/>
         <c:secondPieSize val="80"/>
         <c:sizeRepresents val="w"/>
@@ -21359,6 +21399,8 @@ mod tests {
         assert_eq!(chart_summary.has_up_down_bars, Some(true));
         assert_eq!(chart_summary.first_slice_angle, Some(25));
         assert_eq!(chart_summary.bubble_scale, Some(125));
+        assert_eq!(chart_summary.show_negative_bubbles, Some(true));
+        assert_eq!(chart_summary.has_3d_shading, Some(true));
         assert_eq!(chart_summary.doughnut_hole_size, Some(65));
         assert_eq!(chart_summary.second_plot_size, Some(80));
         assert_eq!(
@@ -21478,6 +21520,8 @@ mod tests {
         assert_eq!(chart_model.has_up_down_bars, Some(true));
         assert_eq!(chart_model.first_slice_angle, Some(25));
         assert_eq!(chart_model.bubble_scale, Some(125));
+        assert_eq!(chart_model.show_negative_bubbles, Some(true));
+        assert_eq!(chart_model.has_3d_shading, Some(true));
         assert_eq!(chart_model.doughnut_hole_size, Some(65));
         assert_eq!(chart_model.second_plot_size, Some(80));
         assert_eq!(

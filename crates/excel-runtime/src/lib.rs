@@ -46,6 +46,7 @@ const XL_SHEET_TYPE_EXCEL4_MACRO_SHEET: i32 = 3;
 const XL_SHEET_TYPE_EXCEL4_INTL_MACRO_SHEET: i32 = 4;
 const XL_LINE: i32 = 4;
 const XL_PIE: i32 = 5;
+const XL_BUBBLE: i32 = 15;
 const XL_BAR_CLUSTERED: i32 = 57;
 const XL_XY_SCATTER: i32 = -4169;
 const XL_CATEGORY: i32 = 1;
@@ -3432,6 +3433,46 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
+                    "ShowNegativeBubbles" | "Has3DShading" => {
+                        let OmValue::Bool(enabled) = value else {
+                            return Err(OmError::type_mismatch(format!(
+                                "ChartGroup.{member} expects a boolean value"
+                            )));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        if group_index != 0 {
+                            return Err(OmError::new(
+                                OmErrorCode::NotFound,
+                                "chart group not found",
+                            ));
+                        }
+                        let target = match member {
+                            "ShowNegativeBubbles" => &mut chart.show_negative_bubbles,
+                            "Has3DShading" => &mut chart.has_3d_shading,
+                            _ => unreachable!(),
+                        };
+                        if *target != Some(enabled) {
+                            *target = Some(enabled);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     "GapWidth" | "Overlap" | "FirstSliceAngle" | "BubbleScale"
                     | "DoughnutHoleSize" | "SecondPlotSize" => {
                         let numeric_value = coerce_i32_arg(&value, format!("ChartGroup.{member}"))?;
@@ -3749,10 +3790,11 @@ impl ExcelRuntime {
                             XL_BAR_CLUSTERED => ChartType::Bar,
                             XL_LINE => ChartType::Line,
                             XL_XY_SCATTER => ChartType::Scatter,
+                            XL_BUBBLE => ChartType::Bubble,
                             XL_PIE => ChartType::Pie,
                             _ => {
                                 return Err(OmError::unsupported(
-                                    "Chart.ChartType supports bar, line, scatter, and pie chart types",
+                                    "Chart.ChartType supports bar, line, scatter, bubble, and pie chart types",
                                 ));
                             }
                         };
@@ -8977,6 +9019,8 @@ impl ExcelRuntime {
                             | "HasUpDownBars"
                             | "FirstSliceAngle"
                             | "BubbleScale"
+                            | "ShowNegativeBubbles"
+                            | "Has3DShading"
                             | "DoughnutHoleSize"
                             | "SecondPlotSize"
                             | "SizeRepresents"
@@ -11099,6 +11143,8 @@ impl ExcelRuntime {
                             has_up_down_bars: None,
                             first_slice_angle: None,
                             bubble_scale: None,
+                            show_negative_bubbles: None,
+                            has_3d_shading: None,
                             doughnut_hole_size: None,
                             second_plot_size: None,
                             size_represents: None,
@@ -11965,6 +12011,10 @@ impl ExcelRuntime {
                     "BubbleScale" => Ok(OmValue::Number(f64::from(
                         chart.bubble_scale.unwrap_or(100),
                     ))),
+                    "ShowNegativeBubbles" => {
+                        Ok(OmValue::Bool(chart.show_negative_bubbles.unwrap_or(false)))
+                    }
+                    "Has3DShading" => Ok(OmValue::Bool(chart.has_3d_shading.unwrap_or(false))),
                     "DoughnutHoleSize" => Ok(OmValue::Number(f64::from(
                         chart.doughnut_hole_size.unwrap_or(75),
                     ))),
@@ -13968,6 +14018,8 @@ impl ExcelRuntime {
                         has_up_down_bars: None,
                         first_slice_angle: None,
                         bubble_scale: None,
+                        show_negative_bubbles: None,
+                        has_3d_shading: None,
                         doughnut_hole_size: None,
                         second_plot_size: None,
                         size_represents: None,
@@ -19032,6 +19084,7 @@ fn chart_type_from_group_name(local_name: &[u8]) -> Option<ChartType> {
         b"barChart" => Some(ChartType::Bar),
         b"lineChart" => Some(ChartType::Line),
         b"scatterChart" => Some(ChartType::Scatter),
+        b"bubbleChart" => Some(ChartType::Bubble),
         b"pieChart" => Some(ChartType::Pie),
         _ => None,
     }
@@ -19042,6 +19095,7 @@ fn chart_group_xml_name(chart_type: &ChartType) -> Option<&'static str> {
         ChartType::Bar => Some("barChart"),
         ChartType::Line => Some("lineChart"),
         ChartType::Scatter => Some("scatterChart"),
+        ChartType::Bubble => Some("bubbleChart"),
         ChartType::Pie => Some("pieChart"),
         ChartType::Unknown | ChartType::Unsupported(_) => None,
     }
@@ -19172,6 +19226,12 @@ fn patch_loaded_chart_model_xml(
     let expected_overlap = chart.overlap.map(|value| value.to_string());
     let expected_first_slice_angle = chart.first_slice_angle.map(|value| value.to_string());
     let expected_bubble_scale = chart.bubble_scale.map(|value| value.to_string());
+    let expected_show_negative_bubbles = chart
+        .show_negative_bubbles
+        .map(|value| if value { "1" } else { "0" });
+    let expected_has_3d_shading = chart
+        .has_3d_shading
+        .map(|value| if value { "1" } else { "0" });
     let expected_doughnut_hole_size = chart.doughnut_hole_size.map(|value| value.to_string());
     let expected_second_plot_size = chart.second_plot_size.map(|value| value.to_string());
     let expected_size_represents = chart.size_represents.map(chart_size_represents_xml_value);
@@ -19190,13 +19250,19 @@ fn patch_loaded_chart_model_xml(
         (b"hiLowLines", "c:hiLowLines", chart.has_hi_lo_lines),
         (b"upDownBars", "c:upDownBars", chart.has_up_down_bars),
     ];
-    let expected_chart_group_numeric_settings: [(&[u8], &str, Option<&str>); 7] = [
+    let expected_chart_group_numeric_settings: [(&[u8], &str, Option<&str>); 9] = [
         (
             b"firstSliceAng",
             "c:firstSliceAng",
             expected_first_slice_angle,
         ),
         (b"bubbleScale", "c:bubbleScale", expected_bubble_scale),
+        (
+            b"showNegBubbles",
+            "c:showNegBubbles",
+            expected_show_negative_bubbles,
+        ),
+        (b"bubble3D", "c:bubble3D", expected_has_3d_shading),
         (b"holeSize", "c:holeSize", expected_doughnut_hole_size),
         (
             b"secondPieSize",
@@ -19257,9 +19323,9 @@ fn patch_loaded_chart_model_xml(
     let mut chart_group_line_flag_written = [false; 4];
     let mut chart_group_line_flag_inserted = [false; 4];
     let mut chart_group_line_flag_removed = [false; 4];
-    let mut chart_group_numeric_setting_seen = [false; 7];
-    let mut chart_group_numeric_setting_written = [false; 7];
-    let mut chart_group_numeric_setting_inserted = [false; 7];
+    let mut chart_group_numeric_setting_seen = [false; 9];
+    let mut chart_group_numeric_setting_written = [false; 9];
+    let mut chart_group_numeric_setting_inserted = [false; 9];
     let mut current_axis_index = None::<usize>;
     let mut axis_kinds = Vec::<ChartAxisKind>::new();
     let mut axis_title_texts = Vec::<Option<String>>::new();
@@ -19429,8 +19495,8 @@ fn patch_loaded_chart_model_xml(
     let source_container_target_local_name = |slot: ChartSourceXmlSlot| -> &'static str {
         match (&chart.chart_type, slot) {
             (_, ChartSourceXmlSlot::Name) => "tx",
-            (&ChartType::Scatter, ChartSourceXmlSlot::XValues) => "xVal",
-            (&ChartType::Scatter, ChartSourceXmlSlot::Values) => "yVal",
+            (&ChartType::Scatter | &ChartType::Bubble, ChartSourceXmlSlot::XValues) => "xVal",
+            (&ChartType::Scatter | &ChartType::Bubble, ChartSourceXmlSlot::Values) => "yVal",
             (_, ChartSourceXmlSlot::XValues) => "cat",
             (_, ChartSourceXmlSlot::Values) => "val",
         }
@@ -19438,8 +19504,12 @@ fn patch_loaded_chart_model_xml(
     let source_container_names = |slot: ChartSourceXmlSlot| -> (&'static str, &'static str) {
         match (&chart.chart_type, slot) {
             (_, ChartSourceXmlSlot::Name) => ("c:tx", "c:strRef"),
-            (&ChartType::Scatter, ChartSourceXmlSlot::XValues) => ("c:xVal", "c:numRef"),
-            (&ChartType::Scatter, ChartSourceXmlSlot::Values) => ("c:yVal", "c:numRef"),
+            (&ChartType::Scatter | &ChartType::Bubble, ChartSourceXmlSlot::XValues) => {
+                ("c:xVal", "c:numRef")
+            }
+            (&ChartType::Scatter | &ChartType::Bubble, ChartSourceXmlSlot::Values) => {
+                ("c:yVal", "c:numRef")
+            }
             (_, ChartSourceXmlSlot::XValues) => ("c:cat", "c:strRef"),
             (_, ChartSourceXmlSlot::Values) => ("c:val", "c:numRef"),
         }
@@ -20794,22 +20864,24 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
         }
         if let Some(x_values) = series.x_values.as_ref() {
             let formula = partial_escape(x_values.raw.text.trim_start_matches('=')).to_string();
-            let (container_name, reference_name) = if chart.chart_type == ChartType::Scatter {
-                ("xVal", "numRef")
-            } else {
-                ("cat", "strRef")
-            };
+            let (container_name, reference_name) =
+                if matches!(chart.chart_type, ChartType::Scatter | ChartType::Bubble) {
+                    ("xVal", "numRef")
+                } else {
+                    ("cat", "strRef")
+                };
             series_xml.push_str(&format!(
                 r#"<c:{container_name}><c:{reference_name}><c:f>{formula}</c:f></c:{reference_name}></c:{container_name}>"#
             ));
         }
         if let Some(values) = series.values.as_ref() {
             let formula = partial_escape(values.raw.text.trim_start_matches('=')).to_string();
-            let (container_name, reference_name) = if chart.chart_type == ChartType::Scatter {
-                ("yVal", "numRef")
-            } else {
-                ("val", "numRef")
-            };
+            let (container_name, reference_name) =
+                if matches!(chart.chart_type, ChartType::Scatter | ChartType::Bubble) {
+                    ("yVal", "numRef")
+                } else {
+                    ("val", "numRef")
+                };
             series_xml.push_str(&format!(
                 r#"<c:{container_name}><c:{reference_name}><c:f>{formula}</c:f></c:{reference_name}></c:{container_name}>"#
             ));
@@ -20858,6 +20930,19 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     let bubble_scale_xml = chart
         .bubble_scale
         .map(|value| format!(r#"<c:bubbleScale val="{value}"/>"#))
+        .unwrap_or_default();
+    let show_negative_bubbles_xml = chart
+        .show_negative_bubbles
+        .map(|value| {
+            format!(
+                r#"<c:showNegBubbles val="{}"/>"#,
+                if value { "1" } else { "0" }
+            )
+        })
+        .unwrap_or_default();
+    let has_3d_shading_xml = chart
+        .has_3d_shading
+        .map(|value| format!(r#"<c:bubble3D val="{}"/>"#, if value { "1" } else { "0" }))
         .unwrap_or_default();
     let doughnut_hole_size_xml = chart
         .doughnut_hole_size
@@ -20958,7 +21043,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
+  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -20969,6 +21054,7 @@ fn chart_type_to_excel_value(chart_type: &ChartType) -> OmResult<i32> {
         ChartType::Bar => Ok(XL_BAR_CLUSTERED),
         ChartType::Line => Ok(XL_LINE),
         ChartType::Scatter => Ok(XL_XY_SCATTER),
+        ChartType::Bubble => Ok(XL_BUBBLE),
         ChartType::Pie => Ok(XL_PIE),
         ChartType::Unknown => Err(OmError::unsupported(
             "Chart.ChartType is unavailable for unknown chart types",
@@ -74616,6 +74702,27 @@ mod tests {
                 .expect_err("ChartGroup numeric setting rejects out of range");
             assert_eq!(invalid_numeric_setting.code, OmErrorCode::InvalidArgument);
         }
+        for member in ["ShowNegativeBubbles", "Has3DShading"] {
+            assert_eq!(
+                runtime
+                    .dispatch_get(chart_group, member, &[])
+                    .expect("ChartGroup bubble flag"),
+                OmValue::Bool(true)
+            );
+            runtime
+                .dispatch_set(chart_group, member, OmValue::Bool(false), &[])
+                .expect("set ChartGroup bubble flag");
+            assert_eq!(
+                runtime
+                    .dispatch_get(chart_group, member, &[])
+                    .expect("ChartGroup bubble flag after set"),
+                OmValue::Bool(false)
+            );
+            let invalid_bubble_flag = runtime
+                .dispatch_set(chart_group, member, OmValue::Number(1.0), &[])
+                .expect_err("ChartGroup bubble flag rejects non-bool");
+            assert_eq!(invalid_bubble_flag.code, OmErrorCode::TypeMismatch);
+        }
         assert_eq!(
             runtime
                 .dispatch_get(chart_group, "SizeRepresents", &[])
@@ -75288,6 +75395,123 @@ mod tests {
                     .dispatch_get(reopened_chart_group, member, &[])
                     .expect("reopened ChartGroup numeric setting"),
                 OmValue::Number(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn chart_group_bubble_flag_setters_roundtrip() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_group = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("Chart.ChartGroups(1)"),
+        );
+
+        for member in ["ShowNegativeBubbles", "Has3DShading"] {
+            assert_eq!(
+                runtime
+                    .dispatch_get(chart_group, member, &[])
+                    .expect("ChartGroup bubble flag before set"),
+                OmValue::Bool(true)
+            );
+            runtime
+                .dispatch_set(chart_group, member, OmValue::Bool(false), &[])
+                .expect("set ChartGroup bubble flag false");
+        }
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save chart group bubble flags");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:showNegBubbles val="0"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:bubble3D val="0"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:showNegBubbles val="1"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:bubble3D val="1"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen saved chart group workbook");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_chart_group = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("reopened Chart.ChartGroups(1)"),
+        );
+        for member in ["ShowNegativeBubbles", "Has3DShading"] {
+            assert_eq!(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_group, member, &[])
+                    .expect("reopened ChartGroup bubble flag"),
+                OmValue::Bool(false)
             );
         }
     }
@@ -79194,6 +79418,177 @@ mod tests {
         assert!(saved_chart_xml.contains("<c:yVal>"));
         assert!(!saved_chart_xml.contains("<c:cat>"));
         assert!(!saved_chart_xml.contains("<c:val>"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after loaded scatter chart type edit");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart, "ChartType", &[])
+                    .expect("reopened Chart.ChartType")
+            ),
+            f64::from(super::XL_XY_SCATTER)
+        );
+    }
+
+    #[test]
+    fn loaded_chart_type_setter_rewrites_bubble_source_containers_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:chart-type-bubble-source-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart extension");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_BUBBLE)),
+                &[],
+            )
+            .expect("set loaded Chart.ChartType to bubble");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "ChartType", &[])
+                    .expect("Chart.ChartType after bubble set")
+            ),
+            f64::from(super::XL_BUBBLE)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after loaded bubble chart type edit");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(
+            saved_chart_xml.contains(r#"<c:ext uri="urn:chart-type-bubble-source-preserve"/>"#)
+        );
+        assert!(saved_chart_xml.contains("<c:bubbleChart>"));
+        assert!(saved_chart_xml.contains("<c:xVal>"));
+        assert!(saved_chart_xml.contains("<c:yVal>"));
+        assert!(!saved_chart_xml.contains("<c:cat>"));
+        assert!(!saved_chart_xml.contains("<c:val>"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after loaded bubble chart type edit");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart, "ChartType", &[])
+                    .expect("reopened Chart.ChartType")
+            ),
+            f64::from(super::XL_BUBBLE)
+        );
     }
 
     #[test]
@@ -89088,7 +89483,7 @@ mod tests {
                 compression: CompressionMethod::Stored,
                 bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:varyColors val="1"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val></c:ser><c:gapWidth val="150"/><c:overlap val="0"/><c:firstSliceAng val="25"/><c:bubbleScale val="125"/><c:holeSize val="65"/><c:secondPieSize val="80"/><c:sizeRepresents val="w"/><c:splitType val="val"/><c:splitPos val="10"/><c:serLines/><c:dropLines/><c:hiLowLines/><c:upDownBars/></c:barChart><c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx><c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx></c:plotArea><c:legend><c:legendPos val="r"/></c:legend></c:chart>
+  <c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:varyColors val="1"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val></c:ser><c:gapWidth val="150"/><c:overlap val="0"/><c:firstSliceAng val="25"/><c:bubbleScale val="125"/><c:showNegBubbles val="1"/><c:bubble3D val="1"/><c:holeSize val="65"/><c:secondPieSize val="80"/><c:sizeRepresents val="w"/><c:splitType val="val"/><c:splitPos val="10"/><c:serLines/><c:dropLines/><c:hiLowLines/><c:upDownBars/></c:barChart><c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx><c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx></c:plotArea><c:legend><c:legendPos val="r"/></c:legend></c:chart>
 </c:chartSpace>"#
                     .to_vec(),
             })
