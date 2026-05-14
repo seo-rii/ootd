@@ -51,7 +51,11 @@ const XL_LINE: i32 = 4;
 const XL_PIE: i32 = 5;
 const XL_BUBBLE: i32 = 15;
 const XL_COLUMN_CLUSTERED: i32 = 51;
+const XL_COLUMN_STACKED: i32 = 52;
+const XL_COLUMN_STACKED_100: i32 = 53;
 const XL_BAR_CLUSTERED: i32 = 57;
+const XL_BAR_STACKED: i32 = 58;
+const XL_BAR_STACKED_100: i32 = 59;
 const XL_XY_SCATTER: i32 = -4169;
 const XL_CATEGORY: i32 = 1;
 const XL_VALUE: i32 = 2;
@@ -3793,7 +3797,11 @@ impl ExcelRuntime {
                         let chart_type = match number as i32 {
                             XL_AREA => ChartType::Area,
                             XL_BAR_CLUSTERED => ChartType::Bar,
+                            XL_BAR_STACKED => ChartType::BarStacked,
+                            XL_BAR_STACKED_100 => ChartType::BarStacked100,
                             XL_COLUMN_CLUSTERED => ChartType::Column,
+                            XL_COLUMN_STACKED => ChartType::ColumnStacked,
+                            XL_COLUMN_STACKED_100 => ChartType::ColumnStacked100,
                             XL_LINE => ChartType::Line,
                             XL_XY_SCATTER => ChartType::Scatter,
                             XL_BUBBLE => ChartType::Bubble,
@@ -19104,7 +19112,12 @@ fn chart_type_from_group_name(local_name: &[u8]) -> Option<ChartType> {
 fn chart_group_xml_name(chart_type: &ChartType) -> Option<&'static str> {
     match chart_type {
         ChartType::Area => Some("areaChart"),
-        ChartType::Bar | ChartType::Column => Some("barChart"),
+        ChartType::Bar
+        | ChartType::BarStacked
+        | ChartType::BarStacked100
+        | ChartType::Column
+        | ChartType::ColumnStacked
+        | ChartType::ColumnStacked100 => Some("barChart"),
         ChartType::Line => Some("lineChart"),
         ChartType::Scatter => Some("scatterChart"),
         ChartType::Bubble => Some("bubbleChart"),
@@ -19117,8 +19130,17 @@ fn chart_group_xml_name(chart_type: &ChartType) -> Option<&'static str> {
 
 fn chart_type_bar_direction_xml_value(chart_type: &ChartType) -> Option<&'static str> {
     match chart_type {
-        ChartType::Bar => Some("bar"),
-        ChartType::Column => Some("col"),
+        ChartType::Bar | ChartType::BarStacked | ChartType::BarStacked100 => Some("bar"),
+        ChartType::Column | ChartType::ColumnStacked | ChartType::ColumnStacked100 => Some("col"),
+        _ => None,
+    }
+}
+
+fn chart_type_bar_grouping_xml_value(chart_type: &ChartType) -> Option<&'static str> {
+    match chart_type {
+        ChartType::Bar | ChartType::Column => Some("clustered"),
+        ChartType::BarStacked | ChartType::ColumnStacked => Some("stacked"),
+        ChartType::BarStacked100 | ChartType::ColumnStacked100 => Some("percentStacked"),
         _ => None,
     }
 }
@@ -19249,6 +19271,7 @@ fn patch_loaded_chart_model_xml(
         .vary_by_categories
         .map(|value| if value { "1" } else { "0" });
     let expected_bar_direction = chart_type_bar_direction_xml_value(&chart.chart_type);
+    let expected_bar_grouping = chart_type_bar_grouping_xml_value(&chart.chart_type);
     let expected_gap_width = chart.gap_width.map(|value| value.to_string());
     let expected_overlap = chart.overlap.map(|value| value.to_string());
     let expected_first_slice_angle = chart.first_slice_angle.map(|value| value.to_string());
@@ -19343,6 +19366,9 @@ fn patch_loaded_chart_model_xml(
     let mut bar_direction_seen = false;
     let mut bar_direction_written = false;
     let mut bar_direction_inserted = false;
+    let mut bar_grouping_seen = false;
+    let mut bar_grouping_written = false;
+    let mut bar_grouping_inserted = false;
     let mut gap_width_seen = false;
     let mut gap_width_written = false;
     let mut gap_width_inserted = false;
@@ -19870,6 +19896,10 @@ fn patch_loaded_chart_model_xml(
                     && current_chart_group_depth == Some(element_stack.len())
                 {
                     bar_direction_seen = true;
+                } else if local_name.as_slice() == b"grouping"
+                    && current_chart_group_depth == Some(element_stack.len())
+                {
+                    bar_grouping_seen = true;
                 } else if local_name.as_slice() == b"gapWidth"
                     && current_chart_group_depth == Some(element_stack.len())
                 {
@@ -20016,6 +20046,18 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     bar_direction_written = true;
+                } else if !wrote_start_element
+                    && local_name.as_slice() == b"grouping"
+                    && let Some(value) = expected_bar_grouping
+                {
+                    writer
+                        .write_event(Event::Start(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    bar_grouping_written = true;
                 } else if !wrote_start_element
                     && local_name.as_slice() == b"gapWidth"
                     && let Some(value) = expected_gap_width
@@ -20185,6 +20227,10 @@ fn patch_loaded_chart_model_xml(
                     && current_chart_group_depth == Some(element_stack.len())
                 {
                     bar_direction_seen = true;
+                } else if local_name.as_slice() == b"grouping"
+                    && current_chart_group_depth == Some(element_stack.len())
+                {
+                    bar_grouping_seen = true;
                 } else if local_name.as_slice() == b"gapWidth"
                     && current_chart_group_depth == Some(element_stack.len())
                 {
@@ -20263,6 +20309,17 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     bar_direction_written = true;
+                } else if local_name.as_slice() == b"grouping"
+                    && let Some(value) = expected_bar_grouping
+                {
+                    writer
+                        .write_event(Event::Empty(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    bar_grouping_written = true;
                 } else if local_name.as_slice() == b"gapWidth"
                     && let Some(value) = expected_gap_width
                 {
@@ -20672,6 +20729,15 @@ fn patch_loaded_chart_model_xml(
                         bar_direction_inserted = true;
                         bar_direction_written = true;
                     }
+                    if !bar_grouping_seen && let Some(value) = expected_bar_grouping {
+                        let mut bar_grouping = BytesStart::new("c:grouping");
+                        bar_grouping.push_attribute(("val", value));
+                        writer
+                            .write_event(Event::Empty(bar_grouping))
+                            .map_err(runtime_xml_error)?;
+                        bar_grouping_inserted = true;
+                        bar_grouping_written = true;
+                    }
                     if !gap_width_seen && let Some(value) = expected_gap_width {
                         let mut gap_width = BytesStart::new("c:gapWidth");
                         gap_width.push_attribute(("val", value));
@@ -20855,6 +20921,11 @@ fn patch_loaded_chart_model_xml(
         (Some(_), false) => bar_direction_inserted,
         (None, _) => true,
     };
+    let bar_grouping_matches = match (expected_bar_grouping, bar_grouping_seen) {
+        (Some(_), true) => bar_grouping_written,
+        (Some(_), false) => bar_grouping_inserted,
+        (None, _) => true,
+    };
     let gap_width_matches = match (expected_gap_width, gap_width_seen) {
         (Some(_), true) => gap_width_written,
         (Some(_), false) => gap_width_inserted,
@@ -20912,6 +20983,7 @@ fn patch_loaded_chart_model_xml(
         && plot_visible_only_matches
         && vary_colors_matches
         && bar_direction_matches
+        && bar_grouping_matches
         && gap_width_matches
         && overlap_matches
         && chart_group_numeric_settings_match
@@ -20973,6 +21045,9 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
         .unwrap_or_default();
     let bar_direction_xml = chart_type_bar_direction_xml_value(&chart.chart_type)
         .map(|value| format!(r#"<c:barDir val="{value}"/>"#))
+        .unwrap_or_default();
+    let bar_grouping_xml = chart_type_bar_grouping_xml_value(&chart.chart_type)
+        .map(|value| format!(r#"<c:grouping val="{value}"/>"#))
         .unwrap_or_default();
     let gap_width_xml = chart
         .gap_width
@@ -21122,7 +21197,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
+  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{bar_grouping_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -21132,7 +21207,11 @@ fn chart_type_to_excel_value(chart_type: &ChartType) -> OmResult<i32> {
     match chart_type {
         ChartType::Area => Ok(XL_AREA),
         ChartType::Bar => Ok(XL_BAR_CLUSTERED),
+        ChartType::BarStacked => Ok(XL_BAR_STACKED),
+        ChartType::BarStacked100 => Ok(XL_BAR_STACKED_100),
         ChartType::Column => Ok(XL_COLUMN_CLUSTERED),
+        ChartType::ColumnStacked => Ok(XL_COLUMN_STACKED),
+        ChartType::ColumnStacked100 => Ok(XL_COLUMN_STACKED_100),
         ChartType::Line => Ok(XL_LINE),
         ChartType::Scatter => Ok(XL_XY_SCATTER),
         ChartType::Bubble => Ok(XL_BUBBLE),
@@ -79676,11 +79755,51 @@ mod tests {
 
     #[test]
     fn loaded_chart_type_setter_rewrites_common_chart_groups_on_save() {
-        for (chart_type_value, expected_group_name, expected_has_axes, expected_bar_direction) in [
-            (super::XL_AREA, "areaChart", true, None),
-            (super::XL_COLUMN_CLUSTERED, "barChart", true, Some("col")),
-            (super::XL_DOUGHNUT, "doughnutChart", false, None),
-            (super::XL_RADAR, "radarChart", true, None),
+        for (
+            chart_type_value,
+            expected_group_name,
+            expected_has_axes,
+            expected_bar_direction,
+            expected_bar_grouping,
+        ) in [
+            (super::XL_AREA, "areaChart", true, None, None),
+            (
+                super::XL_COLUMN_CLUSTERED,
+                "barChart",
+                true,
+                Some("col"),
+                Some("clustered"),
+            ),
+            (
+                super::XL_COLUMN_STACKED,
+                "barChart",
+                true,
+                Some("col"),
+                Some("stacked"),
+            ),
+            (
+                super::XL_COLUMN_STACKED_100,
+                "barChart",
+                true,
+                Some("col"),
+                Some("percentStacked"),
+            ),
+            (
+                super::XL_BAR_STACKED,
+                "barChart",
+                true,
+                Some("bar"),
+                Some("stacked"),
+            ),
+            (
+                super::XL_BAR_STACKED_100,
+                "barChart",
+                true,
+                Some("bar"),
+                Some("percentStacked"),
+            ),
+            (super::XL_DOUGHNUT, "doughnutChart", false, None, None),
+            (super::XL_RADAR, "radarChart", true, None, None),
         ] {
             let mut package =
                 OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
@@ -79780,6 +79899,14 @@ mod tests {
                 );
             } else {
                 assert!(!saved_chart_xml.contains("<c:barDir"));
+            }
+            if let Some(expected_bar_grouping) = expected_bar_grouping {
+                assert!(
+                    saved_chart_xml
+                        .contains(&format!(r#"<c:grouping val="{expected_bar_grouping}"/>"#))
+                );
+            } else {
+                assert!(!saved_chart_xml.contains("<c:grouping"));
             }
             assert_eq!(saved_chart_xml.contains("<c:catAx>"), expected_has_axes);
             assert_eq!(saved_chart_xml.contains("<c:valAx>"), expected_has_axes);
