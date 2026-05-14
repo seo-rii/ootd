@@ -657,6 +657,8 @@ pub struct ChartPartSummary {
     pub bar_direction: Option<String>,
     pub chart_grouping: Option<String>,
     pub line_has_markers: Option<bool>,
+    pub scatter_style: Option<String>,
+    pub radar_style: Option<String>,
     pub title_text: Option<String>,
     pub has_legend: bool,
     pub legend_position: Option<ChartLegendPosition>,
@@ -3349,11 +3351,21 @@ fn chart_type_from_summary(summary: Option<&ChartPartSummary>) -> ChartType {
             (Some("percentStacked"), _) => ChartType::LineStacked100,
             _ => ChartType::Line,
         },
-        Some("scatterChart") => ChartType::Scatter,
+        Some("scatterChart") => match summary.scatter_style.as_deref() {
+            Some("lineMarker") => ChartType::ScatterLines,
+            Some("line") => ChartType::ScatterLinesNoMarkers,
+            Some("smoothMarker") => ChartType::ScatterSmooth,
+            Some("smooth") => ChartType::ScatterSmoothNoMarkers,
+            _ => ChartType::Scatter,
+        },
         Some("bubbleChart") => ChartType::Bubble,
         Some("doughnutChart") => ChartType::Doughnut,
         Some("pieChart") => ChartType::Pie,
-        Some("radarChart") => ChartType::Radar,
+        Some("radarChart") => match summary.radar_style.as_deref() {
+            Some("marker") => ChartType::RadarMarkers,
+            Some("filled") => ChartType::RadarFilled,
+            _ => ChartType::Radar,
+        },
         Some(chart_type_name) => ChartType::Unsupported(chart_type_name.to_string()),
         None => ChartType::Unknown,
     }
@@ -15854,6 +15866,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut bar_direction = None::<String>;
     let mut chart_grouping = None::<String>;
     let mut line_has_markers = None;
+    let mut scatter_style = None::<String>;
+    let mut radar_style = None::<String>;
     let mut title_text = None::<String>;
     let mut title_text_depth = 0usize;
     let mut has_legend = false;
@@ -16074,6 +16088,28 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && element_path.last().is_some_and(|name| name == "lineChart")
                 {
                     line_has_markers = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                }
+                if local_name == b"scatterStyle"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name == "scatterChart")
+                    && scatter_style.is_none()
+                    && let Some(value) = parse_string_val_attr(&element, &reader)?
+                {
+                    scatter_style = match value.as_str() {
+                        "line" | "lineMarker" | "marker" | "smooth" | "smoothMarker" => Some(value),
+                        _ => scatter_style,
+                    };
+                }
+                if local_name == b"radarStyle"
+                    && element_path.last().is_some_and(|name| name == "radarChart")
+                    && radar_style.is_none()
+                    && let Some(value) = parse_string_val_attr(&element, &reader)?
+                {
+                    radar_style = match value.as_str() {
+                        "filled" | "marker" | "standard" => Some(value),
+                        _ => radar_style,
+                    };
                 }
                 if local_name == b"gapWidth"
                     && element_path
@@ -16354,6 +16390,28 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && element_path.last().is_some_and(|name| name == "lineChart")
                 {
                     line_has_markers = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                }
+                if local_name == b"scatterStyle"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name == "scatterChart")
+                    && scatter_style.is_none()
+                    && let Some(value) = parse_string_val_attr(&element, &reader)?
+                {
+                    scatter_style = match value.as_str() {
+                        "line" | "lineMarker" | "marker" | "smooth" | "smoothMarker" => Some(value),
+                        _ => scatter_style,
+                    };
+                }
+                if local_name == b"radarStyle"
+                    && element_path.last().is_some_and(|name| name == "radarChart")
+                    && radar_style.is_none()
+                    && let Some(value) = parse_string_val_attr(&element, &reader)?
+                {
+                    radar_style = match value.as_str() {
+                        "filled" | "marker" | "standard" => Some(value),
+                        _ => radar_style,
+                    };
                 }
                 if local_name == b"gapWidth"
                     && element_path
@@ -16677,6 +16735,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         bar_direction,
         chart_grouping,
         line_has_markers,
+        scatter_style,
+        radar_style,
         title_text: title_text.filter(|text| !text.is_empty()),
         has_legend,
         legend_position,
@@ -21472,6 +21532,8 @@ mod tests {
         assert_eq!(chart_summary.bar_direction, None);
         assert_eq!(chart_summary.chart_grouping, None);
         assert_eq!(chart_summary.line_has_markers, None);
+        assert_eq!(chart_summary.scatter_style, None);
+        assert_eq!(chart_summary.radar_style, None);
         assert_eq!(chart_summary.title_text.as_deref(), Some("Revenue Trend"));
         assert!(chart_summary.has_legend);
         assert_eq!(

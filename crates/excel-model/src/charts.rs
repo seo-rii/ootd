@@ -61,10 +61,16 @@ pub enum ChartType {
     LineStacked,
     LineStacked100,
     Scatter,
+    ScatterLines,
+    ScatterLinesNoMarkers,
+    ScatterSmooth,
+    ScatterSmoothNoMarkers,
     Bubble,
     Doughnut,
     Pie,
     Radar,
+    RadarMarkers,
+    RadarFilled,
     Unsupported(String),
 }
 

@@ -45,6 +45,8 @@ const XL_SHEET_TYPE_CHART: i32 = -4109;
 const XL_SHEET_TYPE_EXCEL4_MACRO_SHEET: i32 = 3;
 const XL_SHEET_TYPE_EXCEL4_INTL_MACRO_SHEET: i32 = 4;
 const XL_RADAR: i32 = -4151;
+const XL_RADAR_MARKERS: i32 = 81;
+const XL_RADAR_FILLED: i32 = 82;
 const XL_DOUGHNUT: i32 = -4120;
 const XL_AREA: i32 = 1;
 const XL_LINE: i32 = 4;
@@ -64,6 +66,10 @@ const XL_BAR_CLUSTERED: i32 = 57;
 const XL_BAR_STACKED: i32 = 58;
 const XL_BAR_STACKED_100: i32 = 59;
 const XL_XY_SCATTER: i32 = -4169;
+const XL_XY_SCATTER_SMOOTH: i32 = 72;
+const XL_XY_SCATTER_SMOOTH_NO_MARKERS: i32 = 73;
+const XL_XY_SCATTER_LINES: i32 = 74;
+const XL_XY_SCATTER_LINES_NO_MARKERS: i32 = 75;
 const XL_CATEGORY: i32 = 1;
 const XL_VALUE: i32 = 2;
 const XL_SERIES_AXIS: i32 = 3;
@@ -3818,10 +3824,16 @@ impl ExcelRuntime {
                             XL_LINE_STACKED => ChartType::LineStacked,
                             XL_LINE_STACKED_100 => ChartType::LineStacked100,
                             XL_XY_SCATTER => ChartType::Scatter,
+                            XL_XY_SCATTER_LINES => ChartType::ScatterLines,
+                            XL_XY_SCATTER_LINES_NO_MARKERS => ChartType::ScatterLinesNoMarkers,
+                            XL_XY_SCATTER_SMOOTH => ChartType::ScatterSmooth,
+                            XL_XY_SCATTER_SMOOTH_NO_MARKERS => ChartType::ScatterSmoothNoMarkers,
                             XL_BUBBLE => ChartType::Bubble,
                             XL_DOUGHNUT => ChartType::Doughnut,
                             XL_PIE => ChartType::Pie,
                             XL_RADAR => ChartType::Radar,
+                            XL_RADAR_MARKERS => ChartType::RadarMarkers,
+                            XL_RADAR_FILLED => ChartType::RadarFilled,
                             _ => {
                                 return Err(OmError::unsupported(
                                     "Chart.ChartType supports area, bar, column, line, scatter, bubble, doughnut, pie, and radar chart types",
@@ -19138,13 +19150,29 @@ fn chart_group_xml_name(chart_type: &ChartType) -> Option<&'static str> {
         | ChartType::LineMarkersStacked100
         | ChartType::LineStacked
         | ChartType::LineStacked100 => Some("lineChart"),
-        ChartType::Scatter => Some("scatterChart"),
+        ChartType::Scatter
+        | ChartType::ScatterLines
+        | ChartType::ScatterLinesNoMarkers
+        | ChartType::ScatterSmooth
+        | ChartType::ScatterSmoothNoMarkers => Some("scatterChart"),
         ChartType::Bubble => Some("bubbleChart"),
         ChartType::Doughnut => Some("doughnutChart"),
         ChartType::Pie => Some("pieChart"),
-        ChartType::Radar => Some("radarChart"),
+        ChartType::Radar | ChartType::RadarMarkers | ChartType::RadarFilled => Some("radarChart"),
         ChartType::Unknown | ChartType::Unsupported(_) => None,
     }
+}
+
+fn chart_type_uses_xy_values(chart_type: &ChartType) -> bool {
+    matches!(
+        chart_type,
+        ChartType::Scatter
+            | ChartType::ScatterLines
+            | ChartType::ScatterLinesNoMarkers
+            | ChartType::ScatterSmooth
+            | ChartType::ScatterSmoothNoMarkers
+            | ChartType::Bubble
+    )
 }
 
 fn chart_type_bar_direction_xml_value(chart_type: &ChartType) -> Option<&'static str> {
@@ -19176,6 +19204,26 @@ fn chart_type_line_marker_xml_value(chart_type: &ChartType) -> Option<&'static s
         ChartType::LineMarkers
         | ChartType::LineMarkersStacked
         | ChartType::LineMarkersStacked100 => Some("1"),
+        _ => None,
+    }
+}
+
+fn chart_type_scatter_style_xml_value(chart_type: &ChartType) -> Option<&'static str> {
+    match chart_type {
+        ChartType::Scatter => Some("marker"),
+        ChartType::ScatterLines => Some("lineMarker"),
+        ChartType::ScatterLinesNoMarkers => Some("line"),
+        ChartType::ScatterSmooth => Some("smoothMarker"),
+        ChartType::ScatterSmoothNoMarkers => Some("smooth"),
+        _ => None,
+    }
+}
+
+fn chart_type_radar_style_xml_value(chart_type: &ChartType) -> Option<&'static str> {
+    match chart_type {
+        ChartType::Radar => Some("standard"),
+        ChartType::RadarMarkers => Some("marker"),
+        ChartType::RadarFilled => Some("filled"),
         _ => None,
     }
 }
@@ -19308,6 +19356,8 @@ fn patch_loaded_chart_model_xml(
     let expected_bar_direction = chart_type_bar_direction_xml_value(&chart.chart_type);
     let expected_chart_grouping = chart_type_grouping_xml_value(&chart.chart_type);
     let expected_line_marker = chart_type_line_marker_xml_value(&chart.chart_type);
+    let expected_scatter_style = chart_type_scatter_style_xml_value(&chart.chart_type);
+    let expected_radar_style = chart_type_radar_style_xml_value(&chart.chart_type);
     let expected_gap_width = chart.gap_width.map(|value| value.to_string());
     let expected_overlap = chart.overlap.map(|value| value.to_string());
     let expected_first_slice_angle = chart.first_slice_angle.map(|value| value.to_string());
@@ -19408,6 +19458,12 @@ fn patch_loaded_chart_model_xml(
     let mut line_marker_seen = false;
     let mut line_marker_written = false;
     let mut line_marker_inserted = false;
+    let mut scatter_style_seen = false;
+    let mut scatter_style_written = false;
+    let mut scatter_style_inserted = false;
+    let mut radar_style_seen = false;
+    let mut radar_style_written = false;
+    let mut radar_style_inserted = false;
     let mut gap_width_seen = false;
     let mut gap_width_written = false;
     let mut gap_width_inserted = false;
@@ -19590,8 +19646,12 @@ fn patch_loaded_chart_model_xml(
     let source_container_target_local_name = |slot: ChartSourceXmlSlot| -> &'static str {
         match (&chart.chart_type, slot) {
             (_, ChartSourceXmlSlot::Name) => "tx",
-            (&ChartType::Scatter | &ChartType::Bubble, ChartSourceXmlSlot::XValues) => "xVal",
-            (&ChartType::Scatter | &ChartType::Bubble, ChartSourceXmlSlot::Values) => "yVal",
+            (chart_type, ChartSourceXmlSlot::XValues) if chart_type_uses_xy_values(chart_type) => {
+                "xVal"
+            }
+            (chart_type, ChartSourceXmlSlot::Values) if chart_type_uses_xy_values(chart_type) => {
+                "yVal"
+            }
             (_, ChartSourceXmlSlot::XValues) => "cat",
             (_, ChartSourceXmlSlot::Values) => "val",
         }
@@ -19599,10 +19659,10 @@ fn patch_loaded_chart_model_xml(
     let source_container_names = |slot: ChartSourceXmlSlot| -> (&'static str, &'static str) {
         match (&chart.chart_type, slot) {
             (_, ChartSourceXmlSlot::Name) => ("c:tx", "c:strRef"),
-            (&ChartType::Scatter | &ChartType::Bubble, ChartSourceXmlSlot::XValues) => {
+            (chart_type, ChartSourceXmlSlot::XValues) if chart_type_uses_xy_values(chart_type) => {
                 ("c:xVal", "c:numRef")
             }
-            (&ChartType::Scatter | &ChartType::Bubble, ChartSourceXmlSlot::Values) => {
+            (chart_type, ChartSourceXmlSlot::Values) if chart_type_uses_xy_values(chart_type) => {
                 ("c:yVal", "c:numRef")
             }
             (_, ChartSourceXmlSlot::XValues) => ("c:cat", "c:strRef"),
@@ -19943,6 +20003,14 @@ fn patch_loaded_chart_model_xml(
                     && current_chart_group_depth == Some(element_stack.len())
                 {
                     line_marker_seen = true;
+                } else if local_name.as_slice() == b"scatterStyle"
+                    && current_chart_group_depth == Some(element_stack.len())
+                {
+                    scatter_style_seen = true;
+                } else if local_name.as_slice() == b"radarStyle"
+                    && current_chart_group_depth == Some(element_stack.len())
+                {
+                    radar_style_seen = true;
                 } else if local_name.as_slice() == b"gapWidth"
                     && current_chart_group_depth == Some(element_stack.len())
                 {
@@ -20113,6 +20181,30 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     line_marker_written = true;
+                } else if !wrote_start_element
+                    && local_name.as_slice() == b"scatterStyle"
+                    && let Some(value) = expected_scatter_style
+                {
+                    writer
+                        .write_event(Event::Start(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    scatter_style_written = true;
+                } else if !wrote_start_element
+                    && local_name.as_slice() == b"radarStyle"
+                    && let Some(value) = expected_radar_style
+                {
+                    writer
+                        .write_event(Event::Start(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    radar_style_written = true;
                 } else if !wrote_start_element
                     && local_name.as_slice() == b"gapWidth"
                     && let Some(value) = expected_gap_width
@@ -20290,6 +20382,14 @@ fn patch_loaded_chart_model_xml(
                     && current_chart_group_depth == Some(element_stack.len())
                 {
                     line_marker_seen = true;
+                } else if local_name.as_slice() == b"scatterStyle"
+                    && current_chart_group_depth == Some(element_stack.len())
+                {
+                    scatter_style_seen = true;
+                } else if local_name.as_slice() == b"radarStyle"
+                    && current_chart_group_depth == Some(element_stack.len())
+                {
+                    radar_style_seen = true;
                 } else if local_name.as_slice() == b"gapWidth"
                     && current_chart_group_depth == Some(element_stack.len())
                 {
@@ -20390,6 +20490,28 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     line_marker_written = true;
+                } else if local_name.as_slice() == b"scatterStyle"
+                    && let Some(value) = expected_scatter_style
+                {
+                    writer
+                        .write_event(Event::Empty(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    scatter_style_written = true;
+                } else if local_name.as_slice() == b"radarStyle"
+                    && let Some(value) = expected_radar_style
+                {
+                    writer
+                        .write_event(Event::Empty(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    radar_style_written = true;
                 } else if local_name.as_slice() == b"gapWidth"
                     && let Some(value) = expected_gap_width
                 {
@@ -20817,6 +20939,24 @@ fn patch_loaded_chart_model_xml(
                         line_marker_inserted = true;
                         line_marker_written = true;
                     }
+                    if !scatter_style_seen && let Some(value) = expected_scatter_style {
+                        let mut scatter_style = BytesStart::new("c:scatterStyle");
+                        scatter_style.push_attribute(("val", value));
+                        writer
+                            .write_event(Event::Empty(scatter_style))
+                            .map_err(runtime_xml_error)?;
+                        scatter_style_inserted = true;
+                        scatter_style_written = true;
+                    }
+                    if !radar_style_seen && let Some(value) = expected_radar_style {
+                        let mut radar_style = BytesStart::new("c:radarStyle");
+                        radar_style.push_attribute(("val", value));
+                        writer
+                            .write_event(Event::Empty(radar_style))
+                            .map_err(runtime_xml_error)?;
+                        radar_style_inserted = true;
+                        radar_style_written = true;
+                    }
                     if !gap_width_seen && let Some(value) = expected_gap_width {
                         let mut gap_width = BytesStart::new("c:gapWidth");
                         gap_width.push_attribute(("val", value));
@@ -21010,6 +21150,16 @@ fn patch_loaded_chart_model_xml(
         (Some(_), false) => line_marker_inserted,
         (None, _) => true,
     };
+    let scatter_style_matches = match (expected_scatter_style, scatter_style_seen) {
+        (Some(_), true) => scatter_style_written,
+        (Some(_), false) => scatter_style_inserted,
+        (None, _) => true,
+    };
+    let radar_style_matches = match (expected_radar_style, radar_style_seen) {
+        (Some(_), true) => radar_style_written,
+        (Some(_), false) => radar_style_inserted,
+        (None, _) => true,
+    };
     let gap_width_matches = match (expected_gap_width, gap_width_seen) {
         (Some(_), true) => gap_width_written,
         (Some(_), false) => gap_width_inserted,
@@ -21069,6 +21219,8 @@ fn patch_loaded_chart_model_xml(
         && bar_direction_matches
         && chart_grouping_matches
         && line_marker_matches
+        && scatter_style_matches
+        && radar_style_matches
         && gap_width_matches
         && overlap_matches
         && chart_group_numeric_settings_match
@@ -21097,24 +21249,22 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
         }
         if let Some(x_values) = series.x_values.as_ref() {
             let formula = partial_escape(x_values.raw.text.trim_start_matches('=')).to_string();
-            let (container_name, reference_name) =
-                if matches!(chart.chart_type, ChartType::Scatter | ChartType::Bubble) {
-                    ("xVal", "numRef")
-                } else {
-                    ("cat", "strRef")
-                };
+            let (container_name, reference_name) = if chart_type_uses_xy_values(&chart.chart_type) {
+                ("xVal", "numRef")
+            } else {
+                ("cat", "strRef")
+            };
             series_xml.push_str(&format!(
                 r#"<c:{container_name}><c:{reference_name}><c:f>{formula}</c:f></c:{reference_name}></c:{container_name}>"#
             ));
         }
         if let Some(values) = series.values.as_ref() {
             let formula = partial_escape(values.raw.text.trim_start_matches('=')).to_string();
-            let (container_name, reference_name) =
-                if matches!(chart.chart_type, ChartType::Scatter | ChartType::Bubble) {
-                    ("yVal", "numRef")
-                } else {
-                    ("val", "numRef")
-                };
+            let (container_name, reference_name) = if chart_type_uses_xy_values(&chart.chart_type) {
+                ("yVal", "numRef")
+            } else {
+                ("val", "numRef")
+            };
             series_xml.push_str(&format!(
                 r#"<c:{container_name}><c:{reference_name}><c:f>{formula}</c:f></c:{reference_name}></c:{container_name}>"#
             ));
@@ -21136,6 +21286,12 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
         .unwrap_or_default();
     let line_marker_xml = chart_type_line_marker_xml_value(&chart.chart_type)
         .map(|value| format!(r#"<c:marker val="{value}"/>"#))
+        .unwrap_or_default();
+    let scatter_style_xml = chart_type_scatter_style_xml_value(&chart.chart_type)
+        .map(|value| format!(r#"<c:scatterStyle val="{value}"/>"#))
+        .unwrap_or_default();
+    let radar_style_xml = chart_type_radar_style_xml_value(&chart.chart_type)
+        .map(|value| format!(r#"<c:radarStyle val="{value}"/>"#))
         .unwrap_or_default();
     let gap_width_xml = chart
         .gap_width
@@ -21285,7 +21441,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{line_marker_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
+  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -21309,10 +21465,16 @@ fn chart_type_to_excel_value(chart_type: &ChartType) -> OmResult<i32> {
         ChartType::LineStacked => Ok(XL_LINE_STACKED),
         ChartType::LineStacked100 => Ok(XL_LINE_STACKED_100),
         ChartType::Scatter => Ok(XL_XY_SCATTER),
+        ChartType::ScatterLines => Ok(XL_XY_SCATTER_LINES),
+        ChartType::ScatterLinesNoMarkers => Ok(XL_XY_SCATTER_LINES_NO_MARKERS),
+        ChartType::ScatterSmooth => Ok(XL_XY_SCATTER_SMOOTH),
+        ChartType::ScatterSmoothNoMarkers => Ok(XL_XY_SCATTER_SMOOTH_NO_MARKERS),
         ChartType::Bubble => Ok(XL_BUBBLE),
         ChartType::Doughnut => Ok(XL_DOUGHNUT),
         ChartType::Pie => Ok(XL_PIE),
         ChartType::Radar => Ok(XL_RADAR),
+        ChartType::RadarMarkers => Ok(XL_RADAR_MARKERS),
+        ChartType::RadarFilled => Ok(XL_RADAR_FILLED),
         ChartType::Unknown => Err(OmError::unsupported(
             "Chart.ChartType is unavailable for unknown chart types",
         )),
@@ -80082,6 +80244,177 @@ mod tests {
             }
             assert_eq!(saved_chart_xml.contains("<c:catAx>"), expected_has_axes);
             assert_eq!(saved_chart_xml.contains("<c:valAx>"), expected_has_axes);
+
+            let mut reopened_runtime = ExcelRuntime::new();
+            let reopened_workbook = reopened_runtime
+                .open_workbook(OpenWorkbookSpec {
+                    bytes: saved,
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                })
+                .expect("reopen workbook after loaded chart type edit");
+            let reopened_worksheet = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                    .expect("reopened Workbook.Worksheets(1)"),
+            );
+            let reopened_chart_objects = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                    .expect("reopened Worksheet.ChartObjects"),
+            );
+            let reopened_chart_object = expect_object_handle(
+                reopened_runtime
+                    .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                    .expect("reopened ChartObjects.Item(1)"),
+            );
+            let reopened_chart = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_object, "Chart", &[])
+                    .expect("reopened ChartObject.Chart"),
+            );
+            assert_eq!(
+                expect_number(
+                    reopened_runtime
+                        .dispatch_get(reopened_chart, "ChartType", &[])
+                        .expect("reopened Chart.ChartType")
+                ),
+                f64::from(chart_type_value)
+            );
+        }
+    }
+
+    #[test]
+    fn loaded_chart_type_setter_rewrites_scatter_and_radar_styles_on_save() {
+        for (chart_type_value, expected_group_name, expected_style_name, expected_style_value) in [
+            (
+                super::XL_XY_SCATTER_LINES,
+                "scatterChart",
+                "scatterStyle",
+                "lineMarker",
+            ),
+            (
+                super::XL_XY_SCATTER_LINES_NO_MARKERS,
+                "scatterChart",
+                "scatterStyle",
+                "line",
+            ),
+            (
+                super::XL_XY_SCATTER_SMOOTH,
+                "scatterChart",
+                "scatterStyle",
+                "smoothMarker",
+            ),
+            (
+                super::XL_XY_SCATTER_SMOOTH_NO_MARKERS,
+                "scatterChart",
+                "scatterStyle",
+                "smooth",
+            ),
+            (
+                super::XL_RADAR_MARKERS,
+                "radarChart",
+                "radarStyle",
+                "marker",
+            ),
+            (super::XL_RADAR_FILLED, "radarChart", "radarStyle", "filled"),
+        ] {
+            let mut package =
+                OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+                    .expect("embedded chart package");
+            let chart_xml = String::from_utf8(
+                package
+                    .part("xl/charts/chart1.xml")
+                    .expect("chart part")
+                    .bytes
+                    .clone(),
+            )
+            .expect("chart xml utf8")
+            .replace(
+                "</c:chartSpace>",
+                r#"<c:extLst><c:ext uri="urn:chart-type-style-preserve"/></c:extLst></c:chartSpace>"#,
+            );
+            package
+                .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+                .expect("replace chart xml");
+
+            let mut runtime = ExcelRuntime::new();
+            let workbook = runtime
+                .open_workbook(OpenWorkbookSpec {
+                    bytes: package.to_bytes().expect("package bytes"),
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                })
+                .expect("open workbook with chart extension");
+            let worksheet = expect_object_handle(
+                runtime
+                    .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                    .expect("Workbook.Worksheets(1)"),
+            );
+            let chart_objects = expect_object_handle(
+                runtime
+                    .dispatch_get(worksheet, "ChartObjects", &[])
+                    .expect("Worksheet.ChartObjects"),
+            );
+            let chart_object = expect_object_handle(
+                runtime
+                    .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                    .expect("ChartObjects.Item(1)"),
+            );
+            let chart = expect_object_handle(
+                runtime
+                    .dispatch_get(chart_object, "Chart", &[])
+                    .expect("ChartObject.Chart"),
+            );
+            runtime
+                .dispatch_set(
+                    chart,
+                    "ChartType",
+                    OmValue::Number(f64::from(chart_type_value)),
+                    &[],
+                )
+                .expect("set loaded Chart.ChartType");
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(chart, "ChartType", &[])
+                        .expect("Chart.ChartType after set")
+                ),
+                f64::from(chart_type_value)
+            );
+
+            let saved = runtime
+                .save_workbook(
+                    workbook,
+                    SaveWorkbookSpec {
+                        format: FileFormat::Xlsx,
+                        profile: ExcelProfile::Excel365,
+                        lossless: true,
+                    },
+                )
+                .expect("save workbook after loaded chart type edit");
+            let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+            let saved_chart_xml = std::str::from_utf8(
+                saved_package
+                    .part("xl/charts/chart1.xml")
+                    .expect("saved chart part")
+                    .bytes
+                    .as_slice(),
+            )
+            .expect("saved chart xml utf8");
+            assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:chart-type-style-preserve"/>"#));
+            assert!(saved_chart_xml.contains(&format!("<c:{expected_group_name}>")));
+            assert!(saved_chart_xml.contains(&format!(
+                r#"<c:{expected_style_name} val="{expected_style_value}"/>"#
+            )));
+            if expected_group_name == "scatterChart" {
+                assert!(saved_chart_xml.contains("<c:xVal>"));
+                assert!(saved_chart_xml.contains("<c:yVal>"));
+                assert!(!saved_chart_xml.contains("<c:cat>"));
+                assert!(!saved_chart_xml.contains("<c:val>"));
+            }
 
             let mut reopened_runtime = ExcelRuntime::new();
             let reopened_workbook = reopened_runtime
