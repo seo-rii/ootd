@@ -45,11 +45,14 @@ pub struct ChartModel {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChartType {
     Unknown,
+    Area,
     Bar,
     Line,
     Scatter,
     Bubble,
+    Doughnut,
     Pie,
+    Radar,
     Unsupported(String),
 }
 

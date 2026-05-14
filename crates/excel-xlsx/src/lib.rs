@@ -3322,11 +3322,14 @@ fn chart_type_from_summary(summary: Option<&ChartPartSummary>) -> ChartType {
         return ChartType::Unknown;
     };
     match summary.chart_type_names.first().map(String::as_str) {
+        Some("areaChart") => ChartType::Area,
         Some("barChart") => ChartType::Bar,
         Some("lineChart") => ChartType::Line,
         Some("scatterChart") => ChartType::Scatter,
         Some("bubbleChart") => ChartType::Bubble,
+        Some("doughnutChart") => ChartType::Doughnut,
         Some("pieChart") => ChartType::Pie,
+        Some("radarChart") => ChartType::Radar,
         Some(chart_type_name) => ChartType::Unsupported(chart_type_name.to_string()),
         None => ChartType::Unknown,
     }

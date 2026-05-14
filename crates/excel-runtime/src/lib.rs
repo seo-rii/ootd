@@ -44,6 +44,9 @@ const XL_SHEET_TYPE_WORKSHEET: i32 = -4167;
 const XL_SHEET_TYPE_CHART: i32 = -4109;
 const XL_SHEET_TYPE_EXCEL4_MACRO_SHEET: i32 = 3;
 const XL_SHEET_TYPE_EXCEL4_INTL_MACRO_SHEET: i32 = 4;
+const XL_RADAR: i32 = -4151;
+const XL_DOUGHNUT: i32 = -4120;
+const XL_AREA: i32 = 1;
 const XL_LINE: i32 = 4;
 const XL_PIE: i32 = 5;
 const XL_BUBBLE: i32 = 15;
@@ -3787,14 +3790,17 @@ impl ExcelRuntime {
                             ));
                         }
                         let chart_type = match number as i32 {
+                            XL_AREA => ChartType::Area,
                             XL_BAR_CLUSTERED => ChartType::Bar,
                             XL_LINE => ChartType::Line,
                             XL_XY_SCATTER => ChartType::Scatter,
                             XL_BUBBLE => ChartType::Bubble,
+                            XL_DOUGHNUT => ChartType::Doughnut,
                             XL_PIE => ChartType::Pie,
+                            XL_RADAR => ChartType::Radar,
                             _ => {
                                 return Err(OmError::unsupported(
-                                    "Chart.ChartType supports bar, line, scatter, bubble, and pie chart types",
+                                    "Chart.ChartType supports area, bar, line, scatter, bubble, doughnut, pie, and radar chart types",
                                 ));
                             }
                         };
@@ -3811,7 +3817,7 @@ impl ExcelRuntime {
                                 || OmError::new(OmErrorCode::NotFound, "chart not found"),
                             )?;
                             if chart.chart_type != chart_type {
-                                let chart_type_has_axes = !matches!(chart_type, ChartType::Pie);
+                                let chart_type_has_axes = chart_type_has_axes(&chart_type);
                                 chart.chart_type = chart_type;
                                 if chart_type_has_axes && chart.axes.is_empty() {
                                     chart.axes = default_chart_axes();
@@ -3998,9 +4004,9 @@ impl ExcelRuntime {
                             let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
                                 || OmError::new(OmErrorCode::NotFound, "chart not found"),
                             )?;
-                            if matches!(chart.chart_type, ChartType::Pie) && has_axis {
+                            if !chart_type_has_axes(&chart.chart_type) && has_axis {
                                 return Err(OmError::unsupported(
-                                    "Chart.HasAxis is unavailable for pie charts",
+                                    "Chart.HasAxis is unavailable for chart types without axes",
                                 ));
                             }
                             let axis_index = chart.axes.iter().position(|axis| match axis_type {
@@ -19081,24 +19087,34 @@ enum ChartTextXmlTarget {
 
 fn chart_type_from_group_name(local_name: &[u8]) -> Option<ChartType> {
     match local_name {
+        b"areaChart" => Some(ChartType::Area),
         b"barChart" => Some(ChartType::Bar),
         b"lineChart" => Some(ChartType::Line),
         b"scatterChart" => Some(ChartType::Scatter),
         b"bubbleChart" => Some(ChartType::Bubble),
+        b"doughnutChart" => Some(ChartType::Doughnut),
         b"pieChart" => Some(ChartType::Pie),
+        b"radarChart" => Some(ChartType::Radar),
         _ => None,
     }
 }
 
 fn chart_group_xml_name(chart_type: &ChartType) -> Option<&'static str> {
     match chart_type {
+        ChartType::Area => Some("areaChart"),
         ChartType::Bar => Some("barChart"),
         ChartType::Line => Some("lineChart"),
         ChartType::Scatter => Some("scatterChart"),
         ChartType::Bubble => Some("bubbleChart"),
+        ChartType::Doughnut => Some("doughnutChart"),
         ChartType::Pie => Some("pieChart"),
+        ChartType::Radar => Some("radarChart"),
         ChartType::Unknown | ChartType::Unsupported(_) => None,
     }
+}
+
+fn chart_type_has_axes(chart_type: &ChartType) -> bool {
+    !matches!(chart_type, ChartType::Doughnut | ChartType::Pie)
 }
 
 fn chart_axis_kind_from_xml_name(local_name: &[u8]) -> Option<ChartAxisKind> {
@@ -21013,7 +21029,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             )
         })
         .unwrap_or_default();
-    let chart_has_axes = !matches!(chart.chart_type, ChartType::Pie);
+    let chart_has_axes = chart_type_has_axes(&chart.chart_type);
     let mut chart_group_axis_refs = String::new();
     let mut axes_xml = String::new();
     if chart_has_axes {
@@ -21051,11 +21067,14 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
 
 fn chart_type_to_excel_value(chart_type: &ChartType) -> OmResult<i32> {
     match chart_type {
+        ChartType::Area => Ok(XL_AREA),
         ChartType::Bar => Ok(XL_BAR_CLUSTERED),
         ChartType::Line => Ok(XL_LINE),
         ChartType::Scatter => Ok(XL_XY_SCATTER),
         ChartType::Bubble => Ok(XL_BUBBLE),
+        ChartType::Doughnut => Ok(XL_DOUGHNUT),
         ChartType::Pie => Ok(XL_PIE),
+        ChartType::Radar => Ok(XL_RADAR),
         ChartType::Unknown => Err(OmError::unsupported(
             "Chart.ChartType is unavailable for unknown chart types",
         )),
@@ -79589,6 +79608,143 @@ mod tests {
             ),
             f64::from(super::XL_BUBBLE)
         );
+    }
+
+    #[test]
+    fn loaded_chart_type_setter_rewrites_common_chart_groups_on_save() {
+        for (chart_type_value, expected_group_name, expected_has_axes) in [
+            (super::XL_AREA, "areaChart", true),
+            (super::XL_DOUGHNUT, "doughnutChart", false),
+            (super::XL_RADAR, "radarChart", true),
+        ] {
+            let mut package =
+                OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+                    .expect("embedded chart package");
+            let chart_xml = String::from_utf8(
+                package
+                    .part("xl/charts/chart1.xml")
+                    .expect("chart part")
+                    .bytes
+                    .clone(),
+            )
+            .expect("chart xml utf8")
+            .replace(
+                "</c:chartSpace>",
+                r#"<c:extLst><c:ext uri="urn:chart-type-common-preserve"/></c:extLst></c:chartSpace>"#,
+            );
+            package
+                .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+                .expect("replace chart xml");
+
+            let mut runtime = ExcelRuntime::new();
+            let workbook = runtime
+                .open_workbook(OpenWorkbookSpec {
+                    bytes: package.to_bytes().expect("package bytes"),
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                })
+                .expect("open workbook with chart extension");
+            let worksheet = expect_object_handle(
+                runtime
+                    .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                    .expect("Workbook.Worksheets(1)"),
+            );
+            let chart_objects = expect_object_handle(
+                runtime
+                    .dispatch_get(worksheet, "ChartObjects", &[])
+                    .expect("Worksheet.ChartObjects"),
+            );
+            let chart_object = expect_object_handle(
+                runtime
+                    .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                    .expect("ChartObjects.Item(1)"),
+            );
+            let chart = expect_object_handle(
+                runtime
+                    .dispatch_get(chart_object, "Chart", &[])
+                    .expect("ChartObject.Chart"),
+            );
+            runtime
+                .dispatch_set(
+                    chart,
+                    "ChartType",
+                    OmValue::Number(f64::from(chart_type_value)),
+                    &[],
+                )
+                .expect("set loaded Chart.ChartType");
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(chart, "ChartType", &[])
+                        .expect("Chart.ChartType after set")
+                ),
+                f64::from(chart_type_value)
+            );
+
+            let saved = runtime
+                .save_workbook(
+                    workbook,
+                    SaveWorkbookSpec {
+                        format: FileFormat::Xlsx,
+                        profile: ExcelProfile::Excel365,
+                        lossless: true,
+                    },
+                )
+                .expect("save workbook after loaded chart type edit");
+            let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+            let saved_chart_xml = std::str::from_utf8(
+                saved_package
+                    .part("xl/charts/chart1.xml")
+                    .expect("saved chart part")
+                    .bytes
+                    .as_slice(),
+            )
+            .expect("saved chart xml utf8");
+            assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:chart-type-common-preserve"/>"#));
+            assert!(saved_chart_xml.contains(&format!("<c:{expected_group_name}>")));
+            assert!(!saved_chart_xml.contains("<c:barChart>"));
+            assert_eq!(saved_chart_xml.contains("<c:catAx>"), expected_has_axes);
+            assert_eq!(saved_chart_xml.contains("<c:valAx>"), expected_has_axes);
+
+            let mut reopened_runtime = ExcelRuntime::new();
+            let reopened_workbook = reopened_runtime
+                .open_workbook(OpenWorkbookSpec {
+                    bytes: saved,
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                })
+                .expect("reopen workbook after loaded chart type edit");
+            let reopened_worksheet = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                    .expect("reopened Workbook.Worksheets(1)"),
+            );
+            let reopened_chart_objects = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                    .expect("reopened Worksheet.ChartObjects"),
+            );
+            let reopened_chart_object = expect_object_handle(
+                reopened_runtime
+                    .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                    .expect("reopened ChartObjects.Item(1)"),
+            );
+            let reopened_chart = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_object, "Chart", &[])
+                    .expect("reopened ChartObject.Chart"),
+            );
+            assert_eq!(
+                expect_number(
+                    reopened_runtime
+                        .dispatch_get(reopened_chart, "ChartType", &[])
+                        .expect("reopened Chart.ChartType")
+                ),
+                f64::from(chart_type_value)
+            );
+        }
     }
 
     #[test]
