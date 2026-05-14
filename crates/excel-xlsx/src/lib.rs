@@ -3333,6 +3333,11 @@ fn chart_type_from_summary(summary: Option<&ChartPartSummary>) -> ChartType {
             Some("percentStacked") => ChartType::AreaStacked100,
             _ => ChartType::Area,
         },
+        Some("area3DChart") => match summary.chart_grouping.as_deref() {
+            Some("stacked") => ChartType::Area3DStacked,
+            Some("percentStacked") => ChartType::Area3DStacked100,
+            _ => ChartType::Area3D,
+        },
         Some("barChart") => match (
             summary.bar_direction.as_deref(),
             summary.chart_grouping.as_deref(),
@@ -3344,6 +3349,18 @@ fn chart_type_from_summary(summary: Option<&ChartPartSummary>) -> ChartType {
             (_, Some("percentStacked")) => ChartType::BarStacked100,
             _ => ChartType::Bar,
         },
+        Some("bar3DChart") => match (
+            summary.bar_direction.as_deref(),
+            summary.chart_grouping.as_deref(),
+        ) {
+            (Some("col"), Some("stacked")) => ChartType::Column3DStacked,
+            (Some("col"), Some("percentStacked")) => ChartType::Column3DStacked100,
+            (Some("col"), Some("clustered")) => ChartType::Column3DClustered,
+            (Some("col"), _) => ChartType::Column3D,
+            (_, Some("stacked")) => ChartType::Bar3DStacked,
+            (_, Some("percentStacked")) => ChartType::Bar3DStacked100,
+            _ => ChartType::Bar3DClustered,
+        },
         Some("lineChart") => match (summary.chart_grouping.as_deref(), summary.line_has_markers) {
             (Some("stacked"), Some(true)) => ChartType::LineMarkersStacked,
             (Some("percentStacked"), Some(true)) => ChartType::LineMarkersStacked100,
@@ -3352,6 +3369,7 @@ fn chart_type_from_summary(summary: Option<&ChartPartSummary>) -> ChartType {
             (Some("percentStacked"), _) => ChartType::LineStacked100,
             _ => ChartType::Line,
         },
+        Some("line3DChart") => ChartType::Line3D,
         Some("scatterChart") => match summary.scatter_style.as_deref() {
             Some("lineMarker") => ChartType::ScatterLines,
             Some("line") => ChartType::ScatterLinesNoMarkers,
@@ -3372,6 +3390,7 @@ fn chart_type_from_summary(summary: Option<&ChartPartSummary>) -> ChartType {
             _ => ChartType::PieOfPie,
         },
         Some("pieChart") => ChartType::Pie,
+        Some("pie3DChart") => ChartType::Pie3D,
         Some("radarChart") => match summary.radar_style.as_deref() {
             Some("marker") => ChartType::RadarMarkers,
             Some("filled") => ChartType::RadarFilled,
@@ -16076,7 +16095,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     vary_by_categories = parse_bool_val_attr(&element, &reader)?.or(Some(true));
                 }
                 if local_name == b"barDir"
-                    && element_path.last().is_some_and(|name| name == "barChart")
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name == "barChart" || name == "bar3DChart")
                     && let Some(value) = parse_string_val_attr(&element, &reader)?
                 {
                     bar_direction = match value.as_str() {
@@ -16388,7 +16409,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     vary_by_categories = parse_bool_val_attr(&element, &reader)?.or(Some(true));
                 }
                 if local_name == b"barDir"
-                    && element_path.last().is_some_and(|name| name == "barChart")
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name == "barChart" || name == "bar3DChart")
                     && let Some(value) = parse_string_val_attr(&element, &reader)?
                 {
                     bar_direction = match value.as_str() {

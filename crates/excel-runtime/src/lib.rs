@@ -48,6 +48,10 @@ const XL_RADAR: i32 = -4151;
 const XL_RADAR_MARKERS: i32 = 81;
 const XL_RADAR_FILLED: i32 = 82;
 const XL_DOUGHNUT: i32 = -4120;
+const XL_3D_AREA: i32 = -4098;
+const XL_3D_COLUMN: i32 = -4100;
+const XL_3D_LINE: i32 = -4101;
+const XL_3D_PIE: i32 = -4102;
 const XL_AREA: i32 = 1;
 const XL_LINE: i32 = 4;
 const XL_LINE_STACKED: i32 = 63;
@@ -65,9 +69,17 @@ const XL_AREA_STACKED_100: i32 = 77;
 const XL_COLUMN_CLUSTERED: i32 = 51;
 const XL_COLUMN_STACKED: i32 = 52;
 const XL_COLUMN_STACKED_100: i32 = 53;
+const XL_3D_COLUMN_CLUSTERED: i32 = 54;
+const XL_3D_COLUMN_STACKED: i32 = 55;
+const XL_3D_COLUMN_STACKED_100: i32 = 56;
 const XL_BAR_CLUSTERED: i32 = 57;
 const XL_BAR_STACKED: i32 = 58;
 const XL_BAR_STACKED_100: i32 = 59;
+const XL_3D_BAR_CLUSTERED: i32 = 60;
+const XL_3D_BAR_STACKED: i32 = 61;
+const XL_3D_BAR_STACKED_100: i32 = 62;
+const XL_3D_AREA_STACKED: i32 = 78;
+const XL_3D_AREA_STACKED_100: i32 = 79;
 const XL_XY_SCATTER: i32 = -4169;
 const XL_XY_SCATTER_SMOOTH: i32 = 72;
 const XL_XY_SCATTER_SMOOTH_NO_MARKERS: i32 = 73;
@@ -3812,15 +3824,26 @@ impl ExcelRuntime {
                         }
                         let chart_type = match number as i32 {
                             XL_AREA => ChartType::Area,
+                            XL_3D_AREA => ChartType::Area3D,
                             XL_AREA_STACKED => ChartType::AreaStacked,
+                            XL_3D_AREA_STACKED => ChartType::Area3DStacked,
                             XL_AREA_STACKED_100 => ChartType::AreaStacked100,
+                            XL_3D_AREA_STACKED_100 => ChartType::Area3DStacked100,
                             XL_BAR_CLUSTERED => ChartType::Bar,
+                            XL_3D_BAR_CLUSTERED => ChartType::Bar3DClustered,
                             XL_BAR_STACKED => ChartType::BarStacked,
+                            XL_3D_BAR_STACKED => ChartType::Bar3DStacked,
                             XL_BAR_STACKED_100 => ChartType::BarStacked100,
+                            XL_3D_BAR_STACKED_100 => ChartType::Bar3DStacked100,
                             XL_COLUMN_CLUSTERED => ChartType::Column,
+                            XL_3D_COLUMN => ChartType::Column3D,
+                            XL_3D_COLUMN_CLUSTERED => ChartType::Column3DClustered,
                             XL_COLUMN_STACKED => ChartType::ColumnStacked,
+                            XL_3D_COLUMN_STACKED => ChartType::Column3DStacked,
                             XL_COLUMN_STACKED_100 => ChartType::ColumnStacked100,
+                            XL_3D_COLUMN_STACKED_100 => ChartType::Column3DStacked100,
                             XL_LINE => ChartType::Line,
+                            XL_3D_LINE => ChartType::Line3D,
                             XL_LINE_MARKERS => ChartType::LineMarkers,
                             XL_LINE_MARKERS_STACKED => ChartType::LineMarkersStacked,
                             XL_LINE_MARKERS_STACKED_100 => ChartType::LineMarkersStacked100,
@@ -3835,6 +3858,7 @@ impl ExcelRuntime {
                             XL_BUBBLE_3D_EFFECT => ChartType::Bubble3DEffect,
                             XL_DOUGHNUT => ChartType::Doughnut,
                             XL_PIE => ChartType::Pie,
+                            XL_3D_PIE => ChartType::Pie3D,
                             XL_PIE_OF_PIE => ChartType::PieOfPie,
                             XL_BAR_OF_PIE => ChartType::BarOfPie,
                             XL_RADAR => ChartType::Radar,
@@ -19138,13 +19162,17 @@ enum ChartTextXmlTarget {
 fn chart_type_from_group_name(local_name: &[u8]) -> Option<ChartType> {
     match local_name {
         b"areaChart" => Some(ChartType::Area),
+        b"area3DChart" => Some(ChartType::Area3D),
         b"barChart" => Some(ChartType::Bar),
+        b"bar3DChart" => Some(ChartType::Bar3DClustered),
         b"lineChart" => Some(ChartType::Line),
+        b"line3DChart" => Some(ChartType::Line3D),
         b"scatterChart" => Some(ChartType::Scatter),
         b"bubbleChart" => Some(ChartType::Bubble),
         b"doughnutChart" => Some(ChartType::Doughnut),
         b"ofPieChart" => Some(ChartType::PieOfPie),
         b"pieChart" => Some(ChartType::Pie),
+        b"pie3DChart" => Some(ChartType::Pie3D),
         b"radarChart" => Some(ChartType::Radar),
         _ => None,
     }
@@ -19153,18 +19181,29 @@ fn chart_type_from_group_name(local_name: &[u8]) -> Option<ChartType> {
 fn chart_group_xml_name(chart_type: &ChartType) -> Option<&'static str> {
     match chart_type {
         ChartType::Area | ChartType::AreaStacked | ChartType::AreaStacked100 => Some("areaChart"),
+        ChartType::Area3D | ChartType::Area3DStacked | ChartType::Area3DStacked100 => {
+            Some("area3DChart")
+        }
         ChartType::Bar
         | ChartType::BarStacked
         | ChartType::BarStacked100
         | ChartType::Column
         | ChartType::ColumnStacked
         | ChartType::ColumnStacked100 => Some("barChart"),
+        ChartType::Bar3DClustered
+        | ChartType::Bar3DStacked
+        | ChartType::Bar3DStacked100
+        | ChartType::Column3D
+        | ChartType::Column3DClustered
+        | ChartType::Column3DStacked
+        | ChartType::Column3DStacked100 => Some("bar3DChart"),
         ChartType::Line
         | ChartType::LineMarkers
         | ChartType::LineMarkersStacked
         | ChartType::LineMarkersStacked100
         | ChartType::LineStacked
         | ChartType::LineStacked100 => Some("lineChart"),
+        ChartType::Line3D => Some("line3DChart"),
         ChartType::Scatter
         | ChartType::ScatterLines
         | ChartType::ScatterLinesNoMarkers
@@ -19173,6 +19212,7 @@ fn chart_group_xml_name(chart_type: &ChartType) -> Option<&'static str> {
         ChartType::Bubble | ChartType::Bubble3DEffect => Some("bubbleChart"),
         ChartType::Doughnut => Some("doughnutChart"),
         ChartType::Pie => Some("pieChart"),
+        ChartType::Pie3D => Some("pie3DChart"),
         ChartType::PieOfPie | ChartType::BarOfPie => Some("ofPieChart"),
         ChartType::Radar | ChartType::RadarMarkers | ChartType::RadarFilled => Some("radarChart"),
         ChartType::Unknown | ChartType::Unsupported(_) => None,
@@ -19194,20 +19234,41 @@ fn chart_type_uses_xy_values(chart_type: &ChartType) -> bool {
 
 fn chart_type_bar_direction_xml_value(chart_type: &ChartType) -> Option<&'static str> {
     match chart_type {
-        ChartType::Bar | ChartType::BarStacked | ChartType::BarStacked100 => Some("bar"),
-        ChartType::Column | ChartType::ColumnStacked | ChartType::ColumnStacked100 => Some("col"),
+        ChartType::Bar
+        | ChartType::BarStacked
+        | ChartType::BarStacked100
+        | ChartType::Bar3DClustered
+        | ChartType::Bar3DStacked
+        | ChartType::Bar3DStacked100 => Some("bar"),
+        ChartType::Column
+        | ChartType::ColumnStacked
+        | ChartType::ColumnStacked100
+        | ChartType::Column3D
+        | ChartType::Column3DClustered
+        | ChartType::Column3DStacked
+        | ChartType::Column3DStacked100 => Some("col"),
         _ => None,
     }
 }
 
 fn chart_type_grouping_xml_value(chart_type: &ChartType) -> Option<&'static str> {
     match chart_type {
-        ChartType::Area => Some("standard"),
-        ChartType::AreaStacked => Some("stacked"),
-        ChartType::AreaStacked100 => Some("percentStacked"),
-        ChartType::Bar | ChartType::Column => Some("clustered"),
-        ChartType::BarStacked | ChartType::ColumnStacked => Some("stacked"),
-        ChartType::BarStacked100 | ChartType::ColumnStacked100 => Some("percentStacked"),
+        ChartType::Area | ChartType::Area3D => Some("standard"),
+        ChartType::AreaStacked | ChartType::Area3DStacked => Some("stacked"),
+        ChartType::AreaStacked100 | ChartType::Area3DStacked100 => Some("percentStacked"),
+        ChartType::Bar
+        | ChartType::Column
+        | ChartType::Bar3DClustered
+        | ChartType::Column3DClustered => Some("clustered"),
+        ChartType::Column3D => Some("standard"),
+        ChartType::BarStacked
+        | ChartType::ColumnStacked
+        | ChartType::Bar3DStacked
+        | ChartType::Column3DStacked => Some("stacked"),
+        ChartType::BarStacked100
+        | ChartType::ColumnStacked100
+        | ChartType::Bar3DStacked100
+        | ChartType::Column3DStacked100 => Some("percentStacked"),
         ChartType::Line | ChartType::LineMarkers => Some("standard"),
         ChartType::LineStacked | ChartType::LineMarkersStacked => Some("stacked"),
         ChartType::LineStacked100 | ChartType::LineMarkersStacked100 => Some("percentStacked"),
@@ -19256,7 +19317,11 @@ fn chart_type_of_pie_xml_value(chart_type: &ChartType) -> Option<&'static str> {
 fn chart_type_has_axes(chart_type: &ChartType) -> bool {
     !matches!(
         chart_type,
-        ChartType::Doughnut | ChartType::Pie | ChartType::PieOfPie | ChartType::BarOfPie
+        ChartType::Doughnut
+            | ChartType::Pie
+            | ChartType::Pie3D
+            | ChartType::PieOfPie
+            | ChartType::BarOfPie
     )
 }
 
@@ -21532,15 +21597,26 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
 fn chart_type_to_excel_value(chart_type: &ChartType) -> OmResult<i32> {
     match chart_type {
         ChartType::Area => Ok(XL_AREA),
+        ChartType::Area3D => Ok(XL_3D_AREA),
         ChartType::AreaStacked => Ok(XL_AREA_STACKED),
+        ChartType::Area3DStacked => Ok(XL_3D_AREA_STACKED),
         ChartType::AreaStacked100 => Ok(XL_AREA_STACKED_100),
+        ChartType::Area3DStacked100 => Ok(XL_3D_AREA_STACKED_100),
         ChartType::Bar => Ok(XL_BAR_CLUSTERED),
+        ChartType::Bar3DClustered => Ok(XL_3D_BAR_CLUSTERED),
         ChartType::BarStacked => Ok(XL_BAR_STACKED),
+        ChartType::Bar3DStacked => Ok(XL_3D_BAR_STACKED),
         ChartType::BarStacked100 => Ok(XL_BAR_STACKED_100),
+        ChartType::Bar3DStacked100 => Ok(XL_3D_BAR_STACKED_100),
         ChartType::Column => Ok(XL_COLUMN_CLUSTERED),
+        ChartType::Column3D => Ok(XL_3D_COLUMN),
+        ChartType::Column3DClustered => Ok(XL_3D_COLUMN_CLUSTERED),
         ChartType::ColumnStacked => Ok(XL_COLUMN_STACKED),
+        ChartType::Column3DStacked => Ok(XL_3D_COLUMN_STACKED),
         ChartType::ColumnStacked100 => Ok(XL_COLUMN_STACKED_100),
+        ChartType::Column3DStacked100 => Ok(XL_3D_COLUMN_STACKED_100),
         ChartType::Line => Ok(XL_LINE),
+        ChartType::Line3D => Ok(XL_3D_LINE),
         ChartType::LineMarkers => Ok(XL_LINE_MARKERS),
         ChartType::LineMarkersStacked => Ok(XL_LINE_MARKERS_STACKED),
         ChartType::LineMarkersStacked100 => Ok(XL_LINE_MARKERS_STACKED_100),
@@ -21555,6 +21631,7 @@ fn chart_type_to_excel_value(chart_type: &ChartType) -> OmResult<i32> {
         ChartType::Bubble3DEffect => Ok(XL_BUBBLE_3D_EFFECT),
         ChartType::Doughnut => Ok(XL_DOUGHNUT),
         ChartType::Pie => Ok(XL_PIE),
+        ChartType::Pie3D => Ok(XL_3D_PIE),
         ChartType::PieOfPie => Ok(XL_PIE_OF_PIE),
         ChartType::BarOfPie => Ok(XL_BAR_OF_PIE),
         ChartType::Radar => Ok(XL_RADAR),
@@ -80130,6 +80207,30 @@ mod tests {
                 None,
             ),
             (
+                super::XL_3D_AREA,
+                "area3DChart",
+                true,
+                None,
+                Some("standard"),
+                None,
+            ),
+            (
+                super::XL_3D_AREA_STACKED,
+                "area3DChart",
+                true,
+                None,
+                Some("stacked"),
+                None,
+            ),
+            (
+                super::XL_3D_AREA_STACKED_100,
+                "area3DChart",
+                true,
+                None,
+                Some("percentStacked"),
+                None,
+            ),
+            (
                 super::XL_COLUMN_CLUSTERED,
                 "barChart",
                 true,
@@ -80154,6 +80255,38 @@ mod tests {
                 None,
             ),
             (
+                super::XL_3D_COLUMN,
+                "bar3DChart",
+                true,
+                Some("col"),
+                Some("standard"),
+                None,
+            ),
+            (
+                super::XL_3D_COLUMN_CLUSTERED,
+                "bar3DChart",
+                true,
+                Some("col"),
+                Some("clustered"),
+                None,
+            ),
+            (
+                super::XL_3D_COLUMN_STACKED,
+                "bar3DChart",
+                true,
+                Some("col"),
+                Some("stacked"),
+                None,
+            ),
+            (
+                super::XL_3D_COLUMN_STACKED_100,
+                "bar3DChart",
+                true,
+                Some("col"),
+                Some("percentStacked"),
+                None,
+            ),
+            (
                 super::XL_BAR_STACKED,
                 "barChart",
                 true,
@@ -80164,6 +80297,30 @@ mod tests {
             (
                 super::XL_BAR_STACKED_100,
                 "barChart",
+                true,
+                Some("bar"),
+                Some("percentStacked"),
+                None,
+            ),
+            (
+                super::XL_3D_BAR_CLUSTERED,
+                "bar3DChart",
+                true,
+                Some("bar"),
+                Some("clustered"),
+                None,
+            ),
+            (
+                super::XL_3D_BAR_STACKED,
+                "bar3DChart",
+                true,
+                Some("bar"),
+                Some("stacked"),
+                None,
+            ),
+            (
+                super::XL_3D_BAR_STACKED_100,
+                "bar3DChart",
                 true,
                 Some("bar"),
                 Some("percentStacked"),
@@ -80209,6 +80366,8 @@ mod tests {
                 Some("percentStacked"),
                 Some("0"),
             ),
+            (super::XL_3D_LINE, "line3DChart", true, None, None, None),
+            (super::XL_3D_PIE, "pie3DChart", false, None, None, None),
             (super::XL_DOUGHNUT, "doughnutChart", false, None, None, None),
             (super::XL_RADAR, "radarChart", true, None, None, None),
         ] {
