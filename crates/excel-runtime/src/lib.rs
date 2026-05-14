@@ -7540,6 +7540,17 @@ impl ExcelRuntime {
                     self.set_headless_copy_mode();
                     Ok(OmValue::Empty)
                 }
+                "Cut" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "ChartObject.Cut does not accept arguments",
+                        ));
+                    }
+                    let chart_object = self.chart_object_model(workbook, chart_object_id)?;
+                    self.chart_model(workbook, chart_object.chart_id)?;
+                    self.set_headless_cut_mode();
+                    Ok(OmValue::Empty)
+                }
                 "CopyPicture" => {
                     validate_copy_picture_args(args, 2, "ChartObject.CopyPicture")?;
                     let chart_object = self.chart_object_model(workbook, chart_object_id)?;
@@ -9106,6 +9117,11 @@ impl ExcelRuntime {
         self.clipboard = None;
     }
 
+    fn set_headless_cut_mode(&mut self) {
+        self.cut_copy_mode = Some(XL_CUT);
+        self.clipboard = None;
+    }
+
     fn focus_member_supported(&self, surface: &str, member: &str, write: bool) -> OmResult<()> {
         if !write
             && matches!(
@@ -9132,6 +9148,7 @@ impl ExcelRuntime {
                             | "Visible"
                             | "Select"
                             | "Copy"
+                            | "Cut"
                             | "CopyPicture"
                             | "Delete"
                     )
@@ -9156,6 +9173,7 @@ impl ExcelRuntime {
                             | "Activate"
                             | "Select"
                             | "Copy"
+                            | "Cut"
                             | "CopyPicture"
                             | "Delete"
                     )
@@ -11190,6 +11208,16 @@ impl ExcelRuntime {
                 }
                 self.chart_object_entries_for_sheet(workbook, sheet_id)?;
                 self.set_headless_copy_mode();
+                Ok(OmValue::Empty)
+            }
+            "Cut" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ChartObjects.Cut does not accept arguments",
+                    ));
+                }
+                self.chart_object_entries_for_sheet(workbook, sheet_id)?;
+                self.set_headless_cut_mode();
                 Ok(OmValue::Empty)
             }
             "CopyPicture" => {
@@ -77963,6 +77991,38 @@ mod tests {
             );
         }
 
+        for (handle, member) in [(chart_object, "Cut"), (chart_objects, "Cut")] {
+            runtime
+                .dispatch_set(application, "CutCopyMode", OmValue::Bool(false), &[])
+                .expect("reset Application.CutCopyMode before chart cut method");
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(handle, member, &[])
+                    .unwrap_or_else(|error| {
+                        panic!("{member} should be a headless cut no-op: {error:?}")
+                    }),
+                OmValue::Empty
+            );
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(application, "CutCopyMode", &[])
+                        .expect("Application.CutCopyMode after chart cut method")
+                ),
+                f64::from(super::XL_CUT)
+            );
+            assert!(
+                runtime.clipboard.is_none(),
+                "{member} should not populate a Range clipboard payload"
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(workbook.0, "Saved", &[])
+                    .expect("Workbook.Saved after chart cut method"),
+                OmValue::Bool(true)
+            );
+        }
+
         for (handle, member) in [(chart_area, "ClearFormats"), (plot_area, "ClearFormats")] {
             assert_eq!(
                 runtime
@@ -77991,6 +78051,20 @@ mod tests {
             runtime
                 .dispatch_invoke(chart_object, "Copy", &[OmValue::Missing])
                 .expect_err("ChartObject.Copy rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_object, "Cut", &[OmValue::Missing])
+                .expect_err("ChartObject.Cut rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_objects, "Cut", &[OmValue::Missing])
+                .expect_err("ChartObjects.Cut rejects arguments")
                 .code,
             OmErrorCode::InvalidArgument
         );
