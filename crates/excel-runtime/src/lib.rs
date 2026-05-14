@@ -8786,6 +8786,25 @@ impl ExcelRuntime {
                 }
             }
             RuntimeObjectKind::ChartArea { workbook, chart_id } => match member {
+                "Copy" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "ChartArea.Copy does not accept arguments",
+                        ));
+                    }
+                    self.chart_model(workbook, chart_id)?;
+                    self.set_headless_copy_mode();
+                    Ok(OmValue::Empty)
+                }
+                "ClearFormats" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "ChartArea.ClearFormats does not accept arguments",
+                        ));
+                    }
+                    self.chart_model(workbook, chart_id)?;
+                    Ok(OmValue::Empty)
+                }
                 "Select" => {
                     if !args.is_empty() {
                         return Err(OmError::invalid_argument(
@@ -8801,6 +8820,15 @@ impl ExcelRuntime {
                 ))),
             },
             RuntimeObjectKind::PlotArea { workbook, chart_id } => match member {
+                "ClearFormats" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "PlotArea.ClearFormats does not accept arguments",
+                        ));
+                    }
+                    self.chart_model(workbook, chart_id)?;
+                    Ok(OmValue::Empty)
+                }
                 "Select" => {
                     if !args.is_empty() {
                         return Err(OmError::invalid_argument(
@@ -9187,8 +9215,14 @@ impl ExcelRuntime {
                             | "PrintOut"
                             | "Delete"
                     )
-                    | ("ChartArea", "Creator" | "Application" | "Parent" | "Select")
-                    | ("PlotArea", "Creator" | "Application" | "Parent" | "Select")
+                    | (
+                        "ChartArea",
+                        "Creator" | "Application" | "Parent" | "Select" | "Copy" | "ClearFormats"
+                    )
+                    | (
+                        "PlotArea",
+                        "Creator" | "Application" | "Parent" | "Select" | "ClearFormats"
+                    )
                     | (
                         "ChartTitle",
                         "Text"
@@ -77743,7 +77777,7 @@ mod tests {
     }
 
     #[test]
-    fn chart_copy_picture_methods_set_copy_mode_without_dirtying() {
+    fn chart_headless_copy_and_format_methods_do_not_dirty_workbook() {
         let mut runtime = ExcelRuntime::new();
         let application = runtime.root_application();
         let workbook = runtime
@@ -77773,6 +77807,16 @@ mod tests {
             runtime
                 .dispatch_get(chart_object, "Chart", &[])
                 .expect("ChartObject.Chart"),
+        );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("Chart.ChartArea"),
+        );
+        let plot_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "PlotArea", &[])
+                .expect("Chart.PlotArea"),
         );
         assert_eq!(
             runtime
@@ -77807,6 +77851,7 @@ mod tests {
                 ],
             ),
             (chart, "Copy", Vec::new()),
+            (chart_area, "Copy", Vec::new()),
             (
                 chart,
                 "CopyPicture",
@@ -77848,10 +77893,41 @@ mod tests {
             );
         }
 
+        for (handle, member) in [(chart_area, "ClearFormats"), (plot_area, "ClearFormats")] {
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(handle, member, &[])
+                    .unwrap_or_else(|error| {
+                        panic!("{member} should be a headless format no-op: {error:?}")
+                    }),
+                OmValue::Empty
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(workbook.0, "Saved", &[])
+                    .expect("Workbook.Saved after chart format no-op"),
+                OmValue::Bool(true)
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(handle, member, &[OmValue::Missing])
+                    .expect_err("chart format no-op rejects arguments")
+                    .code,
+                OmErrorCode::InvalidArgument
+            );
+        }
+
         assert_eq!(
             runtime
                 .dispatch_invoke(chart_object, "Copy", &[OmValue::Missing])
                 .expect_err("ChartObject.Copy rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_area, "Copy", &[OmValue::Missing])
+                .expect_err("ChartArea.Copy rejects arguments")
                 .code,
             OmErrorCode::InvalidArgument
         );
