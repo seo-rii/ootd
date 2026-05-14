@@ -2878,7 +2878,7 @@ impl ExcelRuntime {
                             ))
                         }
                     }
-                    "PrintObject" | "Locked" => {
+                    "PrintObject" | "Locked" | "ProtectChartObject" => {
                         let OmValue::Bool(enabled) = value else {
                             return Err(OmError::type_mismatch(format!(
                                 "ChartObject.{member} expects a boolean value"
@@ -2893,7 +2893,7 @@ impl ExcelRuntime {
                         }
                         let attr_name = match member {
                             "PrintObject" => "fPrintsWithSheet",
-                            "Locked" => "fLocksWithSheet",
+                            "Locked" | "ProtectChartObject" => "fLocksWithSheet",
                             _ => unreachable!("ChartObject clientData boolean was matched"),
                         };
                         let new_value = if enabled { "1" } else { "0" };
@@ -3329,11 +3329,11 @@ impl ExcelRuntime {
                     )));
                 }
                 match member {
-                    "Visible" => {
-                        let OmValue::Bool(visible) = value else {
-                            return Err(OmError::type_mismatch(
-                                "ChartObjects.Visible expects a boolean value",
-                            ));
+                    "Visible" | "ProtectChartObject" => {
+                        let OmValue::Bool(enabled) = value else {
+                            return Err(OmError::type_mismatch(format!(
+                                "ChartObjects.{member} expects a boolean value"
+                            )));
                         };
                         let chart_object_ids = self
                             .chart_object_entries_for_sheet(workbook, sheet_id)?
@@ -3359,19 +3359,40 @@ impl ExcelRuntime {
                                 if !chart_object_ids.contains(&chart_object.id) {
                                     continue;
                                 }
-                                let changed = if visible {
-                                    chart_object.non_visual_attrs.remove("hidden").is_some()
-                                } else if chart_object
-                                    .non_visual_attrs
-                                    .get("hidden")
-                                    .is_some_and(|value| value == "1")
-                                {
-                                    false
-                                } else {
-                                    chart_object
-                                        .non_visual_attrs
-                                        .insert("hidden".to_string(), "1".to_string());
-                                    true
+                                let changed = match member {
+                                    "Visible" => {
+                                        if enabled {
+                                            chart_object.non_visual_attrs.remove("hidden").is_some()
+                                        } else if chart_object
+                                            .non_visual_attrs
+                                            .get("hidden")
+                                            .is_some_and(|value| value == "1")
+                                        {
+                                            false
+                                        } else {
+                                            chart_object
+                                                .non_visual_attrs
+                                                .insert("hidden".to_string(), "1".to_string());
+                                            true
+                                        }
+                                    }
+                                    "ProtectChartObject" => {
+                                        let new_value = if enabled { "1" } else { "0" };
+                                        if chart_object
+                                            .client_data_attrs
+                                            .get("fLocksWithSheet")
+                                            .map_or(true, |value| value != new_value)
+                                        {
+                                            chart_object.client_data_attrs.insert(
+                                                "fLocksWithSheet".to_string(),
+                                                new_value.to_string(),
+                                            );
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    }
+                                    _ => unreachable!("ChartObjects boolean member was matched"),
                                 };
                                 if changed {
                                     chart_object.dirty = true;
@@ -9166,6 +9187,7 @@ impl ExcelRuntime {
                             | "Width"
                             | "Height"
                             | "Visible"
+                            | "ProtectChartObject"
                             | "Select"
                             | "Copy"
                             | "Cut"
@@ -9188,6 +9210,7 @@ impl ExcelRuntime {
                             | "OnAction"
                             | "PrintObject"
                             | "Locked"
+                            | "ProtectChartObject"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -11149,6 +11172,32 @@ impl ExcelRuntime {
                 }
                 Ok(OmValue::Bool(visible))
             }
+            "ProtectChartObject" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ChartObjects.ProtectChartObject does not accept arguments",
+                    ));
+                }
+                let mut protected = true;
+                for (chart_object_id, _) in
+                    self.chart_object_entries_for_sheet(workbook, sheet_id)?
+                {
+                    if self
+                        .chart_object_model(workbook, chart_object_id)?
+                        .client_data_attrs
+                        .get("fLocksWithSheet")
+                        .is_some_and(|value| {
+                            value == "0"
+                                || value.eq_ignore_ascii_case("false")
+                                || value.eq_ignore_ascii_case("off")
+                        })
+                    {
+                        protected = false;
+                        break;
+                    }
+                }
+                Ok(OmValue::Bool(protected))
+            }
             _ => Err(OmError::unsupported(format!(
                 "ChartObjects.{member} is not implemented"
             ))),
@@ -11635,7 +11684,7 @@ impl ExcelRuntime {
                     });
                 Ok(OmValue::Bool(print_object))
             }
-            "Locked" => {
+            "Locked" | "ProtectChartObject" => {
                 let locked = self
                     .chart_object_model(workbook, chart_object_id)?
                     .client_data_attrs
@@ -75226,6 +75275,18 @@ mod tests {
                 .expect("initial ChartObject.Locked"),
             OmValue::Bool(true)
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "ProtectChartObject", &[])
+                .expect("initial ChartObject.ProtectChartObject"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_objects, "ProtectChartObject", &[])
+                .expect("initial ChartObjects.ProtectChartObject"),
+            OmValue::Bool(true)
+        );
         runtime
             .dispatch_set(chart_object, "Locked", OmValue::Bool(false), &[])
             .expect("set ChartObject.Locked false");
@@ -75233,6 +75294,18 @@ mod tests {
             runtime
                 .dispatch_get(chart_object, "Locked", &[])
                 .expect("ChartObject.Locked after false"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "ProtectChartObject", &[])
+                .expect("ChartObject.ProtectChartObject after Locked false"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_objects, "ProtectChartObject", &[])
+                .expect("ChartObjects.ProtectChartObject after Locked false"),
             OmValue::Bool(false)
         );
         let unlocked_bytes = runtime
@@ -75258,8 +75331,25 @@ mod tests {
         assert!(unlocked_drawing.contains(r#"fPrintsWithSheet="0""#));
 
         runtime
-            .dispatch_set(chart_object, "Locked", OmValue::Bool(true), &[])
-            .expect("set ChartObject.Locked true");
+            .dispatch_set(
+                chart_objects,
+                "ProtectChartObject",
+                OmValue::Bool(true),
+                &[],
+            )
+            .expect("set ChartObjects.ProtectChartObject true");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "Locked", &[])
+                .expect("ChartObject.Locked after collection ProtectChartObject true"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "ProtectChartObject", &[])
+                .expect("ChartObject.ProtectChartObject after true"),
+            OmValue::Bool(true)
+        );
         let locked_bytes = runtime
             .save_workbook(
                 workbook,
@@ -75290,6 +75380,24 @@ mod tests {
             )
             .expect_err("ChartObject.Locked should reject non-bool");
         assert_eq!(invalid_locked.code, OmErrorCode::TypeMismatch);
+        let invalid_protect = runtime
+            .dispatch_set(
+                chart_object,
+                "ProtectChartObject",
+                OmValue::Text("false".to_string()),
+                &[],
+            )
+            .expect_err("ChartObject.ProtectChartObject should reject non-bool");
+        assert_eq!(invalid_protect.code, OmErrorCode::TypeMismatch);
+        let invalid_collection_protect = runtime
+            .dispatch_set(
+                chart_objects,
+                "ProtectChartObject",
+                OmValue::Text("false".to_string()),
+                &[],
+            )
+            .expect_err("ChartObjects.ProtectChartObject should reject non-bool");
+        assert_eq!(invalid_collection_protect.code, OmErrorCode::TypeMismatch);
     }
 
     #[test]
