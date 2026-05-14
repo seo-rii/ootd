@@ -3,10 +3,10 @@ use std::io::{Cursor, Write};
 
 use excel_model::{
     AxisModel, CellData, ChartAxisKind, ChartCacheKind, ChartCacheSnapshot,
-    ChartCellMarkerXmlAttrs, ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerXmlAttrs,
-    ChartModel, ChartObjectModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr,
-    ChartSplitType, ChartText, ChartType, DefinedNameTable, DrawingModel, DrawingObjectModel,
-    LegendModel, SeriesModel, WorkbookState, WorksheetData,
+    ChartCellMarkerXmlAttrs, ChartDataLabelsModel, ChartDisplayBlanksAs, ChartLegendPosition,
+    ChartMarkerXmlAttrs, ChartModel, ChartObjectModel, ChartSheetBinding, ChartSizeRepresents,
+    ChartSourceExpr, ChartSplitType, ChartText, ChartType, DefinedNameTable, DrawingModel,
+    DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
     resolve_chart_source_reference_with_names,
 };
 use office_common::{
@@ -683,6 +683,7 @@ pub struct ChartPartSummary {
     pub size_represents: Option<ChartSizeRepresents>,
     pub split_type: Option<ChartSplitType>,
     pub split_value: Option<f64>,
+    pub data_labels: Option<ChartDataLabelsSummary>,
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,
     pub rounded_corners: Option<bool>,
@@ -692,6 +693,18 @@ pub struct ChartPartSummary {
     pub has_extension_list: bool,
     pub relationships_part_uri: Option<String>,
     pub support_relationships: Vec<ChartSupportRelationshipBinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ChartDataLabelsSummary {
+    pub show_legend_key: Option<bool>,
+    pub has_leader_lines: Option<bool>,
+    pub show_series_name: Option<bool>,
+    pub show_category_name: Option<bool>,
+    pub show_value: Option<bool>,
+    pub show_percentage: Option<bool>,
+    pub show_bubble_size: Option<bool>,
+    pub separator: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3171,6 +3184,23 @@ fn build_chart_model_overlay(
                     size_represents: summary.and_then(|summary| summary.size_represents),
                     split_type: summary.and_then(|summary| summary.split_type),
                     split_value: summary.and_then(|summary| summary.split_value),
+                    data_labels: summary.and_then(|summary| {
+                        summary
+                            .data_labels
+                            .as_ref()
+                            .map(|data_labels| ChartDataLabelsModel {
+                                label_type: None,
+                                show_legend_key: data_labels.show_legend_key,
+                                has_leader_lines: data_labels.has_leader_lines,
+                                show_series_name: data_labels.show_series_name,
+                                show_category_name: data_labels.show_category_name,
+                                show_value: data_labels.show_value,
+                                show_percentage: data_labels.show_percentage,
+                                show_bubble_size: data_labels.show_bubble_size,
+                                separator: data_labels.separator.clone(),
+                                dirty: false,
+                            })
+                    }),
                     display_blanks_as: summary.and_then(|summary| summary.display_blanks_as),
                     plot_visible_only: summary.and_then(|summary| summary.plot_visible_only),
                     rounded_corners: summary.and_then(|summary| summary.rounded_corners),
@@ -16006,6 +16036,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut size_represents = None;
     let mut split_type = None;
     let mut split_value = None;
+    let mut data_labels = None::<ChartDataLabelsSummary>;
     let mut display_blanks_as = None;
     let mut plot_visible_only = None;
     let mut rounded_corners = None;
@@ -16022,6 +16053,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut active_axis_index = None::<usize>;
     let mut active_axis_depth = 0usize;
     let mut axis_title_text_depth = 0usize;
+    let mut data_label_separator_text = None::<String>;
+    let mut data_label_separator_depth = 0usize;
     let mut element_path = Vec::<String>::new();
 
     let parse_u32_val_attr = |element: &BytesStart<'_>,
@@ -16181,6 +16214,44 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 {
                     let overlay = parse_bool_val_attr(&element, &reader)?.unwrap_or(true);
                     legend_include_in_layout = Some(!overlay);
+                }
+                if local_name == b"dLbls"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                {
+                    data_labels.get_or_insert_with(ChartDataLabelsSummary::default);
+                }
+                if element_path.last().is_some_and(|name| name == "dLbls") {
+                    if local_name == b"separator" {
+                        data_label_separator_text = Some(String::new());
+                        data_label_separator_depth = 1;
+                    } else if matches!(
+                        local_name,
+                        b"showLegendKey"
+                            | b"showLeaderLines"
+                            | b"showSerName"
+                            | b"showCatName"
+                            | b"showVal"
+                            | b"showPercent"
+                            | b"showBubbleSize"
+                    ) {
+                        let value = parse_bool_val_attr(&element, &reader)?.unwrap_or(true);
+                        let data_labels =
+                            data_labels.get_or_insert_with(ChartDataLabelsSummary::default);
+                        match local_name {
+                            b"showLegendKey" => data_labels.show_legend_key = Some(value),
+                            b"showLeaderLines" => data_labels.has_leader_lines = Some(value),
+                            b"showSerName" => data_labels.show_series_name = Some(value),
+                            b"showCatName" => data_labels.show_category_name = Some(value),
+                            b"showVal" => data_labels.show_value = Some(value),
+                            b"showPercent" => data_labels.show_percentage = Some(value),
+                            b"showBubbleSize" => data_labels.show_bubble_size = Some(value),
+                            _ => {}
+                        }
+                    }
+                } else if data_label_separator_depth > 0 {
+                    data_label_separator_depth += 1;
                 }
                 if local_name == b"varyColors"
                     && element_path
@@ -16532,6 +16603,39 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     let overlay = parse_bool_val_attr(&element, &reader)?.unwrap_or(true);
                     legend_include_in_layout = Some(!overlay);
                 }
+                if local_name == b"dLbls"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                {
+                    data_labels.get_or_insert_with(ChartDataLabelsSummary::default);
+                }
+                if element_path.last().is_some_and(|name| name == "dLbls")
+                    && matches!(
+                        local_name,
+                        b"showLegendKey"
+                            | b"showLeaderLines"
+                            | b"showSerName"
+                            | b"showCatName"
+                            | b"showVal"
+                            | b"showPercent"
+                            | b"showBubbleSize"
+                    )
+                {
+                    let value = parse_bool_val_attr(&element, &reader)?.unwrap_or(true);
+                    let data_labels =
+                        data_labels.get_or_insert_with(ChartDataLabelsSummary::default);
+                    match local_name {
+                        b"showLegendKey" => data_labels.show_legend_key = Some(value),
+                        b"showLeaderLines" => data_labels.has_leader_lines = Some(value),
+                        b"showSerName" => data_labels.show_series_name = Some(value),
+                        b"showCatName" => data_labels.show_category_name = Some(value),
+                        b"showVal" => data_labels.show_value = Some(value),
+                        b"showPercent" => data_labels.show_percentage = Some(value),
+                        b"showBubbleSize" => data_labels.show_bubble_size = Some(value),
+                        _ => {}
+                    }
+                }
                 if local_name == b"varyColors"
                     && element_path
                         .last()
@@ -16827,6 +16931,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 {
                     title_text.push_str(&text_value);
                 }
+                if let Some(separator) = data_label_separator_text.as_mut() {
+                    separator.push_str(&text_value);
+                }
             }
             Ok(Event::CData(text)) => {
                 let text_value = text.xml_content().map_err(xml_error)?;
@@ -16843,6 +16950,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(title_text) = &mut axes[axis_index].title_text
                 {
                     title_text.push_str(&text_value);
+                }
+                if let Some(separator) = data_label_separator_text.as_mut() {
+                    separator.push_str(&text_value);
                 }
             }
             Ok(Event::End(element)) if formula_depth > 0 => {
@@ -16889,6 +16999,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 if axis_title_text_depth > 0 {
                     axis_title_text_depth -= 1;
                 }
+                if data_label_separator_depth > 0 {
+                    data_label_separator_depth -= 1;
+                }
                 if active_axis_depth > 0 {
                     active_axis_depth -= 1;
                 }
@@ -16928,6 +17041,18 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
                 if axis_title_text_depth > 0 {
                     axis_title_text_depth -= 1;
+                }
+                if data_label_separator_depth > 0 {
+                    if data_label_separator_depth == 1 && local_name == b"separator" {
+                        if let Some(separator) = data_label_separator_text.take()
+                            && !separator.is_empty()
+                        {
+                            data_labels
+                                .get_or_insert_with(ChartDataLabelsSummary::default)
+                                .separator = Some(separator);
+                        }
+                    }
+                    data_label_separator_depth -= 1;
                 }
                 if active_axis_depth > 0 {
                     if active_axis_depth == 1
@@ -16988,6 +17113,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         size_represents,
         split_type,
         split_value,
+        data_labels,
         display_blanks_as,
         plot_visible_only,
         rounded_corners,
@@ -20502,8 +20628,8 @@ mod tests {
 
     use super::{
         BorderSummary, COMMENTS_RELATIONSHIP_TYPE, CellData, ChartAxisKind, ChartAxisSummary,
-        ChartCacheKindSummary, ChartCacheSummary, ChartLegendPosition, ChartSeriesSummary,
-        ChartSupportRelationshipBinding, CommentPartSummary, DrawingAnchorKind,
+        ChartCacheKindSummary, ChartCacheSummary, ChartDataLabelsSummary, ChartLegendPosition,
+        ChartSeriesSummary, ChartSupportRelationshipBinding, CommentPartSummary, DrawingAnchorKind,
         DrawingAnchorSummary, DrawingCellMarkerSummary, DrawingPointSummary, DrawingSizeSummary,
         DxfSummary, FileFormat, FillSummary, FontSummary, HYPERLINK_RELATIONSHIP_TYPE, OpcPackage,
         STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE, VML_DRAWING_RELATIONSHIP_TYPE,
@@ -21561,6 +21687,7 @@ mod tests {
         <c:sizeRepresents val="w"/>
         <c:splitType val="val"/>
         <c:splitPos val="10"/>
+        <c:dLbls><c:showLegendKey val="1"/><c:showSerName val="0"/><c:showCatName val="1"/><c:showVal val="1"/><c:showPercent val="0"/><c:showBubbleSize val="0"/><c:separator>, </c:separator></c:dLbls>
         <c:serLines/>
         <c:dropLines/>
         <c:hiLowLines/>
@@ -21798,6 +21925,19 @@ mod tests {
         );
         assert_eq!(chart_summary.split_type, Some(ChartSplitType::Value));
         assert_eq!(chart_summary.split_value, Some(10.0));
+        assert_eq!(
+            chart_summary.data_labels,
+            Some(ChartDataLabelsSummary {
+                show_legend_key: Some(true),
+                has_leader_lines: None,
+                show_series_name: Some(false),
+                show_category_name: Some(true),
+                show_value: Some(true),
+                show_percentage: Some(false),
+                show_bubble_size: Some(false),
+                separator: Some(", ".to_string()),
+            })
+        );
         assert_eq!(chart_summary.plot_visible_only, Some(false));
         assert_eq!(chart_summary.rounded_corners, Some(true));
         assert_eq!(
@@ -21924,6 +22064,15 @@ mod tests {
         );
         assert_eq!(chart_model.split_type, Some(ChartSplitType::Value));
         assert_eq!(chart_model.split_value, Some(10.0));
+        let data_labels = chart_model.data_labels.as_ref().expect("data labels");
+        assert_eq!(data_labels.show_legend_key, Some(true));
+        assert_eq!(data_labels.show_series_name, Some(false));
+        assert_eq!(data_labels.show_category_name, Some(true));
+        assert_eq!(data_labels.show_value, Some(true));
+        assert_eq!(data_labels.show_percentage, Some(false));
+        assert_eq!(data_labels.show_bubble_size, Some(false));
+        assert_eq!(data_labels.separator.as_deref(), Some(", "));
+        assert!(!data_labels.dirty);
         assert_eq!(chart_model.plot_visible_only, Some(false));
         assert_eq!(chart_model.rounded_corners, Some(true));
         assert_eq!(

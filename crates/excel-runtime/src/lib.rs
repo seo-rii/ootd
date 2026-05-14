@@ -1,8 +1,8 @@
 use excel_model::{
-    AxisModel, ChartAxisKind, ChartDisplayBlanksAs, ChartLegendPosition, ChartModel,
-    ChartObjectModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartSplitType,
-    ChartText, ChartType, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel,
-    WorkbookState, WorksheetData, resolve_chart_source_reference_with_names,
+    AxisModel, ChartAxisKind, ChartDataLabelsModel, ChartDisplayBlanksAs, ChartLegendPosition,
+    ChartModel, ChartObjectModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr,
+    ChartSplitType, ChartText, ChartType, DrawingModel, DrawingObjectModel, LegendModel,
+    SeriesModel, WorkbookState, WorksheetData, resolve_chart_source_reference_with_names,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
@@ -8052,30 +8052,106 @@ impl ExcelRuntime {
                             "Chart.ApplyDataLabels accepts at most Type, LegendKey, AutoText, HasLeaderLines, ShowSeriesName, ShowCategoryName, ShowValue, ShowPercentage, ShowBubbleSize, and Separator arguments",
                         ));
                     }
-                    self.chart_model(workbook, chart_id)?;
-                    validate_optional_integer_arg(args, 0, "Chart.ApplyDataLabels Type")?;
-                    for (index, label) in [
-                        (1, "Chart.ApplyDataLabels LegendKey"),
-                        (2, "Chart.ApplyDataLabels AutoText"),
-                        (3, "Chart.ApplyDataLabels HasLeaderLines"),
-                        (4, "Chart.ApplyDataLabels ShowSeriesName"),
-                        (5, "Chart.ApplyDataLabels ShowCategoryName"),
-                        (6, "Chart.ApplyDataLabels ShowValue"),
-                        (7, "Chart.ApplyDataLabels ShowPercentage"),
-                        (8, "Chart.ApplyDataLabels ShowBubbleSize"),
-                    ] {
-                        if let Some(value) = args.get(index) {
-                            coerce_optional_bool_arg(value, false, label)?;
+                    let label_type = match args.first() {
+                        None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => None,
+                        Some(OmValue::Number(value)) => {
+                            if !value.is_finite()
+                                || value.fract() != 0.0
+                                || *value < i32::MIN as f64
+                                || *value > i32::MAX as f64
+                            {
+                                return Err(OmError::invalid_argument(
+                                    "Chart.ApplyDataLabels Type expects an integer value when provided",
+                                ));
+                            }
+                            Some(*value as i32)
                         }
+                        Some(_) => {
+                            return Err(OmError::type_mismatch(
+                                "Chart.ApplyDataLabels Type expects a numeric value when provided",
+                            ));
+                        }
+                    };
+                    let optional_bool = |index: usize, label: &str| -> OmResult<Option<bool>> {
+                        match args.get(index) {
+                            None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => {
+                                Ok(None)
+                            }
+                            Some(OmValue::Bool(value)) => Ok(Some(*value)),
+                            Some(_) => Err(OmError::type_mismatch(format!(
+                                "{label} expects a boolean value when provided"
+                            ))),
+                        }
+                    };
+                    // AutoText affects Excel's automatic label text generation. The current model
+                    // does not persist it yet, but the OM still validates the argument.
+                    let _auto_text = optional_bool(2, "Chart.ApplyDataLabels AutoText")?;
+                    let mut data_labels = ChartDataLabelsModel {
+                        label_type,
+                        show_legend_key: optional_bool(1, "Chart.ApplyDataLabels LegendKey")?,
+                        has_leader_lines: optional_bool(3, "Chart.ApplyDataLabels HasLeaderLines")?,
+                        show_series_name: optional_bool(4, "Chart.ApplyDataLabels ShowSeriesName")?,
+                        show_category_name: optional_bool(
+                            5,
+                            "Chart.ApplyDataLabels ShowCategoryName",
+                        )?,
+                        show_value: optional_bool(6, "Chart.ApplyDataLabels ShowValue")?,
+                        show_percentage: optional_bool(7, "Chart.ApplyDataLabels ShowPercentage")?,
+                        show_bubble_size: optional_bool(8, "Chart.ApplyDataLabels ShowBubbleSize")?,
+                        separator: match args.get(9) {
+                            None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => None,
+                            Some(OmValue::Text(value)) => Some(value.clone()),
+                            Some(_) => {
+                                return Err(OmError::type_mismatch(
+                                    "Chart.ApplyDataLabels Separator expects a text value when provided",
+                                ));
+                            }
+                        },
+                        dirty: true,
+                    };
+                    match label_type {
+                        Some(-4142) => {
+                            data_labels.show_legend_key.get_or_insert(false);
+                            data_labels.show_series_name.get_or_insert(false);
+                            data_labels.show_category_name.get_or_insert(false);
+                            data_labels.show_value.get_or_insert(false);
+                            data_labels.show_percentage.get_or_insert(false);
+                            data_labels.show_bubble_size.get_or_insert(false);
+                        }
+                        Some(2) => {
+                            data_labels.show_value.get_or_insert(true);
+                        }
+                        Some(3) => {
+                            data_labels.show_percentage.get_or_insert(true);
+                        }
+                        Some(4) => {
+                            data_labels.show_category_name.get_or_insert(true);
+                        }
+                        Some(5) => {
+                            data_labels.show_category_name.get_or_insert(true);
+                            data_labels.show_percentage.get_or_insert(true);
+                        }
+                        Some(6) => {
+                            data_labels.show_bubble_size.get_or_insert(true);
+                        }
+                        _ => {}
                     }
-                    if let Some(value) = args.get(9)
-                        && !om_value_is_omitted(value)
-                        && !matches!(value, OmValue::Text(_))
-                    {
-                        return Err(OmError::type_mismatch(
-                            "Chart.ApplyDataLabels Separator expects a text value when provided",
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
                         ));
                     }
+                    let chart = runtime
+                        .loaded
+                        .state
+                        .charts
+                        .get_mut(&chart_id)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    chart.data_labels = Some(data_labels);
+                    chart.dirty = true;
+                    runtime.dirty = true;
                     Ok(OmValue::Empty)
                 }
                 "ApplyChartTemplate" => {
@@ -11649,6 +11725,7 @@ impl ExcelRuntime {
                             size_represents: None,
                             split_type: None,
                             split_value: None,
+                            data_labels: None,
                             display_blanks_as: None,
                             plot_visible_only: None,
                             rounded_corners: None,
@@ -14573,6 +14650,7 @@ impl ExcelRuntime {
                         size_represents: None,
                         split_type: None,
                         split_value: None,
+                        data_labels: None,
                         display_blanks_as: None,
                         plot_visible_only: None,
                         rounded_corners: None,
@@ -20339,6 +20417,10 @@ fn patch_loaded_chart_model_xml(
     let expected_size_represents = chart.size_represents.map(chart_size_represents_xml_value);
     let expected_split_type = chart.split_type.map(chart_split_type_xml_value);
     let expected_split_value = chart.split_value.map(chart_number_xml_value);
+    let expected_dirty_data_labels = chart
+        .data_labels
+        .as_ref()
+        .filter(|data_labels| data_labels.dirty);
     let expected_gap_width = expected_gap_width.as_deref();
     let expected_overlap = expected_overlap.as_deref();
     let expected_first_slice_angle = expected_first_slice_angle.as_deref();
@@ -20462,6 +20544,9 @@ fn patch_loaded_chart_model_xml(
     let mut overlap_seen = false;
     let mut overlap_written = false;
     let mut overlap_inserted = false;
+    let mut data_labels_seen = false;
+    let mut data_labels_written = false;
+    let mut data_labels_inserted = false;
     let mut chart_group_line_flag_seen = [false; 4];
     let mut chart_group_line_flag_written = [false; 4];
     let mut chart_group_line_flag_inserted = [false; 4];
@@ -20838,6 +20923,47 @@ fn patch_loaded_chart_model_xml(
                 .map_err(runtime_xml_error)?;
             Ok(())
         };
+    let write_chart_data_labels_element = |writer: &mut Writer<Cursor<Vec<u8>>>,
+                                           data_labels: &ChartDataLabelsModel|
+     -> OmResult<()> {
+        writer
+            .write_event(Event::Start(BytesStart::new("c:dLbls")))
+            .map_err(runtime_xml_error)?;
+        for (element_name, value) in [
+            ("c:showLegendKey", data_labels.show_legend_key),
+            ("c:showLeaderLines", data_labels.has_leader_lines),
+            ("c:showSerName", data_labels.show_series_name),
+            ("c:showCatName", data_labels.show_category_name),
+            ("c:showVal", data_labels.show_value),
+            ("c:showPercent", data_labels.show_percentage),
+            ("c:showBubbleSize", data_labels.show_bubble_size),
+        ] {
+            if let Some(value) = value {
+                let mut element = BytesStart::new(element_name);
+                element.push_attribute(("val", if value { "1" } else { "0" }));
+                writer
+                    .write_event(Event::Empty(element))
+                    .map_err(runtime_xml_error)?;
+            }
+        }
+        if let Some(separator) = data_labels.separator.as_ref() {
+            writer
+                .write_event(Event::Start(BytesStart::new("c:separator")))
+                .map_err(runtime_xml_error)?;
+            writer
+                .write_event(Event::Text(BytesText::from_escaped(partial_escape(
+                    separator,
+                ))))
+                .map_err(runtime_xml_error)?;
+            writer
+                .write_event(Event::End(BytesEnd::new("c:separator")))
+                .map_err(runtime_xml_error)?;
+        }
+        writer
+            .write_event(Event::End(BytesEnd::new("c:dLbls")))
+            .map_err(runtime_xml_error)?;
+        Ok(())
+    };
     let write_chart_axis_element = |writer: &mut Writer<Cursor<Vec<u8>>>,
                                     axis_index: usize,
                                     axis: &AxisModel|
@@ -21059,6 +21185,17 @@ fn patch_loaded_chart_model_xml(
                     && current_chart_group_depth == Some(element_stack.len())
                 {
                     overlap_seen = true;
+                } else if local_name.as_slice() == b"dLbls"
+                    && current_chart_group_depth == Some(element_stack.len())
+                {
+                    data_labels_seen = true;
+                    if let Some(data_labels) = expected_dirty_data_labels {
+                        write_chart_data_labels_element(&mut writer, data_labels)?;
+                        data_labels_written = true;
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    }
                 } else if current_chart_group_depth == Some(element_stack.len())
                     && let Some((setting_index, (_, _, _))) = expected_chart_group_numeric_settings
                         .iter()
@@ -21587,6 +21724,16 @@ fn patch_loaded_chart_model_xml(
                     && current_chart_group_depth == Some(element_stack.len())
                 {
                     overlap_seen = true;
+                } else if local_name.as_slice() == b"dLbls"
+                    && current_chart_group_depth == Some(element_stack.len())
+                {
+                    data_labels_seen = true;
+                    if let Some(data_labels) = expected_dirty_data_labels {
+                        write_chart_data_labels_element(&mut writer, data_labels)?;
+                        data_labels_written = true;
+                        buffer.clear();
+                        continue;
+                    }
                 } else if current_chart_group_depth == Some(element_stack.len())
                     && let Some((setting_index, (_, _, _))) = expected_chart_group_numeric_settings
                         .iter()
@@ -22317,6 +22464,11 @@ fn patch_loaded_chart_model_xml(
                             chart_group_line_flag_written[flag_index] = true;
                         }
                     }
+                    if !data_labels_seen && let Some(data_labels) = expected_dirty_data_labels {
+                        write_chart_data_labels_element(&mut writer, data_labels)?;
+                        data_labels_inserted = true;
+                        data_labels_written = true;
+                    }
                     if !chart_group_axis_refs_seen.is_empty() {
                         for (axis_index, axis) in chart.axes.iter().enumerate() {
                             let axis_id = chart_axis_id(axis_index, axis);
@@ -22547,6 +22699,11 @@ fn patch_loaded_chart_model_xml(
         (Some(_), false) => overlap_inserted,
         (None, _) => true,
     };
+    let data_labels_match = match (expected_dirty_data_labels, data_labels_seen) {
+        (Some(_), true) => data_labels_written,
+        (Some(_), false) => data_labels_inserted,
+        (None, _) => true,
+    };
     let chart_group_numeric_settings_match = expected_chart_group_numeric_settings
         .iter()
         .enumerate()
@@ -22606,6 +22763,7 @@ fn patch_loaded_chart_model_xml(
         && surface_wireframe_matches
         && gap_width_matches
         && overlap_matches
+        && data_labels_match
         && chart_group_numeric_settings_match
         && chart_group_line_flags_match
         && axes_match
@@ -22782,6 +22940,35 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
         .split_value
         .map(|value| format!(r#"<c:splitPos val="{}"/>"#, chart_number_xml_value(value)))
         .unwrap_or_default();
+    let data_labels_xml = chart
+        .data_labels
+        .as_ref()
+        .map(|data_labels| {
+            let mut xml = String::from("<c:dLbls>");
+            for (element_name, value) in [
+                ("showLegendKey", data_labels.show_legend_key),
+                ("showLeaderLines", data_labels.has_leader_lines),
+                ("showSerName", data_labels.show_series_name),
+                ("showCatName", data_labels.show_category_name),
+                ("showVal", data_labels.show_value),
+                ("showPercent", data_labels.show_percentage),
+                ("showBubbleSize", data_labels.show_bubble_size),
+            ] {
+                if let Some(value) = value {
+                    xml.push_str(&format!(
+                        r#"<c:{element_name} val="{}"/>"#,
+                        if value { "1" } else { "0" }
+                    ));
+                }
+            }
+            if let Some(separator) = data_labels.separator.as_ref() {
+                let separator = partial_escape(separator).to_string();
+                xml.push_str(&format!(r#"<c:separator>{separator}</c:separator>"#));
+            }
+            xml.push_str("</c:dLbls>");
+            xml
+        })
+        .unwrap_or_default();
     let title_xml = chart
         .title
         .as_ref()
@@ -22871,7 +23058,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  {rounded_corners_xml}<c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{bar_shape_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
+  {rounded_corners_xml}<c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{bar_shape_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{data_labels_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -78241,6 +78428,145 @@ mod tests {
     }
 
     #[test]
+    fn loaded_chart_apply_data_labels_persists_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:data-labels-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "ApplyDataLabels",
+                    &[
+                        OmValue::Number(4.0),
+                        OmValue::Bool(true),
+                        OmValue::Bool(false),
+                        OmValue::Bool(true),
+                        OmValue::Bool(false),
+                        OmValue::Bool(true),
+                        OmValue::Bool(true),
+                        OmValue::Bool(false),
+                        OmValue::Bool(false),
+                        OmValue::Text(", ".to_string()),
+                    ],
+                )
+                .expect("Chart.ApplyDataLabels"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after Chart.ApplyDataLabels"),
+            OmValue::Bool(false)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after data labels edit");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:data-labels-preserve"/>"#));
+        assert!(saved_chart_xml.contains("<c:dLbls>"));
+        assert!(saved_chart_xml.contains(r#"<c:showLegendKey val="1"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:showLeaderLines val="1"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:showSerName val="0"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:showCatName val="1"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:showVal val="1"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:showPercent val="0"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:showBubbleSize val="0"/>"#));
+        assert!(saved_chart_xml.contains("<c:separator>, </c:separator>"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after data labels edit");
+        let reopened = reopened_runtime
+            .runtime_workbook_mut(reopened_workbook)
+            .expect("reopened runtime workbook");
+        let chart_model = reopened
+            .loaded
+            .state
+            .charts
+            .values()
+            .next()
+            .expect("reopened chart model");
+        let data_labels = chart_model.data_labels.as_ref().expect("data labels");
+        assert_eq!(data_labels.show_legend_key, Some(true));
+        assert_eq!(data_labels.has_leader_lines, Some(true));
+        assert_eq!(data_labels.show_series_name, Some(false));
+        assert_eq!(data_labels.show_category_name, Some(true));
+        assert_eq!(data_labels.show_value, Some(true));
+        assert_eq!(data_labels.show_percentage, Some(false));
+        assert_eq!(data_labels.show_bubble_size, Some(false));
+        assert_eq!(data_labels.separator.as_deref(), Some(", "));
+        assert!(!data_labels.dirty);
+    }
+
+    #[test]
     fn chart_protection_flags_are_runtime_only() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -80029,8 +80355,8 @@ mod tests {
         assert_eq!(
             runtime
                 .dispatch_get(workbook.0, "Saved", &[])
-                .expect("Workbook.Saved after no-op layout helper methods"),
-            OmValue::Bool(true)
+                .expect("Workbook.Saved after ApplyDataLabels"),
+            OmValue::Bool(false)
         );
 
         let chart_title = expect_object_handle(
@@ -80271,6 +80597,21 @@ mod tests {
                     &[OmValue::Missing, OmValue::Text("bad".to_string())],
                 )
                 .expect_err("Chart.ApplyDataLabels rejects non-bool LegendKey")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "ApplyDataLabels",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Text("bad".to_string()),
+                    ],
+                )
+                .expect_err("Chart.ApplyDataLabels rejects non-bool AutoText")
                 .code,
             OmErrorCode::TypeMismatch
         );

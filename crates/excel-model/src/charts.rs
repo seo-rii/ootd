@@ -37,6 +37,7 @@ pub struct ChartModel {
     pub size_represents: Option<ChartSizeRepresents>,
     pub split_type: Option<ChartSplitType>,
     pub split_value: Option<f64>,
+    pub data_labels: Option<ChartDataLabelsModel>,
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,
     pub rounded_corners: Option<bool>,
@@ -149,6 +150,20 @@ pub struct SeriesModel {
     pub values: Option<ChartSourceExpr>,
     pub bubble_size: Option<ChartSourceExpr>,
     pub order: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChartDataLabelsModel {
+    pub label_type: Option<i32>,
+    pub show_legend_key: Option<bool>,
+    pub has_leader_lines: Option<bool>,
+    pub show_series_name: Option<bool>,
+    pub show_category_name: Option<bool>,
+    pub show_value: Option<bool>,
+    pub show_percentage: Option<bool>,
+    pub show_bubble_size: Option<bool>,
+    pub separator: Option<String>,
+    pub dirty: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

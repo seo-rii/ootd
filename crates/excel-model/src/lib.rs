@@ -12,10 +12,10 @@ mod names;
 
 pub use charts::{
     AxisModel, ChartAxisKind, ChartCacheKind, ChartCacheSnapshot, ChartCellMarkerXmlAttrs,
-    ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerXmlAttrs, ChartModel, ChartObjectModel,
-    ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText, ChartType,
-    DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, resolve_chart_source_reference,
-    resolve_chart_source_reference_with_names,
+    ChartDataLabelsModel, ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerXmlAttrs,
+    ChartModel, ChartObjectModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr,
+    ChartSplitType, ChartText, ChartType, DrawingModel, DrawingObjectModel, LegendModel,
+    SeriesModel, resolve_chart_source_reference, resolve_chart_source_reference_with_names,
 };
 pub use names::DefinedNameTable;
 
@@ -632,6 +632,7 @@ mod tests {
                 size_represents: None,
                 split_type: None,
                 split_value: None,
+                data_labels: None,
                 display_blanks_as: None,
                 plot_visible_only: None,
                 rounded_corners: None,
@@ -1217,6 +1218,7 @@ mod tests {
                 size_represents: None,
                 split_type: None,
                 split_value: None,
+                data_labels: None,
                 display_blanks_as: None,
                 plot_visible_only: None,
                 rounded_corners: None,
