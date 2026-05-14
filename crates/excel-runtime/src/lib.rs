@@ -3539,13 +3539,14 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
-                    "GapWidth" | "Overlap" | "FirstSliceAngle" | "BubbleScale"
+                    "GapWidth" | "Overlap" | "FirstSliceAngle" | "Explosion" | "BubbleScale"
                     | "DoughnutHoleSize" | "SecondPlotSize" => {
                         let numeric_value = coerce_i32_arg(&value, format!("ChartGroup.{member}"))?;
                         let (minimum, maximum) = match member {
                             "GapWidth" => (0, 500),
                             "Overlap" => (-100, 100),
                             "FirstSliceAngle" => (0, 360),
+                            "Explosion" => (0, 400),
                             "BubbleScale" => (0, 300),
                             "DoughnutHoleSize" => (10, 90),
                             "SecondPlotSize" => (5, 200),
@@ -3578,6 +3579,13 @@ impl ExcelRuntime {
                                 "chart group not found",
                             ));
                         }
+                        if member == "Explosion"
+                            && !chart_type_supports_explosion(&chart.chart_type)
+                        {
+                            return Err(OmError::unsupported(
+                                "ChartGroup.Explosion is only supported for pie, 3D pie, and doughnut chart groups",
+                            ));
+                        }
                         let changed = match member {
                             "GapWidth" => {
                                 let numeric_value = numeric_value as u16;
@@ -3603,6 +3611,15 @@ impl ExcelRuntime {
                                     false
                                 } else {
                                     chart.first_slice_angle = Some(numeric_value);
+                                    true
+                                }
+                            }
+                            "Explosion" => {
+                                let numeric_value = numeric_value as u16;
+                                if chart.explosion == Some(numeric_value) {
+                                    false
+                                } else {
+                                    chart.explosion = Some(numeric_value);
                                     true
                                 }
                             }
@@ -3957,10 +3974,7 @@ impl ExcelRuntime {
                                 let chart_type_explosion = match chart_type {
                                     ChartType::PieExploded
                                     | ChartType::Pie3DExploded
-                                    | ChartType::DoughnutExploded => Some(Some(25)),
-                                    ChartType::Pie | ChartType::Pie3D | ChartType::Doughnut => {
-                                        Some(None)
-                                    }
+                                    | ChartType::DoughnutExploded => Some(25),
                                     _ => None,
                                 };
                                 chart.chart_type = chart_type;
@@ -3971,9 +3985,7 @@ impl ExcelRuntime {
                                     chart.has_hi_lo_lines = Some(true);
                                     chart.has_up_down_bars = Some(has_up_down_bars);
                                 }
-                                if let Some(explosion) = chart_type_explosion {
-                                    chart.explosion = explosion;
-                                }
+                                chart.explosion = chart_type_explosion;
                                 if chart_type_has_axes && chart.axes.is_empty() {
                                     chart.axes = default_chart_axes();
                                     stale_axis_handles = true;
@@ -9179,6 +9191,7 @@ impl ExcelRuntime {
                             | "HasHiLoLines"
                             | "HasUpDownBars"
                             | "FirstSliceAngle"
+                            | "Explosion"
                             | "BubbleScale"
                             | "ShowNegativeBubbles"
                             | "Has3DShading"
@@ -12170,6 +12183,7 @@ impl ExcelRuntime {
                     "FirstSliceAngle" => Ok(OmValue::Number(f64::from(
                         chart.first_slice_angle.unwrap_or(0),
                     ))),
+                    "Explosion" => Ok(OmValue::Number(f64::from(chart.explosion.unwrap_or(0)))),
                     "BubbleScale" => Ok(OmValue::Number(f64::from(
                         chart.bubble_scale.unwrap_or(100),
                     ))),
@@ -19515,7 +19529,22 @@ fn chart_type_has_axes(chart_type: &ChartType) -> bool {
     )
 }
 
+fn chart_type_supports_explosion(chart_type: &ChartType) -> bool {
+    matches!(
+        chart_type,
+        ChartType::Doughnut
+            | ChartType::DoughnutExploded
+            | ChartType::Pie
+            | ChartType::Pie3D
+            | ChartType::PieExploded
+            | ChartType::Pie3DExploded
+    )
+}
+
 fn chart_explosion_xml_value(chart: &ChartModel) -> Option<String> {
+    if !chart_type_supports_explosion(&chart.chart_type) {
+        return None;
+    }
     chart
         .explosion
         .or_else(|| {
@@ -81203,6 +81232,146 @@ mod tests {
                 f64::from(chart_type_value)
             );
         }
+    }
+
+    #[test]
+    fn chart_group_explosion_setter_roundtrips_for_pie_groups() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with embedded chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_group = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("Chart.ChartGroups(1)"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(chart_group, "Explosion", OmValue::Number(35.0), &[])
+                .expect_err("ChartGroup.Explosion rejects non-pie groups")
+                .code,
+            OmErrorCode::Unsupported
+        );
+
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_PIE_EXPLODED)),
+                &[],
+            )
+            .expect("set Chart.ChartType to exploded pie");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "Explosion", &[])
+                .expect("ChartGroup.Explosion after exploded type"),
+            OmValue::Number(25.0)
+        );
+        runtime
+            .dispatch_set(chart_group, "Explosion", OmValue::Number(35.0), &[])
+            .expect("set ChartGroup.Explosion");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "Explosion", &[])
+                .expect("ChartGroup.Explosion after set"),
+            OmValue::Number(35.0)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(chart_group, "Explosion", OmValue::Number(401.0), &[])
+                .expect_err("ChartGroup.Explosion rejects out of range")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save chart group explosion edit");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:pieChart>"));
+        assert!(saved_chart_xml.contains(r#"<c:explosion val="35"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:explosion val="25"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after explosion edit");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_chart_group = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("reopened Chart.ChartGroups(1)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart_group, "Explosion", &[])
+                .expect("reopened ChartGroup.Explosion"),
+            OmValue::Number(35.0)
+        );
     }
 
     #[test]
