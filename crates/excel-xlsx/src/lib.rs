@@ -659,6 +659,7 @@ pub struct ChartPartSummary {
     pub line_has_markers: Option<bool>,
     pub scatter_style: Option<String>,
     pub radar_style: Option<String>,
+    pub of_pie_type: Option<String>,
     pub title_text: Option<String>,
     pub has_legend: bool,
     pub legend_position: Option<ChartLegendPosition>,
@@ -3358,8 +3359,18 @@ fn chart_type_from_summary(summary: Option<&ChartPartSummary>) -> ChartType {
             Some("smooth") => ChartType::ScatterSmoothNoMarkers,
             _ => ChartType::Scatter,
         },
-        Some("bubbleChart") => ChartType::Bubble,
+        Some("bubbleChart") => {
+            if summary.has_3d_shading == Some(true) {
+                ChartType::Bubble3DEffect
+            } else {
+                ChartType::Bubble
+            }
+        }
         Some("doughnutChart") => ChartType::Doughnut,
+        Some("ofPieChart") => match summary.of_pie_type.as_deref() {
+            Some("bar") => ChartType::BarOfPie,
+            _ => ChartType::PieOfPie,
+        },
         Some("pieChart") => ChartType::Pie,
         Some("radarChart") => match summary.radar_style.as_deref() {
             Some("marker") => ChartType::RadarMarkers,
@@ -15868,6 +15879,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut line_has_markers = None;
     let mut scatter_style = None::<String>;
     let mut radar_style = None::<String>;
+    let mut of_pie_type = None::<String>;
     let mut title_text = None::<String>;
     let mut title_text_depth = 0usize;
     let mut has_legend = false;
@@ -16109,6 +16121,16 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     radar_style = match value.as_str() {
                         "filled" | "marker" | "standard" => Some(value),
                         _ => radar_style,
+                    };
+                }
+                if local_name == b"ofPieType"
+                    && element_path.last().is_some_and(|name| name == "ofPieChart")
+                    && of_pie_type.is_none()
+                    && let Some(value) = parse_string_val_attr(&element, &reader)?
+                {
+                    of_pie_type = match value.as_str() {
+                        "bar" | "pie" => Some(value),
+                        _ => of_pie_type,
                     };
                 }
                 if local_name == b"gapWidth"
@@ -16411,6 +16433,16 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     radar_style = match value.as_str() {
                         "filled" | "marker" | "standard" => Some(value),
                         _ => radar_style,
+                    };
+                }
+                if local_name == b"ofPieType"
+                    && element_path.last().is_some_and(|name| name == "ofPieChart")
+                    && of_pie_type.is_none()
+                    && let Some(value) = parse_string_val_attr(&element, &reader)?
+                {
+                    of_pie_type = match value.as_str() {
+                        "bar" | "pie" => Some(value),
+                        _ => of_pie_type,
                     };
                 }
                 if local_name == b"gapWidth"
@@ -16737,6 +16769,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         line_has_markers,
         scatter_style,
         radar_style,
+        of_pie_type,
         title_text: title_text.filter(|text| !text.is_empty()),
         has_legend,
         legend_position,
@@ -21534,6 +21567,7 @@ mod tests {
         assert_eq!(chart_summary.line_has_markers, None);
         assert_eq!(chart_summary.scatter_style, None);
         assert_eq!(chart_summary.radar_style, None);
+        assert_eq!(chart_summary.of_pie_type, None);
         assert_eq!(chart_summary.title_text.as_deref(), Some("Revenue Trend"));
         assert!(chart_summary.has_legend);
         assert_eq!(
