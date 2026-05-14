@@ -5,8 +5,9 @@ use excel_model::{
     AxisModel, CellData, ChartAxisKind, ChartCacheKind, ChartCacheSnapshot,
     ChartCellMarkerXmlAttrs, ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerXmlAttrs,
     ChartModel, ChartObjectModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr,
-    ChartText, ChartType, DefinedNameTable, DrawingModel, DrawingObjectModel, LegendModel,
-    SeriesModel, WorkbookState, WorksheetData, resolve_chart_source_reference_with_names,
+    ChartSplitType, ChartText, ChartType, DefinedNameTable, DrawingModel, DrawingObjectModel,
+    LegendModel, SeriesModel, WorkbookState, WorksheetData,
+    resolve_chart_source_reference_with_names,
 };
 use office_common::{
     AbsoluteAnchor, CellError, CellMarker, CellValue, ChartId, ChartObjectId, DefinedName,
@@ -552,7 +553,7 @@ pub struct WorksheetSupportParts {
     pub comment_relationship_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SheetDrawingSupportParts {
     pub sheet_part_uri: Option<String>,
     pub relationships_part_uri: Option<String>,
@@ -649,7 +650,7 @@ pub struct DrawingSizeSummary {
     pub cy: Option<i64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ChartPartSummary {
     pub root_name: Option<String>,
     pub chart_type_names: Vec<String>,
@@ -668,6 +669,8 @@ pub struct ChartPartSummary {
     pub doughnut_hole_size: Option<u16>,
     pub second_plot_size: Option<u16>,
     pub size_represents: Option<ChartSizeRepresents>,
+    pub split_type: Option<ChartSplitType>,
+    pub split_value: Option<f64>,
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,
     pub axes: Vec<ChartAxisSummary>,
@@ -3146,6 +3149,8 @@ fn build_chart_model_overlay(
                     doughnut_hole_size: summary.and_then(|summary| summary.doughnut_hole_size),
                     second_plot_size: summary.and_then(|summary| summary.second_plot_size),
                     size_represents: summary.and_then(|summary| summary.size_represents),
+                    split_type: summary.and_then(|summary| summary.split_type),
+                    split_value: summary.and_then(|summary| summary.split_value),
                     display_blanks_as: summary.and_then(|summary| summary.display_blanks_as),
                     plot_visible_only: summary.and_then(|summary| summary.plot_visible_only),
                     axes: summary
@@ -15829,6 +15834,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut doughnut_hole_size = None;
     let mut second_plot_size = None;
     let mut size_represents = None;
+    let mut split_type = None;
+    let mut split_value = None;
     let mut display_blanks_as = None;
     let mut plot_visible_only = None;
     let mut axes = Vec::new();
@@ -15902,6 +15909,29 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         format!("chart {context} value must be an integer: {value}: {error}"),
                     )
                 })
+            })
+            .transpose()
+    };
+    let parse_f64_val_attr = |element: &BytesStart<'_>,
+                              reader: &Reader<Cursor<&[u8]>>,
+                              context: &str|
+     -> OmResult<Option<f64>> {
+        parse_string_val_attr(element, reader)?
+            .map(|value| {
+                let parsed = value.trim().parse::<f64>().map_err(|error| {
+                    OmError::new(
+                        OmErrorCode::Parse,
+                        format!("chart {context} value must be a number: {value}: {error}"),
+                    )
+                })?;
+                if parsed.is_finite() {
+                    Ok(parsed)
+                } else {
+                    Err(OmError::new(
+                        OmErrorCode::Parse,
+                        format!("chart {context} value must be finite: {value}"),
+                    ))
+                }
             })
             .transpose()
     };
@@ -16075,6 +16105,28 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "w" => Some(ChartSizeRepresents::Width),
                         _ => size_represents,
                     };
+                }
+                if local_name == b"splitType"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                    && let Some(value) = parse_string_val_attr(&element, &reader)?
+                {
+                    split_type = match value.as_str() {
+                        "cust" => Some(ChartSplitType::Custom),
+                        "percent" => Some(ChartSplitType::PercentValue),
+                        "pos" => Some(ChartSplitType::Position),
+                        "val" => Some(ChartSplitType::Value),
+                        _ => split_type,
+                    };
+                }
+                if local_name == b"splitPos"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                    && let Some(value) = parse_f64_val_attr(&element, &reader, "split value")?
+                {
+                    split_value = Some(value);
                 }
                 if local_name == b"dispBlanksAs"
                     && element_path.last().is_some_and(|name| name == "chart")
@@ -16294,6 +16346,28 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         _ => size_represents,
                     };
                 }
+                if local_name == b"splitType"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                    && let Some(value) = parse_string_val_attr(&element, &reader)?
+                {
+                    split_type = match value.as_str() {
+                        "cust" => Some(ChartSplitType::Custom),
+                        "percent" => Some(ChartSplitType::PercentValue),
+                        "pos" => Some(ChartSplitType::Position),
+                        "val" => Some(ChartSplitType::Value),
+                        _ => split_type,
+                    };
+                }
+                if local_name == b"splitPos"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                    && let Some(value) = parse_f64_val_attr(&element, &reader, "split value")?
+                {
+                    split_value = Some(value);
+                }
                 if local_name == b"dispBlanksAs"
                     && element_path.last().is_some_and(|name| name == "chart")
                 {
@@ -16497,6 +16571,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         doughnut_hole_size,
         second_plot_size,
         size_represents,
+        split_type,
+        split_value,
         display_blanks_as,
         plot_visible_only,
         axes,
@@ -20023,7 +20099,7 @@ mod tests {
     };
     use excel_model::{
         ChartCacheKind, ChartCellMarkerXmlAttrs, ChartDisplayBlanksAs, ChartMarkerXmlAttrs,
-        ChartObjectModel, ChartSizeRepresents, ChartType, DrawingObjectModel,
+        ChartObjectModel, ChartSizeRepresents, ChartSplitType, ChartType, DrawingObjectModel,
         resolve_chart_source_reference,
     };
     use office_common::{
@@ -21064,6 +21140,8 @@ mod tests {
         <c:holeSize val="65"/>
         <c:secondPieSize val="80"/>
         <c:sizeRepresents val="w"/>
+        <c:splitType val="val"/>
+        <c:splitPos val="10"/>
         <c:serLines/>
         <c:dropLines/>
         <c:hiLowLines/>
@@ -21287,6 +21365,8 @@ mod tests {
             chart_summary.size_represents,
             Some(ChartSizeRepresents::Width)
         );
+        assert_eq!(chart_summary.split_type, Some(ChartSplitType::Value));
+        assert_eq!(chart_summary.split_value, Some(10.0));
         assert_eq!(chart_summary.plot_visible_only, Some(false));
         assert_eq!(
             chart_summary.display_blanks_as,
@@ -21404,6 +21484,8 @@ mod tests {
             chart_model.size_represents,
             Some(ChartSizeRepresents::Width)
         );
+        assert_eq!(chart_model.split_type, Some(ChartSplitType::Value));
+        assert_eq!(chart_model.split_value, Some(10.0));
         assert_eq!(chart_model.plot_visible_only, Some(false));
         assert_eq!(
             chart_model.display_blanks_as,

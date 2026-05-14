@@ -1,8 +1,8 @@
 use excel_model::{
     AxisModel, ChartAxisKind, ChartDisplayBlanksAs, ChartLegendPosition, ChartModel,
-    ChartObjectModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartText,
-    ChartType, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState,
-    WorksheetData, resolve_chart_source_reference_with_names,
+    ChartObjectModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartSplitType,
+    ChartText, ChartType, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel,
+    WorkbookState, WorksheetData, resolve_chart_source_reference_with_names,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
@@ -60,6 +60,10 @@ const XL_ZERO: i32 = 2;
 const XL_INTERPOLATED: i32 = 3;
 const XL_SIZE_IS_AREA: i32 = 1;
 const XL_SIZE_IS_WIDTH: i32 = 2;
+const XL_SPLIT_BY_POSITION: i32 = 1;
+const XL_SPLIT_BY_VALUE: i32 = 2;
+const XL_SPLIT_BY_PERCENT_VALUE: i32 = 3;
+const XL_SPLIT_BY_CUSTOM_SPLIT: i32 = 4;
 const XL_LEGEND_POSITION_BOTTOM: i32 = -4107;
 const XL_LEGEND_POSITION_CORNER: i32 = 2;
 const XL_LEGEND_POSITION_CUSTOM: i32 = -4161;
@@ -3565,6 +3569,89 @@ impl ExcelRuntime {
                         }
                         if chart.size_represents != Some(size_represents) {
                             chart.size_represents = Some(size_represents);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "SplitType" => {
+                        let numeric_value = coerce_i32_arg(&value, "ChartGroup.SplitType")?;
+                        let split_type = match numeric_value {
+                            XL_SPLIT_BY_CUSTOM_SPLIT => ChartSplitType::Custom,
+                            XL_SPLIT_BY_PERCENT_VALUE => ChartSplitType::PercentValue,
+                            XL_SPLIT_BY_POSITION => ChartSplitType::Position,
+                            XL_SPLIT_BY_VALUE => ChartSplitType::Value,
+                            _ => {
+                                return Err(OmError::invalid_argument(
+                                    "ChartGroup.SplitType supports XlChartSplitType constants",
+                                ));
+                            }
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        if group_index != 0 {
+                            return Err(OmError::new(
+                                OmErrorCode::NotFound,
+                                "chart group not found",
+                            ));
+                        }
+                        if chart.split_type != Some(split_type) {
+                            chart.split_type = Some(split_type);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "SplitValue" => {
+                        let OmValue::Number(split_value) = value else {
+                            return Err(OmError::new(
+                                OmErrorCode::TypeMismatch,
+                                "ChartGroup.SplitValue expects a numeric value",
+                            ));
+                        };
+                        if !split_value.is_finite() {
+                            return Err(OmError::invalid_argument(
+                                "ChartGroup.SplitValue expects a finite numeric value",
+                            ));
+                        }
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        if group_index != 0 {
+                            return Err(OmError::new(
+                                OmErrorCode::NotFound,
+                                "chart group not found",
+                            ));
+                        }
+                        if chart.split_value != Some(split_value) {
+                            chart.split_value = Some(split_value);
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -8893,6 +8980,8 @@ impl ExcelRuntime {
                             | "DoughnutHoleSize"
                             | "SecondPlotSize"
                             | "SizeRepresents"
+                            | "SplitType"
+                            | "SplitValue"
                             | "SeriesCollection"
                             | "Creator"
                             | "Application"
@@ -11013,6 +11102,8 @@ impl ExcelRuntime {
                             doughnut_hole_size: None,
                             second_plot_size: None,
                             size_represents: None,
+                            split_type: None,
+                            split_value: None,
                             display_blanks_as: None,
                             plot_visible_only: None,
                             raw_part_uri: None,
@@ -11886,6 +11977,15 @@ impl ExcelRuntime {
                             ChartSizeRepresents::Width => XL_SIZE_IS_WIDTH,
                         },
                     ))),
+                    "SplitType" => Ok(OmValue::Number(f64::from(
+                        match chart.split_type.unwrap_or(ChartSplitType::Position) {
+                            ChartSplitType::Custom => XL_SPLIT_BY_CUSTOM_SPLIT,
+                            ChartSplitType::PercentValue => XL_SPLIT_BY_PERCENT_VALUE,
+                            ChartSplitType::Position => XL_SPLIT_BY_POSITION,
+                            ChartSplitType::Value => XL_SPLIT_BY_VALUE,
+                        },
+                    ))),
+                    "SplitValue" => Ok(OmValue::Number(chart.split_value.unwrap_or(0.0))),
                     "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
                     "Application" => Ok(OmValue::Object(self.root_application())),
                     "Parent" => Ok(OmValue::Object(
@@ -13871,6 +13971,8 @@ impl ExcelRuntime {
                         doughnut_hole_size: None,
                         second_plot_size: None,
                         size_represents: None,
+                        split_type: None,
+                        split_value: None,
                         display_blanks_as: None,
                         plot_visible_only: None,
                         raw_part_uri: Some(chart_part_uri.clone()),
@@ -19009,6 +19111,23 @@ fn chart_size_represents_xml_value(value: ChartSizeRepresents) -> &'static str {
     }
 }
 
+fn chart_split_type_xml_value(value: ChartSplitType) -> &'static str {
+    match value {
+        ChartSplitType::Custom => "cust",
+        ChartSplitType::PercentValue => "percent",
+        ChartSplitType::Position => "pos",
+        ChartSplitType::Value => "val",
+    }
+}
+
+fn chart_number_xml_value(value: f64) -> String {
+    if value.fract() == 0.0 {
+        format!("{value:.0}")
+    } else {
+        value.to_string()
+    }
+}
+
 fn patch_loaded_chart_model_xml(
     existing_chart_xml: &[u8],
     chart: &ChartModel,
@@ -19056,19 +19175,22 @@ fn patch_loaded_chart_model_xml(
     let expected_doughnut_hole_size = chart.doughnut_hole_size.map(|value| value.to_string());
     let expected_second_plot_size = chart.second_plot_size.map(|value| value.to_string());
     let expected_size_represents = chart.size_represents.map(chart_size_represents_xml_value);
+    let expected_split_type = chart.split_type.map(chart_split_type_xml_value);
+    let expected_split_value = chart.split_value.map(chart_number_xml_value);
     let expected_gap_width = expected_gap_width.as_deref();
     let expected_overlap = expected_overlap.as_deref();
     let expected_first_slice_angle = expected_first_slice_angle.as_deref();
     let expected_bubble_scale = expected_bubble_scale.as_deref();
     let expected_doughnut_hole_size = expected_doughnut_hole_size.as_deref();
     let expected_second_plot_size = expected_second_plot_size.as_deref();
+    let expected_split_value = expected_split_value.as_deref();
     let expected_chart_group_line_flags: [(&[u8], &str, Option<bool>); 4] = [
         (b"serLines", "c:serLines", chart.has_series_lines),
         (b"dropLines", "c:dropLines", chart.has_drop_lines),
         (b"hiLowLines", "c:hiLowLines", chart.has_hi_lo_lines),
         (b"upDownBars", "c:upDownBars", chart.has_up_down_bars),
     ];
-    let expected_chart_group_numeric_settings: [(&[u8], &str, Option<&str>); 5] = [
+    let expected_chart_group_numeric_settings: [(&[u8], &str, Option<&str>); 7] = [
         (
             b"firstSliceAng",
             "c:firstSliceAng",
@@ -19086,6 +19208,8 @@ fn patch_loaded_chart_model_xml(
             "c:sizeRepresents",
             expected_size_represents,
         ),
+        (b"splitType", "c:splitType", expected_split_type),
+        (b"splitPos", "c:splitPos", expected_split_value),
     ];
 
     let mut reader = Reader::from_reader(Cursor::new(existing_chart_xml));
@@ -19133,9 +19257,9 @@ fn patch_loaded_chart_model_xml(
     let mut chart_group_line_flag_written = [false; 4];
     let mut chart_group_line_flag_inserted = [false; 4];
     let mut chart_group_line_flag_removed = [false; 4];
-    let mut chart_group_numeric_setting_seen = [false; 5];
-    let mut chart_group_numeric_setting_written = [false; 5];
-    let mut chart_group_numeric_setting_inserted = [false; 5];
+    let mut chart_group_numeric_setting_seen = [false; 7];
+    let mut chart_group_numeric_setting_written = [false; 7];
+    let mut chart_group_numeric_setting_inserted = [false; 7];
     let mut current_axis_index = None::<usize>;
     let mut axis_kinds = Vec::<ChartAxisKind>::new();
     let mut axis_title_texts = Vec::<Option<String>>::new();
@@ -20752,6 +20876,19 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             )
         })
         .unwrap_or_default();
+    let split_type_xml = chart
+        .split_type
+        .map(|value| {
+            format!(
+                r#"<c:splitType val="{}"/>"#,
+                chart_split_type_xml_value(value)
+            )
+        })
+        .unwrap_or_default();
+    let split_value_xml = chart
+        .split_value
+        .map(|value| format!(r#"<c:splitPos val="{}"/>"#, chart_number_xml_value(value)))
+        .unwrap_or_default();
     let title_xml = chart
         .title
         .as_ref()
@@ -20821,7 +20958,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
+  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -74503,6 +74640,54 @@ mod tests {
             .dispatch_set(chart_group, "SizeRepresents", OmValue::Number(99.0), &[])
             .expect_err("ChartGroup.SizeRepresents rejects unsupported constants");
         assert_eq!(invalid_size_represents.code, OmErrorCode::InvalidArgument);
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "SplitType", &[])
+                .expect("ChartGroup.SplitType"),
+            OmValue::Number(f64::from(super::XL_SPLIT_BY_VALUE))
+        );
+        runtime
+            .dispatch_set(
+                chart_group,
+                "SplitType",
+                OmValue::Number(f64::from(super::XL_SPLIT_BY_PERCENT_VALUE)),
+                &[],
+            )
+            .expect("set ChartGroup.SplitType");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "SplitType", &[])
+                .expect("ChartGroup.SplitType after set"),
+            OmValue::Number(f64::from(super::XL_SPLIT_BY_PERCENT_VALUE))
+        );
+        let invalid_split_type = runtime
+            .dispatch_set(chart_group, "SplitType", OmValue::Number(99.0), &[])
+            .expect_err("ChartGroup.SplitType rejects unsupported constants");
+        assert_eq!(invalid_split_type.code, OmErrorCode::InvalidArgument);
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "SplitValue", &[])
+                .expect("ChartGroup.SplitValue"),
+            OmValue::Number(10.0)
+        );
+        runtime
+            .dispatch_set(chart_group, "SplitValue", OmValue::Number(15.5), &[])
+            .expect("set ChartGroup.SplitValue");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "SplitValue", &[])
+                .expect("ChartGroup.SplitValue after set"),
+            OmValue::Number(15.5)
+        );
+        let invalid_split_value = runtime
+            .dispatch_set(
+                chart_group,
+                "SplitValue",
+                OmValue::Text("bad".to_string()),
+                &[],
+            )
+            .expect_err("ChartGroup.SplitValue rejects non-number");
+        assert_eq!(invalid_split_value.code, OmErrorCode::TypeMismatch);
         for member in [
             "HasSeriesLines",
             "HasDropLines",
@@ -74957,6 +75142,8 @@ mod tests {
             ("DoughnutHoleSize", 65.0),
             ("SecondPlotSize", 80.0),
             ("SizeRepresents", f64::from(super::XL_SIZE_IS_WIDTH)),
+            ("SplitType", f64::from(super::XL_SPLIT_BY_VALUE)),
+            ("SplitValue", 10.0),
         ] {
             assert_eq!(
                 runtime
@@ -74991,6 +75178,17 @@ mod tests {
                 &[],
             )
             .expect("set ChartGroup.SizeRepresents");
+        runtime
+            .dispatch_set(
+                chart_group,
+                "SplitType",
+                OmValue::Number(f64::from(super::XL_SPLIT_BY_PERCENT_VALUE)),
+                &[],
+            )
+            .expect("set ChartGroup.SplitType");
+        runtime
+            .dispatch_set(chart_group, "SplitValue", OmValue::Number(15.5), &[])
+            .expect("set ChartGroup.SplitValue");
 
         let saved = runtime
             .save_workbook(
@@ -75018,6 +75216,8 @@ mod tests {
         assert!(saved_chart_xml.contains(r#"<c:holeSize val="70"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:secondPieSize val="95"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:sizeRepresents val="area"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:splitType val="percent"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:splitPos val="15.5"/>"#));
         assert!(!saved_chart_xml.contains(r#"<c:gapWidth val="150"/>"#));
         assert!(!saved_chart_xml.contains(r#"<c:overlap val="0"/>"#));
         assert!(!saved_chart_xml.contains(r#"<c:firstSliceAng val="25"/>"#));
@@ -75025,6 +75225,8 @@ mod tests {
         assert!(!saved_chart_xml.contains(r#"<c:holeSize val="65"/>"#));
         assert!(!saved_chart_xml.contains(r#"<c:secondPieSize val="80"/>"#));
         assert!(!saved_chart_xml.contains(r#"<c:sizeRepresents val="w"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:splitType val="val"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:splitPos val="10"/>"#));
 
         let mut reopened_runtime = ExcelRuntime::new();
         let reopened_workbook = reopened_runtime
@@ -75078,6 +75280,8 @@ mod tests {
             ("DoughnutHoleSize", 70.0),
             ("SecondPlotSize", 95.0),
             ("SizeRepresents", f64::from(super::XL_SIZE_IS_AREA)),
+            ("SplitType", f64::from(super::XL_SPLIT_BY_PERCENT_VALUE)),
+            ("SplitValue", 15.5),
         ] {
             assert_eq!(
                 reopened_runtime
@@ -88884,7 +89088,7 @@ mod tests {
                 compression: CompressionMethod::Stored,
                 bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:varyColors val="1"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val></c:ser><c:gapWidth val="150"/><c:overlap val="0"/><c:firstSliceAng val="25"/><c:bubbleScale val="125"/><c:holeSize val="65"/><c:secondPieSize val="80"/><c:sizeRepresents val="w"/><c:serLines/><c:dropLines/><c:hiLowLines/><c:upDownBars/></c:barChart><c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx><c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx></c:plotArea><c:legend><c:legendPos val="r"/></c:legend></c:chart>
+  <c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:varyColors val="1"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val></c:ser><c:gapWidth val="150"/><c:overlap val="0"/><c:firstSliceAng val="25"/><c:bubbleScale val="125"/><c:holeSize val="65"/><c:secondPieSize val="80"/><c:sizeRepresents val="w"/><c:splitType val="val"/><c:splitPos val="10"/><c:serLines/><c:dropLines/><c:hiLowLines/><c:upDownBars/></c:barChart><c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx><c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx></c:plotArea><c:legend><c:legendPos val="r"/></c:legend></c:chart>
 </c:chartSpace>"#
                     .to_vec(),
             })
