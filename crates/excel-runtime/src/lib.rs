@@ -2878,6 +2878,36 @@ impl ExcelRuntime {
                             ))
                         }
                     }
+                    "RoundedCorners" => {
+                        let OmValue::Bool(rounded_corners) = value else {
+                            return Err(OmError::type_mismatch(
+                                "ChartObject.RoundedCorners expects a boolean value",
+                            ));
+                        };
+                        let chart_id = self.chart_object_model(workbook, chart_object_id)?.chart_id;
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        if chart.rounded_corners != Some(rounded_corners) {
+                            chart.rounded_corners = Some(rounded_corners);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     "PrintObject" | "Locked" | "ProtectChartObject" => {
                         let OmValue::Bool(enabled) = value else {
                             return Err(OmError::type_mismatch(format!(
@@ -9211,6 +9241,7 @@ impl ExcelRuntime {
                             | "PrintObject"
                             | "Locked"
                             | "ProtectChartObject"
+                            | "RoundedCorners"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -11531,6 +11562,7 @@ impl ExcelRuntime {
                             split_value: None,
                             display_blanks_as: None,
                             plot_visible_only: None,
+                            rounded_corners: None,
                             raw_part_uri: None,
                             dirty: true,
                         },
@@ -11695,6 +11727,14 @@ impl ExcelRuntime {
                             || value.eq_ignore_ascii_case("off"))
                     });
                 Ok(OmValue::Bool(locked))
+            }
+            "RoundedCorners" => {
+                let chart_id = self.chart_object_model(workbook, chart_object_id)?.chart_id;
+                Ok(OmValue::Bool(
+                    self.chart_model(workbook, chart_id)?
+                        .rounded_corners
+                        .unwrap_or(false),
+                ))
             }
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Left" | "Top" | "Width" | "Height" => {
@@ -14442,6 +14482,7 @@ impl ExcelRuntime {
                         split_value: None,
                         display_blanks_as: None,
                         plot_visible_only: None,
+                        rounded_corners: None,
                         raw_part_uri: Some(chart_part_uri.clone()),
                         dirty: false,
                     };
@@ -20169,6 +20210,9 @@ fn patch_loaded_chart_model_xml(
     let expected_plot_visible_only = chart
         .plot_visible_only
         .map(|value| if value { "1" } else { "0" });
+    let expected_rounded_corners = chart
+        .rounded_corners
+        .map(|value| if value { "1" } else { "0" });
     let expected_vary_colors = chart
         .vary_by_categories
         .map(|value| if value { "1" } else { "0" });
@@ -20280,6 +20324,9 @@ fn patch_loaded_chart_model_xml(
     let mut plot_visible_only_seen = false;
     let mut plot_visible_only_written = false;
     let mut plot_visible_only_inserted = false;
+    let mut rounded_corners_seen = false;
+    let mut rounded_corners_written = false;
+    let mut rounded_corners_inserted = false;
     let mut vary_colors_seen = false;
     let mut vary_colors_written = false;
     let mut vary_colors_inserted = false;
@@ -20848,6 +20895,10 @@ fn patch_loaded_chart_model_xml(
                     && parent_name == Some(b"chart".as_slice())
                 {
                     display_blanks_as_seen = true;
+                } else if local_name.as_slice() == b"roundedCorners"
+                    && parent_name == Some(b"chartSpace".as_slice())
+                {
+                    rounded_corners_seen = true;
                 } else if local_name.as_slice() == b"varyColors"
                     && current_chart_group_depth == Some(element_stack.len())
                 {
@@ -20934,6 +20985,19 @@ fn patch_loaded_chart_model_xml(
                     write_chart_text_element(&mut writer, "c:title", &title.text)?;
                     chart_title_inserted = true;
                     chart_title_text_written = true;
+                }
+                if local_name.as_slice() == b"chart"
+                    && parent_name == Some(b"chartSpace".as_slice())
+                    && !rounded_corners_seen
+                    && let Some(value) = expected_rounded_corners
+                {
+                    let mut rounded_corners = BytesStart::new("c:roundedCorners");
+                    rounded_corners.push_attribute(("val", value));
+                    writer
+                        .write_event(Event::Empty(rounded_corners))
+                        .map_err(runtime_xml_error)?;
+                    rounded_corners_inserted = true;
+                    rounded_corners_written = true;
                 }
 
                 let mut wrote_start_element = false;
@@ -21056,6 +21120,18 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     display_blanks_as_written = true;
+                } else if !wrote_start_element
+                    && local_name.as_slice() == b"roundedCorners"
+                    && let Some(value) = expected_rounded_corners
+                {
+                    writer
+                        .write_event(Event::Start(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    rounded_corners_written = true;
                 } else if !wrote_start_element
                     && local_name.as_slice() == b"barDir"
                     && let Some(value) = expected_bar_direction
@@ -21332,6 +21408,10 @@ fn patch_loaded_chart_model_xml(
                     && parent_name == Some(b"chart".as_slice())
                 {
                     display_blanks_as_seen = true;
+                } else if local_name.as_slice() == b"roundedCorners"
+                    && parent_name == Some(b"chartSpace".as_slice())
+                {
+                    rounded_corners_seen = true;
                 } else if local_name.as_slice() == b"varyColors"
                     && current_chart_group_depth == Some(element_stack.len())
                 {
@@ -21443,6 +21523,17 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     display_blanks_as_written = true;
+                } else if local_name.as_slice() == b"roundedCorners"
+                    && let Some(value) = expected_rounded_corners
+                {
+                    writer
+                        .write_event(Event::Empty(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    rounded_corners_written = true;
                 } else if local_name.as_slice() == b"barDir"
                     && let Some(value) = expected_bar_direction
                 {
@@ -22228,6 +22319,11 @@ fn patch_loaded_chart_model_xml(
         (Some(_), false) => plot_visible_only_inserted,
         (None, _) => true,
     };
+    let rounded_corners_matches = match (expected_rounded_corners, rounded_corners_seen) {
+        (Some(_), true) => rounded_corners_written,
+        (Some(_), false) => rounded_corners_inserted,
+        (None, _) => true,
+    };
     let vary_colors_matches = match (expected_vary_colors, vary_colors_seen) {
         (Some(_), true) => vary_colors_written,
         (Some(_), false) => vary_colors_inserted,
@@ -22329,6 +22425,7 @@ fn patch_loaded_chart_model_xml(
         && legend_matches
         && display_blanks_as_matches
         && plot_visible_only_matches
+        && rounded_corners_matches
         && vary_colors_matches
         && bar_direction_matches
         && chart_grouping_matches
@@ -22555,6 +22652,15 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             )
         })
         .unwrap_or_default();
+    let rounded_corners_xml = chart
+        .rounded_corners
+        .map(|value| {
+            format!(
+                r#"<c:roundedCorners val="{}"/>"#,
+                if value { "1" } else { "0" }
+            )
+        })
+        .unwrap_or_default();
     let chart_has_axes = chart_type_has_axes(&chart.chart_type);
     let mut chart_group_axis_refs = String::new();
     let mut axes_xml = String::new();
@@ -22585,7 +22691,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{bar_shape_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
+  {rounded_corners_xml}<c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{bar_shape_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -77721,6 +77827,12 @@ mod tests {
         );
         assert_eq!(
             runtime
+                .dispatch_get(chart_object, "RoundedCorners", &[])
+                .expect("ChartObject.RoundedCorners default"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
                 .dispatch_get(chart, "PlotVisibleOnly", &[])
                 .expect("Chart.PlotVisibleOnly default"),
             OmValue::Bool(true)
@@ -77763,6 +77875,9 @@ mod tests {
             .dispatch_set(chart, "PlotVisibleOnly", OmValue::Bool(false), &[])
             .expect("set loaded Chart.PlotVisibleOnly");
         runtime
+            .dispatch_set(chart_object, "RoundedCorners", OmValue::Bool(true), &[])
+            .expect("set loaded ChartObject.RoundedCorners");
+        runtime
             .dispatch_set(
                 chart,
                 "DisplayBlanksAs",
@@ -77774,6 +77889,13 @@ mod tests {
             runtime
                 .dispatch_set(chart, "PlotVisibleOnly", OmValue::Number(0.0), &[])
                 .expect_err("Chart.PlotVisibleOnly rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(chart_object, "RoundedCorners", OmValue::Number(1.0), &[])
+                .expect_err("ChartObject.RoundedCorners rejects non-bool")
                 .code,
             OmErrorCode::TypeMismatch
         );
@@ -77807,6 +77929,7 @@ mod tests {
         assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:content-preserve"/>"#));
         assert!(saved_chart_xml.contains("<a:t>Updated Revenue</a:t>"));
         assert!(saved_chart_xml.contains(r#"<c:legendPos val="l""#));
+        assert!(saved_chart_xml.contains(r#"<c:roundedCorners val="1"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:plotVisOnly val="0"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:dispBlanksAs val="zero"/>"#));
 
@@ -77843,6 +77966,12 @@ mod tests {
             reopened_runtime
                 .dispatch_get(reopened_chart_object, "Chart", &[])
                 .expect("reopened ChartObject.Chart"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "RoundedCorners", &[])
+                .expect("reopened ChartObject.RoundedCorners"),
+            OmValue::Bool(true)
         );
         let reopened_chart_title = expect_object_handle(
             reopened_runtime

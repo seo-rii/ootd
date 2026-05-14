@@ -684,6 +684,7 @@ pub struct ChartPartSummary {
     pub split_value: Option<f64>,
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,
+    pub rounded_corners: Option<bool>,
     pub axes: Vec<ChartAxisSummary>,
     pub series: Vec<ChartSeriesSummary>,
     pub formula_refs: Vec<String>,
@@ -3170,6 +3171,7 @@ fn build_chart_model_overlay(
                     split_value: summary.and_then(|summary| summary.split_value),
                     display_blanks_as: summary.and_then(|summary| summary.display_blanks_as),
                     plot_visible_only: summary.and_then(|summary| summary.plot_visible_only),
+                    rounded_corners: summary.and_then(|summary| summary.rounded_corners),
                     axes: summary
                         .into_iter()
                         .flat_map(|summary| summary.axes.iter())
@@ -16003,6 +16005,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut split_value = None;
     let mut display_blanks_as = None;
     let mut plot_visible_only = None;
+    let mut rounded_corners = None;
     let mut axes = Vec::new();
     let mut series = Vec::new();
     let mut formula_refs = Vec::new();
@@ -16405,6 +16408,11 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 {
                     plot_visible_only = Some(value);
                 }
+                if local_name == b"roundedCorners"
+                    && element_path.last().is_some_and(|name| name == "chartSpace")
+                {
+                    rounded_corners = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                }
                 if let Some(kind) = match local_name {
                     b"catAx" => Some(ChartAxisKind::Category),
                     b"valAx" => Some(ChartAxisKind::Value),
@@ -16744,6 +16752,11 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 {
                     plot_visible_only = Some(value);
                 }
+                if local_name == b"roundedCorners"
+                    && element_path.last().is_some_and(|name| name == "chartSpace")
+                {
+                    rounded_corners = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                }
                 if local_name == b"axId"
                     && let Some(axis_index) = active_axis_index
                     && let Some(axis_id) = parse_string_val_attr(&element, &reader)?
@@ -16961,6 +16974,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         split_value,
         display_blanks_as,
         plot_visible_only,
+        rounded_corners,
         axes,
         series,
         formula_refs,
@@ -21508,6 +21522,7 @@ mod tests {
             .expect("add drawing rels");
         let chart_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <c:roundedCorners val="1"/>
   <c:chart>
     <c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title>
     <c:plotArea>
@@ -21767,6 +21782,7 @@ mod tests {
         assert_eq!(chart_summary.split_type, Some(ChartSplitType::Value));
         assert_eq!(chart_summary.split_value, Some(10.0));
         assert_eq!(chart_summary.plot_visible_only, Some(false));
+        assert_eq!(chart_summary.rounded_corners, Some(true));
         assert_eq!(
             chart_summary.display_blanks_as,
             Some(ChartDisplayBlanksAs::Span)
@@ -21891,6 +21907,7 @@ mod tests {
         assert_eq!(chart_model.split_type, Some(ChartSplitType::Value));
         assert_eq!(chart_model.split_value, Some(10.0));
         assert_eq!(chart_model.plot_visible_only, Some(false));
+        assert_eq!(chart_model.rounded_corners, Some(true));
         assert_eq!(
             chart_model.display_blanks_as,
             Some(ChartDisplayBlanksAs::Span)

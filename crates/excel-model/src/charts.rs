@@ -39,6 +39,7 @@ pub struct ChartModel {
     pub split_value: Option<f64>,
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,
+    pub rounded_corners: Option<bool>,
     pub raw_part_uri: Option<String>,
     pub dirty: bool,
 }
