@@ -538,6 +538,17 @@ enum RuntimeObjectKind {
         chart_id: ChartId,
         series_index: usize,
     },
+    Points {
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
+    },
+    Point {
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
+        point_index: usize,
+    },
 }
 
 #[derive(Debug)]
@@ -1941,6 +1952,19 @@ impl ExcelRuntime {
                 chart_id,
                 series_index,
             } => self.dispatch_get_series(workbook, chart_id, series_index, member, args),
+            RuntimeObjectKind::Points {
+                workbook,
+                chart_id,
+                series_index,
+            } => self.dispatch_get_points(workbook, chart_id, series_index, member, args),
+            RuntimeObjectKind::Point {
+                workbook,
+                chart_id,
+                series_index,
+                point_index,
+            } => {
+                self.dispatch_get_point(workbook, chart_id, series_index, point_index, member, args)
+            }
         }
     }
 
@@ -3490,7 +3514,9 @@ impl ExcelRuntime {
             | RuntimeObjectKind::PlotArea { .. }
             | RuntimeObjectKind::ChartGroups { .. }
             | RuntimeObjectKind::Axes { .. }
-            | RuntimeObjectKind::SeriesCollection { .. } => Err(OmError::unsupported(format!(
+            | RuntimeObjectKind::SeriesCollection { .. }
+            | RuntimeObjectKind::Points { .. }
+            | RuntimeObjectKind::Point { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
             ))),
             RuntimeObjectKind::ChartGroup {
@@ -9019,6 +9045,9 @@ impl ExcelRuntime {
                 "DataLabels" => {
                     self.dispatch_get_series(workbook, chart_id, series_index, member, args)
                 }
+                "Points" => {
+                    self.dispatch_get_series(workbook, chart_id, series_index, member, args)
+                }
                 "Select" => {
                     if !args.is_empty() {
                         return Err(OmError::invalid_argument(
@@ -9067,6 +9096,31 @@ impl ExcelRuntime {
                 }
                 _ => Err(OmError::unsupported(format!(
                     "Series.{member} is not implemented as a method"
+                ))),
+            },
+            RuntimeObjectKind::Points {
+                workbook,
+                chart_id,
+                series_index,
+            } => self.dispatch_invoke_points(workbook, chart_id, series_index, member, args),
+            RuntimeObjectKind::Point {
+                workbook,
+                chart_id,
+                series_index,
+                point_index,
+            } => match member {
+                "Select" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "Point.Select does not accept arguments",
+                        ));
+                    }
+                    self.validate_point_index(workbook, chart_id, series_index, point_index)?;
+                    let chart = self.register_chart_handle(workbook, chart_id);
+                    self.dispatch_invoke(chart, "Select", &[])
+                }
+                _ => Err(OmError::unsupported(format!(
+                    "Point.{member} is not implemented as a method"
                 ))),
             },
             RuntimeObjectKind::ChartArea { workbook, chart_id } => {
@@ -9698,6 +9752,7 @@ impl ExcelRuntime {
                             | "AxisGroup"
                             | "HasDataLabels"
                             | "DataLabels"
+                            | "Points"
                             | "PlotOrder"
                             | "Creator"
                             | "Application"
@@ -9721,6 +9776,14 @@ impl ExcelRuntime {
                             | "Parent"
                             | "Delete"
                             | "Select"
+                    )
+                    | (
+                        "Points",
+                        "Count" | "Item" | "Creator" | "Application" | "Parent"
+                    )
+                    | (
+                        "Point",
+                        "Name" | "Index" | "Creator" | "Application" | "Parent" | "Select"
                     )
             )
         {
@@ -13181,7 +13244,7 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
-        if !args.is_empty() && member != "DataLabels" {
+        if !args.is_empty() && member != "DataLabels" && member != "Points" {
             return Err(OmError::invalid_argument(format!(
                 "Series.{member} does not accept arguments"
             )));
@@ -13227,6 +13290,15 @@ impl ExcelRuntime {
             "DataLabels" => {
                 self.series_model(workbook, chart_id, series_index)?;
                 let handle = self.register_data_labels_handle(workbook, chart_id, series_index);
+                if args.is_empty() {
+                    Ok(OmValue::Object(handle))
+                } else {
+                    self.dispatch_invoke(handle, "Item", args)
+                }
+            }
+            "Points" => {
+                self.series_model(workbook, chart_id, series_index)?;
+                let handle = self.register_points_handle(workbook, chart_id, series_index);
                 if args.is_empty() {
                     Ok(OmValue::Object(handle))
                 } else {
@@ -13312,6 +13384,136 @@ impl ExcelRuntime {
             ))),
             _ => Err(OmError::unsupported(format!(
                 "DataLabels.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_get_points(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        match member {
+            "Count" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Points.Count does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Number(chart_series_point_count(self.series_model(
+                    workbook,
+                    chart_id,
+                    series_index,
+                )?) as f64))
+            }
+            "Item" => self.dispatch_invoke_points(workbook, chart_id, series_index, member, args),
+            "Creator" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Points.Creator does not accept arguments",
+                    ));
+                }
+                self.series_model(workbook, chart_id, series_index)?;
+                Ok(OmValue::Number(f64::from(XL_CREATOR_CODE)))
+            }
+            "Application" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Points.Application does not accept arguments",
+                    ));
+                }
+                self.series_model(workbook, chart_id, series_index)?;
+                Ok(OmValue::Object(self.root_application()))
+            }
+            "Parent" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Points.Parent does not accept arguments",
+                    ));
+                }
+                self.series_model(workbook, chart_id, series_index)?;
+                Ok(OmValue::Object(self.register_series_handle(
+                    workbook,
+                    chart_id,
+                    series_index,
+                )))
+            }
+            _ => Err(OmError::unsupported(format!(
+                "Points.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_invoke_points(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        match member {
+            "Item" => {
+                let [index] = args else {
+                    return Err(OmError::invalid_argument(
+                        "Points.Item expects a single 1-based index",
+                    ));
+                };
+                let index = coerce_u32_arg(index, "Points.Item index")? as usize;
+                let point_count = chart_series_point_count(self.series_model(
+                    workbook,
+                    chart_id,
+                    series_index,
+                )?);
+                if index == 0 || index > point_count {
+                    return Err(OmError::invalid_argument(
+                        "Points.Item index is out of bounds",
+                    ));
+                }
+                Ok(OmValue::Object(self.register_point_handle(
+                    workbook,
+                    chart_id,
+                    series_index,
+                    index - 1,
+                )))
+            }
+            _ => Err(OmError::unsupported(format!(
+                "Points.{member} is not implemented as a method"
+            ))),
+        }
+    }
+
+    fn dispatch_get_point(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
+        point_index: usize,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        if !args.is_empty() {
+            return Err(OmError::invalid_argument(format!(
+                "Point.{member} does not accept arguments"
+            )));
+        }
+        self.validate_point_index(workbook, chart_id, series_index, point_index)?;
+
+        match member {
+            "Name" => Ok(OmValue::Text(format!("Point {}", point_index + 1))),
+            "Index" => Ok(OmValue::Number((point_index + 1) as f64)),
+            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+            "Application" => Ok(OmValue::Object(self.root_application())),
+            "Parent" => Ok(OmValue::Object(self.register_points_handle(
+                workbook,
+                chart_id,
+                series_index,
+            ))),
+            _ => Err(OmError::unsupported(format!(
+                "Point.{member} is not implemented"
             ))),
         }
     }
@@ -16644,6 +16846,34 @@ impl ExcelRuntime {
         })
     }
 
+    fn register_points_handle(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
+    ) -> ObjectHandle {
+        self.register_object(RuntimeObjectKind::Points {
+            workbook,
+            chart_id,
+            series_index,
+        })
+    }
+
+    fn register_point_handle(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
+        point_index: usize,
+    ) -> ObjectHandle {
+        self.register_object(RuntimeObjectKind::Point {
+            workbook,
+            chart_id,
+            series_index,
+            point_index,
+        })
+    }
+
     fn defined_name(
         &self,
         workbook: WorkbookHandle,
@@ -17568,6 +17798,21 @@ impl ExcelRuntime {
             .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "series not found"))
     }
 
+    fn validate_point_index(
+        &self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
+        point_index: usize,
+    ) -> OmResult<()> {
+        let point_count =
+            chart_series_point_count(self.series_model(workbook, chart_id, series_index)?);
+        if point_index >= point_count {
+            return Err(OmError::new(OmErrorCode::NotFound, "point not found"));
+        }
+        Ok(())
+    }
+
     fn axis_model(
         &self,
         workbook: WorkbookHandle,
@@ -17728,6 +17973,16 @@ impl ExcelRuntime {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
                     ..
+                }
+                | RuntimeObjectKind::Points {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    ..
+                }
+                | RuntimeObjectKind::Point {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    ..
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
                 }
@@ -17815,6 +18070,16 @@ impl ExcelRuntime {
             .iter()
             .filter_map(|(&object_id, object)| match object {
                 RuntimeObjectKind::Series {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    ..
+                }
+                | RuntimeObjectKind::Points {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    ..
+                }
+                | RuntimeObjectKind::Point {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
                     ..
@@ -20732,19 +20997,32 @@ fn chart_data_labels_count_for_series(
     if !chart_data_labels_visible(data_labels) {
         return 0;
     }
+    chart_series_point_count(series).max(1)
+}
+
+fn chart_series_point_count(series: &SeriesModel) -> usize {
     let Some(ReferenceTarget::Range(range)) = series
         .values
         .as_ref()
         .and_then(|source| source.resolved.as_ref())
     else {
-        return 1;
+        return match series
+            .values
+            .as_ref()
+            .and_then(|source| source.resolved.as_ref())
+        {
+            Some(ReferenceTarget::Array(array)) => array.rows.saturating_mul(array.cols),
+            Some(ReferenceTarget::Value(_)) => 1,
+            Some(_) => 1,
+            None if series.values.is_some() => 1,
+            None => 0,
+        };
     };
     range
         .areas()
         .iter()
         .map(|area| area.rect.width() as usize * area.rect.height() as usize)
-        .sum::<usize>()
-        .max(1)
+        .sum()
 }
 
 fn chart_number_xml_value(value: f64) -> String {
@@ -23696,7 +23974,9 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         | RuntimeObjectKind::Axis { workbook, .. }
         | RuntimeObjectKind::AxisTitle { workbook, .. }
         | RuntimeObjectKind::SeriesCollection { workbook, .. }
-        | RuntimeObjectKind::Series { workbook, .. } => Some(workbook),
+        | RuntimeObjectKind::Series { workbook, .. }
+        | RuntimeObjectKind::Points { workbook, .. }
+        | RuntimeObjectKind::Point { workbook, .. } => Some(workbook),
     }
 }
 
@@ -79204,6 +79484,165 @@ mod tests {
                 .dispatch_get(reopened_data_labels, "Separator", &[])
                 .expect("reopened DataLabels.Separator"),
             OmValue::Text(" | ".to_string())
+        );
+    }
+
+    #[test]
+    fn series_points_collection_exposes_basic_point_handles() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+
+        let points = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Points", &[])
+                .expect("Series.Points"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(points, "Count", &[])
+                    .expect("Points.Count")
+            ),
+            3.0
+        );
+        let first_point = expect_object_handle(
+            runtime
+                .dispatch_invoke(points, "Item", &[OmValue::Number(1.0)])
+                .expect("Points.Item(1)"),
+        );
+        let second_point = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Points", &[OmValue::Number(2.0)])
+                .expect("Series.Points(2)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_point, "Index", &[])
+                    .expect("Point.Index")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(first_point, "Name", &[])
+                    .expect("Point.Name")
+            ),
+            "Point 1"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_point, "Index", &[])
+                    .expect("Point.Index from Series.Points(2)")
+            ),
+            2.0
+        );
+
+        let point_parent = expect_object_handle(
+            runtime
+                .dispatch_get(first_point, "Parent", &[])
+                .expect("Point.Parent"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(point_parent, "Count", &[])
+                    .expect("Point.Parent.Count")
+            ),
+            3.0
+        );
+        let points_parent = expect_object_handle(
+            runtime
+                .dispatch_get(points, "Parent", &[])
+                .expect("Points.Parent"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(points_parent, "Formula", &[])
+                .expect("Points.Parent.Formula"),
+            runtime
+                .dispatch_get(series, "Formula", &[])
+                .expect("Series.Formula")
+        );
+
+        runtime
+            .dispatch_invoke(worksheet, "Activate", &[])
+            .expect("Worksheet.Activate clears ActiveChart");
+        assert_eq!(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                .expect("ActiveChart before Point.Select"),
+            OmValue::Empty
+        );
+        runtime
+            .dispatch_invoke(first_point, "Select", &[])
+            .expect("Point.Select");
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                .expect("ActiveChart after Point.Select"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_chart, "Name", &[])
+                    .expect("ActiveChart.Name after Point.Select")
+            ),
+            "Embedded Revenue Chart"
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(points, "Item", &[OmValue::Number(4.0)])
+                .expect_err("Points.Item(4) should be out of bounds")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(first_point, "Select", &[OmValue::Bool(true)])
+                .expect_err("Point.Select rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 
