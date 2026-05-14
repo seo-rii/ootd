@@ -7621,9 +7621,14 @@ impl ExcelRuntime {
                 }
                 "Copy" => {
                     let Some(sheet_id) = self.chart_sheet_id_for_chart(workbook, chart_id)? else {
-                        return Err(OmError::unsupported(
-                            "Chart.Copy is not supported for chart objects",
-                        ));
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "embedded Chart.Copy does not accept placement arguments",
+                            ));
+                        }
+                        self.chart_model(workbook, chart_id)?;
+                        self.set_headless_copy_mode();
+                        return Ok(OmValue::Empty);
                     };
                     let sheet_handle = self.register_worksheet_handle(workbook, sheet_id);
                     self.dispatch_invoke(sheet_handle.0, "Copy", args)
@@ -74083,12 +74088,34 @@ mod tests {
             ),
             "Embedded Revenue Chart"
         );
+        runtime
+            .dispatch_set(
+                runtime.root_application(),
+                "CutCopyMode",
+                OmValue::Bool(false),
+                &[],
+            )
+            .expect("reset Application.CutCopyMode before embedded Chart.Copy");
         assert_eq!(
             runtime
                 .dispatch_invoke(chart, "Copy", &[])
-                .expect_err("embedded Chart.Copy should be unsupported")
+                .expect("embedded Chart.Copy"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode after embedded Chart.Copy")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "Copy", &[OmValue::Missing])
+                .expect_err("embedded Chart.Copy rejects placement arguments")
                 .code,
-            OmErrorCode::Unsupported
+            OmErrorCode::InvalidArgument
         );
         assert_eq!(
             runtime
@@ -77775,6 +77802,7 @@ mod tests {
                     OmValue::Number(f64::from(super::XL_PICTURE)),
                 ],
             ),
+            (chart, "Copy", Vec::new()),
             (
                 chart,
                 "CopyPicture",
