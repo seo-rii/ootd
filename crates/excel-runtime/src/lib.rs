@@ -8888,11 +8888,11 @@ impl ExcelRuntime {
                         self.chart_model(workbook, chart_id)?;
                         Ok(OmValue::Empty)
                     }
-                    "ClearContents" => {
+                    "Clear" | "ClearContents" => {
                         if !args.is_empty() {
-                            return Err(OmError::invalid_argument(
-                                "ChartArea.ClearContents does not accept arguments",
-                            ));
+                            return Err(OmError::invalid_argument(format!(
+                                "ChartArea.{member} does not accept arguments"
+                            )));
                         }
                         {
                             let runtime = self.runtime_workbook_mut(workbook)?;
@@ -9349,6 +9349,7 @@ impl ExcelRuntime {
                             | "Parent"
                             | "Select"
                             | "Copy"
+                            | "Clear"
                             | "ClearFormats"
                             | "ClearContents"
                     )
@@ -78679,165 +78680,166 @@ mod tests {
     }
 
     #[test]
-    fn chartarea_clearcontents_removes_series_and_preserves_extensions_on_save() {
-        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
-            .expect("embedded chart package");
-        let chart_xml = String::from_utf8(
-            package
-                .part("xl/charts/chart1.xml")
-                .expect("chart part")
-                .bytes
-                .clone(),
-        )
-        .expect("chart xml utf8")
-        .replace(
-            "</c:chartSpace>",
-            r#"<c:extLst><c:ext uri="urn:chartarea-clearcontents-preserve"/></c:extLst></c:chartSpace>"#,
-        );
-        package
-            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
-            .expect("replace chart xml");
-
-        let mut runtime = ExcelRuntime::new();
-        let workbook = runtime
-            .open_workbook(OpenWorkbookSpec {
-                bytes: package.to_bytes().expect("package bytes"),
-                format_hint: Some(FileFormat::Xlsx),
-                profile: ExcelProfile::Excel365,
-                read_only: false,
-            })
-            .expect("open workbook with chart");
-        let worksheet = expect_object_handle(
-            runtime
-                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
-                .expect("Workbook.Worksheets(1)"),
-        );
-        let chart_objects = expect_object_handle(
-            runtime
-                .dispatch_get(worksheet, "ChartObjects", &[])
-                .expect("Worksheet.ChartObjects"),
-        );
-        let chart_object = expect_object_handle(
-            runtime
-                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
-                .expect("ChartObjects.Item(1)"),
-        );
-        let chart = expect_object_handle(
-            runtime
-                .dispatch_get(chart_object, "Chart", &[])
-                .expect("ChartObject.Chart"),
-        );
-        let chart_area = expect_object_handle(
-            runtime
-                .dispatch_get(chart, "ChartArea", &[])
-                .expect("Chart.ChartArea"),
-        );
-        let series_collection = expect_object_handle(
-            runtime
-                .dispatch_get(chart, "SeriesCollection", &[])
-                .expect("Chart.SeriesCollection"),
-        );
-        assert_eq!(
-            expect_number(
-                runtime
-                    .dispatch_get(series_collection, "Count", &[])
-                    .expect("SeriesCollection.Count before ClearContents")
-            ),
-            1.0
-        );
-        assert_eq!(
-            runtime
-                .dispatch_invoke(chart_area, "ClearContents", &[OmValue::Missing])
-                .expect_err("ChartArea.ClearContents rejects arguments")
-                .code,
-            OmErrorCode::InvalidArgument
-        );
-        assert_eq!(
-            runtime
-                .dispatch_invoke(chart_area, "ClearContents", &[])
-                .expect("ChartArea.ClearContents"),
-            OmValue::Empty
-        );
-        assert_eq!(
-            runtime
-                .dispatch_get(workbook.0, "Saved", &[])
-                .expect("Workbook.Saved after ChartArea.ClearContents"),
-            OmValue::Bool(false)
-        );
-        assert_eq!(
-            expect_number(
-                runtime
-                    .dispatch_get(series_collection, "Count", &[])
-                    .expect("SeriesCollection.Count after ClearContents")
-            ),
-            0.0
-        );
-
-        let saved = runtime
-            .save_workbook(
-                workbook,
-                SaveWorkbookSpec {
-                    format: FileFormat::Xlsx,
-                    profile: ExcelProfile::Excel365,
-                    lossless: true,
-                },
+    fn chartarea_clear_methods_remove_series_and_preserve_extensions_on_save() {
+        for member in ["ClearContents", "Clear"] {
+            let marker = format!("urn:chartarea-{}-preserve", member.to_ascii_lowercase());
+            let mut package =
+                OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+                    .expect("embedded chart package");
+            let chart_xml = String::from_utf8(
+                package
+                    .part("xl/charts/chart1.xml")
+                    .expect("chart part")
+                    .bytes
+                    .clone(),
             )
-            .expect("save workbook after ChartArea.ClearContents");
-        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
-        let saved_chart_xml = std::str::from_utf8(
-            saved_package
-                .part("xl/charts/chart1.xml")
-                .expect("saved chart part")
-                .bytes
-                .as_slice(),
-        )
-        .expect("saved chart xml utf8");
-        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:chartarea-clearcontents-preserve"/>"#));
-        assert!(!saved_chart_xml.contains("<c:ser>"));
-        assert!(!saved_chart_xml.contains("<c:f>Sheet1!$A$1:$C$1</c:f>"));
+            .expect("chart xml utf8")
+            .replace(
+                "</c:chartSpace>",
+                &format!(r#"<c:extLst><c:ext uri="{marker}"/></c:extLst></c:chartSpace>"#),
+            );
+            package
+                .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+                .expect("replace chart xml");
 
-        let mut reopened_runtime = ExcelRuntime::new();
-        let reopened_workbook = reopened_runtime
-            .open_workbook(OpenWorkbookSpec {
-                bytes: saved,
-                format_hint: Some(FileFormat::Xlsx),
-                profile: ExcelProfile::Excel365,
-                read_only: false,
-            })
-            .expect("reopen workbook after ChartArea.ClearContents");
-        let reopened_worksheet = expect_object_handle(
-            reopened_runtime
-                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
-                .expect("reopened Workbook.Worksheets(1)"),
-        );
-        let reopened_chart_objects = expect_object_handle(
-            reopened_runtime
-                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
-                .expect("reopened Worksheet.ChartObjects"),
-        );
-        let reopened_chart_object = expect_object_handle(
-            reopened_runtime
-                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
-                .expect("reopened ChartObjects.Item(1)"),
-        );
-        let reopened_chart = expect_object_handle(
-            reopened_runtime
-                .dispatch_get(reopened_chart_object, "Chart", &[])
-                .expect("reopened ChartObject.Chart"),
-        );
-        let reopened_series_collection = expect_object_handle(
-            reopened_runtime
-                .dispatch_get(reopened_chart, "SeriesCollection", &[])
-                .expect("reopened Chart.SeriesCollection"),
-        );
-        assert_eq!(
-            expect_number(
+            let mut runtime = ExcelRuntime::new();
+            let workbook = runtime
+                .open_workbook(OpenWorkbookSpec {
+                    bytes: package.to_bytes().expect("package bytes"),
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                })
+                .expect("open workbook with chart");
+            let worksheet = expect_object_handle(
+                runtime
+                    .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                    .expect("Workbook.Worksheets(1)"),
+            );
+            let chart_objects = expect_object_handle(
+                runtime
+                    .dispatch_get(worksheet, "ChartObjects", &[])
+                    .expect("Worksheet.ChartObjects"),
+            );
+            let chart_object = expect_object_handle(
+                runtime
+                    .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                    .expect("ChartObjects.Item(1)"),
+            );
+            let chart = expect_object_handle(
+                runtime
+                    .dispatch_get(chart_object, "Chart", &[])
+                    .expect("ChartObject.Chart"),
+            );
+            let chart_area = expect_object_handle(
+                runtime
+                    .dispatch_get(chart, "ChartArea", &[])
+                    .expect("Chart.ChartArea"),
+            );
+            let series_collection = expect_object_handle(
+                runtime
+                    .dispatch_get(chart, "SeriesCollection", &[])
+                    .expect("Chart.SeriesCollection"),
+            );
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(series_collection, "Count", &[])
+                        .expect("SeriesCollection.Count before ChartArea clear")
+                ),
+                1.0
+            );
+            let error = runtime
+                .dispatch_invoke(chart_area, member, &[OmValue::Missing])
+                .expect_err("ChartArea clear should reject arguments");
+            assert_eq!(error.code, OmErrorCode::InvalidArgument);
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(chart_area, member, &[])
+                    .unwrap_or_else(|error| panic!("ChartArea.{member} failed: {error:?}")),
+                OmValue::Empty
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(workbook.0, "Saved", &[])
+                    .expect("Workbook.Saved after ChartArea clear"),
+                OmValue::Bool(false)
+            );
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(series_collection, "Count", &[])
+                        .expect("SeriesCollection.Count after ChartArea clear")
+                ),
+                0.0
+            );
+
+            let saved = runtime
+                .save_workbook(
+                    workbook,
+                    SaveWorkbookSpec {
+                        format: FileFormat::Xlsx,
+                        profile: ExcelProfile::Excel365,
+                        lossless: true,
+                    },
+                )
+                .expect("save workbook after ChartArea clear");
+            let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+            let saved_chart_xml = std::str::from_utf8(
+                saved_package
+                    .part("xl/charts/chart1.xml")
+                    .expect("saved chart part")
+                    .bytes
+                    .as_slice(),
+            )
+            .expect("saved chart xml utf8");
+            assert!(saved_chart_xml.contains(format!(r#"<c:ext uri="{marker}"/>"#).as_str()));
+            assert!(!saved_chart_xml.contains("<c:ser>"));
+            assert!(!saved_chart_xml.contains("<c:f>Sheet1!$A$1:$C$1</c:f>"));
+
+            let mut reopened_runtime = ExcelRuntime::new();
+            let reopened_workbook = reopened_runtime
+                .open_workbook(OpenWorkbookSpec {
+                    bytes: saved,
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                })
+                .expect("reopen workbook after ChartArea clear");
+            let reopened_worksheet = expect_object_handle(
                 reopened_runtime
-                    .dispatch_get(reopened_series_collection, "Count", &[])
-                    .expect("reopened SeriesCollection.Count")
-            ),
-            0.0
-        );
+                    .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                    .expect("reopened Workbook.Worksheets(1)"),
+            );
+            let reopened_chart_objects = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                    .expect("reopened Worksheet.ChartObjects"),
+            );
+            let reopened_chart_object = expect_object_handle(
+                reopened_runtime
+                    .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                    .expect("reopened ChartObjects.Item(1)"),
+            );
+            let reopened_chart = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_object, "Chart", &[])
+                    .expect("reopened ChartObject.Chart"),
+            );
+            let reopened_series_collection = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                    .expect("reopened Chart.SeriesCollection"),
+            );
+            assert_eq!(
+                expect_number(
+                    reopened_runtime
+                        .dispatch_get(reopened_series_collection, "Count", &[])
+                        .expect("reopened SeriesCollection.Count")
+                ),
+                0.0
+            );
+        }
     }
 
     #[test]
