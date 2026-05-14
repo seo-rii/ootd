@@ -30,6 +30,7 @@ pub struct ChartModel {
     pub first_slice_angle: Option<u16>,
     pub bubble_scale: Option<u16>,
     pub doughnut_hole_size: Option<u16>,
+    pub second_plot_size: Option<u16>,
     pub size_represents: Option<ChartSizeRepresents>,
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,

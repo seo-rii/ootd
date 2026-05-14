@@ -666,6 +666,7 @@ pub struct ChartPartSummary {
     pub first_slice_angle: Option<u16>,
     pub bubble_scale: Option<u16>,
     pub doughnut_hole_size: Option<u16>,
+    pub second_plot_size: Option<u16>,
     pub size_represents: Option<ChartSizeRepresents>,
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,
@@ -3143,6 +3144,7 @@ fn build_chart_model_overlay(
                     first_slice_angle: summary.and_then(|summary| summary.first_slice_angle),
                     bubble_scale: summary.and_then(|summary| summary.bubble_scale),
                     doughnut_hole_size: summary.and_then(|summary| summary.doughnut_hole_size),
+                    second_plot_size: summary.and_then(|summary| summary.second_plot_size),
                     size_represents: summary.and_then(|summary| summary.size_represents),
                     display_blanks_as: summary.and_then(|summary| summary.display_blanks_as),
                     plot_visible_only: summary.and_then(|summary| summary.plot_visible_only),
@@ -15825,6 +15827,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut first_slice_angle = None;
     let mut bubble_scale = None;
     let mut doughnut_hole_size = None;
+    let mut second_plot_size = None;
     let mut size_represents = None;
     let mut display_blanks_as = None;
     let mut plot_visible_only = None;
@@ -16052,6 +16055,15 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 {
                     doughnut_hole_size = Some(value as u16);
                 }
+                if local_name == b"secondPieSize"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                    && let Some(value) = parse_i32_val_attr(&element, &reader, "second plot size")?
+                    && (5..=200).contains(&value)
+                {
+                    second_plot_size = Some(value as u16);
+                }
                 if local_name == b"sizeRepresents"
                     && element_path
                         .last()
@@ -16260,6 +16272,15 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && (10..=90).contains(&value)
                 {
                     doughnut_hole_size = Some(value as u16);
+                }
+                if local_name == b"secondPieSize"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                    && let Some(value) = parse_i32_val_attr(&element, &reader, "second plot size")?
+                    && (5..=200).contains(&value)
+                {
+                    second_plot_size = Some(value as u16);
                 }
                 if local_name == b"sizeRepresents"
                     && element_path
@@ -16474,6 +16495,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         first_slice_angle,
         bubble_scale,
         doughnut_hole_size,
+        second_plot_size,
         size_represents,
         display_blanks_as,
         plot_visible_only,
@@ -21040,6 +21062,7 @@ mod tests {
         <c:firstSliceAng val="25"/>
         <c:bubbleScale val="125"/>
         <c:holeSize val="65"/>
+        <c:secondPieSize val="80"/>
         <c:sizeRepresents val="w"/>
         <c:serLines/>
         <c:dropLines/>
@@ -21259,6 +21282,7 @@ mod tests {
         assert_eq!(chart_summary.first_slice_angle, Some(25));
         assert_eq!(chart_summary.bubble_scale, Some(125));
         assert_eq!(chart_summary.doughnut_hole_size, Some(65));
+        assert_eq!(chart_summary.second_plot_size, Some(80));
         assert_eq!(
             chart_summary.size_represents,
             Some(ChartSizeRepresents::Width)
@@ -21375,6 +21399,7 @@ mod tests {
         assert_eq!(chart_model.first_slice_angle, Some(25));
         assert_eq!(chart_model.bubble_scale, Some(125));
         assert_eq!(chart_model.doughnut_hole_size, Some(65));
+        assert_eq!(chart_model.second_plot_size, Some(80));
         assert_eq!(
             chart_model.size_represents,
             Some(ChartSizeRepresents::Width)
