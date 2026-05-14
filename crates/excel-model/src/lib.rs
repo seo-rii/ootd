@@ -13,8 +13,8 @@ mod names;
 pub use charts::{
     AxisModel, ChartAxisKind, ChartCacheKind, ChartCacheSnapshot, ChartCellMarkerXmlAttrs,
     ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerXmlAttrs, ChartModel, ChartObjectModel,
-    ChartSheetBinding, ChartSourceExpr, ChartText, ChartType, DrawingModel, DrawingObjectModel,
-    LegendModel, SeriesModel, resolve_chart_source_reference,
+    ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartText, ChartType, DrawingModel,
+    DrawingObjectModel, LegendModel, SeriesModel, resolve_chart_source_reference,
     resolve_chart_source_reference_with_names,
 };
 pub use names::DefinedNameTable;
@@ -625,6 +625,7 @@ mod tests {
                 first_slice_angle: None,
                 bubble_scale: None,
                 doughnut_hole_size: None,
+                size_represents: None,
                 display_blanks_as: None,
                 plot_visible_only: None,
                 raw_part_uri: Some("xl/charts/chart1.xml".to_string()),
@@ -1201,6 +1202,7 @@ mod tests {
                 first_slice_angle: None,
                 bubble_scale: None,
                 doughnut_hole_size: None,
+                size_represents: None,
                 display_blanks_as: None,
                 plot_visible_only: None,
                 raw_part_uri: Some("xl/charts/chart1.xml".to_string()),

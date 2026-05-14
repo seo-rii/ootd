@@ -1,8 +1,8 @@
 use excel_model::{
     AxisModel, ChartAxisKind, ChartDisplayBlanksAs, ChartLegendPosition, ChartModel,
-    ChartObjectModel, ChartSheetBinding, ChartSourceExpr, ChartText, ChartType, DrawingModel,
-    DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
-    resolve_chart_source_reference_with_names,
+    ChartObjectModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartText,
+    ChartType, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState,
+    WorksheetData, resolve_chart_source_reference_with_names,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
@@ -58,6 +58,8 @@ const XL_PLOT_BY_COLUMNS: i32 = 2;
 const XL_NOT_PLOTTED: i32 = 1;
 const XL_ZERO: i32 = 2;
 const XL_INTERPOLATED: i32 = 3;
+const XL_SIZE_IS_AREA: i32 = 1;
+const XL_SIZE_IS_WIDTH: i32 = 2;
 const XL_LEGEND_POSITION_BOTTOM: i32 = -4107;
 const XL_LEGEND_POSITION_CORNER: i32 = 2;
 const XL_LEGEND_POSITION_CUSTOM: i32 = -4161;
@@ -3513,6 +3515,46 @@ impl ExcelRuntime {
                             _ => unreachable!(),
                         };
                         if changed {
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "SizeRepresents" => {
+                        let numeric_value = coerce_i32_arg(&value, "ChartGroup.SizeRepresents")?;
+                        let size_represents = match numeric_value {
+                            XL_SIZE_IS_AREA => ChartSizeRepresents::Area,
+                            XL_SIZE_IS_WIDTH => ChartSizeRepresents::Width,
+                            _ => {
+                                return Err(OmError::invalid_argument(
+                                    "ChartGroup.SizeRepresents supports xlSizeIsArea and xlSizeIsWidth",
+                                ));
+                            }
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        if group_index != 0 {
+                            return Err(OmError::new(
+                                OmErrorCode::NotFound,
+                                "chart group not found",
+                            ));
+                        }
+                        if chart.size_represents != Some(size_represents) {
+                            chart.size_represents = Some(size_represents);
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -8839,6 +8881,7 @@ impl ExcelRuntime {
                             | "FirstSliceAngle"
                             | "BubbleScale"
                             | "DoughnutHoleSize"
+                            | "SizeRepresents"
                             | "SeriesCollection"
                             | "Creator"
                             | "Application"
@@ -10957,6 +11000,7 @@ impl ExcelRuntime {
                             first_slice_angle: None,
                             bubble_scale: None,
                             doughnut_hole_size: None,
+                            size_represents: None,
                             display_blanks_as: None,
                             plot_visible_only: None,
                             raw_part_uri: None,
@@ -11820,6 +11864,12 @@ impl ExcelRuntime {
                     ))),
                     "DoughnutHoleSize" => Ok(OmValue::Number(f64::from(
                         chart.doughnut_hole_size.unwrap_or(75),
+                    ))),
+                    "SizeRepresents" => Ok(OmValue::Number(f64::from(
+                        match chart.size_represents.unwrap_or(ChartSizeRepresents::Area) {
+                            ChartSizeRepresents::Area => XL_SIZE_IS_AREA,
+                            ChartSizeRepresents::Width => XL_SIZE_IS_WIDTH,
+                        },
                     ))),
                     "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
                     "Application" => Ok(OmValue::Object(self.root_application())),
@@ -13804,6 +13854,7 @@ impl ExcelRuntime {
                         first_slice_angle: None,
                         bubble_scale: None,
                         doughnut_hole_size: None,
+                        size_represents: None,
                         display_blanks_as: None,
                         plot_visible_only: None,
                         raw_part_uri: Some(chart_part_uri.clone()),
@@ -18935,6 +18986,13 @@ fn chart_display_blanks_as_from_excel_value(value: i32) -> OmResult<ChartDisplay
     }
 }
 
+fn chart_size_represents_xml_value(value: ChartSizeRepresents) -> &'static str {
+    match value {
+        ChartSizeRepresents::Area => "area",
+        ChartSizeRepresents::Width => "w",
+    }
+}
+
 fn patch_loaded_chart_model_xml(
     existing_chart_xml: &[u8],
     chart: &ChartModel,
@@ -18980,6 +19038,7 @@ fn patch_loaded_chart_model_xml(
     let expected_first_slice_angle = chart.first_slice_angle.map(|value| value.to_string());
     let expected_bubble_scale = chart.bubble_scale.map(|value| value.to_string());
     let expected_doughnut_hole_size = chart.doughnut_hole_size.map(|value| value.to_string());
+    let expected_size_represents = chart.size_represents.map(chart_size_represents_xml_value);
     let expected_gap_width = expected_gap_width.as_deref();
     let expected_overlap = expected_overlap.as_deref();
     let expected_first_slice_angle = expected_first_slice_angle.as_deref();
@@ -18991,7 +19050,7 @@ fn patch_loaded_chart_model_xml(
         (b"hiLowLines", "c:hiLowLines", chart.has_hi_lo_lines),
         (b"upDownBars", "c:upDownBars", chart.has_up_down_bars),
     ];
-    let expected_chart_group_numeric_settings: [(&[u8], &str, Option<&str>); 3] = [
+    let expected_chart_group_numeric_settings: [(&[u8], &str, Option<&str>); 4] = [
         (
             b"firstSliceAng",
             "c:firstSliceAng",
@@ -18999,6 +19058,11 @@ fn patch_loaded_chart_model_xml(
         ),
         (b"bubbleScale", "c:bubbleScale", expected_bubble_scale),
         (b"holeSize", "c:holeSize", expected_doughnut_hole_size),
+        (
+            b"sizeRepresents",
+            "c:sizeRepresents",
+            expected_size_represents,
+        ),
     ];
 
     let mut reader = Reader::from_reader(Cursor::new(existing_chart_xml));
@@ -19046,9 +19110,9 @@ fn patch_loaded_chart_model_xml(
     let mut chart_group_line_flag_written = [false; 4];
     let mut chart_group_line_flag_inserted = [false; 4];
     let mut chart_group_line_flag_removed = [false; 4];
-    let mut chart_group_numeric_setting_seen = [false; 3];
-    let mut chart_group_numeric_setting_written = [false; 3];
-    let mut chart_group_numeric_setting_inserted = [false; 3];
+    let mut chart_group_numeric_setting_seen = [false; 4];
+    let mut chart_group_numeric_setting_written = [false; 4];
+    let mut chart_group_numeric_setting_inserted = [false; 4];
     let mut current_axis_index = None::<usize>;
     let mut axis_kinds = Vec::<ChartAxisKind>::new();
     let mut axis_title_texts = Vec::<Option<String>>::new();
@@ -20652,6 +20716,15 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
         .doughnut_hole_size
         .map(|value| format!(r#"<c:holeSize val="{value}"/>"#))
         .unwrap_or_default();
+    let size_represents_xml = chart
+        .size_represents
+        .map(|value| {
+            format!(
+                r#"<c:sizeRepresents val="{}"/>"#,
+                chart_size_represents_xml_value(value)
+            )
+        })
+        .unwrap_or_default();
     let title_xml = chart
         .title
         .as_ref()
@@ -20721,7 +20794,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{doughnut_hole_size_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
+  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{doughnut_hole_size_xml}{size_represents_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -74378,6 +74451,30 @@ mod tests {
                 .expect_err("ChartGroup numeric setting rejects out of range");
             assert_eq!(invalid_numeric_setting.code, OmErrorCode::InvalidArgument);
         }
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "SizeRepresents", &[])
+                .expect("ChartGroup.SizeRepresents"),
+            OmValue::Number(f64::from(super::XL_SIZE_IS_WIDTH))
+        );
+        runtime
+            .dispatch_set(
+                chart_group,
+                "SizeRepresents",
+                OmValue::Number(f64::from(super::XL_SIZE_IS_AREA)),
+                &[],
+            )
+            .expect("set ChartGroup.SizeRepresents");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "SizeRepresents", &[])
+                .expect("ChartGroup.SizeRepresents after set"),
+            OmValue::Number(f64::from(super::XL_SIZE_IS_AREA))
+        );
+        let invalid_size_represents = runtime
+            .dispatch_set(chart_group, "SizeRepresents", OmValue::Number(99.0), &[])
+            .expect_err("ChartGroup.SizeRepresents rejects unsupported constants");
+        assert_eq!(invalid_size_represents.code, OmErrorCode::InvalidArgument);
         for member in [
             "HasSeriesLines",
             "HasDropLines",
@@ -74830,6 +74927,7 @@ mod tests {
             ("FirstSliceAngle", 25.0),
             ("BubbleScale", 125.0),
             ("DoughnutHoleSize", 65.0),
+            ("SizeRepresents", f64::from(super::XL_SIZE_IS_WIDTH)),
         ] {
             assert_eq!(
                 runtime
@@ -74853,6 +74951,14 @@ mod tests {
         runtime
             .dispatch_set(chart_group, "DoughnutHoleSize", OmValue::Number(70.0), &[])
             .expect("set ChartGroup.DoughnutHoleSize");
+        runtime
+            .dispatch_set(
+                chart_group,
+                "SizeRepresents",
+                OmValue::Number(f64::from(super::XL_SIZE_IS_AREA)),
+                &[],
+            )
+            .expect("set ChartGroup.SizeRepresents");
 
         let saved = runtime
             .save_workbook(
@@ -74878,11 +74984,13 @@ mod tests {
         assert!(saved_chart_xml.contains(r#"<c:firstSliceAng val="90"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:bubbleScale val="150"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:holeSize val="70"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:sizeRepresents val="area"/>"#));
         assert!(!saved_chart_xml.contains(r#"<c:gapWidth val="150"/>"#));
         assert!(!saved_chart_xml.contains(r#"<c:overlap val="0"/>"#));
         assert!(!saved_chart_xml.contains(r#"<c:firstSliceAng val="25"/>"#));
         assert!(!saved_chart_xml.contains(r#"<c:bubbleScale val="125"/>"#));
         assert!(!saved_chart_xml.contains(r#"<c:holeSize val="65"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:sizeRepresents val="w"/>"#));
 
         let mut reopened_runtime = ExcelRuntime::new();
         let reopened_workbook = reopened_runtime
@@ -74934,6 +75042,7 @@ mod tests {
             ("FirstSliceAngle", 90.0),
             ("BubbleScale", 150.0),
             ("DoughnutHoleSize", 70.0),
+            ("SizeRepresents", f64::from(super::XL_SIZE_IS_AREA)),
         ] {
             assert_eq!(
                 reopened_runtime
@@ -88740,7 +88849,7 @@ mod tests {
                 compression: CompressionMethod::Stored,
                 bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:varyColors val="1"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val></c:ser><c:gapWidth val="150"/><c:overlap val="0"/><c:firstSliceAng val="25"/><c:bubbleScale val="125"/><c:holeSize val="65"/><c:serLines/><c:dropLines/><c:hiLowLines/><c:upDownBars/></c:barChart><c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx><c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx></c:plotArea><c:legend><c:legendPos val="r"/></c:legend></c:chart>
+  <c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:varyColors val="1"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val></c:ser><c:gapWidth val="150"/><c:overlap val="0"/><c:firstSliceAng val="25"/><c:bubbleScale val="125"/><c:holeSize val="65"/><c:sizeRepresents val="w"/><c:serLines/><c:dropLines/><c:hiLowLines/><c:upDownBars/></c:barChart><c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx><c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx></c:plotArea><c:legend><c:legendPos val="r"/></c:legend></c:chart>
 </c:chartSpace>"#
                     .to_vec(),
             })
