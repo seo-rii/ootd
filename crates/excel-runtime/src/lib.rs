@@ -7562,6 +7562,15 @@ impl ExcelRuntime {
                         self.register_chart_object_handle(workbook, duplicate_id),
                     ))
                 }
+                "BringToFront" | "SendToBack" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(format!(
+                            "ChartObject.{member} does not accept arguments"
+                        )));
+                    }
+                    self.move_chart_object_z_order(workbook, chart_object_id, member)?;
+                    Ok(OmValue::Empty)
+                }
                 "CopyPicture" => {
                     validate_copy_picture_args(args, 2, "ChartObject.CopyPicture")?;
                     let chart_object = self.chart_object_model(workbook, chart_object_id)?;
@@ -9184,11 +9193,13 @@ impl ExcelRuntime {
                             | "Parent"
                             | "Activate"
                             | "Select"
+                            | "BringToFront"
                             | "Copy"
                             | "Cut"
                             | "Duplicate"
                             | "CopyPicture"
                             | "Delete"
+                            | "SendToBack"
                     )
                     | (
                         "Chart",
@@ -16954,6 +16965,84 @@ impl ExcelRuntime {
         runtime.dirty = true;
 
         Ok(new_chart_object_id)
+    }
+
+    fn move_chart_object_z_order(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_object_id: ChartObjectId,
+        member: &str,
+    ) -> OmResult<()> {
+        let host_sheet_id = self
+            .chart_object_model(workbook, chart_object_id)?
+            .host_sheet_id;
+        let mut ordered_chart_object_ids = self
+            .chart_object_entries_for_sheet(workbook, host_sheet_id)?
+            .into_iter()
+            .map(|(chart_object_id, _)| chart_object_id)
+            .collect::<Vec<_>>();
+        let Some(position) = ordered_chart_object_ids
+            .iter()
+            .position(|candidate_id| *candidate_id == chart_object_id)
+        else {
+            return Err(OmError::new(
+                OmErrorCode::NotFound,
+                "chart object not found",
+            ));
+        };
+        if ordered_chart_object_ids.len() <= 1 {
+            return Ok(());
+        }
+        let target = ordered_chart_object_ids.remove(position);
+        match member {
+            "BringToFront" => ordered_chart_object_ids.push(target),
+            "SendToBack" => ordered_chart_object_ids.insert(0, target),
+            _ => {
+                return Err(OmError::unsupported(format!(
+                    "ChartObject.{member} is not implemented as a z-order method"
+                )));
+            }
+        }
+
+        let runtime = self.runtime_workbook_mut(workbook)?;
+        if runtime.read_only {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                "cannot modify a read-only workbook",
+            ));
+        }
+        let mut workbook_dirty = false;
+        for drawing in runtime.loaded.state.drawings.values_mut() {
+            if drawing.host_sheet_id != host_sheet_id {
+                continue;
+            }
+            let mut drawing_dirty = false;
+            for object in &mut drawing.objects {
+                let DrawingObjectModel::ChartFrame(chart_object) = object else {
+                    continue;
+                };
+                let Some(new_position) = ordered_chart_object_ids
+                    .iter()
+                    .position(|candidate_id| *candidate_id == chart_object.id)
+                else {
+                    continue;
+                };
+                let new_z_order = u32::try_from(new_position).ok();
+                if chart_object.z_order != new_z_order {
+                    chart_object.z_order = new_z_order;
+                    chart_object.dirty = true;
+                    drawing_dirty = true;
+                }
+            }
+            if drawing_dirty {
+                drawing.dirty = true;
+                workbook_dirty = true;
+            }
+        }
+        if workbook_dirty {
+            runtime.dirty = true;
+        }
+        Ok(())
     }
 
     fn series_model(
@@ -84603,6 +84692,182 @@ mod tests {
                     .expect("new ChartObject.ZOrder after add")
             ),
             2.0
+        );
+    }
+
+    #[test]
+    fn chartobject_z_order_methods_reorder_collection_and_persist() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let first_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let second_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(24.0),
+                        OmValue::Number(30.0),
+                        OmValue::Number(180.0),
+                        OmValue::Number(90.0),
+                    ],
+                )
+                .expect("ChartObjects.Add second chart"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(first_chart_object, "Name", &[])
+                    .expect("first ChartObject.Name")
+            ),
+            "Embedded Revenue Chart"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(second_chart_object, "Name", &[])
+                    .expect("second ChartObject.Name")
+            ),
+            "Chart 2"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(first_chart_object, "BringToFront", &[OmValue::Missing])
+                .expect_err("ChartObject.BringToFront rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(first_chart_object, "BringToFront", &[])
+                .expect("ChartObject.BringToFront"),
+            OmValue::Empty
+        );
+        let ordered_first = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1) after BringToFront"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(ordered_first, "Name", &[])
+                    .expect("first ordered ChartObject.Name after BringToFront")
+            ),
+            "Chart 2"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_chart_object, "ZOrder", &[])
+                    .expect("first ChartObject.ZOrder after BringToFront")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_chart_object, "ZOrder", &[])
+                    .expect("second ChartObject.ZOrder after BringToFront")
+            ),
+            1.0
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after ChartObject.BringToFront");
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after ChartObject.BringToFront");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_back_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_front_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(2.0)])
+                .expect("reopened ChartObjects.Item(2)"),
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(reopened_back_chart_object, "Name", &[])
+                    .expect("reopened back ChartObject.Name")
+            ),
+            "Chart 2"
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(reopened_front_chart_object, "Name", &[])
+                    .expect("reopened front ChartObject.Name")
+            ),
+            "Embedded Revenue Chart"
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_invoke(reopened_front_chart_object, "SendToBack", &[])
+                .expect("ChartObject.SendToBack"),
+            OmValue::Empty
+        );
+        let reordered_first = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1) after SendToBack"),
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(reordered_first, "Name", &[])
+                    .expect("first ChartObject.Name after SendToBack")
+            ),
+            "Embedded Revenue Chart"
         );
     }
 
