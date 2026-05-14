@@ -660,6 +660,7 @@ pub struct ChartPartSummary {
     pub scatter_style: Option<String>,
     pub radar_style: Option<String>,
     pub of_pie_type: Option<String>,
+    pub surface_wireframe: Option<bool>,
     pub title_text: Option<String>,
     pub has_legend: bool,
     pub legend_position: Option<ChartLegendPosition>,
@@ -3396,6 +3397,20 @@ fn chart_type_from_summary(summary: Option<&ChartPartSummary>) -> ChartType {
             Some("filled") => ChartType::RadarFilled,
             _ => ChartType::Radar,
         },
+        Some("surface3DChart") => {
+            if summary.surface_wireframe == Some(true) {
+                ChartType::SurfaceWireframe
+            } else {
+                ChartType::Surface
+            }
+        }
+        Some("surfaceChart") => {
+            if summary.surface_wireframe == Some(true) {
+                ChartType::SurfaceTopViewWireframe
+            } else {
+                ChartType::SurfaceTopView
+            }
+        }
         Some(chart_type_name) => ChartType::Unsupported(chart_type_name.to_string()),
         None => ChartType::Unknown,
     }
@@ -15899,6 +15914,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut scatter_style = None::<String>;
     let mut radar_style = None::<String>;
     let mut of_pie_type = None::<String>;
+    let mut surface_wireframe = None;
     let mut title_text = None::<String>;
     let mut title_text_depth = 0usize;
     let mut has_legend = false;
@@ -16153,6 +16169,13 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "bar" | "pie" => Some(value),
                         _ => of_pie_type,
                     };
+                }
+                if local_name == b"wireframe"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name == "surfaceChart" || name == "surface3DChart")
+                {
+                    surface_wireframe = parse_bool_val_attr(&element, &reader)?.or(Some(true));
                 }
                 if local_name == b"gapWidth"
                     && element_path
@@ -16467,6 +16490,13 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "bar" | "pie" => Some(value),
                         _ => of_pie_type,
                     };
+                }
+                if local_name == b"wireframe"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name == "surfaceChart" || name == "surface3DChart")
+                {
+                    surface_wireframe = parse_bool_val_attr(&element, &reader)?.or(Some(true));
                 }
                 if local_name == b"gapWidth"
                     && element_path
@@ -16793,6 +16823,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         scatter_style,
         radar_style,
         of_pie_type,
+        surface_wireframe,
         title_text: title_text.filter(|text| !text.is_empty()),
         has_legend,
         legend_position,
@@ -21591,6 +21622,7 @@ mod tests {
         assert_eq!(chart_summary.scatter_style, None);
         assert_eq!(chart_summary.radar_style, None);
         assert_eq!(chart_summary.of_pie_type, None);
+        assert_eq!(chart_summary.surface_wireframe, None);
         assert_eq!(chart_summary.title_text.as_deref(), Some("Revenue Trend"));
         assert!(chart_summary.has_legend);
         assert_eq!(

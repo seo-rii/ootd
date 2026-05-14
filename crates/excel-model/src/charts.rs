@@ -86,6 +86,10 @@ pub enum ChartType {
     Radar,
     RadarMarkers,
     RadarFilled,
+    Surface,
+    SurfaceWireframe,
+    SurfaceTopView,
+    SurfaceTopViewWireframe,
     Unsupported(String),
 }
 

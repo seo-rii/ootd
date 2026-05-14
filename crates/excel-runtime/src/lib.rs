@@ -80,6 +80,10 @@ const XL_3D_BAR_STACKED: i32 = 61;
 const XL_3D_BAR_STACKED_100: i32 = 62;
 const XL_3D_AREA_STACKED: i32 = 78;
 const XL_3D_AREA_STACKED_100: i32 = 79;
+const XL_SURFACE: i32 = 83;
+const XL_SURFACE_WIREFRAME: i32 = 84;
+const XL_SURFACE_TOP_VIEW: i32 = 85;
+const XL_SURFACE_TOP_VIEW_WIREFRAME: i32 = 86;
 const XL_XY_SCATTER: i32 = -4169;
 const XL_XY_SCATTER_SMOOTH: i32 = 72;
 const XL_XY_SCATTER_SMOOTH_NO_MARKERS: i32 = 73;
@@ -3864,6 +3868,10 @@ impl ExcelRuntime {
                             XL_RADAR => ChartType::Radar,
                             XL_RADAR_MARKERS => ChartType::RadarMarkers,
                             XL_RADAR_FILLED => ChartType::RadarFilled,
+                            XL_SURFACE => ChartType::Surface,
+                            XL_SURFACE_WIREFRAME => ChartType::SurfaceWireframe,
+                            XL_SURFACE_TOP_VIEW => ChartType::SurfaceTopView,
+                            XL_SURFACE_TOP_VIEW_WIREFRAME => ChartType::SurfaceTopViewWireframe,
                             _ => {
                                 return Err(OmError::unsupported(
                                     "Chart.ChartType supports area, bar, column, line, scatter, bubble, doughnut, pie, and radar chart types",
@@ -19174,6 +19182,8 @@ fn chart_type_from_group_name(local_name: &[u8]) -> Option<ChartType> {
         b"pieChart" => Some(ChartType::Pie),
         b"pie3DChart" => Some(ChartType::Pie3D),
         b"radarChart" => Some(ChartType::Radar),
+        b"surfaceChart" => Some(ChartType::SurfaceTopView),
+        b"surface3DChart" => Some(ChartType::Surface),
         _ => None,
     }
 }
@@ -19215,6 +19225,8 @@ fn chart_group_xml_name(chart_type: &ChartType) -> Option<&'static str> {
         ChartType::Pie3D => Some("pie3DChart"),
         ChartType::PieOfPie | ChartType::BarOfPie => Some("ofPieChart"),
         ChartType::Radar | ChartType::RadarMarkers | ChartType::RadarFilled => Some("radarChart"),
+        ChartType::Surface | ChartType::SurfaceWireframe => Some("surface3DChart"),
+        ChartType::SurfaceTopView | ChartType::SurfaceTopViewWireframe => Some("surfaceChart"),
         ChartType::Unknown | ChartType::Unsupported(_) => None,
     }
 }
@@ -19310,6 +19322,14 @@ fn chart_type_of_pie_xml_value(chart_type: &ChartType) -> Option<&'static str> {
     match chart_type {
         ChartType::PieOfPie => Some("pie"),
         ChartType::BarOfPie => Some("bar"),
+        _ => None,
+    }
+}
+
+fn chart_type_surface_wireframe_xml_value(chart_type: &ChartType) -> Option<&'static str> {
+    match chart_type {
+        ChartType::Surface | ChartType::SurfaceTopView => Some("0"),
+        ChartType::SurfaceWireframe | ChartType::SurfaceTopViewWireframe => Some("1"),
         _ => None,
     }
 }
@@ -19452,6 +19472,7 @@ fn patch_loaded_chart_model_xml(
     let expected_scatter_style = chart_type_scatter_style_xml_value(&chart.chart_type);
     let expected_radar_style = chart_type_radar_style_xml_value(&chart.chart_type);
     let expected_of_pie_type = chart_type_of_pie_xml_value(&chart.chart_type);
+    let expected_surface_wireframe = chart_type_surface_wireframe_xml_value(&chart.chart_type);
     let expected_gap_width = chart.gap_width.map(|value| value.to_string());
     let expected_overlap = chart.overlap.map(|value| value.to_string());
     let expected_first_slice_angle = chart.first_slice_angle.map(|value| value.to_string());
@@ -19561,6 +19582,9 @@ fn patch_loaded_chart_model_xml(
     let mut of_pie_type_seen = false;
     let mut of_pie_type_written = false;
     let mut of_pie_type_inserted = false;
+    let mut surface_wireframe_seen = false;
+    let mut surface_wireframe_written = false;
+    let mut surface_wireframe_inserted = false;
     let mut gap_width_seen = false;
     let mut gap_width_written = false;
     let mut gap_width_inserted = false;
@@ -20112,6 +20136,10 @@ fn patch_loaded_chart_model_xml(
                     && current_chart_group_depth == Some(element_stack.len())
                 {
                     of_pie_type_seen = true;
+                } else if local_name.as_slice() == b"wireframe"
+                    && current_chart_group_depth == Some(element_stack.len())
+                {
+                    surface_wireframe_seen = true;
                 } else if local_name.as_slice() == b"gapWidth"
                     && current_chart_group_depth == Some(element_stack.len())
                 {
@@ -20319,6 +20347,18 @@ fn patch_loaded_chart_model_xml(
                         .map_err(runtime_xml_error)?;
                     of_pie_type_written = true;
                 } else if !wrote_start_element
+                    && local_name.as_slice() == b"wireframe"
+                    && let Some(value) = expected_surface_wireframe
+                {
+                    writer
+                        .write_event(Event::Start(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    surface_wireframe_written = true;
+                } else if !wrote_start_element
                     && local_name.as_slice() == b"gapWidth"
                     && let Some(value) = expected_gap_width
                 {
@@ -20507,6 +20547,10 @@ fn patch_loaded_chart_model_xml(
                     && current_chart_group_depth == Some(element_stack.len())
                 {
                     of_pie_type_seen = true;
+                } else if local_name.as_slice() == b"wireframe"
+                    && current_chart_group_depth == Some(element_stack.len())
+                {
+                    surface_wireframe_seen = true;
                 } else if local_name.as_slice() == b"gapWidth"
                     && current_chart_group_depth == Some(element_stack.len())
                 {
@@ -20640,6 +20684,17 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     of_pie_type_written = true;
+                } else if local_name.as_slice() == b"wireframe"
+                    && let Some(value) = expected_surface_wireframe
+                {
+                    writer
+                        .write_event(Event::Empty(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    surface_wireframe_written = true;
                 } else if local_name.as_slice() == b"gapWidth"
                     && let Some(value) = expected_gap_width
                 {
@@ -21094,6 +21149,15 @@ fn patch_loaded_chart_model_xml(
                         of_pie_type_inserted = true;
                         of_pie_type_written = true;
                     }
+                    if !surface_wireframe_seen && let Some(value) = expected_surface_wireframe {
+                        let mut surface_wireframe = BytesStart::new("c:wireframe");
+                        surface_wireframe.push_attribute(("val", value));
+                        writer
+                            .write_event(Event::Empty(surface_wireframe))
+                            .map_err(runtime_xml_error)?;
+                        surface_wireframe_inserted = true;
+                        surface_wireframe_written = true;
+                    }
                     if !gap_width_seen && let Some(value) = expected_gap_width {
                         let mut gap_width = BytesStart::new("c:gapWidth");
                         gap_width.push_attribute(("val", value));
@@ -21302,6 +21366,11 @@ fn patch_loaded_chart_model_xml(
         (Some(_), false) => of_pie_type_inserted,
         (None, _) => true,
     };
+    let surface_wireframe_matches = match (expected_surface_wireframe, surface_wireframe_seen) {
+        (Some(_), true) => surface_wireframe_written,
+        (Some(_), false) => surface_wireframe_inserted,
+        (None, _) => true,
+    };
     let gap_width_matches = match (expected_gap_width, gap_width_seen) {
         (Some(_), true) => gap_width_written,
         (Some(_), false) => gap_width_inserted,
@@ -21364,6 +21433,7 @@ fn patch_loaded_chart_model_xml(
         && scatter_style_matches
         && radar_style_matches
         && of_pie_type_matches
+        && surface_wireframe_matches
         && gap_width_matches
         && overlap_matches
         && chart_group_numeric_settings_match
@@ -21438,6 +21508,9 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
         .unwrap_or_default();
     let of_pie_type_xml = chart_type_of_pie_xml_value(&chart.chart_type)
         .map(|value| format!(r#"<c:ofPieType val="{value}"/>"#))
+        .unwrap_or_default();
+    let surface_wireframe_xml = chart_type_surface_wireframe_xml_value(&chart.chart_type)
+        .map(|value| format!(r#"<c:wireframe val="{value}"/>"#))
         .unwrap_or_default();
     let gap_width_xml = chart
         .gap_width
@@ -21588,7 +21661,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
+  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -21637,6 +21710,10 @@ fn chart_type_to_excel_value(chart_type: &ChartType) -> OmResult<i32> {
         ChartType::Radar => Ok(XL_RADAR),
         ChartType::RadarMarkers => Ok(XL_RADAR_MARKERS),
         ChartType::RadarFilled => Ok(XL_RADAR_FILLED),
+        ChartType::Surface => Ok(XL_SURFACE),
+        ChartType::SurfaceWireframe => Ok(XL_SURFACE_WIREFRAME),
+        ChartType::SurfaceTopView => Ok(XL_SURFACE_TOP_VIEW),
+        ChartType::SurfaceTopViewWireframe => Ok(XL_SURFACE_TOP_VIEW_WIREFRAME),
         ChartType::Unknown => Err(OmError::unsupported(
             "Chart.ChartType is unavailable for unknown chart types",
         )),
@@ -80037,6 +80114,146 @@ mod tests {
             ),
             f64::from(super::XL_XY_SCATTER)
         );
+    }
+
+    #[test]
+    fn loaded_chart_type_setter_rewrites_surface_chart_groups_on_save() {
+        for (chart_type_value, expected_group_name, expected_wireframe) in [
+            (super::XL_SURFACE, "surface3DChart", "0"),
+            (super::XL_SURFACE_WIREFRAME, "surface3DChart", "1"),
+            (super::XL_SURFACE_TOP_VIEW, "surfaceChart", "0"),
+            (super::XL_SURFACE_TOP_VIEW_WIREFRAME, "surfaceChart", "1"),
+        ] {
+            let mut package =
+                OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+                    .expect("embedded chart package");
+            let chart_xml = String::from_utf8(
+                package
+                    .part("xl/charts/chart1.xml")
+                    .expect("chart part")
+                    .bytes
+                    .clone(),
+            )
+            .expect("chart xml utf8")
+            .replace(
+                "</c:chartSpace>",
+                r#"<c:extLst><c:ext uri="urn:chart-type-surface-preserve"/></c:extLst></c:chartSpace>"#,
+            );
+            package
+                .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+                .expect("replace chart xml");
+
+            let mut runtime = ExcelRuntime::new();
+            let workbook = runtime
+                .open_workbook(OpenWorkbookSpec {
+                    bytes: package.to_bytes().expect("package bytes"),
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                })
+                .expect("open workbook with chart extension");
+            let worksheet = expect_object_handle(
+                runtime
+                    .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                    .expect("Workbook.Worksheets(1)"),
+            );
+            let chart_objects = expect_object_handle(
+                runtime
+                    .dispatch_get(worksheet, "ChartObjects", &[])
+                    .expect("Worksheet.ChartObjects"),
+            );
+            let chart_object = expect_object_handle(
+                runtime
+                    .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                    .expect("ChartObjects.Item(1)"),
+            );
+            let chart = expect_object_handle(
+                runtime
+                    .dispatch_get(chart_object, "Chart", &[])
+                    .expect("ChartObject.Chart"),
+            );
+            runtime
+                .dispatch_set(
+                    chart,
+                    "ChartType",
+                    OmValue::Number(f64::from(chart_type_value)),
+                    &[],
+                )
+                .expect("set loaded Chart.ChartType");
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(chart, "ChartType", &[])
+                        .expect("Chart.ChartType after set")
+                ),
+                f64::from(chart_type_value)
+            );
+
+            let saved = runtime
+                .save_workbook(
+                    workbook,
+                    SaveWorkbookSpec {
+                        format: FileFormat::Xlsx,
+                        profile: ExcelProfile::Excel365,
+                        lossless: true,
+                    },
+                )
+                .expect("save workbook after loaded chart type edit");
+            let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+            let saved_chart_xml = std::str::from_utf8(
+                saved_package
+                    .part("xl/charts/chart1.xml")
+                    .expect("saved chart part")
+                    .bytes
+                    .as_slice(),
+            )
+            .expect("saved chart xml utf8");
+            assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:chart-type-surface-preserve"/>"#));
+            assert!(saved_chart_xml.contains(&format!("<c:{expected_group_name}>")));
+            assert!(
+                saved_chart_xml.contains(&format!(r#"<c:wireframe val="{expected_wireframe}"/>"#))
+            );
+            assert!(saved_chart_xml.contains("<c:catAx>"));
+            assert!(saved_chart_xml.contains("<c:valAx>"));
+
+            let mut reopened_runtime = ExcelRuntime::new();
+            let reopened_workbook = reopened_runtime
+                .open_workbook(OpenWorkbookSpec {
+                    bytes: saved,
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                })
+                .expect("reopen workbook after loaded chart type edit");
+            let reopened_worksheet = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                    .expect("reopened Workbook.Worksheets(1)"),
+            );
+            let reopened_chart_objects = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                    .expect("reopened Worksheet.ChartObjects"),
+            );
+            let reopened_chart_object = expect_object_handle(
+                reopened_runtime
+                    .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                    .expect("reopened ChartObjects.Item(1)"),
+            );
+            let reopened_chart = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_object, "Chart", &[])
+                    .expect("reopened ChartObject.Chart"),
+            );
+            assert_eq!(
+                expect_number(
+                    reopened_runtime
+                        .dispatch_get(reopened_chart, "ChartType", &[])
+                        .expect("reopened Chart.ChartType")
+                ),
+                f64::from(chart_type_value)
+            );
+        }
     }
 
     #[test]
