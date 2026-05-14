@@ -3013,7 +3013,7 @@ impl ExcelRuntime {
                             )),
                         }
                     }
-                    "Name" | "Values" | "XValues" => {
+                    "Name" | "Values" | "XValues" | "BubbleSizes" => {
                         let source = match value {
                             OmValue::Text(text) => {
                                 let raw_text = text.trim_start_matches('=').to_string();
@@ -3085,6 +3085,13 @@ impl ExcelRuntime {
                                 .ok_or_else(|| {
                                     OmError::new(OmErrorCode::NotFound, "chart not found")
                                 })?;
+                        if member == "BubbleSizes"
+                            && !chart_type_uses_bubble_size(&chart.chart_type)
+                        {
+                            return Err(OmError::unsupported(
+                                "Series.BubbleSizes is only supported for bubble charts",
+                            ));
+                        }
                         let series = chart.series.get_mut(series_index).ok_or_else(|| {
                             OmError::new(OmErrorCode::NotFound, "series not found")
                         })?;
@@ -3092,6 +3099,7 @@ impl ExcelRuntime {
                             "Name" => series.name = source,
                             "Values" => series.values = source,
                             "XValues" => series.x_values = source,
+                            "BubbleSizes" => series.bubble_size = source,
                             _ => unreachable!("handled series member"),
                         }
                         chart.dirty = true;
@@ -3169,11 +3177,6 @@ impl ExcelRuntime {
                                 "Series.Formula expects name, x-values, values, and plot order",
                             ));
                         }
-                        if parts.len() == 5 && !parts[4].trim().is_empty() {
-                            return Err(OmError::unsupported(
-                                "Series.Formula bubble size is not supported yet",
-                            ));
-                        }
                         let plot_order = parts[3].trim().parse::<u32>().map_err(|_| {
                             OmError::invalid_argument(
                                 "Series.Formula plot order must be a positive integer",
@@ -3184,7 +3187,7 @@ impl ExcelRuntime {
                                 "Series.Formula plot order must be a positive integer",
                             ));
                         }
-                        let (name_source, x_values_source, values_source) = {
+                        let (name_source, x_values_source, values_source, bubble_size_source) = {
                             let source_arg = |text: &str| {
                                 let text = text.trim();
                                 if text.is_empty() {
@@ -3214,6 +3217,7 @@ impl ExcelRuntime {
                                 source_arg(&parts[0]),
                                 source_arg(&parts[1]),
                                 source_arg(&parts[2]),
+                                parts.get(4).and_then(|part| source_arg(part)),
                             )
                         };
                         let runtime = self.runtime_workbook_mut(workbook)?;
@@ -3245,6 +3249,13 @@ impl ExcelRuntime {
                         if series_index >= chart.series.len() {
                             return Err(OmError::new(OmErrorCode::NotFound, "series not found"));
                         }
+                        if bubble_size_source.is_some()
+                            && !chart_type_uses_bubble_size(&chart.chart_type)
+                        {
+                            return Err(OmError::unsupported(
+                                "Series.Formula bubble size is only supported for bubble charts",
+                            ));
+                        }
                         update_series_plot_order(&mut chart.series, series_index, plot_order);
                         let series = chart.series.get_mut(series_index).ok_or_else(|| {
                             OmError::new(OmErrorCode::NotFound, "series not found")
@@ -3252,6 +3263,7 @@ impl ExcelRuntime {
                         series.name = name_source;
                         series.x_values = x_values_source;
                         series.values = values_source;
+                        series.bubble_size = bubble_size_source;
                         chart.dirty = true;
                         runtime.dirty = true;
                         Ok(())
@@ -3978,6 +3990,11 @@ impl ExcelRuntime {
                                     _ => None,
                                 };
                                 chart.chart_type = chart_type;
+                                if !chart_type_uses_bubble_size(&chart.chart_type) {
+                                    for series in &mut chart.series {
+                                        series.bubble_size = None;
+                                    }
+                                }
                                 if let Some(has_3d_shading) = chart_type_bubble_3d {
                                     chart.has_3d_shading = Some(has_3d_shading);
                                 }
@@ -8614,6 +8631,7 @@ impl ExcelRuntime {
                                         values_rect,
                                         &worksheet_name,
                                     )?),
+                                    bubble_size: None,
                                     order: u32::try_from(index).ok(),
                                 });
                             }
@@ -8637,6 +8655,7 @@ impl ExcelRuntime {
                                         values_rect,
                                         &worksheet_name,
                                     )?),
+                                    bubble_size: None,
                                     order: u32::try_from(index).ok(),
                                 });
                             }
@@ -8652,6 +8671,7 @@ impl ExcelRuntime {
                                     source_rect,
                                     &worksheet_name,
                                 )?),
+                                bubble_size: None,
                                 order: Some(0),
                             });
                         }
@@ -9240,6 +9260,7 @@ impl ExcelRuntime {
                         "Name"
                             | "Values"
                             | "XValues"
+                            | "BubbleSizes"
                             | "Formula"
                             | "AxisGroup"
                             | "PlotOrder"
@@ -12565,6 +12586,7 @@ impl ExcelRuntime {
                         name: None,
                         x_values: None,
                         values: None,
+                        bubble_size: None,
                         order: u32::try_from(series_index).ok(),
                     });
                     if let Some(plot_order) = series_index
@@ -12612,6 +12634,9 @@ impl ExcelRuntime {
                 .map(OmValue::Text)
                 .unwrap_or(OmValue::Empty)),
             "XValues" => Ok(chart_source_expr_text(series.x_values.as_ref())
+                .map(OmValue::Text)
+                .unwrap_or(OmValue::Empty)),
+            "BubbleSizes" => Ok(chart_source_expr_text(series.bubble_size.as_ref())
                 .map(OmValue::Text)
                 .unwrap_or(OmValue::Empty)),
             "Formula" => Ok(OmValue::Text(series_formula_text(series, series_index))),
@@ -19248,6 +19273,7 @@ enum ChartSourceXmlSlot {
     Name,
     XValues,
     Values,
+    BubbleSize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19354,6 +19380,10 @@ fn chart_type_uses_xy_values(chart_type: &ChartType) -> bool {
             | ChartType::Bubble
             | ChartType::Bubble3DEffect
     )
+}
+
+fn chart_type_uses_bubble_size(chart_type: &ChartType) -> bool {
+    matches!(chart_type, ChartType::Bubble | ChartType::Bubble3DEffect)
 }
 
 fn chart_type_bar_direction_xml_value(chart_type: &ChartType) -> Option<&'static str> {
@@ -19759,7 +19789,7 @@ fn patch_loaded_chart_model_xml(
     let mut current_series_index = None::<usize>;
     let mut source_stack = Vec::<ChartSourceXmlSlot>::new();
     let mut current_formula = None::<(ChartSourceXmlSlot, bool)>;
-    let mut source_slots_seen = vec![[false; 3]; chart.series.len()];
+    let mut source_slots_seen = vec![[false; 4]; chart.series.len()];
     let mut series_order_seen = vec![false; chart.series.len()];
     let mut series_order_written = vec![false; chart.series.len()];
     let mut series_explosion_seen = vec![false; chart.series.len()];
@@ -19839,6 +19869,7 @@ fn patch_loaded_chart_model_xml(
             ChartSourceXmlSlot::Name => 0,
             ChartSourceXmlSlot::XValues => 1,
             ChartSourceXmlSlot::Values => 2,
+            ChartSourceXmlSlot::BubbleSize => 3,
         }
     };
     let source_container_slot = |local_name: &[u8]| -> Option<ChartSourceXmlSlot> {
@@ -19846,15 +19877,16 @@ fn patch_loaded_chart_model_xml(
             b"tx" => Some(ChartSourceXmlSlot::Name),
             b"cat" | b"xVal" => Some(ChartSourceXmlSlot::XValues),
             b"val" | b"yVal" => Some(ChartSourceXmlSlot::Values),
+            b"bubbleSize" => Some(ChartSourceXmlSlot::BubbleSize),
             _ => None,
         }
     };
-    let mut loaded_series_signatures = Vec::<[Option<String>; 3]>::new();
+    let mut loaded_series_signatures = Vec::<[Option<String>; 4]>::new();
     {
         let mut signature_reader = Reader::from_reader(Cursor::new(existing_chart_xml));
         signature_reader.config_mut().trim_text(false);
         let mut signature_buffer = Vec::new();
-        let mut active_signature = None::<[Option<String>; 3]>;
+        let mut active_signature = None::<[Option<String>; 4]>;
         let mut signature_source_stack = Vec::<ChartSourceXmlSlot>::new();
         let mut signature_formula = None::<(ChartSourceXmlSlot, String, usize)>;
 
@@ -19863,7 +19895,7 @@ fn patch_loaded_chart_model_xml(
                 Ok(Event::Start(element)) => {
                     let local_name = xml_local_name(element.name().as_ref()).to_vec();
                     if local_name.as_slice() == b"ser" && active_signature.is_none() {
-                        active_signature = Some([None, None, None]);
+                        active_signature = Some([None, None, None, None]);
                     } else if active_signature.is_some() {
                         if let Some((_, _, depth)) = signature_formula.as_mut() {
                             *depth += 1;
@@ -19901,7 +19933,7 @@ fn patch_loaded_chart_model_xml(
                         }
                     } else if matches!(
                         local_name.as_slice(),
-                        b"tx" | b"cat" | b"val" | b"xVal" | b"yVal"
+                        b"tx" | b"cat" | b"val" | b"xVal" | b"yVal" | b"bubbleSize"
                     ) {
                         signature_source_stack.pop();
                     } else if local_name.as_slice() == b"ser"
@@ -19919,12 +19951,13 @@ fn patch_loaded_chart_model_xml(
         }
     }
     let model_series_matches_signature = |series: &SeriesModel,
-                                          signature: &[Option<String>; 3]|
+                                          signature: &[Option<String>; 4]|
      -> bool {
         let sources = [
             series.name.as_ref(),
             series.x_values.as_ref(),
             series.values.as_ref(),
+            series.bubble_size.as_ref(),
         ];
         sources
             .iter()
@@ -19974,6 +20007,12 @@ fn patch_loaded_chart_model_xml(
                     ChartSourceXmlSlot::Name => series.name.as_ref(),
                     ChartSourceXmlSlot::XValues => series.x_values.as_ref(),
                     ChartSourceXmlSlot::Values => series.values.as_ref(),
+                    ChartSourceXmlSlot::BubbleSize
+                        if chart_type_uses_bubble_size(&chart.chart_type) =>
+                    {
+                        series.bubble_size.as_ref()
+                    }
+                    ChartSourceXmlSlot::BubbleSize => None,
                 })
         };
     let target_chart_group_name = chart_group_xml_name(&chart.chart_type);
@@ -19987,11 +20026,23 @@ fn patch_loaded_chart_model_xml(
             replacement_local.to_string()
         }
     };
-    let source_slots_in_order = [
+    let source_slots_with_bubble_size = [
+        ChartSourceXmlSlot::Name,
+        ChartSourceXmlSlot::XValues,
+        ChartSourceXmlSlot::Values,
+        ChartSourceXmlSlot::BubbleSize,
+    ];
+    let source_slots_without_bubble_size = [
         ChartSourceXmlSlot::Name,
         ChartSourceXmlSlot::XValues,
         ChartSourceXmlSlot::Values,
     ];
+    let source_slots_in_order: &[ChartSourceXmlSlot] =
+        if chart_type_uses_bubble_size(&chart.chart_type) {
+            &source_slots_with_bubble_size
+        } else {
+            &source_slots_without_bubble_size
+        };
     let source_container_target_local_name = |slot: ChartSourceXmlSlot| -> &'static str {
         match (&chart.chart_type, slot) {
             (_, ChartSourceXmlSlot::Name) => "tx",
@@ -20003,6 +20054,7 @@ fn patch_loaded_chart_model_xml(
             }
             (_, ChartSourceXmlSlot::XValues) => "cat",
             (_, ChartSourceXmlSlot::Values) => "val",
+            (_, ChartSourceXmlSlot::BubbleSize) => "bubbleSize",
         }
     };
     let source_container_names = |slot: ChartSourceXmlSlot| -> (&'static str, &'static str) {
@@ -20016,6 +20068,7 @@ fn patch_loaded_chart_model_xml(
             }
             (_, ChartSourceXmlSlot::XValues) => ("c:cat", "c:strRef"),
             (_, ChartSourceXmlSlot::Values) => ("c:val", "c:numRef"),
+            (_, ChartSourceXmlSlot::BubbleSize) => ("c:bubbleSize", "c:numRef"),
         }
     };
     let write_chart_source_container = |writer: &mut Writer<Cursor<Vec<u8>>>,
@@ -21264,7 +21317,7 @@ fn patch_loaded_chart_model_xml(
                             *written = true;
                         }
                     }
-                    for slot in source_slots_in_order {
+                    for slot in source_slots_in_order.iter().copied() {
                         if !source_slots_seen
                             .get(series_index)
                             .map(|seen| seen[slot_index(slot)])
@@ -21391,7 +21444,7 @@ fn patch_loaded_chart_model_xml(
                         if series_emitted.get(series_index).copied().unwrap_or(false) {
                             continue;
                         }
-                        let mut source_seen = [false; 3];
+                        let mut source_seen = [false; 4];
                         writer
                             .write_event(Event::Start(BytesStart::new("c:ser")))
                             .map_err(runtime_xml_error)?;
@@ -21424,7 +21477,7 @@ fn patch_loaded_chart_model_xml(
                                 *written = true;
                             }
                         }
-                        for slot in source_slots_in_order {
+                        for slot in source_slots_in_order.iter().copied() {
                             if let Some(source) = source_for_slot(series_index, slot) {
                                 write_chart_source_container(&mut writer, slot, source)?;
                                 source_seen[slot_index(slot)] = true;
@@ -21657,6 +21710,9 @@ fn patch_loaded_chart_model_xml(
                 seen[0] == series.name.is_some()
                     && seen[1] == series.x_values.is_some()
                     && seen[2] == series.values.is_some()
+                    && seen[3]
+                        == (series.bubble_size.is_some()
+                            && chart_type_uses_bubble_size(&chart.chart_type))
             });
     let series_orders_match = series_order_seen.len() == chart.series.len()
         && series_order_seen
@@ -21867,6 +21923,14 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             };
             series_xml.push_str(&format!(
                 r#"<c:{container_name}><c:{reference_name}><c:f>{formula}</c:f></c:{reference_name}></c:{container_name}>"#
+            ));
+        }
+        if chart_type_uses_bubble_size(&chart.chart_type)
+            && let Some(bubble_size) = series.bubble_size.as_ref()
+        {
+            let formula = partial_escape(bubble_size.raw.text.trim_start_matches('=')).to_string();
+            series_xml.push_str(&format!(
+                r#"<c:bubbleSize><c:numRef><c:f>{formula}</c:f></c:numRef></c:bubbleSize>"#
             ));
         }
         series_xml.push_str("</c:ser>");
@@ -22214,7 +22278,11 @@ fn series_formula_text(series: &SeriesModel, series_index: usize) -> String {
     let x_values = formula_arg_text(series.x_values.as_ref()).unwrap_or_default();
     let values = formula_arg_text(series.values.as_ref()).unwrap_or_default();
     let order = series_plot_order(series, series_index);
-    format!("=SERIES({name},{x_values},{values},{order})")
+    if let Some(bubble_size) = formula_arg_text(series.bubble_size.as_ref()) {
+        format!("=SERIES({name},{x_values},{values},{order},{bubble_size})")
+    } else {
+        format!("=SERIES({name},{x_values},{values},{order})")
+    }
 }
 
 fn series_plot_order(series: &SeriesModel, series_index: usize) -> u32 {
@@ -87309,6 +87377,181 @@ mod tests {
                     .expect("reopened Series.Formula")
             ),
             "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1)"
+        );
+    }
+
+    #[test]
+    fn chart_series_formula_setter_roundtrips_bubble_size_source() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    series,
+                    "BubbleSizes",
+                    OmValue::Text("=Sheet1!$D$1:$D$3".to_string()),
+                    &[],
+                )
+                .expect_err("Series.BubbleSizes rejects non-bubble charts")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_BUBBLE)),
+                &[],
+            )
+            .expect("set Chart.ChartType to bubble");
+        runtime
+            .dispatch_set(
+                series,
+                "Formula",
+                OmValue::Text(
+                    "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1,Sheet1!$D$1:$D$3)"
+                        .to_string(),
+                ),
+                &[],
+            )
+            .expect("set bubble Series.Formula");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "BubbleSizes", &[])
+                .expect("Series.BubbleSizes after Formula"),
+            OmValue::Text("=Sheet1!$D$1:$D$3".to_string())
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Formula", &[])
+                    .expect("Series.Formula after bubble Formula")
+            ),
+            "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1,Sheet1!$D$1:$D$3)"
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after bubble Series.Formula");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:bubbleChart>"));
+        assert!(saved_chart_xml.contains(
+            "<c:bubbleSize><c:numRef><c:f>Sheet1!$D$1:$D$3</c:f></c:numRef></c:bubbleSize>"
+        ));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after bubble Series.Formula");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_series, "BubbleSizes", &[])
+                .expect("reopened Series.BubbleSizes"),
+            OmValue::Text("=Sheet1!$D$1:$D$3".to_string())
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(reopened_series, "Formula", &[])
+                    .expect("reopened Series.Formula")
+            ),
+            "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1,Sheet1!$D$1:$D$3)"
         );
     }
 

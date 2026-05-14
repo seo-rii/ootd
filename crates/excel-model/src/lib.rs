@@ -1193,6 +1193,7 @@ mod tests {
                         cache: None,
                         dirty: false,
                     }),
+                    bubble_size: None,
                     order: Some(0),
                 }],
                 title: None,

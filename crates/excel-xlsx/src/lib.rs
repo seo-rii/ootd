@@ -707,6 +707,8 @@ pub struct ChartSeriesSummary {
     pub category_cache: Option<ChartCacheSummary>,
     pub values_ref: Option<String>,
     pub values_cache: Option<ChartCacheSummary>,
+    pub bubble_size_ref: Option<String>,
+    pub bubble_size_cache: Option<ChartCacheSummary>,
     pub order: Option<u32>,
 }
 
@@ -3527,6 +3529,10 @@ fn chart_series_from_summary(
                     .values_ref
                     .as_ref()
                     .map(|reference| source_from_ref(reference, series.values_cache.as_ref())),
+                bubble_size: series
+                    .bubble_size_ref
+                    .as_ref()
+                    .map(|reference| source_from_ref(reference, series.bubble_size_cache.as_ref())),
                 order: series.order.or_else(|| u32::try_from(index).ok()),
             })
             .collect();
@@ -3540,6 +3546,7 @@ fn chart_series_from_summary(
             name: None,
             x_values: None,
             values: Some(source_from_ref(reference, None)),
+            bubble_size: None,
             order: u32::try_from(index).ok(),
         })
         .collect()
@@ -15957,6 +15964,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         Name,
         Category,
         Values,
+        BubbleSize,
     }
 
     let mut reader = Reader::from_reader(Cursor::new(chart_xml));
@@ -16112,6 +16120,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 "tx" => return Some(ChartSeriesFormulaSlot::Name),
                 "cat" | "xVal" => return Some(ChartSeriesFormulaSlot::Category),
                 "val" | "yVal" => return Some(ChartSeriesFormulaSlot::Values),
+                "bubbleSize" => return Some(ChartSeriesFormulaSlot::BubbleSize),
                 _ => {}
             }
         }
@@ -16768,6 +16777,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                             active_series.category_cache = Some(cache)
                         }
                         ChartSeriesFormulaSlot::Values => active_series.values_cache = Some(cache),
+                        ChartSeriesFormulaSlot::BubbleSize => {
+                            active_series.bubble_size_cache = Some(cache)
+                        }
                     }
                 }
             }
@@ -16831,6 +16843,11 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                                         active_series.values_ref = Some(value.clone());
                                     }
                                 }
+                                ChartSeriesFormulaSlot::BubbleSize => {
+                                    if active_series.bubble_size_ref.is_none() {
+                                        active_series.bubble_size_ref = Some(value.clone());
+                                    }
+                                }
                             }
                         }
                         formula_refs.push(value);
@@ -16865,6 +16882,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                             }
                             ChartSeriesFormulaSlot::Values => {
                                 active_series.values_cache = Some(cache)
+                            }
+                            ChartSeriesFormulaSlot::BubbleSize => {
+                                active_series.bubble_size_cache = Some(cache)
                             }
                         }
                     }
@@ -21786,6 +21806,8 @@ mod tests {
                     kind: ChartCacheKindSummary::Number,
                     point_count: Some(3),
                 }),
+                bubble_size_ref: None,
+                bubble_size_cache: None,
                 order: Some(0),
             }]
         );
