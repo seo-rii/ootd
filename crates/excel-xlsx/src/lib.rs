@@ -673,6 +673,7 @@ pub struct ChartPartSummary {
     pub has_hi_lo_lines: Option<bool>,
     pub has_up_down_bars: Option<bool>,
     pub first_slice_angle: Option<u16>,
+    pub explosion: Option<u16>,
     pub bubble_scale: Option<u16>,
     pub show_negative_bubbles: Option<bool>,
     pub has_3d_shading: Option<bool>,
@@ -3155,6 +3156,7 @@ fn build_chart_model_overlay(
                     has_hi_lo_lines: summary.and_then(|summary| summary.has_hi_lo_lines),
                     has_up_down_bars: summary.and_then(|summary| summary.has_up_down_bars),
                     first_slice_angle: summary.and_then(|summary| summary.first_slice_angle),
+                    explosion: summary.and_then(|summary| summary.explosion),
                     bubble_scale: summary.and_then(|summary| summary.bubble_scale),
                     show_negative_bubbles: summary
                         .and_then(|summary| summary.show_negative_bubbles),
@@ -3414,13 +3416,31 @@ fn chart_type_from_summary(summary: Option<&ChartPartSummary>) -> ChartType {
                 ChartType::Bubble
             }
         }
-        Some("doughnutChart") => ChartType::Doughnut,
+        Some("doughnutChart") => {
+            if summary.explosion.unwrap_or(0) > 0 {
+                ChartType::DoughnutExploded
+            } else {
+                ChartType::Doughnut
+            }
+        }
         Some("ofPieChart") => match summary.of_pie_type.as_deref() {
             Some("bar") => ChartType::BarOfPie,
             _ => ChartType::PieOfPie,
         },
-        Some("pieChart") => ChartType::Pie,
-        Some("pie3DChart") => ChartType::Pie3D,
+        Some("pieChart") => {
+            if summary.explosion.unwrap_or(0) > 0 {
+                ChartType::PieExploded
+            } else {
+                ChartType::Pie
+            }
+        }
+        Some("pie3DChart") => {
+            if summary.explosion.unwrap_or(0) > 0 {
+                ChartType::Pie3DExploded
+            } else {
+                ChartType::Pie3D
+            }
+        }
         Some("radarChart") => match summary.radar_style.as_deref() {
             Some("marker") => ChartType::RadarMarkers,
             Some("filled") => ChartType::RadarFilled,
@@ -15964,6 +15984,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut has_hi_lo_lines = None;
     let mut has_up_down_bars = None;
     let mut first_slice_angle = None;
+    let mut explosion = None;
     let mut bubble_scale = None;
     let mut show_negative_bubbles = None;
     let mut has_3d_shading = None;
@@ -16278,6 +16299,14 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && (0..=360).contains(&value)
                 {
                     first_slice_angle = Some(value as u16);
+                }
+                if local_name == b"explosion"
+                    && active_series.is_some()
+                    && explosion.is_none()
+                    && let Some(value) = parse_i32_val_attr(&element, &reader, "explosion")?
+                    && (0..=400).contains(&value)
+                {
+                    explosion = Some(value as u16);
                 }
                 if local_name == b"bubbleScale"
                     && element_path
@@ -16610,6 +16639,14 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 {
                     first_slice_angle = Some(value as u16);
                 }
+                if local_name == b"explosion"
+                    && active_series.is_some()
+                    && explosion.is_none()
+                    && let Some(value) = parse_i32_val_attr(&element, &reader, "explosion")?
+                    && (0..=400).contains(&value)
+                {
+                    explosion = Some(value as u16);
+                }
                 if local_name == b"bubbleScale"
                     && element_path
                         .last()
@@ -16893,6 +16930,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         has_hi_lo_lines,
         has_up_down_bars,
         first_slice_angle,
+        explosion,
         bubble_scale,
         show_negative_bubbles,
         has_3d_shading,
@@ -21696,6 +21734,7 @@ mod tests {
         assert_eq!(chart_summary.has_hi_lo_lines, Some(true));
         assert_eq!(chart_summary.has_up_down_bars, Some(true));
         assert_eq!(chart_summary.first_slice_angle, Some(25));
+        assert_eq!(chart_summary.explosion, None);
         assert_eq!(chart_summary.bubble_scale, Some(125));
         assert_eq!(chart_summary.show_negative_bubbles, Some(true));
         assert_eq!(chart_summary.has_3d_shading, Some(true));
@@ -21817,6 +21856,7 @@ mod tests {
         assert_eq!(chart_model.has_hi_lo_lines, Some(true));
         assert_eq!(chart_model.has_up_down_bars, Some(true));
         assert_eq!(chart_model.first_slice_angle, Some(25));
+        assert_eq!(chart_model.explosion, None);
         assert_eq!(chart_model.bubble_scale, Some(125));
         assert_eq!(chart_model.show_negative_bubbles, Some(true));
         assert_eq!(chart_model.has_3d_shading, Some(true));

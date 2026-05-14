@@ -61,6 +61,8 @@ const XL_LINE_MARKERS_STACKED: i32 = 66;
 const XL_LINE_MARKERS_STACKED_100: i32 = 67;
 const XL_PIE: i32 = 5;
 const XL_PIE_OF_PIE: i32 = 68;
+const XL_PIE_EXPLODED: i32 = 69;
+const XL_3D_PIE_EXPLODED: i32 = 70;
 const XL_BAR_OF_PIE: i32 = 71;
 const XL_BUBBLE: i32 = 15;
 const XL_BUBBLE_3D_EFFECT: i32 = 87;
@@ -82,6 +84,7 @@ const XL_3D_BAR_STACKED: i32 = 61;
 const XL_3D_BAR_STACKED_100: i32 = 62;
 const XL_3D_AREA_STACKED: i32 = 78;
 const XL_3D_AREA_STACKED_100: i32 = 79;
+const XL_DOUGHNUT_EXPLODED: i32 = 80;
 const XL_SURFACE: i32 = 83;
 const XL_SURFACE_WIREFRAME: i32 = 84;
 const XL_SURFACE_TOP_VIEW: i32 = 85;
@@ -3884,8 +3887,11 @@ impl ExcelRuntime {
                             XL_BUBBLE => ChartType::Bubble,
                             XL_BUBBLE_3D_EFFECT => ChartType::Bubble3DEffect,
                             XL_DOUGHNUT => ChartType::Doughnut,
+                            XL_DOUGHNUT_EXPLODED => ChartType::DoughnutExploded,
                             XL_PIE => ChartType::Pie,
                             XL_3D_PIE => ChartType::Pie3D,
+                            XL_PIE_EXPLODED => ChartType::PieExploded,
+                            XL_3D_PIE_EXPLODED => ChartType::Pie3DExploded,
                             XL_PIE_OF_PIE => ChartType::PieOfPie,
                             XL_BAR_OF_PIE => ChartType::BarOfPie,
                             XL_RADAR => ChartType::Radar,
@@ -3948,6 +3954,15 @@ impl ExcelRuntime {
                                     ChartType::StockOHLC => Some(true),
                                     _ => None,
                                 };
+                                let chart_type_explosion = match chart_type {
+                                    ChartType::PieExploded
+                                    | ChartType::Pie3DExploded
+                                    | ChartType::DoughnutExploded => Some(Some(25)),
+                                    ChartType::Pie | ChartType::Pie3D | ChartType::Doughnut => {
+                                        Some(None)
+                                    }
+                                    _ => None,
+                                };
                                 chart.chart_type = chart_type;
                                 if let Some(has_3d_shading) = chart_type_bubble_3d {
                                     chart.has_3d_shading = Some(has_3d_shading);
@@ -3955,6 +3970,9 @@ impl ExcelRuntime {
                                 if let Some(has_up_down_bars) = chart_type_stock_up_down_bars {
                                     chart.has_hi_lo_lines = Some(true);
                                     chart.has_up_down_bars = Some(has_up_down_bars);
+                                }
+                                if let Some(explosion) = chart_type_explosion {
+                                    chart.explosion = explosion;
                                 }
                                 if chart_type_has_axes && chart.axes.is_empty() {
                                     chart.axes = default_chart_axes();
@@ -11285,6 +11303,7 @@ impl ExcelRuntime {
                             has_hi_lo_lines: None,
                             has_up_down_bars: None,
                             first_slice_angle: None,
+                            explosion: None,
                             bubble_scale: None,
                             show_negative_bubbles: None,
                             has_3d_shading: None,
@@ -14160,6 +14179,7 @@ impl ExcelRuntime {
                         has_hi_lo_lines: None,
                         has_up_down_bars: None,
                         first_slice_angle: None,
+                        explosion: None,
                         bubble_scale: None,
                         show_negative_bubbles: None,
                         has_3d_shading: None,
@@ -19297,9 +19317,9 @@ fn chart_group_xml_name(chart_type: &ChartType) -> Option<&'static str> {
         | ChartType::ScatterSmooth
         | ChartType::ScatterSmoothNoMarkers => Some("scatterChart"),
         ChartType::Bubble | ChartType::Bubble3DEffect => Some("bubbleChart"),
-        ChartType::Doughnut => Some("doughnutChart"),
-        ChartType::Pie => Some("pieChart"),
-        ChartType::Pie3D => Some("pie3DChart"),
+        ChartType::Doughnut | ChartType::DoughnutExploded => Some("doughnutChart"),
+        ChartType::Pie | ChartType::PieExploded => Some("pieChart"),
+        ChartType::Pie3D | ChartType::Pie3DExploded => Some("pie3DChart"),
         ChartType::PieOfPie | ChartType::BarOfPie => Some("ofPieChart"),
         ChartType::Radar | ChartType::RadarMarkers | ChartType::RadarFilled => Some("radarChart"),
         ChartType::StockHLC | ChartType::StockOHLC => Some("stockChart"),
@@ -19485,11 +19505,27 @@ fn chart_type_has_axes(chart_type: &ChartType) -> bool {
     !matches!(
         chart_type,
         ChartType::Doughnut
+            | ChartType::DoughnutExploded
             | ChartType::Pie
             | ChartType::Pie3D
+            | ChartType::PieExploded
+            | ChartType::Pie3DExploded
             | ChartType::PieOfPie
             | ChartType::BarOfPie
     )
+}
+
+fn chart_explosion_xml_value(chart: &ChartModel) -> Option<String> {
+    chart
+        .explosion
+        .or_else(|| {
+            matches!(
+                chart.chart_type,
+                ChartType::PieExploded | ChartType::Pie3DExploded | ChartType::DoughnutExploded
+            )
+            .then_some(25)
+        })
+        .map(|value| value.to_string())
 }
 
 fn chart_axis_kind_from_xml_name(local_name: &[u8]) -> Option<ChartAxisKind> {
@@ -19624,6 +19660,7 @@ fn patch_loaded_chart_model_xml(
     let expected_gap_width = chart.gap_width.map(|value| value.to_string());
     let expected_overlap = chart.overlap.map(|value| value.to_string());
     let expected_first_slice_angle = chart.first_slice_angle.map(|value| value.to_string());
+    let expected_explosion = chart_explosion_xml_value(chart);
     let expected_bubble_scale = chart.bubble_scale.map(|value| value.to_string());
     let expected_show_negative_bubbles = chart
         .show_negative_bubbles
@@ -19639,6 +19676,7 @@ fn patch_loaded_chart_model_xml(
     let expected_gap_width = expected_gap_width.as_deref();
     let expected_overlap = expected_overlap.as_deref();
     let expected_first_slice_angle = expected_first_slice_angle.as_deref();
+    let expected_explosion = expected_explosion.as_deref();
     let expected_bubble_scale = expected_bubble_scale.as_deref();
     let expected_doughnut_hole_size = expected_doughnut_hole_size.as_deref();
     let expected_second_plot_size = expected_second_plot_size.as_deref();
@@ -19695,6 +19733,10 @@ fn patch_loaded_chart_model_xml(
     let mut source_slots_seen = vec![[false; 3]; chart.series.len()];
     let mut series_order_seen = vec![false; chart.series.len()];
     let mut series_order_written = vec![false; chart.series.len()];
+    let mut series_explosion_seen = vec![false; chart.series.len()];
+    let mut series_explosion_written = vec![false; chart.series.len()];
+    let mut series_explosion_inserted = vec![false; chart.series.len()];
+    let mut series_explosion_removed = vec![false; chart.series.len()];
     let mut series_emitted = vec![false; chart.series.len()];
     let mut patched_sources = 0usize;
     let mut chart_type = None::<ChartType>;
@@ -20370,6 +20412,34 @@ fn patch_loaded_chart_model_xml(
                     wrote_start_element = true;
                 }
                 if !wrote_start_element
+                    && local_name.as_slice() == b"explosion"
+                    && let Some(series_index) = current_series_index
+                {
+                    if let Some(seen) = series_explosion_seen.get_mut(series_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = expected_explosion {
+                        writer
+                            .write_event(Event::Start(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value,
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = series_explosion_written.get_mut(series_index) {
+                            *written = true;
+                        }
+                        wrote_start_element = true;
+                    } else {
+                        if let Some(removed) = series_explosion_removed.get_mut(series_index) {
+                            *removed = true;
+                        }
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    }
+                }
+                if !wrote_start_element
                     && let Some(slot) = source_container_slot(local_name.as_slice())
                     && current_series_index.is_some()
                 {
@@ -20641,6 +20711,29 @@ fn patch_loaded_chart_model_xml(
                         buffer.clear();
                         continue;
                     }
+                }
+                if local_name.as_slice() == b"explosion"
+                    && let Some(series_index) = current_series_index
+                {
+                    if let Some(seen) = series_explosion_seen.get_mut(series_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = expected_explosion {
+                        writer
+                            .write_event(Event::Empty(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value,
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = series_explosion_written.get_mut(series_index) {
+                            *written = true;
+                        }
+                    } else if let Some(removed) = series_explosion_removed.get_mut(series_index) {
+                        *removed = true;
+                    }
+                    buffer.clear();
+                    continue;
                 }
                 if let Some(source_chart_type) = chart_type_from_group_name(local_name.as_slice())
                     && source_chart_type != chart.chart_type
@@ -21124,6 +21217,24 @@ fn patch_loaded_chart_model_xml(
                 if local_name.as_slice() == b"ser"
                     && let Some(series_index) = current_series_index
                 {
+                    if !series_explosion_seen
+                        .get(series_index)
+                        .copied()
+                        .unwrap_or(false)
+                        && let Some(value) = expected_explosion
+                    {
+                        let mut explosion = BytesStart::new("c:explosion");
+                        explosion.push_attribute(("val", value));
+                        writer
+                            .write_event(Event::Empty(explosion))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(inserted) = series_explosion_inserted.get_mut(series_index) {
+                            *inserted = true;
+                        }
+                        if let Some(written) = series_explosion_written.get_mut(series_index) {
+                            *written = true;
+                        }
+                    }
                     for slot in source_slots_in_order {
                         if !source_slots_seen
                             .get(series_index)
@@ -21267,6 +21378,23 @@ fn patch_loaded_chart_model_xml(
                         writer
                             .write_event(Event::Empty(order_element))
                             .map_err(runtime_xml_error)?;
+                        if let Some(value) = expected_explosion {
+                            let mut explosion = BytesStart::new("c:explosion");
+                            explosion.push_attribute(("val", value));
+                            writer
+                                .write_event(Event::Empty(explosion))
+                                .map_err(runtime_xml_error)?;
+                            if let Some(seen) = series_explosion_seen.get_mut(series_index) {
+                                *seen = true;
+                            }
+                            if let Some(inserted) = series_explosion_inserted.get_mut(series_index)
+                            {
+                                *inserted = true;
+                            }
+                            if let Some(written) = series_explosion_written.get_mut(series_index) {
+                                *written = true;
+                            }
+                        }
                         for slot in source_slots_in_order {
                             if let Some(source) = source_for_slot(series_index, slot) {
                                 write_chart_source_container(&mut writer, slot, source)?;
@@ -21515,6 +21643,20 @@ fn patch_loaded_chart_model_xml(
                     expected_order == series_index as u32
                 }
             });
+    let series_explosions_match = series_explosion_seen.len() == chart.series.len()
+        && series_explosion_seen
+            .iter()
+            .zip(series_explosion_written.iter())
+            .zip(series_explosion_inserted.iter())
+            .zip(series_explosion_removed.iter())
+            .all(
+                |(((seen, written), inserted), removed)| match expected_explosion {
+                    Some(_) if *seen => *written,
+                    Some(_) => *inserted,
+                    None if *seen => *removed,
+                    None => true,
+                },
+            );
     let title_matches = match (chart.title.as_ref(), chart_title_seen) {
         (Some(_), true) => chart_title_text_written,
         (Some(_), false) => chart_title_inserted,
@@ -21632,6 +21774,7 @@ fn patch_loaded_chart_model_xml(
     if chart_type_matches
         && series_sources_match
         && series_orders_match
+        && series_explosions_match
         && patched_sources == expected_dirty_sources
         && title_matches
         && legend_matches
@@ -21666,6 +21809,9 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             r#"<c:ser><c:idx val="{}"/><c:order val="{}"/>"#,
             series_index, order
         ));
+        if let Some(explosion) = chart_explosion_xml_value(chart) {
+            series_xml.push_str(&format!(r#"<c:explosion val="{explosion}"/>"#));
+        }
         if let Some(name) = series.name.as_ref() {
             let formula = partial_escape(name.raw.text.trim_start_matches('=')).to_string();
             series_xml.push_str(&format!(
@@ -21924,8 +22070,11 @@ fn chart_type_to_excel_value(chart_type: &ChartType) -> OmResult<i32> {
         ChartType::Bubble => Ok(XL_BUBBLE),
         ChartType::Bubble3DEffect => Ok(XL_BUBBLE_3D_EFFECT),
         ChartType::Doughnut => Ok(XL_DOUGHNUT),
+        ChartType::DoughnutExploded => Ok(XL_DOUGHNUT_EXPLODED),
         ChartType::Pie => Ok(XL_PIE),
         ChartType::Pie3D => Ok(XL_3D_PIE),
+        ChartType::PieExploded => Ok(XL_PIE_EXPLODED),
+        ChartType::Pie3DExploded => Ok(XL_3D_PIE_EXPLODED),
         ChartType::PieOfPie => Ok(XL_PIE_OF_PIE),
         ChartType::BarOfPie => Ok(XL_BAR_OF_PIE),
         ChartType::Radar => Ok(XL_RADAR),
@@ -80937,6 +81086,123 @@ mod tests {
             ),
             f64::from(super::XL_BUBBLE)
         );
+    }
+
+    #[test]
+    fn loaded_chart_type_setter_rewrites_exploded_pie_and_doughnut_types_on_save() {
+        for (chart_type_value, expected_group_name) in [
+            (super::XL_PIE_EXPLODED, "pieChart"),
+            (super::XL_3D_PIE_EXPLODED, "pie3DChart"),
+            (super::XL_DOUGHNUT_EXPLODED, "doughnutChart"),
+        ] {
+            let mut runtime = ExcelRuntime::new();
+            let workbook = runtime
+                .open_workbook(OpenWorkbookSpec {
+                    bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                })
+                .expect("open workbook with embedded chart");
+            let worksheet = expect_object_handle(
+                runtime
+                    .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                    .expect("Workbook.Worksheets(1)"),
+            );
+            let chart_objects = expect_object_handle(
+                runtime
+                    .dispatch_get(worksheet, "ChartObjects", &[])
+                    .expect("Worksheet.ChartObjects"),
+            );
+            let chart_object = expect_object_handle(
+                runtime
+                    .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                    .expect("ChartObjects.Item(1)"),
+            );
+            let chart = expect_object_handle(
+                runtime
+                    .dispatch_get(chart_object, "Chart", &[])
+                    .expect("ChartObject.Chart"),
+            );
+            runtime
+                .dispatch_set(
+                    chart,
+                    "ChartType",
+                    OmValue::Number(f64::from(chart_type_value)),
+                    &[],
+                )
+                .expect("set loaded Chart.ChartType");
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(chart, "ChartType", &[])
+                        .expect("Chart.ChartType after set")
+                ),
+                f64::from(chart_type_value)
+            );
+
+            let saved = runtime
+                .save_workbook(
+                    workbook,
+                    SaveWorkbookSpec {
+                        format: FileFormat::Xlsx,
+                        profile: ExcelProfile::Excel365,
+                        lossless: true,
+                    },
+                )
+                .expect("save workbook after exploded chart type edit");
+            let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+            let saved_chart_xml = std::str::from_utf8(
+                saved_package
+                    .part("xl/charts/chart1.xml")
+                    .expect("saved chart part")
+                    .bytes
+                    .as_slice(),
+            )
+            .expect("saved chart xml utf8");
+            assert!(saved_chart_xml.contains(&format!("<c:{expected_group_name}>")));
+            assert!(saved_chart_xml.contains(r#"<c:explosion val="25"/>"#));
+            assert!(!saved_chart_xml.contains("<c:catAx>"));
+            assert!(!saved_chart_xml.contains("<c:valAx>"));
+
+            let mut reopened_runtime = ExcelRuntime::new();
+            let reopened_workbook = reopened_runtime
+                .open_workbook(OpenWorkbookSpec {
+                    bytes: saved,
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                })
+                .expect("reopen workbook after exploded chart type edit");
+            let reopened_worksheet = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                    .expect("reopened Workbook.Worksheets(1)"),
+            );
+            let reopened_chart_objects = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                    .expect("reopened Worksheet.ChartObjects"),
+            );
+            let reopened_chart_object = expect_object_handle(
+                reopened_runtime
+                    .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                    .expect("reopened ChartObjects.Item(1)"),
+            );
+            let reopened_chart = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_object, "Chart", &[])
+                    .expect("reopened ChartObject.Chart"),
+            );
+            assert_eq!(
+                expect_number(
+                    reopened_runtime
+                        .dispatch_get(reopened_chart, "ChartType", &[])
+                        .expect("reopened Chart.ChartType")
+                ),
+                f64::from(chart_type_value)
+            );
+        }
     }
 
     #[test]
