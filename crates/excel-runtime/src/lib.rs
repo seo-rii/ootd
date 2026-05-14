@@ -9359,7 +9359,8 @@ impl ExcelRuntime {
                     )
                     | (
                         "ChartTitle",
-                        "Text"
+                        "Name"
+                            | "Text"
                             | "Caption"
                             | "Creator"
                             | "Application"
@@ -9369,7 +9370,8 @@ impl ExcelRuntime {
                     )
                     | (
                         "Legend",
-                        "Position"
+                        "Name"
+                            | "Position"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -9426,7 +9428,8 @@ impl ExcelRuntime {
                     )
                     | (
                         "AxisTitle",
-                        "Text"
+                        "Name"
+                            | "Text"
                             | "Caption"
                             | "Creator"
                             | "Application"
@@ -12339,6 +12342,7 @@ impl ExcelRuntime {
             .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart legend not found"))?;
 
         match member {
+            "Name" => Ok(OmValue::Text("Legend".to_string())),
             "Position" => {
                 let position = legend.position.ok_or_else(|| {
                     OmError::unsupported("Legend.Position is unavailable for unknown position")
@@ -12723,6 +12727,7 @@ impl ExcelRuntime {
             .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis title not found"))?;
 
         match member {
+            "Name" => Ok(OmValue::Text("Axis Title".to_string())),
             "Text" | "Caption" => Ok(OmValue::Text(title.text.clone())),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
@@ -12758,6 +12763,7 @@ impl ExcelRuntime {
             .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart title not found"))?;
 
         match member {
+            "Name" => Ok(OmValue::Text("Chart Title".to_string())),
             "Text" | "Caption" => Ok(OmValue::Text(title.text.clone())),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
@@ -76305,6 +76311,14 @@ mod tests {
         assert_eq!(
             expect_text(
                 runtime
+                    .dispatch_get(axis_title, "Name", &[])
+                    .expect("AxisTitle.Name")
+            ),
+            "Axis Title"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
                     .dispatch_get(axis_title, "Text", &[])
                     .expect("AxisTitle.Text")
             ),
@@ -76358,6 +76372,14 @@ mod tests {
         assert_eq!(
             expect_text(
                 runtime
+                    .dispatch_get(chart_title, "Name", &[])
+                    .expect("ChartTitle.Name")
+            ),
+            "Chart Title"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
                     .dispatch_get(chart_title, "Text", &[])
                     .expect("ChartTitle.Text")
             ),
@@ -76381,6 +76403,14 @@ mod tests {
             runtime
                 .dispatch_get(chart, "Legend", &[])
                 .expect("Chart.Legend"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(legend, "Name", &[])
+                    .expect("Legend.Name")
+            ),
+            "Legend"
         );
         assert_eq!(
             expect_object_handle(
