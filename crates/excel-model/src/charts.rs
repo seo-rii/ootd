@@ -107,6 +107,8 @@ pub enum ChartType {
     Radar,
     RadarMarkers,
     RadarFilled,
+    StockHLC,
+    StockOHLC,
     Surface,
     SurfaceWireframe,
     SurfaceTopView,

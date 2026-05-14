@@ -3426,6 +3426,13 @@ fn chart_type_from_summary(summary: Option<&ChartPartSummary>) -> ChartType {
             Some("filled") => ChartType::RadarFilled,
             _ => ChartType::Radar,
         },
+        Some("stockChart") => {
+            if summary.has_up_down_bars == Some(true) {
+                ChartType::StockOHLC
+            } else {
+                ChartType::StockHLC
+            }
+        }
         Some("surface3DChart") => {
             if summary.surface_wireframe == Some(true) {
                 ChartType::SurfaceWireframe

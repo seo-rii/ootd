@@ -64,6 +64,8 @@ const XL_PIE_OF_PIE: i32 = 68;
 const XL_BAR_OF_PIE: i32 = 71;
 const XL_BUBBLE: i32 = 15;
 const XL_BUBBLE_3D_EFFECT: i32 = 87;
+const XL_STOCK_HLC: i32 = 88;
+const XL_STOCK_OHLC: i32 = 89;
 const XL_AREA_STACKED: i32 = 76;
 const XL_AREA_STACKED_100: i32 = 77;
 const XL_COLUMN_CLUSTERED: i32 = 51;
@@ -3889,6 +3891,8 @@ impl ExcelRuntime {
                             XL_RADAR => ChartType::Radar,
                             XL_RADAR_MARKERS => ChartType::RadarMarkers,
                             XL_RADAR_FILLED => ChartType::RadarFilled,
+                            XL_STOCK_HLC => ChartType::StockHLC,
+                            XL_STOCK_OHLC => ChartType::StockOHLC,
                             XL_SURFACE => ChartType::Surface,
                             XL_SURFACE_WIREFRAME => ChartType::SurfaceWireframe,
                             XL_SURFACE_TOP_VIEW => ChartType::SurfaceTopView,
@@ -3916,7 +3920,7 @@ impl ExcelRuntime {
                             XL_PYRAMID_BAR_STACKED_100 => ChartType::PyramidBarStacked100,
                             _ => {
                                 return Err(OmError::unsupported(
-                                    "Chart.ChartType supports area, bar, column, line, scatter, bubble, doughnut, pie, radar, surface, and shaped 3D chart types",
+                                    "Chart.ChartType supports area, bar, column, line, scatter, bubble, doughnut, pie, radar, stock, surface, and shaped 3D chart types",
                                 ));
                             }
                         };
@@ -3939,9 +3943,18 @@ impl ExcelRuntime {
                                     ChartType::Bubble3DEffect => Some(true),
                                     _ => None,
                                 };
+                                let chart_type_stock_up_down_bars = match chart_type {
+                                    ChartType::StockHLC => Some(false),
+                                    ChartType::StockOHLC => Some(true),
+                                    _ => None,
+                                };
                                 chart.chart_type = chart_type;
                                 if let Some(has_3d_shading) = chart_type_bubble_3d {
                                     chart.has_3d_shading = Some(has_3d_shading);
+                                }
+                                if let Some(has_up_down_bars) = chart_type_stock_up_down_bars {
+                                    chart.has_hi_lo_lines = Some(true);
+                                    chart.has_up_down_bars = Some(has_up_down_bars);
                                 }
                                 if chart_type_has_axes && chart.axes.is_empty() {
                                     chart.axes = default_chart_axes();
@@ -19224,6 +19237,7 @@ fn chart_type_from_group_name(local_name: &[u8]) -> Option<ChartType> {
         b"pieChart" => Some(ChartType::Pie),
         b"pie3DChart" => Some(ChartType::Pie3D),
         b"radarChart" => Some(ChartType::Radar),
+        b"stockChart" => Some(ChartType::StockHLC),
         b"surfaceChart" => Some(ChartType::SurfaceTopView),
         b"surface3DChart" => Some(ChartType::Surface),
         _ => None,
@@ -19288,6 +19302,7 @@ fn chart_group_xml_name(chart_type: &ChartType) -> Option<&'static str> {
         ChartType::Pie3D => Some("pie3DChart"),
         ChartType::PieOfPie | ChartType::BarOfPie => Some("ofPieChart"),
         ChartType::Radar | ChartType::RadarMarkers | ChartType::RadarFilled => Some("radarChart"),
+        ChartType::StockHLC | ChartType::StockOHLC => Some("stockChart"),
         ChartType::Surface | ChartType::SurfaceWireframe => Some("surface3DChart"),
         ChartType::SurfaceTopView | ChartType::SurfaceTopViewWireframe => Some("surfaceChart"),
         ChartType::Unknown | ChartType::Unsupported(_) => None,
@@ -19628,11 +19643,17 @@ fn patch_loaded_chart_model_xml(
     let expected_doughnut_hole_size = expected_doughnut_hole_size.as_deref();
     let expected_second_plot_size = expected_second_plot_size.as_deref();
     let expected_split_value = expected_split_value.as_deref();
+    let expected_has_hi_lo_lines = chart.has_hi_lo_lines.or_else(|| {
+        matches!(chart.chart_type, ChartType::StockHLC | ChartType::StockOHLC).then_some(true)
+    });
+    let expected_has_up_down_bars = chart
+        .has_up_down_bars
+        .or_else(|| matches!(chart.chart_type, ChartType::StockOHLC).then_some(true));
     let expected_chart_group_line_flags: [(&[u8], &str, Option<bool>); 4] = [
         (b"serLines", "c:serLines", chart.has_series_lines),
         (b"dropLines", "c:dropLines", chart.has_drop_lines),
-        (b"hiLowLines", "c:hiLowLines", chart.has_hi_lo_lines),
-        (b"upDownBars", "c:upDownBars", chart.has_up_down_bars),
+        (b"hiLowLines", "c:hiLowLines", expected_has_hi_lo_lines),
+        (b"upDownBars", "c:upDownBars", expected_has_up_down_bars),
     ];
     let expected_chart_group_numeric_settings: [(&[u8], &str, Option<&str>); 9] = [
         (
@@ -21724,12 +21745,18 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     } else {
         ""
     };
-    let hi_lo_lines_xml = if chart.has_hi_lo_lines == Some(true) {
+    let has_hi_lo_lines = chart.has_hi_lo_lines.or_else(|| {
+        matches!(chart.chart_type, ChartType::StockHLC | ChartType::StockOHLC).then_some(true)
+    });
+    let hi_lo_lines_xml = if has_hi_lo_lines == Some(true) {
         r#"<c:hiLowLines/>"#
     } else {
         ""
     };
-    let up_down_bars_xml = if chart.has_up_down_bars == Some(true) {
+    let has_up_down_bars = chart
+        .has_up_down_bars
+        .or_else(|| matches!(chart.chart_type, ChartType::StockOHLC).then_some(true));
+    let up_down_bars_xml = if has_up_down_bars == Some(true) {
         r#"<c:upDownBars/>"#
     } else {
         ""
@@ -21904,6 +21931,8 @@ fn chart_type_to_excel_value(chart_type: &ChartType) -> OmResult<i32> {
         ChartType::Radar => Ok(XL_RADAR),
         ChartType::RadarMarkers => Ok(XL_RADAR_MARKERS),
         ChartType::RadarFilled => Ok(XL_RADAR_FILLED),
+        ChartType::StockHLC => Ok(XL_STOCK_HLC),
+        ChartType::StockOHLC => Ok(XL_STOCK_OHLC),
         ChartType::Surface => Ok(XL_SURFACE),
         ChartType::SurfaceWireframe => Ok(XL_SURFACE_WIREFRAME),
         ChartType::SurfaceTopView => Ok(XL_SURFACE_TOP_VIEW),
@@ -80629,6 +80658,123 @@ mod tests {
                     read_only: false,
                 })
                 .expect("reopen workbook after shaped chart type edit");
+            let reopened_worksheet = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                    .expect("reopened Workbook.Worksheets(1)"),
+            );
+            let reopened_chart_objects = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                    .expect("reopened Worksheet.ChartObjects"),
+            );
+            let reopened_chart_object = expect_object_handle(
+                reopened_runtime
+                    .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                    .expect("reopened ChartObjects.Item(1)"),
+            );
+            let reopened_chart = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_object, "Chart", &[])
+                    .expect("reopened ChartObject.Chart"),
+            );
+            assert_eq!(
+                expect_number(
+                    reopened_runtime
+                        .dispatch_get(reopened_chart, "ChartType", &[])
+                        .expect("reopened Chart.ChartType")
+                ),
+                f64::from(chart_type_value)
+            );
+        }
+    }
+
+    #[test]
+    fn loaded_chart_type_setter_rewrites_basic_stock_chart_types_on_save() {
+        for (chart_type_value, expected_up_down_bars) in
+            [(super::XL_STOCK_HLC, false), (super::XL_STOCK_OHLC, true)]
+        {
+            let mut runtime = ExcelRuntime::new();
+            let workbook = runtime
+                .open_workbook(OpenWorkbookSpec {
+                    bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                })
+                .expect("open workbook with embedded chart");
+            let worksheet = expect_object_handle(
+                runtime
+                    .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                    .expect("Workbook.Worksheets(1)"),
+            );
+            let chart_objects = expect_object_handle(
+                runtime
+                    .dispatch_get(worksheet, "ChartObjects", &[])
+                    .expect("Worksheet.ChartObjects"),
+            );
+            let chart_object = expect_object_handle(
+                runtime
+                    .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                    .expect("ChartObjects.Item(1)"),
+            );
+            let chart = expect_object_handle(
+                runtime
+                    .dispatch_get(chart_object, "Chart", &[])
+                    .expect("ChartObject.Chart"),
+            );
+            runtime
+                .dispatch_set(
+                    chart,
+                    "ChartType",
+                    OmValue::Number(f64::from(chart_type_value)),
+                    &[],
+                )
+                .expect("set loaded Chart.ChartType");
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(chart, "ChartType", &[])
+                        .expect("Chart.ChartType after set")
+                ),
+                f64::from(chart_type_value)
+            );
+
+            let saved = runtime
+                .save_workbook(
+                    workbook,
+                    SaveWorkbookSpec {
+                        format: FileFormat::Xlsx,
+                        profile: ExcelProfile::Excel365,
+                        lossless: true,
+                    },
+                )
+                .expect("save workbook after stock chart type edit");
+            let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+            let saved_chart_xml = std::str::from_utf8(
+                saved_package
+                    .part("xl/charts/chart1.xml")
+                    .expect("saved chart part")
+                    .bytes
+                    .as_slice(),
+            )
+            .expect("saved chart xml utf8");
+            assert!(saved_chart_xml.contains("<c:stockChart>"));
+            assert!(saved_chart_xml.contains("<c:hiLowLines/>"));
+            assert_eq!(
+                saved_chart_xml.contains("<c:upDownBars/>"),
+                expected_up_down_bars
+            );
+
+            let mut reopened_runtime = ExcelRuntime::new();
+            let reopened_workbook = reopened_runtime
+                .open_workbook(OpenWorkbookSpec {
+                    bytes: saved,
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                })
+                .expect("reopen workbook after stock chart type edit");
             let reopened_worksheet = expect_object_handle(
                 reopened_runtime
                     .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
