@@ -655,7 +655,7 @@ pub struct ChartPartSummary {
     pub root_name: Option<String>,
     pub chart_type_names: Vec<String>,
     pub bar_direction: Option<String>,
-    pub bar_grouping: Option<String>,
+    pub chart_grouping: Option<String>,
     pub title_text: Option<String>,
     pub has_legend: bool,
     pub legend_position: Option<ChartLegendPosition>,
@@ -3324,10 +3324,14 @@ fn chart_type_from_summary(summary: Option<&ChartPartSummary>) -> ChartType {
         return ChartType::Unknown;
     };
     match summary.chart_type_names.first().map(String::as_str) {
-        Some("areaChart") => ChartType::Area,
+        Some("areaChart") => match summary.chart_grouping.as_deref() {
+            Some("stacked") => ChartType::AreaStacked,
+            Some("percentStacked") => ChartType::AreaStacked100,
+            _ => ChartType::Area,
+        },
         Some("barChart") => match (
             summary.bar_direction.as_deref(),
-            summary.bar_grouping.as_deref(),
+            summary.chart_grouping.as_deref(),
         ) {
             (Some("col"), Some("stacked")) => ChartType::ColumnStacked,
             (Some("col"), Some("percentStacked")) => ChartType::ColumnStacked100,
@@ -15840,7 +15844,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut root_name = None;
     let mut chart_type_names = Vec::new();
     let mut bar_direction = None::<String>;
-    let mut bar_grouping = None::<String>;
+    let mut chart_grouping = None::<String>;
     let mut title_text = None::<String>;
     let mut title_text_depth = 0usize;
     let mut has_legend = false;
@@ -16046,12 +16050,15 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     };
                 }
                 if local_name == b"grouping"
-                    && element_path.last().is_some_and(|name| name == "barChart")
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                    && chart_grouping.is_none()
                     && let Some(value) = parse_string_val_attr(&element, &reader)?
                 {
-                    bar_grouping = match value.as_str() {
+                    chart_grouping = match value.as_str() {
                         "clustered" | "stacked" | "percentStacked" | "standard" => Some(value),
-                        _ => bar_grouping,
+                        _ => chart_grouping,
                     };
                 }
                 if local_name == b"gapWidth"
@@ -16318,12 +16325,15 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     };
                 }
                 if local_name == b"grouping"
-                    && element_path.last().is_some_and(|name| name == "barChart")
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                    && chart_grouping.is_none()
                     && let Some(value) = parse_string_val_attr(&element, &reader)?
                 {
-                    bar_grouping = match value.as_str() {
+                    chart_grouping = match value.as_str() {
                         "clustered" | "stacked" | "percentStacked" | "standard" => Some(value),
-                        _ => bar_grouping,
+                        _ => chart_grouping,
                     };
                 }
                 if local_name == b"gapWidth"
@@ -16646,7 +16656,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         root_name,
         chart_type_names,
         bar_direction,
-        bar_grouping,
+        chart_grouping,
         title_text: title_text.filter(|text| !text.is_empty()),
         has_legend,
         legend_position,
@@ -21440,7 +21450,7 @@ mod tests {
         assert_eq!(chart_summary.root_name.as_deref(), Some("chartSpace"));
         assert_eq!(chart_summary.chart_type_names, vec!["barChart".to_string()]);
         assert_eq!(chart_summary.bar_direction, None);
-        assert_eq!(chart_summary.bar_grouping, None);
+        assert_eq!(chart_summary.chart_grouping, None);
         assert_eq!(chart_summary.title_text.as_deref(), Some("Revenue Trend"));
         assert!(chart_summary.has_legend);
         assert_eq!(

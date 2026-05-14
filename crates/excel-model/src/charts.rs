@@ -46,6 +46,8 @@ pub struct ChartModel {
 pub enum ChartType {
     Unknown,
     Area,
+    AreaStacked,
+    AreaStacked100,
     Bar,
     BarStacked,
     BarStacked100,

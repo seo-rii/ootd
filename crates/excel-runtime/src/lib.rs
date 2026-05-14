@@ -50,6 +50,8 @@ const XL_AREA: i32 = 1;
 const XL_LINE: i32 = 4;
 const XL_PIE: i32 = 5;
 const XL_BUBBLE: i32 = 15;
+const XL_AREA_STACKED: i32 = 76;
+const XL_AREA_STACKED_100: i32 = 77;
 const XL_COLUMN_CLUSTERED: i32 = 51;
 const XL_COLUMN_STACKED: i32 = 52;
 const XL_COLUMN_STACKED_100: i32 = 53;
@@ -3796,6 +3798,8 @@ impl ExcelRuntime {
                         }
                         let chart_type = match number as i32 {
                             XL_AREA => ChartType::Area,
+                            XL_AREA_STACKED => ChartType::AreaStacked,
+                            XL_AREA_STACKED_100 => ChartType::AreaStacked100,
                             XL_BAR_CLUSTERED => ChartType::Bar,
                             XL_BAR_STACKED => ChartType::BarStacked,
                             XL_BAR_STACKED_100 => ChartType::BarStacked100,
@@ -19111,7 +19115,7 @@ fn chart_type_from_group_name(local_name: &[u8]) -> Option<ChartType> {
 
 fn chart_group_xml_name(chart_type: &ChartType) -> Option<&'static str> {
     match chart_type {
-        ChartType::Area => Some("areaChart"),
+        ChartType::Area | ChartType::AreaStacked | ChartType::AreaStacked100 => Some("areaChart"),
         ChartType::Bar
         | ChartType::BarStacked
         | ChartType::BarStacked100
@@ -19136,8 +19140,11 @@ fn chart_type_bar_direction_xml_value(chart_type: &ChartType) -> Option<&'static
     }
 }
 
-fn chart_type_bar_grouping_xml_value(chart_type: &ChartType) -> Option<&'static str> {
+fn chart_type_grouping_xml_value(chart_type: &ChartType) -> Option<&'static str> {
     match chart_type {
+        ChartType::Area => Some("standard"),
+        ChartType::AreaStacked => Some("stacked"),
+        ChartType::AreaStacked100 => Some("percentStacked"),
         ChartType::Bar | ChartType::Column => Some("clustered"),
         ChartType::BarStacked | ChartType::ColumnStacked => Some("stacked"),
         ChartType::BarStacked100 | ChartType::ColumnStacked100 => Some("percentStacked"),
@@ -19271,7 +19278,7 @@ fn patch_loaded_chart_model_xml(
         .vary_by_categories
         .map(|value| if value { "1" } else { "0" });
     let expected_bar_direction = chart_type_bar_direction_xml_value(&chart.chart_type);
-    let expected_bar_grouping = chart_type_bar_grouping_xml_value(&chart.chart_type);
+    let expected_chart_grouping = chart_type_grouping_xml_value(&chart.chart_type);
     let expected_gap_width = chart.gap_width.map(|value| value.to_string());
     let expected_overlap = chart.overlap.map(|value| value.to_string());
     let expected_first_slice_angle = chart.first_slice_angle.map(|value| value.to_string());
@@ -19366,9 +19373,9 @@ fn patch_loaded_chart_model_xml(
     let mut bar_direction_seen = false;
     let mut bar_direction_written = false;
     let mut bar_direction_inserted = false;
-    let mut bar_grouping_seen = false;
-    let mut bar_grouping_written = false;
-    let mut bar_grouping_inserted = false;
+    let mut chart_grouping_seen = false;
+    let mut chart_grouping_written = false;
+    let mut chart_grouping_inserted = false;
     let mut gap_width_seen = false;
     let mut gap_width_written = false;
     let mut gap_width_inserted = false;
@@ -19899,7 +19906,7 @@ fn patch_loaded_chart_model_xml(
                 } else if local_name.as_slice() == b"grouping"
                     && current_chart_group_depth == Some(element_stack.len())
                 {
-                    bar_grouping_seen = true;
+                    chart_grouping_seen = true;
                 } else if local_name.as_slice() == b"gapWidth"
                     && current_chart_group_depth == Some(element_stack.len())
                 {
@@ -20048,7 +20055,7 @@ fn patch_loaded_chart_model_xml(
                     bar_direction_written = true;
                 } else if !wrote_start_element
                     && local_name.as_slice() == b"grouping"
-                    && let Some(value) = expected_bar_grouping
+                    && let Some(value) = expected_chart_grouping
                 {
                     writer
                         .write_event(Event::Start(rewrite_val_attribute_element(
@@ -20057,7 +20064,7 @@ fn patch_loaded_chart_model_xml(
                             value,
                         )?))
                         .map_err(runtime_xml_error)?;
-                    bar_grouping_written = true;
+                    chart_grouping_written = true;
                 } else if !wrote_start_element
                     && local_name.as_slice() == b"gapWidth"
                     && let Some(value) = expected_gap_width
@@ -20230,7 +20237,7 @@ fn patch_loaded_chart_model_xml(
                 } else if local_name.as_slice() == b"grouping"
                     && current_chart_group_depth == Some(element_stack.len())
                 {
-                    bar_grouping_seen = true;
+                    chart_grouping_seen = true;
                 } else if local_name.as_slice() == b"gapWidth"
                     && current_chart_group_depth == Some(element_stack.len())
                 {
@@ -20310,7 +20317,7 @@ fn patch_loaded_chart_model_xml(
                         .map_err(runtime_xml_error)?;
                     bar_direction_written = true;
                 } else if local_name.as_slice() == b"grouping"
-                    && let Some(value) = expected_bar_grouping
+                    && let Some(value) = expected_chart_grouping
                 {
                     writer
                         .write_event(Event::Empty(rewrite_val_attribute_element(
@@ -20319,7 +20326,7 @@ fn patch_loaded_chart_model_xml(
                             value,
                         )?))
                         .map_err(runtime_xml_error)?;
-                    bar_grouping_written = true;
+                    chart_grouping_written = true;
                 } else if local_name.as_slice() == b"gapWidth"
                     && let Some(value) = expected_gap_width
                 {
@@ -20729,14 +20736,14 @@ fn patch_loaded_chart_model_xml(
                         bar_direction_inserted = true;
                         bar_direction_written = true;
                     }
-                    if !bar_grouping_seen && let Some(value) = expected_bar_grouping {
-                        let mut bar_grouping = BytesStart::new("c:grouping");
-                        bar_grouping.push_attribute(("val", value));
+                    if !chart_grouping_seen && let Some(value) = expected_chart_grouping {
+                        let mut chart_grouping = BytesStart::new("c:grouping");
+                        chart_grouping.push_attribute(("val", value));
                         writer
-                            .write_event(Event::Empty(bar_grouping))
+                            .write_event(Event::Empty(chart_grouping))
                             .map_err(runtime_xml_error)?;
-                        bar_grouping_inserted = true;
-                        bar_grouping_written = true;
+                        chart_grouping_inserted = true;
+                        chart_grouping_written = true;
                     }
                     if !gap_width_seen && let Some(value) = expected_gap_width {
                         let mut gap_width = BytesStart::new("c:gapWidth");
@@ -20921,9 +20928,9 @@ fn patch_loaded_chart_model_xml(
         (Some(_), false) => bar_direction_inserted,
         (None, _) => true,
     };
-    let bar_grouping_matches = match (expected_bar_grouping, bar_grouping_seen) {
-        (Some(_), true) => bar_grouping_written,
-        (Some(_), false) => bar_grouping_inserted,
+    let chart_grouping_matches = match (expected_chart_grouping, chart_grouping_seen) {
+        (Some(_), true) => chart_grouping_written,
+        (Some(_), false) => chart_grouping_inserted,
         (None, _) => true,
     };
     let gap_width_matches = match (expected_gap_width, gap_width_seen) {
@@ -20983,7 +20990,7 @@ fn patch_loaded_chart_model_xml(
         && plot_visible_only_matches
         && vary_colors_matches
         && bar_direction_matches
-        && bar_grouping_matches
+        && chart_grouping_matches
         && gap_width_matches
         && overlap_matches
         && chart_group_numeric_settings_match
@@ -21046,7 +21053,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     let bar_direction_xml = chart_type_bar_direction_xml_value(&chart.chart_type)
         .map(|value| format!(r#"<c:barDir val="{value}"/>"#))
         .unwrap_or_default();
-    let bar_grouping_xml = chart_type_bar_grouping_xml_value(&chart.chart_type)
+    let chart_grouping_xml = chart_type_grouping_xml_value(&chart.chart_type)
         .map(|value| format!(r#"<c:grouping val="{value}"/>"#))
         .unwrap_or_default();
     let gap_width_xml = chart
@@ -21197,7 +21204,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{bar_grouping_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
+  <c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -21206,6 +21213,8 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
 fn chart_type_to_excel_value(chart_type: &ChartType) -> OmResult<i32> {
     match chart_type {
         ChartType::Area => Ok(XL_AREA),
+        ChartType::AreaStacked => Ok(XL_AREA_STACKED),
+        ChartType::AreaStacked100 => Ok(XL_AREA_STACKED_100),
         ChartType::Bar => Ok(XL_BAR_CLUSTERED),
         ChartType::BarStacked => Ok(XL_BAR_STACKED),
         ChartType::BarStacked100 => Ok(XL_BAR_STACKED_100),
@@ -79760,9 +79769,23 @@ mod tests {
             expected_group_name,
             expected_has_axes,
             expected_bar_direction,
-            expected_bar_grouping,
+            expected_chart_grouping,
         ) in [
-            (super::XL_AREA, "areaChart", true, None, None),
+            (super::XL_AREA, "areaChart", true, None, Some("standard")),
+            (
+                super::XL_AREA_STACKED,
+                "areaChart",
+                true,
+                None,
+                Some("stacked"),
+            ),
+            (
+                super::XL_AREA_STACKED_100,
+                "areaChart",
+                true,
+                None,
+                Some("percentStacked"),
+            ),
             (
                 super::XL_COLUMN_CLUSTERED,
                 "barChart",
@@ -79900,10 +79923,10 @@ mod tests {
             } else {
                 assert!(!saved_chart_xml.contains("<c:barDir"));
             }
-            if let Some(expected_bar_grouping) = expected_bar_grouping {
+            if let Some(expected_chart_grouping) = expected_chart_grouping {
                 assert!(
                     saved_chart_xml
-                        .contains(&format!(r#"<c:grouping val="{expected_bar_grouping}"/>"#))
+                        .contains(&format!(r#"<c:grouping val="{expected_chart_grouping}"/>"#))
                 );
             } else {
                 assert!(!saved_chart_xml.contains("<c:grouping"));
