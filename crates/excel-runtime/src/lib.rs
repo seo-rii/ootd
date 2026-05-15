@@ -3531,8 +3531,45 @@ impl ExcelRuntime {
                     ))),
                 }
             }
-            RuntimeObjectKind::ChartArea { .. }
-            | RuntimeObjectKind::PlotArea { .. }
+            RuntimeObjectKind::ChartArea { workbook, chart_id } => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "ChartArea.{member} does not accept index arguments"
+                    )));
+                }
+                match member {
+                    "Left" | "Top" | "Width" | "Height" => {
+                        let chart_object_id = {
+                            let state = &self.runtime_workbook(workbook)?.loaded.state;
+                            state
+                                .drawings
+                                .values()
+                                .flat_map(|drawing| drawing.objects.iter())
+                                .find_map(|object| match object {
+                                    DrawingObjectModel::ChartFrame(chart_object)
+                                        if chart_object.chart_id == chart_id =>
+                                    {
+                                        Some(chart_object.id)
+                                    }
+                                    DrawingObjectModel::UnsupportedRaw { .. } => None,
+                                    _ => None,
+                                })
+                                .ok_or_else(|| {
+                                    OmError::unsupported(
+                                        "ChartArea geometry is only available for embedded charts",
+                                    )
+                                })?
+                        };
+                        let chart_object =
+                            self.register_chart_object_handle(workbook, chart_object_id);
+                        self.dispatch_set(chart_object, member, value, &[])
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "ChartArea.{member} is not writable"
+                    ))),
+                }
+            }
+            RuntimeObjectKind::PlotArea { .. }
             | RuntimeObjectKind::ChartGroups { .. }
             | RuntimeObjectKind::Axes { .. }
             | RuntimeObjectKind::SeriesCollection { .. }
@@ -77657,6 +77694,49 @@ mod tests {
                 )
             );
         }
+        runtime
+            .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
+            .expect("clear chart area geometry dirty state");
+        for (member, value) in [
+            ("Left", 11.0),
+            ("Top", 12.0),
+            ("Width", 130.0),
+            ("Height", 80.0),
+        ] {
+            runtime
+                .dispatch_set(chart_area, member, OmValue::Number(value), &[])
+                .unwrap_or_else(|error| panic!("ChartArea.{member} setter failed: {error:?}"));
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(chart_object, member, &[])
+                        .unwrap_or_else(|error| panic!(
+                            "ChartObject.{member} after ChartArea set failed: {error:?}"
+                        ))
+                ),
+                value
+            );
+        }
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after ChartArea geometry set"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(chart_area, "Height", OmValue::Number(-1.0), &[])
+                .expect_err("negative ChartArea.Height should fail")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(chart_area, "Name", OmValue::Text("bad".to_string()), &[])
+                .expect_err("ChartArea.Name should not be writable")
+                .code,
+            OmErrorCode::Unsupported
+        );
         assert_eq!(
             expect_number(
                 runtime
