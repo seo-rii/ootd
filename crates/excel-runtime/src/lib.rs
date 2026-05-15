@@ -1,9 +1,9 @@
 use excel_model::{
-    AxisModel, ChartAxisCrosses, ChartAxisKind, ChartDataLabelsModel, ChartDisplayBlanksAs,
-    ChartLegendPosition, ChartModel, ChartObjectModel, ChartSheetBinding, ChartSizeRepresents,
-    ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition, ChartTickMark, ChartType,
-    DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
-    resolve_chart_source_reference_with_names,
+    AxisModel, ChartAxisCrosses, ChartAxisKind, ChartAxisScaleType, ChartDataLabelsModel,
+    ChartDisplayBlanksAs, ChartLegendPosition, ChartModel, ChartObjectModel, ChartSheetBinding,
+    ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition,
+    ChartTickMark, ChartType, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel,
+    WorkbookState, WorksheetData, resolve_chart_source_reference_with_names,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
@@ -150,6 +150,8 @@ const XL_AXIS_CROSSES_AUTOMATIC: i32 = -4105;
 const XL_AXIS_CROSSES_CUSTOM: i32 = -4114;
 const XL_AXIS_CROSSES_MAXIMUM: i32 = 2;
 const XL_AXIS_CROSSES_MINIMUM: i32 = 4;
+const XL_SCALE_LINEAR: i32 = -4132;
+const XL_SCALE_LOGARITHMIC: i32 = -4133;
 const XL_MOVE_AND_SIZE: i32 = 1;
 const XL_MOVE: i32 = 2;
 const XL_FREE_FLOATING: i32 = 3;
@@ -4619,6 +4621,8 @@ impl ExcelRuntime {
                                         minor_tick_mark: None,
                                         tick_label_position: None,
                                         reverse_plot_order: None,
+                                        scale_type: None,
+                                        log_base: None,
                                         crosses: None,
                                         crosses_at: None,
                                         minimum_scale: None,
@@ -5087,6 +5091,98 @@ impl ExcelRuntime {
                         let changed = axis.reverse_plot_order != Some(reverse_plot_order);
                         if changed {
                             axis.reverse_plot_order = Some(reverse_plot_order);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "ScaleType" => {
+                        let OmValue::Number(number) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Axis.ScaleType expects a numeric enum value",
+                            ));
+                        };
+                        if !number.is_finite() || number.fract() != 0.0 {
+                            return Err(OmError::invalid_argument(
+                                "Axis.ScaleType expects an integral enum value",
+                            ));
+                        }
+                        let scale_type = chart_axis_scale_type_from_excel_value(number as i32)?;
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let axis = chart
+                            .axes
+                            .get_mut(axis_index)
+                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
+                        let next_log_base = match scale_type {
+                            ChartAxisScaleType::Linear => None,
+                            ChartAxisScaleType::Logarithmic => axis.log_base.or(Some(10.0)),
+                        };
+                        let changed =
+                            axis.scale_type != Some(scale_type) || axis.log_base != next_log_base;
+                        if changed {
+                            axis.scale_type = Some(scale_type);
+                            axis.log_base = next_log_base;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "LogBase" => {
+                        let OmValue::Number(number) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Axis.LogBase expects a numeric value",
+                            ));
+                        };
+                        if !number.is_finite() {
+                            return Err(OmError::invalid_argument(
+                                "Axis.LogBase expects a finite numeric value",
+                            ));
+                        }
+                        if !(2.0..=1000.0).contains(&number) {
+                            return Err(OmError::invalid_argument(
+                                "Axis.LogBase expects a value between 2 and 1000",
+                            ));
+                        }
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let axis = chart
+                            .axes
+                            .get_mut(axis_index)
+                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
+                        let changed = axis.scale_type != Some(ChartAxisScaleType::Logarithmic)
+                            || axis.log_base != Some(number);
+                        if changed {
+                            axis.scale_type = Some(ChartAxisScaleType::Logarithmic);
+                            axis.log_base = Some(number);
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -10455,6 +10551,8 @@ impl ExcelRuntime {
                             | "HasTitle"
                             | "AxisTitle"
                             | "ReversePlotOrder"
+                            | "ScaleType"
+                            | "LogBase"
                             | "Crosses"
                             | "CrossesAt"
                             | "MajorTickMark"
@@ -13782,6 +13880,17 @@ impl ExcelRuntime {
             "HasMajorGridlines" => Ok(OmValue::Bool(axis.has_major_gridlines == Some(true))),
             "HasMinorGridlines" => Ok(OmValue::Bool(axis.has_minor_gridlines == Some(true))),
             "ReversePlotOrder" => Ok(OmValue::Bool(axis.reverse_plot_order.unwrap_or(false))),
+            "ScaleType" => Ok(OmValue::Number(f64::from(
+                chart_axis_scale_type_to_excel_value(if axis.log_base.is_some() {
+                    ChartAxisScaleType::Logarithmic
+                } else {
+                    axis.scale_type.unwrap_or(ChartAxisScaleType::Linear)
+                }),
+            ))),
+            "LogBase" => axis
+                .log_base
+                .map(OmValue::Number)
+                .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis scale is linear")),
             "Crosses" => Ok(OmValue::Number(f64::from(
                 chart_axis_crosses_to_excel_value(if axis.crosses_at.is_some() {
                     ChartAxisCrosses::Custom
@@ -21945,6 +22054,38 @@ fn chart_axis_orientation_xml_value(reverse_plot_order: bool) -> &'static str {
     }
 }
 
+fn chart_axis_scale_type_to_excel_value(value: ChartAxisScaleType) -> i32 {
+    match value {
+        ChartAxisScaleType::Linear => XL_SCALE_LINEAR,
+        ChartAxisScaleType::Logarithmic => XL_SCALE_LOGARITHMIC,
+    }
+}
+
+fn chart_axis_scale_type_from_excel_value(value: i32) -> OmResult<ChartAxisScaleType> {
+    match value {
+        XL_SCALE_LINEAR => Ok(ChartAxisScaleType::Linear),
+        XL_SCALE_LOGARITHMIC => Ok(ChartAxisScaleType::Logarithmic),
+        _ => Err(OmError::unsupported(
+            "Axis.ScaleType supports xlScaleLinear and xlScaleLogarithmic",
+        )),
+    }
+}
+
+fn chart_axis_log_base_xml_value(axis: &AxisModel) -> Option<f64> {
+    if axis.scale_type == Some(ChartAxisScaleType::Logarithmic) || axis.log_base.is_some() {
+        Some(axis.log_base.unwrap_or(10.0))
+    } else {
+        None
+    }
+}
+
+fn chart_axis_has_scaling_xml(axis: &AxisModel) -> bool {
+    chart_axis_log_base_xml_value(axis).is_some()
+        || axis.minimum_scale.is_some()
+        || axis.maximum_scale.is_some()
+        || axis.reverse_plot_order.is_some()
+}
+
 fn chart_axis_crosses_xml_value(value: ChartAxisCrosses) -> Option<&'static str> {
     match value {
         ChartAxisCrosses::Automatic => Some("autoZero"),
@@ -22594,6 +22735,10 @@ fn patch_loaded_chart_model_xml(
     let mut axis_tick_label_position_inserted = Vec::<bool>::new();
     let mut axis_tick_label_position_removed = Vec::<bool>::new();
     let mut axis_scaling_seen = Vec::<bool>::new();
+    let mut axis_log_base_seen = Vec::<bool>::new();
+    let mut axis_log_base_written = Vec::<bool>::new();
+    let mut axis_log_base_inserted = Vec::<bool>::new();
+    let mut axis_log_base_removed = Vec::<bool>::new();
     let mut axis_orientation_seen = Vec::<bool>::new();
     let mut axis_orientation_written = Vec::<bool>::new();
     let mut axis_orientation_inserted = Vec::<bool>::new();
@@ -23008,15 +23153,15 @@ fn patch_loaded_chart_model_xml(
         };
     let write_chart_axis_scaling_element =
         |writer: &mut Writer<Cursor<Vec<u8>>>, axis: &AxisModel| -> OmResult<()> {
-            if axis.minimum_scale.is_none()
-                && axis.maximum_scale.is_none()
-                && axis.reverse_plot_order.is_none()
-            {
+            if !chart_axis_has_scaling_xml(axis) {
                 return Ok(());
             }
             writer
                 .write_event(Event::Start(BytesStart::new("c:scaling")))
                 .map_err(runtime_xml_error)?;
+            if let Some(value) = chart_axis_log_base_xml_value(axis) {
+                write_chart_val_element(writer, "c:logBase", value)?;
+            }
             if let Some(value) = axis.reverse_plot_order {
                 write_chart_string_val_element(
                     writer,
@@ -23338,6 +23483,10 @@ fn patch_loaded_chart_model_xml(
                     axis_tick_label_position_inserted.push(false);
                     axis_tick_label_position_removed.push(false);
                     axis_scaling_seen.push(false);
+                    axis_log_base_seen.push(false);
+                    axis_log_base_written.push(false);
+                    axis_log_base_inserted.push(false);
+                    axis_log_base_removed.push(false);
                     axis_orientation_seen.push(false);
                     axis_orientation_written.push(false);
                     axis_orientation_inserted.push(false);
@@ -23850,6 +23999,35 @@ fn patch_loaded_chart_model_xml(
                         .map_err(runtime_xml_error)?;
                     overlap_written = true;
                 } else if !wrote_start_element
+                    && local_name.as_slice() == b"logBase"
+                    && parent_name == Some(b"scaling".as_slice())
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    if let Some(seen) = axis_log_base_seen.get_mut(axis_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = chart_axis_log_base_xml_value(axis) {
+                        let value = chart_number_xml_value(value);
+                        writer
+                            .write_event(Event::Start(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value.as_str(),
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = axis_log_base_written.get_mut(axis_index) {
+                            *written = true;
+                        }
+                    } else {
+                        if let Some(removed) = axis_log_base_removed.get_mut(axis_index) {
+                            *removed = true;
+                        }
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    }
+                } else if !wrote_start_element
                     && local_name.as_slice() == b"orientation"
                     && parent_name == Some(b"scaling".as_slice())
                     && let Some(axis_index) = current_axis_index
@@ -24112,11 +24290,16 @@ fn patch_loaded_chart_model_xml(
                     if let Some(seen) = axis_scaling_seen.get_mut(axis_index) {
                         *seen = true;
                     }
-                    if axis.minimum_scale.is_some()
-                        || axis.maximum_scale.is_some()
-                        || axis.reverse_plot_order.is_some()
-                    {
+                    if chart_axis_has_scaling_xml(axis) {
                         write_chart_axis_scaling_element(&mut writer, axis)?;
+                        if chart_axis_log_base_xml_value(axis).is_some() {
+                            if let Some(inserted) = axis_log_base_inserted.get_mut(axis_index) {
+                                *inserted = true;
+                            }
+                            if let Some(written) = axis_log_base_written.get_mut(axis_index) {
+                                *written = true;
+                            }
+                        }
                         if axis.reverse_plot_order.is_some() {
                             if let Some(inserted) = axis_orientation_inserted.get_mut(axis_index) {
                                 *inserted = true;
@@ -24146,6 +24329,32 @@ fn patch_loaded_chart_model_xml(
                         buffer.clear();
                         continue;
                     }
+                }
+                if local_name.as_slice() == b"logBase"
+                    && parent_name == Some(b"scaling".as_slice())
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    if let Some(seen) = axis_log_base_seen.get_mut(axis_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = chart_axis_log_base_xml_value(axis) {
+                        let value = chart_number_xml_value(value);
+                        writer
+                            .write_event(Event::Empty(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value.as_str(),
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = axis_log_base_written.get_mut(axis_index) {
+                            *written = true;
+                        }
+                    } else if let Some(removed) = axis_log_base_removed.get_mut(axis_index) {
+                        *removed = true;
+                    }
+                    buffer.clear();
+                    continue;
                 }
                 if local_name.as_slice() == b"orientation"
                     && parent_name == Some(b"scaling".as_slice())
@@ -25115,6 +25324,19 @@ fn patch_loaded_chart_model_xml(
                     && let Some(axis_index) = current_axis_index
                     && let Some(axis) = chart.axes.get(axis_index)
                 {
+                    if chart_axis_log_base_xml_value(axis).is_some()
+                        && !axis_log_base_seen.get(axis_index).copied().unwrap_or(false)
+                    {
+                        if let Some(value) = chart_axis_log_base_xml_value(axis) {
+                            write_chart_val_element(&mut writer, "c:logBase", value)?;
+                            if let Some(inserted) = axis_log_base_inserted.get_mut(axis_index) {
+                                *inserted = true;
+                            }
+                            if let Some(written) = axis_log_base_written.get_mut(axis_index) {
+                                *written = true;
+                            }
+                        }
+                    }
                     if axis.reverse_plot_order.is_some()
                         && !axis_orientation_seen
                             .get(axis_index)
@@ -25222,12 +25444,18 @@ fn patch_loaded_chart_model_xml(
                     && let Some(axis_index) = current_axis_index
                     && let Some(axis) = chart.axes.get(axis_index)
                 {
-                    if (axis.minimum_scale.is_some()
-                        || axis.maximum_scale.is_some()
-                        || axis.reverse_plot_order.is_some())
+                    if chart_axis_has_scaling_xml(axis)
                         && !axis_scaling_seen.get(axis_index).copied().unwrap_or(false)
                     {
                         write_chart_axis_scaling_element(&mut writer, axis)?;
+                        if chart_axis_log_base_xml_value(axis).is_some() {
+                            if let Some(inserted) = axis_log_base_inserted.get_mut(axis_index) {
+                                *inserted = true;
+                            }
+                            if let Some(written) = axis_log_base_written.get_mut(axis_index) {
+                                *written = true;
+                            }
+                        }
                         if axis.reverse_plot_order.is_some() {
                             if let Some(inserted) = axis_orientation_inserted.get_mut(axis_index) {
                                 *inserted = true;
@@ -25453,10 +25681,13 @@ fn patch_loaded_chart_model_xml(
                         axis_tick_label_position_written.push(axis.tick_label_position.is_some());
                         axis_tick_label_position_inserted.push(axis.tick_label_position.is_some());
                         axis_tick_label_position_removed.push(false);
-                        let has_scaling = axis.minimum_scale.is_some()
-                            || axis.maximum_scale.is_some()
-                            || axis.reverse_plot_order.is_some();
+                        let has_log_base = chart_axis_log_base_xml_value(axis).is_some();
+                        let has_scaling = chart_axis_has_scaling_xml(axis);
                         axis_scaling_seen.push(has_scaling);
+                        axis_log_base_seen.push(has_log_base);
+                        axis_log_base_written.push(has_log_base);
+                        axis_log_base_inserted.push(has_log_base);
+                        axis_log_base_removed.push(false);
                         axis_orientation_seen.push(axis.reverse_plot_order.is_some());
                         axis_orientation_written.push(axis.reverse_plot_order.is_some());
                         axis_orientation_inserted.push(axis.reverse_plot_order.is_some());
@@ -26029,6 +26260,13 @@ fn patch_loaded_chart_model_xml(
     let axis_scale_units_match = chart.axes.iter().enumerate().all(|(axis_index, axis)| {
         axis_numeric_field_matches(
             axis_index,
+            chart_axis_log_base_xml_value(axis),
+            &axis_log_base_seen,
+            &axis_log_base_written,
+            &axis_log_base_inserted,
+            &axis_log_base_removed,
+        ) && axis_numeric_field_matches(
+            axis_index,
             axis.minimum_scale,
             &axis_minimum_scale_seen,
             &axis_minimum_scale_written,
@@ -26448,11 +26686,14 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             chart_group_axis_refs.push_str(&format!(r#"<c:axId val="{escaped_axis_id}"/>"#));
             let axis_tag = chart_axis_xml_name(axis.kind);
             let mut scaling_xml = String::new();
-            if axis.minimum_scale.is_some()
-                || axis.maximum_scale.is_some()
-                || axis.reverse_plot_order.is_some()
-            {
+            if chart_axis_has_scaling_xml(axis) {
                 scaling_xml.push_str("<c:scaling>");
+                if let Some(value) = chart_axis_log_base_xml_value(axis) {
+                    scaling_xml.push_str(&format!(
+                        r#"<c:logBase val="{}"/>"#,
+                        chart_number_xml_value(value)
+                    ));
+                }
                 if let Some(value) = axis.reverse_plot_order {
                     scaling_xml.push_str(&format!(
                         r#"<c:orientation val="{}"/>"#,
@@ -26644,6 +26885,8 @@ fn default_chart_axes() -> Vec<AxisModel> {
             minor_tick_mark: None,
             tick_label_position: None,
             reverse_plot_order: None,
+            scale_type: None,
+            log_base: None,
             crosses: None,
             crosses_at: None,
             minimum_scale: None,
@@ -26661,6 +26904,8 @@ fn default_chart_axes() -> Vec<AxisModel> {
             minor_tick_mark: None,
             tick_label_position: None,
             reverse_plot_order: None,
+            scale_type: None,
+            log_base: None,
             crosses: None,
             crosses_at: None,
             minimum_scale: None,
@@ -89233,6 +89478,331 @@ mod tests {
             reopened_runtime
                 .dispatch_get(reopened_value_axis, "MinorUnit", &[])
                 .expect_err("auto minor unit has no explicit value")
+                .code,
+            OmErrorCode::NotFound
+        );
+    }
+
+    #[test]
+    fn loaded_chart_axis_scale_type_setters_preserve_chart_extensions_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            r#"<c:valAx><c:axId val="20"/><c:title>"#,
+            r#"<c:valAx><c:axId val="20"/><c:scaling><c:logBase val="10"/></c:scaling><c:title>"#,
+        )
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:axis-scale-type-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with logarithmic value axis");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let category_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.Axes(xlCategory)"),
+        );
+        let value_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.Axes(xlValue)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(category_axis, "ScaleType", &[])
+                    .expect("category Axis.ScaleType")
+            ),
+            f64::from(super::XL_SCALE_LINEAR)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis, "LogBase", &[])
+                .expect_err("linear category Axis.LogBase")
+                .code,
+            OmErrorCode::NotFound
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(value_axis, "ScaleType", &[])
+                    .expect("value Axis.ScaleType before set")
+            ),
+            f64::from(super::XL_SCALE_LOGARITHMIC)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(value_axis, "LogBase", &[])
+                    .expect("value Axis.LogBase before set")
+            ),
+            10.0
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    value_axis,
+                    "ScaleType",
+                    OmValue::Text("bad".to_string()),
+                    &[]
+                )
+                .expect_err("Axis.ScaleType rejects non-number")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(value_axis, "ScaleType", OmValue::Number(1.5), &[])
+                .expect_err("Axis.ScaleType rejects fractional enum")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(value_axis, "ScaleType", OmValue::Number(999.0), &[])
+                .expect_err("Axis.ScaleType rejects unsupported enum")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(value_axis, "LogBase", OmValue::Text("bad".to_string()), &[])
+                .expect_err("Axis.LogBase rejects non-number")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(value_axis, "LogBase", OmValue::Number(1.0), &[])
+                .expect_err("Axis.LogBase rejects low value")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(value_axis, "LogBase", OmValue::Number(1001.0), &[])
+                .expect_err("Axis.LogBase rejects high value")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+
+        runtime
+            .dispatch_set(value_axis, "LogBase", OmValue::Number(2.0), &[])
+            .expect("set Axis.LogBase");
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after Axis.LogBase edit");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:axis-scale-type-preserve"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:logBase val="2"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:logBase val="10"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after Axis.LogBase edit");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_value_axis = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("reopened Chart.Axes(xlValue)"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_value_axis, "ScaleType", &[])
+                    .expect("reopened Axis.ScaleType")
+            ),
+            f64::from(super::XL_SCALE_LOGARITHMIC)
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_value_axis, "LogBase", &[])
+                    .expect("reopened Axis.LogBase")
+            ),
+            2.0
+        );
+
+        reopened_runtime
+            .dispatch_set(
+                reopened_value_axis,
+                "ScaleType",
+                OmValue::Number(f64::from(super::XL_SCALE_LINEAR)),
+                &[],
+            )
+            .expect("set Axis.ScaleType linear");
+        let linear_saved = reopened_runtime
+            .save_workbook(
+                reopened_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after Axis.ScaleType linear");
+        let linear_saved_package = OpcPackage::from_bytes(&linear_saved).expect("saved package");
+        let linear_saved_chart_xml = std::str::from_utf8(
+            linear_saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(linear_saved_chart_xml.contains(r#"<c:ext uri="urn:axis-scale-type-preserve"/>"#));
+        assert!(!linear_saved_chart_xml.contains("<c:logBase"));
+
+        let mut linear_reopened_runtime = ExcelRuntime::new();
+        let linear_reopened_workbook = linear_reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: linear_saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after Axis.ScaleType linear");
+        let linear_reopened_worksheet = expect_object_handle(
+            linear_reopened_runtime
+                .dispatch_get(
+                    linear_reopened_workbook.0,
+                    "Worksheets",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("linear reopened Workbook.Worksheets(1)"),
+        );
+        let linear_reopened_chart_objects = expect_object_handle(
+            linear_reopened_runtime
+                .dispatch_get(linear_reopened_worksheet, "ChartObjects", &[])
+                .expect("linear reopened Worksheet.ChartObjects"),
+        );
+        let linear_reopened_chart_object = expect_object_handle(
+            linear_reopened_runtime
+                .dispatch_invoke(
+                    linear_reopened_chart_objects,
+                    "Item",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("linear reopened ChartObjects.Item(1)"),
+        );
+        let linear_reopened_chart = expect_object_handle(
+            linear_reopened_runtime
+                .dispatch_get(linear_reopened_chart_object, "Chart", &[])
+                .expect("linear reopened ChartObject.Chart"),
+        );
+        let linear_reopened_value_axis = expect_object_handle(
+            linear_reopened_runtime
+                .dispatch_get(
+                    linear_reopened_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("linear reopened Chart.Axes(xlValue)"),
+        );
+        assert_eq!(
+            expect_number(
+                linear_reopened_runtime
+                    .dispatch_get(linear_reopened_value_axis, "ScaleType", &[])
+                    .expect("linear reopened Axis.ScaleType")
+            ),
+            f64::from(super::XL_SCALE_LINEAR)
+        );
+        assert_eq!(
+            linear_reopened_runtime
+                .dispatch_get(linear_reopened_value_axis, "LogBase", &[])
+                .expect_err("linear reopened Axis.LogBase")
                 .code,
             OmErrorCode::NotFound
         );

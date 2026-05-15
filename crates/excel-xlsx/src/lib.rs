@@ -2,12 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Write};
 
 use excel_model::{
-    AxisModel, CellData, ChartAxisCrosses, ChartAxisKind, ChartCacheKind, ChartCacheSnapshot,
-    ChartCellMarkerXmlAttrs, ChartDataLabelsModel, ChartDisplayBlanksAs, ChartLegendPosition,
-    ChartMarkerXmlAttrs, ChartModel, ChartObjectModel, ChartSheetBinding, ChartSizeRepresents,
-    ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition, ChartTickMark, ChartType,
-    DefinedNameTable, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState,
-    WorksheetData, resolve_chart_source_reference_with_names,
+    AxisModel, CellData, ChartAxisCrosses, ChartAxisKind, ChartAxisScaleType, ChartCacheKind,
+    ChartCacheSnapshot, ChartCellMarkerXmlAttrs, ChartDataLabelsModel, ChartDisplayBlanksAs,
+    ChartLegendPosition, ChartMarkerXmlAttrs, ChartModel, ChartObjectModel, ChartSheetBinding,
+    ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition,
+    ChartTickMark, ChartType, DefinedNameTable, DrawingModel, DrawingObjectModel, LegendModel,
+    SeriesModel, WorkbookState, WorksheetData, resolve_chart_source_reference_with_names,
 };
 use office_common::{
     AbsoluteAnchor, CellError, CellMarker, CellValue, ChartId, ChartObjectId, DefinedName,
@@ -718,6 +718,8 @@ pub struct ChartAxisSummary {
     pub minor_tick_mark: Option<ChartTickMark>,
     pub tick_label_position: Option<ChartTickLabelPosition>,
     pub reverse_plot_order: Option<bool>,
+    pub scale_type: Option<ChartAxisScaleType>,
+    pub log_base: Option<f64>,
     pub crosses: Option<ChartAxisCrosses>,
     pub crosses_at: Option<f64>,
     pub minimum_scale: Option<f64>,
@@ -3220,6 +3222,8 @@ fn build_chart_model_overlay(
                             minor_tick_mark: axis.minor_tick_mark,
                             tick_label_position: axis.tick_label_position,
                             reverse_plot_order: axis.reverse_plot_order,
+                            scale_type: axis.scale_type,
+                            log_base: axis.log_base,
                             crosses: axis.crosses,
                             crosses_at: axis.crosses_at,
                             minimum_scale: axis.minimum_scale,
@@ -16233,6 +16237,19 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
             Some(_) | None => None,
         })
     };
+    let parse_log_base =
+        |element: &BytesStart<'_>, reader: &Reader<Cursor<&[u8]>>| -> OmResult<Option<f64>> {
+            let Some(value) = parse_f64_val_attr(element, reader, "axis log base")? else {
+                return Ok(None);
+            };
+            if !(2.0..=1000.0).contains(&value) {
+                return Err(OmError::new(
+                    OmErrorCode::Parse,
+                    format!("chart axis log base must be between 2 and 1000: {value}"),
+                ));
+            }
+            Ok(Some(value))
+        };
 
     let detect_series_formula_slot = |path: &[String]| -> Option<ChartSeriesFormulaSlot> {
         let series_position = path.iter().rposition(|name| name == "ser")?;
@@ -16642,6 +16659,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         minor_tick_mark: None,
                         tick_label_position: None,
                         reverse_plot_order: None,
+                        scale_type: None,
+                        log_base: None,
                         crosses: None,
                         crosses_at: None,
                         minimum_scale: None,
@@ -16715,6 +16734,14 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "minMax" => axes[axis_index].reverse_plot_order = Some(false),
                         _ => {}
                     }
+                }
+                if local_name == b"logBase"
+                    && element_path.last().is_some_and(|name| name == "scaling")
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) = parse_log_base(&element, &reader)?
+                {
+                    axes[axis_index].scale_type = Some(ChartAxisScaleType::Logarithmic);
+                    axes[axis_index].log_base = Some(value);
                 }
                 if local_name == b"min"
                     && element_path.last().is_some_and(|name| name == "scaling")
@@ -16958,6 +16985,14 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "minMax" => axes[axis_index].reverse_plot_order = Some(false),
                         _ => {}
                     }
+                }
+                if local_name == b"logBase"
+                    && element_path.last().is_some_and(|name| name == "scaling")
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) = parse_log_base(&element, &reader)?
+                {
+                    axes[axis_index].scale_type = Some(ChartAxisScaleType::Logarithmic);
+                    axes[axis_index].log_base = Some(value);
                 }
                 if local_name == b"min"
                     && element_path.last().is_some_and(|name| name == "scaling")
@@ -21010,15 +21045,16 @@ mod tests {
 
     use super::{
         BorderSummary, COMMENTS_RELATIONSHIP_TYPE, CellData, ChartAxisCrosses, ChartAxisKind,
-        ChartAxisSummary, ChartCacheKindSummary, ChartCacheSummary, ChartDataLabelsSummary,
-        ChartLegendPosition, ChartSeriesSummary, ChartSupportRelationshipBinding,
-        ChartTickLabelPosition, ChartTickMark, CommentPartSummary, DrawingAnchorKind,
-        DrawingAnchorSummary, DrawingCellMarkerSummary, DrawingPointSummary, DrawingSizeSummary,
-        DxfSummary, FileFormat, FillSummary, FontSummary, HYPERLINK_RELATIONSHIP_TYPE, OpcPackage,
-        STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE, VML_DRAWING_RELATIONSHIP_TYPE,
-        WORKBOOK_RELS_PART_NAME, WorksheetCommentSummary, WorksheetData, WorksheetHyperlinkBinding,
-        WorksheetHyperlinkSummary, WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec,
-        chart_object_anchor_xml, collect_support_part_dimension_coords, compute_dimension_ref,
+        ChartAxisScaleType, ChartAxisSummary, ChartCacheKindSummary, ChartCacheSummary,
+        ChartDataLabelsSummary, ChartLegendPosition, ChartSeriesSummary,
+        ChartSupportRelationshipBinding, ChartTickLabelPosition, ChartTickMark, CommentPartSummary,
+        DrawingAnchorKind, DrawingAnchorSummary, DrawingCellMarkerSummary, DrawingPointSummary,
+        DrawingSizeSummary, DxfSummary, FileFormat, FillSummary, FontSummary,
+        HYPERLINK_RELATIONSHIP_TYPE, OpcPackage, STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE,
+        VML_DRAWING_RELATIONSHIP_TYPE, WORKBOOK_RELS_PART_NAME, WorksheetCommentSummary,
+        WorksheetData, WorksheetHyperlinkBinding, WorksheetHyperlinkSummary,
+        WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml,
+        collect_support_part_dimension_coords, compute_dimension_ref,
         compute_dimension_ref_with_preserved, parse_shared_strings, parse_workbook,
         parse_workbook_relationships, parse_worksheet_cells, rewrite_worksheet_xml,
     };
@@ -22078,7 +22114,7 @@ mod tests {
         <c:upDownBars/>
       </c:barChart>
       <c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crosses val="autoZero"/></c:catAx>
-      <c:valAx><c:axId val="20"/><c:scaling><c:orientation val="maxMin"/><c:min val="0"/><c:max val="1000"/></c:scaling><c:majorGridlines/><c:minorGridlines/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title><c:majorTickMark val="cross"/><c:minorTickMark val="in"/><c:tickLblPos val="low"/><c:majorUnit val="250"/><c:minorUnit val="50"/><c:crossesAt val="10"/></c:valAx>
+      <c:valAx><c:axId val="20"/><c:scaling><c:logBase val="10"/><c:orientation val="maxMin"/><c:min val="0"/><c:max val="1000"/></c:scaling><c:majorGridlines/><c:minorGridlines/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title><c:majorTickMark val="cross"/><c:minorTickMark val="in"/><c:tickLblPos val="low"/><c:majorUnit val="250"/><c:minorUnit val="50"/><c:crossesAt val="10"/></c:valAx>
     </c:plotArea>
     <c:legend><c:legendPos val="r"/><c:overlay val="1"/></c:legend>
     <c:plotVisOnly val="0"/>
@@ -22341,6 +22377,8 @@ mod tests {
                     minor_tick_mark: Some(ChartTickMark::None),
                     tick_label_position: Some(ChartTickLabelPosition::NextToAxis),
                     reverse_plot_order: None,
+                    scale_type: None,
+                    log_base: None,
                     crosses: Some(ChartAxisCrosses::Automatic),
                     crosses_at: None,
                     minimum_scale: None,
@@ -22358,6 +22396,8 @@ mod tests {
                     minor_tick_mark: Some(ChartTickMark::Inside),
                     tick_label_position: Some(ChartTickLabelPosition::Low),
                     reverse_plot_order: Some(true),
+                    scale_type: Some(ChartAxisScaleType::Logarithmic),
+                    log_base: Some(10.0),
                     crosses: Some(ChartAxisCrosses::Custom),
                     crosses_at: Some(10.0),
                     minimum_scale: Some(0.0),
