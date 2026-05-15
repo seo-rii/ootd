@@ -717,6 +717,7 @@ pub struct ChartAxisSummary {
     pub major_tick_mark: Option<ChartTickMark>,
     pub minor_tick_mark: Option<ChartTickMark>,
     pub tick_label_position: Option<ChartTickLabelPosition>,
+    pub reverse_plot_order: Option<bool>,
     pub minimum_scale: Option<f64>,
     pub maximum_scale: Option<f64>,
     pub major_unit: Option<f64>,
@@ -3216,6 +3217,7 @@ fn build_chart_model_overlay(
                             major_tick_mark: axis.major_tick_mark,
                             minor_tick_mark: axis.minor_tick_mark,
                             tick_label_position: axis.tick_label_position,
+                            reverse_plot_order: axis.reverse_plot_order,
                             minimum_scale: axis.minimum_scale,
                             maximum_scale: axis.maximum_scale,
                             major_unit: axis.major_unit,
@@ -16625,6 +16627,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         major_tick_mark: None,
                         minor_tick_mark: None,
                         tick_label_position: None,
+                        reverse_plot_order: None,
                         minimum_scale: None,
                         maximum_scale: None,
                         major_unit: None,
@@ -16669,6 +16672,17 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(value) = parse_tick_label_position(&element, &reader)?
                 {
                     axes[axis_index].tick_label_position = Some(value);
+                }
+                if local_name == b"orientation"
+                    && element_path.last().is_some_and(|name| name == "scaling")
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) = parse_string_val_attr(&element, &reader)?
+                {
+                    match value.as_str() {
+                        "maxMin" => axes[axis_index].reverse_plot_order = Some(true),
+                        "minMax" => axes[axis_index].reverse_plot_order = Some(false),
+                        _ => {}
+                    }
                 }
                 if local_name == b"min"
                     && element_path.last().is_some_and(|name| name == "scaling")
@@ -16885,6 +16899,17 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(value) = parse_tick_label_position(&element, &reader)?
                 {
                     axes[axis_index].tick_label_position = Some(value);
+                }
+                if local_name == b"orientation"
+                    && element_path.last().is_some_and(|name| name == "scaling")
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) = parse_string_val_attr(&element, &reader)?
+                {
+                    match value.as_str() {
+                        "maxMin" => axes[axis_index].reverse_plot_order = Some(true),
+                        "minMax" => axes[axis_index].reverse_plot_order = Some(false),
+                        _ => {}
+                    }
                 }
                 if local_name == b"min"
                     && element_path.last().is_some_and(|name| name == "scaling")
@@ -22005,7 +22030,7 @@ mod tests {
         <c:upDownBars/>
       </c:barChart>
       <c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/></c:catAx>
-      <c:valAx><c:axId val="20"/><c:scaling><c:min val="0"/><c:max val="1000"/></c:scaling><c:majorGridlines/><c:minorGridlines/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title><c:majorTickMark val="cross"/><c:minorTickMark val="in"/><c:tickLblPos val="low"/><c:majorUnit val="250"/><c:minorUnit val="50"/></c:valAx>
+      <c:valAx><c:axId val="20"/><c:scaling><c:orientation val="maxMin"/><c:min val="0"/><c:max val="1000"/></c:scaling><c:majorGridlines/><c:minorGridlines/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title><c:majorTickMark val="cross"/><c:minorTickMark val="in"/><c:tickLblPos val="low"/><c:majorUnit val="250"/><c:minorUnit val="50"/></c:valAx>
     </c:plotArea>
     <c:legend><c:legendPos val="r"/><c:overlay val="1"/></c:legend>
     <c:plotVisOnly val="0"/>
@@ -22267,6 +22292,7 @@ mod tests {
                     major_tick_mark: Some(ChartTickMark::Outside),
                     minor_tick_mark: Some(ChartTickMark::None),
                     tick_label_position: Some(ChartTickLabelPosition::NextToAxis),
+                    reverse_plot_order: None,
                     minimum_scale: None,
                     maximum_scale: None,
                     major_unit: None,
@@ -22281,6 +22307,7 @@ mod tests {
                     major_tick_mark: Some(ChartTickMark::Cross),
                     minor_tick_mark: Some(ChartTickMark::Inside),
                     tick_label_position: Some(ChartTickLabelPosition::Low),
+                    reverse_plot_order: Some(true),
                     minimum_scale: Some(0.0),
                     maximum_scale: Some(1000.0),
                     major_unit: Some(250.0),

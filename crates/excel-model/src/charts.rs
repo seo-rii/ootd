@@ -223,6 +223,7 @@ pub struct AxisModel {
     pub major_tick_mark: Option<ChartTickMark>,
     pub minor_tick_mark: Option<ChartTickMark>,
     pub tick_label_position: Option<ChartTickLabelPosition>,
+    pub reverse_plot_order: Option<bool>,
     pub minimum_scale: Option<f64>,
     pub maximum_scale: Option<f64>,
     pub major_unit: Option<f64>,

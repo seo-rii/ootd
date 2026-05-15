@@ -4614,6 +4614,7 @@ impl ExcelRuntime {
                                         major_tick_mark: None,
                                         minor_tick_mark: None,
                                         tick_label_position: None,
+                                        reverse_plot_order: None,
                                         minimum_scale: None,
                                         maximum_scale: None,
                                         major_unit: None,
@@ -5048,6 +5049,40 @@ impl ExcelRuntime {
                             self.stale_gridline_handles_for_axis(
                                 workbook, chart_id, axis_index, major,
                             );
+                        }
+                        Ok(())
+                    }
+                    "ReversePlotOrder" => {
+                        let OmValue::Bool(reverse_plot_order) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Axis.ReversePlotOrder expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let axis = chart
+                            .axes
+                            .get_mut(axis_index)
+                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
+                        let changed = axis.reverse_plot_order != Some(reverse_plot_order);
+                        if changed {
+                            axis.reverse_plot_order = Some(reverse_plot_order);
+                            chart.dirty = true;
+                            runtime.dirty = true;
                         }
                         Ok(())
                     }
@@ -10320,6 +10355,7 @@ impl ExcelRuntime {
                             | "AxisGroup"
                             | "HasTitle"
                             | "AxisTitle"
+                            | "ReversePlotOrder"
                             | "MajorTickMark"
                             | "MinorTickMark"
                             | "TickLabelPosition"
@@ -13644,6 +13680,7 @@ impl ExcelRuntime {
             "HasTitle" => Ok(OmValue::Bool(axis.title.is_some())),
             "HasMajorGridlines" => Ok(OmValue::Bool(axis.has_major_gridlines == Some(true))),
             "HasMinorGridlines" => Ok(OmValue::Bool(axis.has_minor_gridlines == Some(true))),
+            "ReversePlotOrder" => Ok(OmValue::Bool(axis.reverse_plot_order.unwrap_or(false))),
             "MajorTickMark" => Ok(OmValue::Number(f64::from(chart_tick_mark_to_excel_value(
                 axis.major_tick_mark.unwrap_or(ChartTickMark::Outside),
             )))),
@@ -21788,6 +21825,14 @@ fn chart_axis_xml_name(kind: ChartAxisKind) -> &'static str {
     }
 }
 
+fn chart_axis_orientation_xml_value(reverse_plot_order: bool) -> &'static str {
+    if reverse_plot_order {
+        "maxMin"
+    } else {
+        "minMax"
+    }
+}
+
 fn chart_legend_position_xml_value(position: ChartLegendPosition) -> &'static str {
     match position {
         ChartLegendPosition::Bottom => "b",
@@ -22407,6 +22452,10 @@ fn patch_loaded_chart_model_xml(
     let mut axis_tick_label_position_inserted = Vec::<bool>::new();
     let mut axis_tick_label_position_removed = Vec::<bool>::new();
     let mut axis_scaling_seen = Vec::<bool>::new();
+    let mut axis_orientation_seen = Vec::<bool>::new();
+    let mut axis_orientation_written = Vec::<bool>::new();
+    let mut axis_orientation_inserted = Vec::<bool>::new();
+    let mut axis_orientation_removed = Vec::<bool>::new();
     let mut axis_minimum_scale_seen = Vec::<bool>::new();
     let mut axis_minimum_scale_written = Vec::<bool>::new();
     let mut axis_minimum_scale_inserted = Vec::<bool>::new();
@@ -22809,12 +22858,22 @@ fn patch_loaded_chart_model_xml(
         };
     let write_chart_axis_scaling_element =
         |writer: &mut Writer<Cursor<Vec<u8>>>, axis: &AxisModel| -> OmResult<()> {
-            if axis.minimum_scale.is_none() && axis.maximum_scale.is_none() {
+            if axis.minimum_scale.is_none()
+                && axis.maximum_scale.is_none()
+                && axis.reverse_plot_order.is_none()
+            {
                 return Ok(());
             }
             writer
                 .write_event(Event::Start(BytesStart::new("c:scaling")))
                 .map_err(runtime_xml_error)?;
+            if let Some(value) = axis.reverse_plot_order {
+                write_chart_string_val_element(
+                    writer,
+                    "c:orientation",
+                    chart_axis_orientation_xml_value(value),
+                )?;
+            }
             if let Some(value) = axis.minimum_scale {
                 write_chart_val_element(writer, "c:min", value)?;
             }
@@ -23119,6 +23178,10 @@ fn patch_loaded_chart_model_xml(
                     axis_tick_label_position_inserted.push(false);
                     axis_tick_label_position_removed.push(false);
                     axis_scaling_seen.push(false);
+                    axis_orientation_seen.push(false);
+                    axis_orientation_written.push(false);
+                    axis_orientation_inserted.push(false);
+                    axis_orientation_removed.push(false);
                     axis_minimum_scale_seen.push(false);
                     axis_minimum_scale_written.push(false);
                     axis_minimum_scale_inserted.push(false);
@@ -23619,6 +23682,31 @@ fn patch_loaded_chart_model_xml(
                         .map_err(runtime_xml_error)?;
                     overlap_written = true;
                 } else if !wrote_start_element
+                    && local_name.as_slice() == b"orientation"
+                    && parent_name == Some(b"scaling".as_slice())
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    if let Some(seen) = axis_orientation_seen.get_mut(axis_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = axis.reverse_plot_order {
+                        writer
+                            .write_event(Event::Start(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                chart_axis_orientation_xml_value(value),
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = axis_orientation_written.get_mut(axis_index) {
+                            *written = true;
+                        }
+                    } else {
+                        writer
+                            .write_event(Event::Start(element.into_owned()))
+                            .map_err(runtime_xml_error)?;
+                    }
+                } else if !wrote_start_element
                     && matches!(local_name.as_slice(), b"min" | b"max")
                     && parent_name == Some(b"scaling".as_slice())
                     && let Some(axis_index) = current_axis_index
@@ -23801,8 +23889,19 @@ fn patch_loaded_chart_model_xml(
                     if let Some(seen) = axis_scaling_seen.get_mut(axis_index) {
                         *seen = true;
                     }
-                    if axis.minimum_scale.is_some() || axis.maximum_scale.is_some() {
+                    if axis.minimum_scale.is_some()
+                        || axis.maximum_scale.is_some()
+                        || axis.reverse_plot_order.is_some()
+                    {
                         write_chart_axis_scaling_element(&mut writer, axis)?;
+                        if axis.reverse_plot_order.is_some() {
+                            if let Some(inserted) = axis_orientation_inserted.get_mut(axis_index) {
+                                *inserted = true;
+                            }
+                            if let Some(written) = axis_orientation_written.get_mut(axis_index) {
+                                *written = true;
+                            }
+                        }
                         if axis.minimum_scale.is_some() {
                             if let Some(inserted) = axis_minimum_scale_inserted.get_mut(axis_index)
                             {
@@ -23820,6 +23919,29 @@ fn patch_loaded_chart_model_xml(
                             if let Some(written) = axis_maximum_scale_written.get_mut(axis_index) {
                                 *written = true;
                             }
+                        }
+                        buffer.clear();
+                        continue;
+                    }
+                }
+                if local_name.as_slice() == b"orientation"
+                    && parent_name == Some(b"scaling".as_slice())
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    if let Some(seen) = axis_orientation_seen.get_mut(axis_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = axis.reverse_plot_order {
+                        writer
+                            .write_event(Event::Empty(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                chart_axis_orientation_xml_value(value),
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = axis_orientation_written.get_mut(axis_index) {
+                            *written = true;
                         }
                         buffer.clear();
                         continue;
@@ -24723,6 +24845,26 @@ fn patch_loaded_chart_model_xml(
                     && let Some(axis_index) = current_axis_index
                     && let Some(axis) = chart.axes.get(axis_index)
                 {
+                    if axis.reverse_plot_order.is_some()
+                        && !axis_orientation_seen
+                            .get(axis_index)
+                            .copied()
+                            .unwrap_or(false)
+                    {
+                        if let Some(value) = axis.reverse_plot_order {
+                            write_chart_string_val_element(
+                                &mut writer,
+                                "c:orientation",
+                                chart_axis_orientation_xml_value(value),
+                            )?;
+                            if let Some(inserted) = axis_orientation_inserted.get_mut(axis_index) {
+                                *inserted = true;
+                            }
+                            if let Some(written) = axis_orientation_written.get_mut(axis_index) {
+                                *written = true;
+                            }
+                        }
+                    }
                     if axis.minimum_scale.is_some()
                         && !axis_minimum_scale_seen
                             .get(axis_index)
@@ -24810,10 +24952,20 @@ fn patch_loaded_chart_model_xml(
                     && let Some(axis_index) = current_axis_index
                     && let Some(axis) = chart.axes.get(axis_index)
                 {
-                    if (axis.minimum_scale.is_some() || axis.maximum_scale.is_some())
+                    if (axis.minimum_scale.is_some()
+                        || axis.maximum_scale.is_some()
+                        || axis.reverse_plot_order.is_some())
                         && !axis_scaling_seen.get(axis_index).copied().unwrap_or(false)
                     {
                         write_chart_axis_scaling_element(&mut writer, axis)?;
+                        if axis.reverse_plot_order.is_some() {
+                            if let Some(inserted) = axis_orientation_inserted.get_mut(axis_index) {
+                                *inserted = true;
+                            }
+                            if let Some(written) = axis_orientation_written.get_mut(axis_index) {
+                                *written = true;
+                            }
+                        }
                         if axis.minimum_scale.is_some() {
                             if let Some(inserted) = axis_minimum_scale_inserted.get_mut(axis_index)
                             {
@@ -25005,9 +25157,14 @@ fn patch_loaded_chart_model_xml(
                         axis_tick_label_position_written.push(axis.tick_label_position.is_some());
                         axis_tick_label_position_inserted.push(axis.tick_label_position.is_some());
                         axis_tick_label_position_removed.push(false);
-                        let has_scaling =
-                            axis.minimum_scale.is_some() || axis.maximum_scale.is_some();
+                        let has_scaling = axis.minimum_scale.is_some()
+                            || axis.maximum_scale.is_some()
+                            || axis.reverse_plot_order.is_some();
                         axis_scaling_seen.push(has_scaling);
+                        axis_orientation_seen.push(axis.reverse_plot_order.is_some());
+                        axis_orientation_written.push(axis.reverse_plot_order.is_some());
+                        axis_orientation_inserted.push(axis.reverse_plot_order.is_some());
+                        axis_orientation_removed.push(false);
                         axis_minimum_scale_seen.push(axis.minimum_scale.is_some());
                         axis_minimum_scale_written.push(axis.minimum_scale.is_some());
                         axis_minimum_scale_inserted.push(axis.minimum_scale.is_some());
@@ -25592,6 +25749,20 @@ fn patch_loaded_chart_model_xml(
             &axis_minor_unit_removed,
         )
     });
+    let axis_orientation_match = chart.axes.iter().enumerate().all(|(axis_index, axis)| {
+        if axis.reverse_plot_order.is_some() {
+            axis_orientation_written
+                .get(axis_index)
+                .copied()
+                .unwrap_or(false)
+                || axis_orientation_inserted
+                    .get(axis_index)
+                    .copied()
+                    .unwrap_or(false)
+        } else {
+            true
+        }
+    });
     let axis_tick_settings_match = chart.axes.iter().enumerate().all(|(axis_index, axis)| {
         axis_optional_field_matches(
             axis_index,
@@ -25694,6 +25865,7 @@ fn patch_loaded_chart_model_xml(
         && chart_group_line_flags_match
         && axes_match
         && axis_scale_units_match
+        && axis_orientation_match
         && axis_tick_settings_match
         && axis_gridlines_match
     {
@@ -25947,8 +26119,17 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             chart_group_axis_refs.push_str(&format!(r#"<c:axId val="{escaped_axis_id}"/>"#));
             let axis_tag = chart_axis_xml_name(axis.kind);
             let mut scaling_xml = String::new();
-            if axis.minimum_scale.is_some() || axis.maximum_scale.is_some() {
+            if axis.minimum_scale.is_some()
+                || axis.maximum_scale.is_some()
+                || axis.reverse_plot_order.is_some()
+            {
                 scaling_xml.push_str("<c:scaling>");
+                if let Some(value) = axis.reverse_plot_order {
+                    scaling_xml.push_str(&format!(
+                        r#"<c:orientation val="{}"/>"#,
+                        chart_axis_orientation_xml_value(value)
+                    ));
+                }
                 if let Some(value) = axis.minimum_scale {
                     scaling_xml.push_str(&format!(
                         r#"<c:min val="{}"/>"#,
@@ -26125,6 +26306,7 @@ fn default_chart_axes() -> Vec<AxisModel> {
             major_tick_mark: None,
             minor_tick_mark: None,
             tick_label_position: None,
+            reverse_plot_order: None,
             minimum_scale: None,
             maximum_scale: None,
             major_unit: None,
@@ -26139,6 +26321,7 @@ fn default_chart_axes() -> Vec<AxisModel> {
             major_tick_mark: None,
             minor_tick_mark: None,
             tick_label_position: None,
+            reverse_plot_order: None,
             minimum_scale: None,
             maximum_scale: None,
             major_unit: None,
@@ -88973,6 +89156,167 @@ mod tests {
             ),
             f64::from(super::XL_TICK_LABEL_POSITION_HIGH)
         );
+    }
+
+    #[test]
+    fn loaded_chart_axis_reverse_plot_order_setter_preserves_chart_extensions_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            r#"<c:valAx><c:axId val="20"/><c:title>"#,
+            r#"<c:valAx><c:axId val="20"/><c:scaling><c:orientation val="maxMin"/></c:scaling><c:title>"#,
+        )
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:axis-reverse-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with reversed value axis");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let category_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.Axes(xlCategory)"),
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(category_axis, "ReversePlotOrder", &[])
+                .expect("default Axis.ReversePlotOrder")
+        ));
+        let value_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.Axes(xlValue)"),
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(value_axis, "ReversePlotOrder", &[])
+                .expect("Axis.ReversePlotOrder before set")
+        ));
+
+        runtime
+            .dispatch_set(value_axis, "ReversePlotOrder", OmValue::Bool(false), &[])
+            .expect("set Axis.ReversePlotOrder false");
+        assert_eq!(
+            runtime
+                .dispatch_set(value_axis, "ReversePlotOrder", OmValue::Number(1.0), &[])
+                .expect_err("Axis.ReversePlotOrder rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after reverse plot order edit");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:axis-reverse-preserve"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:orientation val="minMax"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:orientation val="maxMin"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after reverse plot order edit");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_value_axis = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("reopened Chart.Axes(xlValue)"),
+        );
+        assert!(!expect_bool(
+            reopened_runtime
+                .dispatch_get(reopened_value_axis, "ReversePlotOrder", &[])
+                .expect("reopened Axis.ReversePlotOrder")
+        ));
     }
 
     #[test]
