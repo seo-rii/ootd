@@ -3573,11 +3573,183 @@ impl ExcelRuntime {
             | RuntimeObjectKind::ChartGroups { .. }
             | RuntimeObjectKind::Axes { .. }
             | RuntimeObjectKind::SeriesCollection { .. }
-            | RuntimeObjectKind::Points { .. }
-            | RuntimeObjectKind::Point { .. }
-            | RuntimeObjectKind::DataLabel { .. } => Err(OmError::unsupported(format!(
+            | RuntimeObjectKind::Points { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
             ))),
+            RuntimeObjectKind::Point {
+                workbook,
+                chart_id,
+                series_index,
+                point_index,
+            } => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "Point.{member} does not accept index arguments"
+                    )));
+                }
+                match member {
+                    "HasDataLabel" => {
+                        let OmValue::Bool(has_data_label) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Point.HasDataLabel expects a boolean value",
+                            ));
+                        };
+                        self.validate_point_index(workbook, chart_id, series_index, point_index)?;
+                        let replacement = if has_data_label {
+                            chart_data_labels_default_visible_model()
+                        } else {
+                            chart_data_labels_disabled_model()
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let series = chart.series.get_mut(series_index).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "series not found")
+                        })?;
+                        let point_index = u32::try_from(point_index).map_err(|_| {
+                            OmError::invalid_argument("Point.HasDataLabel index is out of bounds")
+                        })?;
+                        if series.point_data_labels.get(&point_index) != Some(&replacement) {
+                            series.point_data_labels.insert(point_index, replacement);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "Point.{member} is not writable"
+                    ))),
+                }
+            }
+            RuntimeObjectKind::DataLabel {
+                workbook,
+                chart_id,
+                series_index,
+                point_index,
+            } => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "DataLabel.{member} does not accept index arguments"
+                    )));
+                }
+                self.validate_data_label_index(workbook, chart_id, series_index, point_index)?;
+                match member {
+                    "ShowLegendKey" | "ShowSeriesName" | "ShowCategoryName" | "ShowValue"
+                    | "ShowPercentage" | "ShowBubbleSize" => {
+                        let OmValue::Bool(enabled) = value else {
+                            return Err(OmError::type_mismatch(format!(
+                                "DataLabel.{member} expects a boolean value"
+                            )));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let inherited =
+                            chart_point_effective_data_labels(chart, series_index, point_index)
+                                .cloned()
+                                .unwrap_or_else(chart_data_labels_disabled_model);
+                        let series = chart.series.get_mut(series_index).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "series not found")
+                        })?;
+                        let point_index = u32::try_from(point_index).map_err(|_| {
+                            OmError::invalid_argument("DataLabel index is out of bounds")
+                        })?;
+                        let data_labels = series
+                            .point_data_labels
+                            .entry(point_index)
+                            .or_insert(inherited);
+                        let target = match member {
+                            "ShowLegendKey" => &mut data_labels.show_legend_key,
+                            "ShowSeriesName" => &mut data_labels.show_series_name,
+                            "ShowCategoryName" => &mut data_labels.show_category_name,
+                            "ShowValue" => &mut data_labels.show_value,
+                            "ShowPercentage" => &mut data_labels.show_percentage,
+                            "ShowBubbleSize" => &mut data_labels.show_bubble_size,
+                            _ => unreachable!("matched data label boolean property"),
+                        };
+                        if *target != Some(enabled) {
+                            *target = Some(enabled);
+                            data_labels.dirty = true;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "Separator" => {
+                        let OmValue::Text(separator) = value else {
+                            return Err(OmError::type_mismatch(
+                                "DataLabel.Separator expects a text value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let inherited =
+                            chart_point_effective_data_labels(chart, series_index, point_index)
+                                .cloned()
+                                .unwrap_or_else(chart_data_labels_disabled_model);
+                        let series = chart.series.get_mut(series_index).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "series not found")
+                        })?;
+                        let point_index = u32::try_from(point_index).map_err(|_| {
+                            OmError::invalid_argument("DataLabel index is out of bounds")
+                        })?;
+                        let data_labels = series
+                            .point_data_labels
+                            .entry(point_index)
+                            .or_insert(inherited);
+                        if data_labels.separator.as_deref() != Some(separator.as_str()) {
+                            data_labels.separator = Some(separator);
+                            data_labels.dirty = true;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "DataLabel.{member} is not writable"
+                    ))),
+                }
+            }
             RuntimeObjectKind::ChartGroup {
                 workbook,
                 chart_id,
@@ -8996,6 +9168,7 @@ impl ExcelRuntime {
                                     )?),
                                     bubble_size: None,
                                     data_labels: None,
+                                    point_data_labels: BTreeMap::new(),
                                     order: u32::try_from(index).ok(),
                                 });
                             }
@@ -9021,6 +9194,7 @@ impl ExcelRuntime {
                                     )?),
                                     bubble_size: None,
                                     data_labels: None,
+                                    point_data_labels: BTreeMap::new(),
                                     order: u32::try_from(index).ok(),
                                 });
                             }
@@ -9038,6 +9212,7 @@ impl ExcelRuntime {
                                 )?),
                                 bubble_size: None,
                                 data_labels: None,
+                                point_data_labels: BTreeMap::new(),
                                 order: Some(0),
                             });
                         }
@@ -13340,6 +13515,7 @@ impl ExcelRuntime {
                         values: None,
                         bubble_size: None,
                         data_labels: None,
+                        point_data_labels: BTreeMap::new(),
                         order: u32::try_from(series_index).ok(),
                     });
                     if let Some(plot_order) = series_index
@@ -13472,13 +13648,11 @@ impl ExcelRuntime {
             "Name" => Ok(OmValue::Text("Data Labels".to_string())),
             "Count" => {
                 let chart = self.chart_model(workbook, chart_id)?;
-                let series = chart
-                    .series
-                    .get(series_index)
-                    .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "series not found"))?;
-                let data_labels = chart_series_effective_data_labels(chart, series_index);
+                if chart.series.get(series_index).is_none() {
+                    return Err(OmError::new(OmErrorCode::NotFound, "series not found"));
+                }
                 Ok(OmValue::Number(
-                    chart_data_labels_count_for_series(data_labels, series) as f64,
+                    chart_data_labels_count_for_chart_series(chart, series_index) as f64,
                 ))
             }
             "ShowLegendKey" => Ok(OmValue::Bool(
@@ -13566,12 +13740,10 @@ impl ExcelRuntime {
                 };
                 let index = coerce_u32_arg(index, "DataLabels.Item index")? as usize;
                 let chart = self.chart_model(workbook, chart_id)?;
-                let series = chart
-                    .series
-                    .get(series_index)
-                    .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "series not found"))?;
-                let data_labels = chart_series_effective_data_labels(chart, series_index);
-                let label_count = chart_data_labels_count_for_series(data_labels, series);
+                if chart.series.get(series_index).is_none() {
+                    return Err(OmError::new(OmErrorCode::NotFound, "series not found"));
+                }
+                let label_count = chart_data_labels_count_for_chart_series(chart, series_index);
                 if index == 0 || index > label_count {
                     return Err(OmError::invalid_argument(
                         "DataLabels.Item index is out of bounds",
@@ -13782,10 +13954,16 @@ impl ExcelRuntime {
         match member {
             "Name" => Ok(OmValue::Text(format!("Point {}", point_index + 1))),
             "Index" => Ok(OmValue::Number((point_index + 1) as f64)),
-            "HasDataLabel" => Ok(OmValue::Bool(
-                self.validate_data_label_index(workbook, chart_id, series_index, point_index)
-                    .is_ok(),
-            )),
+            "HasDataLabel" => {
+                self.validate_point_index(workbook, chart_id, series_index, point_index)?;
+                Ok(OmValue::Bool(chart_data_labels_visible(
+                    chart_point_effective_data_labels(
+                        self.chart_model(workbook, chart_id)?,
+                        series_index,
+                        point_index,
+                    ),
+                )))
+            }
             "DataLabel" => {
                 self.validate_data_label_index(workbook, chart_id, series_index, point_index)?;
                 Ok(OmValue::Object(self.register_data_label_handle(
@@ -18126,16 +18304,18 @@ impl ExcelRuntime {
         point_index: usize,
     ) -> OmResult<Option<&ChartDataLabelsModel>> {
         let chart = self.chart_model(workbook, chart_id)?;
-        let series = chart
-            .series
-            .get(series_index)
-            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "series not found"))?;
-        let data_labels = chart_series_effective_data_labels(chart, series_index);
-        let label_count = chart_data_labels_count_for_series(data_labels, series);
+        if chart.series.get(series_index).is_none() {
+            return Err(OmError::new(OmErrorCode::NotFound, "series not found"));
+        }
+        let label_count = chart_data_labels_count_for_chart_series(chart, series_index);
         if point_index >= label_count {
             return Err(OmError::new(OmErrorCode::NotFound, "data label not found"));
         }
-        Ok(data_labels)
+        Ok(chart_point_effective_data_labels(
+            chart,
+            series_index,
+            point_index,
+        ))
     }
 
     fn axis_model(
@@ -21336,14 +21516,37 @@ fn chart_series_effective_data_labels(
         .or(chart.data_labels.as_ref())
 }
 
-fn chart_data_labels_count_for_series(
-    data_labels: Option<&ChartDataLabelsModel>,
-    series: &SeriesModel,
-) -> usize {
-    if !chart_data_labels_visible(data_labels) {
+fn chart_point_effective_data_labels(
+    chart: &ChartModel,
+    series_index: usize,
+    point_index: usize,
+) -> Option<&ChartDataLabelsModel> {
+    chart
+        .series
+        .get(series_index)
+        .and_then(|series| {
+            u32::try_from(point_index)
+                .ok()
+                .and_then(|index| series.point_data_labels.get(&index))
+                .or(series.data_labels.as_ref())
+        })
+        .or(chart.data_labels.as_ref())
+}
+
+fn chart_data_labels_count_for_chart_series(chart: &ChartModel, series_index: usize) -> usize {
+    let Some(series) = chart.series.get(series_index) else {
         return 0;
+    };
+    if chart_data_labels_visible(chart_series_effective_data_labels(chart, series_index))
+        || series
+            .point_data_labels
+            .values()
+            .any(|data_labels| chart_data_labels_visible(Some(data_labels)))
+    {
+        chart_series_point_count(series).max(1)
+    } else {
+        0
     }
-    chart_series_point_count(series).max(1)
 }
 
 fn chart_series_point_count(series: &SeriesModel) -> usize {
@@ -21379,8 +21582,7 @@ fn chart_number_xml_value(value: f64) -> String {
     }
 }
 
-fn chart_data_labels_xml_string(data_labels: &ChartDataLabelsModel) -> String {
-    let mut xml = String::from("<c:dLbls>");
+fn push_chart_data_label_properties_xml(xml: &mut String, data_labels: &ChartDataLabelsModel) {
     for (element_name, value) in [
         ("showLegendKey", data_labels.show_legend_key),
         ("showLeaderLines", data_labels.has_leader_lines),
@@ -21400,6 +21602,28 @@ fn chart_data_labels_xml_string(data_labels: &ChartDataLabelsModel) -> String {
     if let Some(separator) = data_labels.separator.as_ref() {
         let separator = partial_escape(separator).to_string();
         xml.push_str(&format!(r#"<c:separator>{separator}</c:separator>"#));
+    }
+}
+
+fn chart_data_labels_xml_string(data_labels: &ChartDataLabelsModel) -> String {
+    let mut xml = String::from("<c:dLbls>");
+    push_chart_data_label_properties_xml(&mut xml, data_labels);
+    xml.push_str("</c:dLbls>");
+    xml
+}
+
+fn chart_series_data_labels_xml_string(series: &SeriesModel) -> String {
+    if series.data_labels.is_none() && series.point_data_labels.is_empty() {
+        return String::new();
+    }
+    let mut xml = String::from("<c:dLbls>");
+    for (point_index, data_labels) in &series.point_data_labels {
+        xml.push_str(&format!(r#"<c:dLbl><c:idx val="{point_index}"/>"#));
+        push_chart_data_label_properties_xml(&mut xml, data_labels);
+        xml.push_str("</c:dLbl>");
+    }
+    if let Some(data_labels) = series.data_labels.as_ref() {
+        push_chart_data_label_properties_xml(&mut xml, data_labels);
     }
     xml.push_str("</c:dLbls>");
     xml
@@ -21482,14 +21706,18 @@ fn patch_loaded_chart_model_xml(
         .data_labels
         .as_ref()
         .filter(|data_labels| data_labels.dirty);
-    let expected_dirty_series_data_labels = chart
+    let expected_dirty_series_data_label_sets = chart
         .series
         .iter()
         .map(|series| {
             series
                 .data_labels
                 .as_ref()
-                .filter(|data_labels| data_labels.dirty)
+                .is_some_and(|data_labels| data_labels.dirty)
+                || series
+                    .point_data_labels
+                    .values()
+                    .any(|data_labels| data_labels.dirty)
         })
         .collect::<Vec<_>>();
     let expected_gap_width = expected_gap_width.as_deref();
@@ -21997,12 +22225,9 @@ fn patch_loaded_chart_model_xml(
                 .map_err(runtime_xml_error)?;
             Ok(())
         };
-    let write_chart_data_labels_element = |writer: &mut Writer<Cursor<Vec<u8>>>,
-                                           data_labels: &ChartDataLabelsModel|
+    let write_chart_data_labels_properties = |writer: &mut Writer<Cursor<Vec<u8>>>,
+                                              data_labels: &ChartDataLabelsModel|
      -> OmResult<()> {
-        writer
-            .write_event(Event::Start(BytesStart::new("c:dLbls")))
-            .map_err(runtime_xml_error)?;
         for (element_name, value) in [
             ("c:showLegendKey", data_labels.show_legend_key),
             ("c:showLeaderLines", data_labels.has_leader_lines),
@@ -22033,11 +22258,41 @@ fn patch_loaded_chart_model_xml(
                 .write_event(Event::End(BytesEnd::new("c:separator")))
                 .map_err(runtime_xml_error)?;
         }
-        writer
-            .write_event(Event::End(BytesEnd::new("c:dLbls")))
-            .map_err(runtime_xml_error)?;
         Ok(())
     };
+    let write_chart_data_labels_element =
+        |writer: &mut Writer<Cursor<Vec<u8>>>,
+         data_labels: Option<&ChartDataLabelsModel>,
+         point_data_labels: Option<&BTreeMap<u32, ChartDataLabelsModel>>|
+         -> OmResult<()> {
+            writer
+                .write_event(Event::Start(BytesStart::new("c:dLbls")))
+                .map_err(runtime_xml_error)?;
+            if let Some(point_data_labels) = point_data_labels {
+                for (point_index, data_labels) in point_data_labels {
+                    writer
+                        .write_event(Event::Start(BytesStart::new("c:dLbl")))
+                        .map_err(runtime_xml_error)?;
+                    let mut index_element = BytesStart::new("c:idx");
+                    let point_index = point_index.to_string();
+                    index_element.push_attribute(("val", point_index.as_str()));
+                    writer
+                        .write_event(Event::Empty(index_element))
+                        .map_err(runtime_xml_error)?;
+                    write_chart_data_labels_properties(writer, data_labels)?;
+                    writer
+                        .write_event(Event::End(BytesEnd::new("c:dLbl")))
+                        .map_err(runtime_xml_error)?;
+                }
+            }
+            if let Some(data_labels) = data_labels {
+                write_chart_data_labels_properties(writer, data_labels)?;
+            }
+            writer
+                .write_event(Event::End(BytesEnd::new("c:dLbls")))
+                .map_err(runtime_xml_error)?;
+            Ok(())
+        };
     let write_chart_axis_element = |writer: &mut Writer<Cursor<Vec<u8>>>,
                                     axis_index: usize,
                                     axis: &AxisModel|
@@ -22100,17 +22355,22 @@ fn patch_loaded_chart_model_xml(
                         if let Some(seen) = series_data_labels_seen.get_mut(series_index) {
                             *seen = true;
                         }
-                        if let Some(data_labels) = expected_dirty_series_data_labels
+                        if expected_dirty_series_data_label_sets
                             .get(series_index)
                             .copied()
-                            .flatten()
+                            .unwrap_or(false)
                         {
                             if !series_data_labels_inserted
                                 .get(series_index)
                                 .copied()
                                 .unwrap_or(false)
                             {
-                                write_chart_data_labels_element(&mut writer, data_labels)?;
+                                let series = &chart.series[series_index];
+                                write_chart_data_labels_element(
+                                    &mut writer,
+                                    series.data_labels.as_ref(),
+                                    Some(&series.point_data_labels),
+                                )?;
                                 if let Some(written) =
                                     series_data_labels_written.get_mut(series_index)
                                 {
@@ -22135,12 +22395,17 @@ fn patch_loaded_chart_model_xml(
                                 .get(series_index)
                                 .copied()
                                 .unwrap_or(false)
-                            && let Some(data_labels) = expected_dirty_series_data_labels
+                            && expected_dirty_series_data_label_sets
                                 .get(series_index)
                                 .copied()
-                                .flatten()
+                                .unwrap_or(false)
                         {
-                            write_chart_data_labels_element(&mut writer, data_labels)?;
+                            let series = &chart.series[series_index];
+                            write_chart_data_labels_element(
+                                &mut writer,
+                                series.data_labels.as_ref(),
+                                Some(&series.point_data_labels),
+                            )?;
                             if let Some(inserted) =
                                 series_data_labels_inserted.get_mut(series_index)
                             {
@@ -22313,7 +22578,7 @@ fn patch_loaded_chart_model_xml(
                 {
                     data_labels_seen = true;
                     if let Some(data_labels) = expected_dirty_data_labels {
-                        write_chart_data_labels_element(&mut writer, data_labels)?;
+                        write_chart_data_labels_element(&mut writer, Some(data_labels), None)?;
                         data_labels_written = true;
                         skip_depth = 1;
                         buffer.clear();
@@ -22854,17 +23119,22 @@ fn patch_loaded_chart_model_xml(
                     if let Some(seen) = series_data_labels_seen.get_mut(series_index) {
                         *seen = true;
                     }
-                    if let Some(data_labels) = expected_dirty_series_data_labels
+                    if expected_dirty_series_data_label_sets
                         .get(series_index)
                         .copied()
-                        .flatten()
+                        .unwrap_or(false)
                     {
                         if !series_data_labels_inserted
                             .get(series_index)
                             .copied()
                             .unwrap_or(false)
                         {
-                            write_chart_data_labels_element(&mut writer, data_labels)?;
+                            let series = &chart.series[series_index];
+                            write_chart_data_labels_element(
+                                &mut writer,
+                                series.data_labels.as_ref(),
+                                Some(&series.point_data_labels),
+                            )?;
                             if let Some(written) = series_data_labels_written.get_mut(series_index)
                             {
                                 *written = true;
@@ -22878,7 +23148,7 @@ fn patch_loaded_chart_model_xml(
                 {
                     data_labels_seen = true;
                     if let Some(data_labels) = expected_dirty_data_labels {
-                        write_chart_data_labels_element(&mut writer, data_labels)?;
+                        write_chart_data_labels_element(&mut writer, Some(data_labels), None)?;
                         data_labels_written = true;
                         buffer.clear();
                         continue;
@@ -23311,12 +23581,17 @@ fn patch_loaded_chart_model_xml(
                             .get(series_index)
                             .copied()
                             .unwrap_or(false)
-                        && let Some(data_labels) = expected_dirty_series_data_labels
+                        && expected_dirty_series_data_label_sets
                             .get(series_index)
                             .copied()
-                            .flatten()
+                            .unwrap_or(false)
                     {
-                        write_chart_data_labels_element(&mut writer, data_labels)?;
+                        let series = &chart.series[series_index];
+                        write_chart_data_labels_element(
+                            &mut writer,
+                            series.data_labels.as_ref(),
+                            Some(&series.point_data_labels),
+                        )?;
                         if let Some(inserted) = series_data_labels_inserted.get_mut(series_index) {
                             *inserted = true;
                         }
@@ -23493,12 +23768,16 @@ fn patch_loaded_chart_model_xml(
                                 *written = true;
                             }
                         }
-                        if let Some(data_labels) = expected_dirty_series_data_labels
+                        if expected_dirty_series_data_label_sets
                             .get(series_index)
                             .copied()
-                            .flatten()
+                            .unwrap_or(false)
                         {
-                            write_chart_data_labels_element(&mut writer, data_labels)?;
+                            write_chart_data_labels_element(
+                                &mut writer,
+                                series.data_labels.as_ref(),
+                                Some(&series.point_data_labels),
+                            )?;
                             if let Some(seen) = series_data_labels_seen.get_mut(series_index) {
                                 *seen = true;
                             }
@@ -23654,7 +23933,7 @@ fn patch_loaded_chart_model_xml(
                         }
                     }
                     if !data_labels_seen && let Some(data_labels) = expected_dirty_data_labels {
-                        write_chart_data_labels_element(&mut writer, data_labels)?;
+                        write_chart_data_labels_element(&mut writer, Some(data_labels), None)?;
                         data_labels_inserted = true;
                         data_labels_written = true;
                     }
@@ -23893,25 +24172,28 @@ fn patch_loaded_chart_model_xml(
         (Some(_), false) => data_labels_inserted,
         (None, _) => true,
     };
-    let series_data_labels_match = expected_dirty_series_data_labels.iter().enumerate().all(
-        |(series_index, expected)| match (
-            expected,
-            series_data_labels_seen
-                .get(series_index)
-                .copied()
-                .unwrap_or(false),
-        ) {
-            (Some(_), true) => series_data_labels_written
-                .get(series_index)
-                .copied()
-                .unwrap_or(false),
-            (Some(_), false) => series_data_labels_inserted
-                .get(series_index)
-                .copied()
-                .unwrap_or(false),
-            (None, _) => true,
-        },
-    );
+    let series_data_labels_match = expected_dirty_series_data_label_sets
+        .iter()
+        .enumerate()
+        .all(|(series_index, expected)| {
+            match (
+                *expected,
+                series_data_labels_seen
+                    .get(series_index)
+                    .copied()
+                    .unwrap_or(false),
+            ) {
+                (true, true) => series_data_labels_written
+                    .get(series_index)
+                    .copied()
+                    .unwrap_or(false),
+                (true, false) => series_data_labels_inserted
+                    .get(series_index)
+                    .copied()
+                    .unwrap_or(false),
+                (false, _) => true,
+            }
+        });
     let chart_group_numeric_settings_match = expected_chart_group_numeric_settings
         .iter()
         .enumerate()
@@ -23994,9 +24276,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
         if let Some(explosion) = chart_explosion_xml_value(chart) {
             series_xml.push_str(&format!(r#"<c:explosion val="{explosion}"/>"#));
         }
-        if let Some(data_labels) = series.data_labels.as_ref() {
-            series_xml.push_str(&chart_data_labels_xml_string(data_labels));
-        }
+        series_xml.push_str(&chart_series_data_labels_xml_string(series));
         if let Some(name) = series.name.as_ref() {
             let formula = partial_escape(name.raw.text.trim_start_matches('=')).to_string();
             series_xml.push_str(&format!(
@@ -80342,6 +80622,59 @@ mod tests {
                 .expect("DataLabel.ShowValue"),
             OmValue::Bool(true)
         );
+        runtime
+            .dispatch_set(second_label, "ShowValue", OmValue::Bool(false), &[])
+            .expect("DataLabel.ShowValue = false");
+        runtime
+            .dispatch_set(second_label, "ShowCategoryName", OmValue::Bool(true), &[])
+            .expect("DataLabel.ShowCategoryName = true");
+        runtime
+            .dispatch_set(
+                second_label,
+                "Separator",
+                OmValue::Text(" * ".to_string()),
+                &[],
+            )
+            .expect("DataLabel.Separator = star");
+        assert_eq!(
+            runtime
+                .dispatch_get(second_label, "ShowValue", &[])
+                .expect("DataLabel.ShowValue after set"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_label, "ShowCategoryName", &[])
+                .expect("DataLabel.ShowCategoryName after set"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_point_label, "ShowValue", &[])
+                .expect("first DataLabel.ShowValue after second label set"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    second_label,
+                    "ShowValue",
+                    OmValue::Text("bad".to_string()),
+                    &[]
+                )
+                .expect_err("DataLabel.ShowValue rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        let state = runtime.workbook_state(workbook).expect("workbook state");
+        let chart_model = state.charts.values().next().expect("chart model");
+        let second_point_labels = chart_model.series[0]
+            .point_data_labels
+            .get(&1)
+            .expect("second point data labels");
+        assert_eq!(second_point_labels.show_category_name, Some(true));
+        assert_eq!(second_point_labels.show_value, Some(false));
+        assert_eq!(second_point_labels.separator.as_deref(), Some(" * "));
         let labels_parent = expect_object_handle(
             runtime
                 .dispatch_get(second_label, "Parent", &[])
@@ -80396,6 +80729,97 @@ mod tests {
                 .expect_err("DataLabel.Select rejects arguments")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after point data label edit");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(
+            r#"<c:dLbl><c:idx val="1"/><c:showCatName val="1"/><c:showVal val="0"/><c:separator> * </c:separator></c:dLbl>"#
+        ));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after point data label edit");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        let reopened_data_labels = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_series, "DataLabels", &[])
+                .expect("reopened Series.DataLabels"),
+        );
+        let reopened_second_label = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_data_labels, "Item", &[OmValue::Number(2.0)])
+                .expect("reopened DataLabels.Item(2)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_second_label, "ShowValue", &[])
+                .expect("reopened DataLabel.ShowValue"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_second_label, "ShowCategoryName", &[])
+                .expect("reopened DataLabel.ShowCategoryName"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_second_label, "Separator", &[])
+                .expect("reopened DataLabel.Separator"),
+            OmValue::Text(" * ".to_string())
         );
     }
 

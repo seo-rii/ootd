@@ -150,6 +150,7 @@ pub struct SeriesModel {
     pub values: Option<ChartSourceExpr>,
     pub bubble_size: Option<ChartSourceExpr>,
     pub data_labels: Option<ChartDataLabelsModel>,
+    pub point_data_labels: BTreeMap<u32, ChartDataLabelsModel>,
     pub order: Option<u32>,
 }
 

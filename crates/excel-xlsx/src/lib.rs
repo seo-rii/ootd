@@ -725,6 +725,7 @@ pub struct ChartSeriesSummary {
     pub bubble_size_ref: Option<String>,
     pub bubble_size_cache: Option<ChartCacheSummary>,
     pub data_labels: Option<ChartDataLabelsSummary>,
+    pub point_data_labels: BTreeMap<u32, ChartDataLabelsSummary>,
     pub order: Option<u32>,
 }
 
@@ -3558,6 +3559,13 @@ fn chart_series_from_summary(
                     .data_labels
                     .as_ref()
                     .map(chart_data_labels_model_from_summary),
+                point_data_labels: series
+                    .point_data_labels
+                    .iter()
+                    .map(|(index, data_labels)| {
+                        (*index, chart_data_labels_model_from_summary(data_labels))
+                    })
+                    .collect(),
                 order: series.order.or_else(|| u32::try_from(index).ok()),
             })
             .collect();
@@ -3573,6 +3581,7 @@ fn chart_series_from_summary(
             values: Some(source_from_ref(reference, None)),
             bubble_size: None,
             data_labels: None,
+            point_data_labels: BTreeMap::new(),
             order: u32::try_from(index).ok(),
         })
         .collect()
@@ -16068,6 +16077,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut active_axis_depth = 0usize;
     let mut axis_title_text_depth = 0usize;
     let mut data_labels_target = None::<ChartDataLabelsTarget>;
+    let mut active_point_data_label_index = None::<u32>;
+    let mut active_point_data_label_depth = 0usize;
     let mut data_label_separator_text = None::<String>;
     let mut data_label_separator_depth = 0usize;
     let mut element_path = Vec::<String>::new();
@@ -16246,7 +16257,30 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .get_or_insert_with(ChartDataLabelsSummary::default);
                     data_labels_target = Some(ChartDataLabelsTarget::Series);
                 }
-                if element_path.last().is_some_and(|name| name == "dLbls") {
+                if local_name == b"dLbl"
+                    && element_path.last().is_some_and(|name| name == "dLbls")
+                    && active_series.is_some()
+                {
+                    active_point_data_label_index = None;
+                    active_point_data_label_depth = 1;
+                } else if active_point_data_label_depth > 0 {
+                    active_point_data_label_depth += 1;
+                }
+                if local_name == b"idx"
+                    && active_point_data_label_depth > 0
+                    && let Some(index) = parse_u32_val_attr(&element, &reader, "data label index")?
+                {
+                    active_point_data_label_index = Some(index);
+                    if let Some(active_series) = active_series.as_mut() {
+                        active_series
+                            .point_data_labels
+                            .entry(index)
+                            .or_insert_with(ChartDataLabelsSummary::default);
+                    }
+                }
+                if element_path.last().is_some_and(|name| name == "dLbls")
+                    || active_point_data_label_index.is_some()
+                {
                     if local_name == b"separator" {
                         data_label_separator_text = Some(String::new());
                         data_label_separator_depth = 1;
@@ -16261,13 +16295,22 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                             | b"showBubbleSize"
                     ) {
                         let value = parse_bool_val_attr(&element, &reader)?.unwrap_or(true);
-                        let data_labels = match data_labels_target {
-                            Some(ChartDataLabelsTarget::Series) => active_series
-                                .as_mut()
-                                .and_then(|series| series.data_labels.as_mut()),
-                            Some(ChartDataLabelsTarget::ChartGroup) | None => Some(
-                                data_labels.get_or_insert_with(ChartDataLabelsSummary::default),
-                            ),
+                        let data_labels = if let Some(index) = active_point_data_label_index {
+                            active_series.as_mut().map(|series| {
+                                series
+                                    .point_data_labels
+                                    .entry(index)
+                                    .or_insert_with(ChartDataLabelsSummary::default)
+                            })
+                        } else {
+                            match data_labels_target {
+                                Some(ChartDataLabelsTarget::Series) => active_series
+                                    .as_mut()
+                                    .and_then(|series| series.data_labels.as_mut()),
+                                Some(ChartDataLabelsTarget::ChartGroup) | None => Some(
+                                    data_labels.get_or_insert_with(ChartDataLabelsSummary::default),
+                                ),
+                            }
                         };
                         let Some(data_labels) = data_labels else {
                             continue;
@@ -16642,6 +16685,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
                     data_labels.get_or_insert_with(ChartDataLabelsSummary::default);
+                    data_labels_target = Some(ChartDataLabelsTarget::ChartGroup);
                 } else if local_name == b"dLbls"
                     && element_path.last().is_some_and(|name| name == "ser")
                     && let Some(active_series) = active_series.as_mut()
@@ -16649,8 +16693,22 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     active_series
                         .data_labels
                         .get_or_insert_with(ChartDataLabelsSummary::default);
+                    data_labels_target = Some(ChartDataLabelsTarget::Series);
                 }
-                if element_path.last().is_some_and(|name| name == "dLbls")
+                if local_name == b"idx"
+                    && active_point_data_label_depth > 0
+                    && let Some(index) = parse_u32_val_attr(&element, &reader, "data label index")?
+                {
+                    active_point_data_label_index = Some(index);
+                    if let Some(active_series) = active_series.as_mut() {
+                        active_series
+                            .point_data_labels
+                            .entry(index)
+                            .or_insert_with(ChartDataLabelsSummary::default);
+                    }
+                }
+                if (element_path.last().is_some_and(|name| name == "dLbls")
+                    || active_point_data_label_index.is_some())
                     && matches!(
                         local_name,
                         b"showLegendKey"
@@ -16663,12 +16721,21 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     )
                 {
                     let value = parse_bool_val_attr(&element, &reader)?.unwrap_or(true);
-                    let data_labels = match data_labels_target {
-                        Some(ChartDataLabelsTarget::Series) => active_series
-                            .as_mut()
-                            .and_then(|series| series.data_labels.as_mut()),
-                        Some(ChartDataLabelsTarget::ChartGroup) | None => {
-                            Some(data_labels.get_or_insert_with(ChartDataLabelsSummary::default))
+                    let data_labels = if let Some(index) = active_point_data_label_index {
+                        active_series.as_mut().map(|series| {
+                            series
+                                .point_data_labels
+                                .entry(index)
+                                .or_insert_with(ChartDataLabelsSummary::default)
+                        })
+                    } else {
+                        match data_labels_target {
+                            Some(ChartDataLabelsTarget::Series) => active_series
+                                .as_mut()
+                                .and_then(|series| series.data_labels.as_mut()),
+                            Some(ChartDataLabelsTarget::ChartGroup) | None => Some(
+                                data_labels.get_or_insert_with(ChartDataLabelsSummary::default),
+                            ),
                         }
                     };
                     let Some(data_labels) = data_labels else {
@@ -17097,24 +17164,40 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         if let Some(separator) = data_label_separator_text.take()
                             && !separator.is_empty()
                         {
-                            match data_labels_target {
-                                Some(ChartDataLabelsTarget::Series) => {
-                                    if let Some(series) = active_series.as_mut() {
-                                        series
-                                            .data_labels
+                            if let Some(index) = active_point_data_label_index {
+                                if let Some(series) = active_series.as_mut() {
+                                    series
+                                        .point_data_labels
+                                        .entry(index)
+                                        .or_insert_with(ChartDataLabelsSummary::default)
+                                        .separator = Some(separator);
+                                }
+                            } else {
+                                match data_labels_target {
+                                    Some(ChartDataLabelsTarget::Series) => {
+                                        if let Some(series) = active_series.as_mut() {
+                                            series
+                                                .data_labels
+                                                .get_or_insert_with(ChartDataLabelsSummary::default)
+                                                .separator = Some(separator);
+                                        }
+                                    }
+                                    Some(ChartDataLabelsTarget::ChartGroup) | None => {
+                                        data_labels
                                             .get_or_insert_with(ChartDataLabelsSummary::default)
                                             .separator = Some(separator);
                                     }
-                                }
-                                Some(ChartDataLabelsTarget::ChartGroup) | None => {
-                                    data_labels
-                                        .get_or_insert_with(ChartDataLabelsSummary::default)
-                                        .separator = Some(separator);
                                 }
                             }
                         }
                     }
                     data_label_separator_depth -= 1;
+                }
+                if active_point_data_label_depth > 0 {
+                    if active_point_data_label_depth == 1 && local_name == b"dLbl" {
+                        active_point_data_label_index = None;
+                    }
+                    active_point_data_label_depth -= 1;
                 }
                 if local_name == b"dLbls" {
                     data_labels_target = None;
@@ -22057,6 +22140,7 @@ mod tests {
                     show_bubble_size: Some(false),
                     separator: Some("; ".to_string()),
                 }),
+                point_data_labels: BTreeMap::new(),
                 order: Some(0),
             }]
         );

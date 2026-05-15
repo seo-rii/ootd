@@ -1197,6 +1197,7 @@ mod tests {
                     }),
                     bubble_size: None,
                     data_labels: None,
+                    point_data_labels: BTreeMap::new(),
                     order: Some(0),
                 }],
                 title: None,
