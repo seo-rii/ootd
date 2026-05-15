@@ -4587,6 +4587,8 @@ impl ExcelRuntime {
                                             _ => unreachable!("axis type validated above"),
                                         },
                                         title: None,
+                                        has_major_gridlines: None,
+                                        has_minor_gridlines: None,
                                     });
                                     true
                                 }
@@ -4976,6 +4978,44 @@ impl ExcelRuntime {
                         };
                         if removed_axis_title {
                             self.stale_axis_title_handles_for_axis(workbook, chart_id, axis_index);
+                        }
+                        Ok(())
+                    }
+                    "HasMajorGridlines" | "HasMinorGridlines" => {
+                        let OmValue::Bool(has_gridlines) = value else {
+                            return Err(OmError::type_mismatch(format!(
+                                "Axis.{member} expects a boolean value"
+                            )));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let axis = chart
+                            .axes
+                            .get_mut(axis_index)
+                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
+                        let target = match member {
+                            "HasMajorGridlines" => &mut axis.has_major_gridlines,
+                            "HasMinorGridlines" => &mut axis.has_minor_gridlines,
+                            _ => unreachable!("matched axis gridline property"),
+                        };
+                        if *target != Some(has_gridlines) {
+                            *target = Some(has_gridlines);
+                            chart.dirty = true;
+                            runtime.dirty = true;
                         }
                         Ok(())
                     }
@@ -13318,6 +13358,8 @@ impl ExcelRuntime {
             }))),
             "AxisGroup" => Ok(OmValue::Number(f64::from(XL_PRIMARY))),
             "HasTitle" => Ok(OmValue::Bool(axis.title.is_some())),
+            "HasMajorGridlines" => Ok(OmValue::Bool(axis.has_major_gridlines == Some(true))),
+            "HasMinorGridlines" => Ok(OmValue::Bool(axis.has_minor_gridlines == Some(true))),
             "AxisTitle" => {
                 if axis.title.is_none() {
                     return Err(OmError::new(OmErrorCode::NotFound, "axis title not found"));
@@ -21860,6 +21902,14 @@ fn patch_loaded_chart_model_xml(
     let mut axis_kinds = Vec::<ChartAxisKind>::new();
     let mut axis_title_texts = Vec::<Option<String>>::new();
     let mut axis_title_text_written = Vec::<bool>::new();
+    let mut axis_major_gridlines_seen = Vec::<bool>::new();
+    let mut axis_major_gridlines_written = Vec::<bool>::new();
+    let mut axis_major_gridlines_inserted = Vec::<bool>::new();
+    let mut axis_major_gridlines_removed = Vec::<bool>::new();
+    let mut axis_minor_gridlines_seen = Vec::<bool>::new();
+    let mut axis_minor_gridlines_written = Vec::<bool>::new();
+    let mut axis_minor_gridlines_inserted = Vec::<bool>::new();
+    let mut axis_minor_gridlines_removed = Vec::<bool>::new();
     let mut current_chart_group_depth = None::<usize>;
     let mut chart_group_axis_refs_seen = Vec::<String>::new();
     let mut skip_depth = 0usize;
@@ -22303,6 +22353,16 @@ fn patch_loaded_chart_model_xml(
             .map_err(runtime_xml_error)?;
         let axis_id = chart_axis_id(axis_index, axis);
         write_chart_axis_ref_element(writer, &axis_id)?;
+        if axis.has_major_gridlines == Some(true) {
+            writer
+                .write_event(Event::Empty(BytesStart::new("c:majorGridlines")))
+                .map_err(runtime_xml_error)?;
+        }
+        if axis.has_minor_gridlines == Some(true) {
+            writer
+                .write_event(Event::Empty(BytesStart::new("c:minorGridlines")))
+                .map_err(runtime_xml_error)?;
+        }
         if let Some(title) = axis.title.as_ref() {
             write_chart_text_element(writer, "c:title", &title.text)?;
         }
@@ -22459,6 +22519,14 @@ fn patch_loaded_chart_model_xml(
                     axis_kinds.push(axis_kind);
                     axis_title_texts.push(None);
                     axis_title_text_written.push(false);
+                    axis_major_gridlines_seen.push(false);
+                    axis_major_gridlines_written.push(false);
+                    axis_major_gridlines_inserted.push(false);
+                    axis_major_gridlines_removed.push(false);
+                    axis_minor_gridlines_seen.push(false);
+                    axis_minor_gridlines_written.push(false);
+                    axis_minor_gridlines_inserted.push(false);
+                    axis_minor_gridlines_removed.push(false);
                 }
                 if local_name.as_slice() == b"title" && parent_name == Some(b"chart".as_slice()) {
                     chart_title_seen = true;
@@ -22606,6 +22674,46 @@ fn patch_loaded_chart_model_xml(
                     }
                     if *expected == Some(true) {
                         chart_group_line_flag_written[flag_index] = true;
+                    }
+                }
+                if matches!(local_name.as_slice(), b"majorGridlines" | b"minorGridlines")
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    let (seen, written, removed, expected) =
+                        if local_name.as_slice() == b"majorGridlines" {
+                            (
+                                &mut axis_major_gridlines_seen,
+                                &mut axis_major_gridlines_written,
+                                &mut axis_major_gridlines_removed,
+                                axis.has_major_gridlines,
+                            )
+                        } else {
+                            (
+                                &mut axis_minor_gridlines_seen,
+                                &mut axis_minor_gridlines_written,
+                                &mut axis_minor_gridlines_removed,
+                                axis.has_minor_gridlines,
+                            )
+                        };
+                    if let Some(seen) = seen.get_mut(axis_index) {
+                        *seen = true;
+                    }
+                    match expected {
+                        Some(false) => {
+                            if let Some(removed) = removed.get_mut(axis_index) {
+                                *removed = true;
+                            }
+                            skip_depth = 1;
+                            buffer.clear();
+                            continue;
+                        }
+                        Some(true) => {
+                            if let Some(written) = written.get_mut(axis_index) {
+                                *written = true;
+                            }
+                        }
+                        None => {}
                     }
                 }
 
@@ -23176,6 +23284,45 @@ fn patch_loaded_chart_model_xml(
                         chart_group_line_flag_written[flag_index] = true;
                     }
                 }
+                if matches!(local_name.as_slice(), b"majorGridlines" | b"minorGridlines")
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    let (seen, written, removed, expected) =
+                        if local_name.as_slice() == b"majorGridlines" {
+                            (
+                                &mut axis_major_gridlines_seen,
+                                &mut axis_major_gridlines_written,
+                                &mut axis_major_gridlines_removed,
+                                axis.has_major_gridlines,
+                            )
+                        } else {
+                            (
+                                &mut axis_minor_gridlines_seen,
+                                &mut axis_minor_gridlines_written,
+                                &mut axis_minor_gridlines_removed,
+                                axis.has_minor_gridlines,
+                            )
+                        };
+                    if let Some(seen) = seen.get_mut(axis_index) {
+                        *seen = true;
+                    }
+                    match expected {
+                        Some(false) => {
+                            if let Some(removed) = removed.get_mut(axis_index) {
+                                *removed = true;
+                            }
+                            buffer.clear();
+                            continue;
+                        }
+                        Some(true) => {
+                            if let Some(written) = written.get_mut(axis_index) {
+                                *written = true;
+                            }
+                        }
+                        None => {}
+                    }
+                }
                 if local_name.as_slice() == b"legendPos"
                     && expected_legend_position.is_some()
                     && element_stack
@@ -23706,17 +23853,49 @@ fn patch_loaded_chart_model_xml(
                 }
                 if chart_axis_kind_from_xml_name(local_name.as_slice()).is_some()
                     && let Some(axis_index) = current_axis_index
-                    && axis_title_texts
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    if axis.has_major_gridlines == Some(true)
+                        && !axis_major_gridlines_seen
+                            .get(axis_index)
+                            .copied()
+                            .unwrap_or(false)
+                    {
+                        writer
+                            .write_event(Event::Empty(BytesStart::new("c:majorGridlines")))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(inserted) = axis_major_gridlines_inserted.get_mut(axis_index) {
+                            *inserted = true;
+                        }
+                        if let Some(written) = axis_major_gridlines_written.get_mut(axis_index) {
+                            *written = true;
+                        }
+                    }
+                    if axis.has_minor_gridlines == Some(true)
+                        && !axis_minor_gridlines_seen
+                            .get(axis_index)
+                            .copied()
+                            .unwrap_or(false)
+                    {
+                        writer
+                            .write_event(Event::Empty(BytesStart::new("c:minorGridlines")))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(inserted) = axis_minor_gridlines_inserted.get_mut(axis_index) {
+                            *inserted = true;
+                        }
+                        if let Some(written) = axis_minor_gridlines_written.get_mut(axis_index) {
+                            *written = true;
+                        }
+                    }
+                    if axis_title_texts
                         .get(axis_index)
                         .is_some_and(|title_text| title_text.is_none())
-                    && let Some(title) = chart
-                        .axes
-                        .get(axis_index)
-                        .and_then(|axis| axis.title.as_ref())
-                {
-                    write_chart_text_element(&mut writer, "c:title", &title.text)?;
-                    if let Some(written) = axis_title_text_written.get_mut(axis_index) {
-                        *written = true;
+                        && let Some(title) = axis.title.as_ref()
+                    {
+                        write_chart_text_element(&mut writer, "c:title", &title.text)?;
+                        if let Some(written) = axis_title_text_written.get_mut(axis_index) {
+                            *written = true;
+                        }
                     }
                 }
                 if local_name.as_slice() == b"plotArea" {
@@ -23726,6 +23905,14 @@ fn patch_loaded_chart_model_xml(
                         axis_kinds.push(axis.kind);
                         axis_title_texts.push(axis.title.as_ref().map(|title| title.text.clone()));
                         axis_title_text_written.push(axis.title.is_some());
+                        axis_major_gridlines_seen.push(axis.has_major_gridlines == Some(true));
+                        axis_major_gridlines_written.push(axis.has_major_gridlines == Some(true));
+                        axis_major_gridlines_inserted.push(axis.has_major_gridlines == Some(true));
+                        axis_major_gridlines_removed.push(false);
+                        axis_minor_gridlines_seen.push(axis.has_minor_gridlines == Some(true));
+                        axis_minor_gridlines_written.push(axis.has_minor_gridlines == Some(true));
+                        axis_minor_gridlines_inserted.push(axis.has_minor_gridlines == Some(true));
+                        axis_minor_gridlines_removed.push(false);
                     }
                 }
                 if chart_type_from_group_name(local_name.as_slice()).is_some()
@@ -24230,6 +24417,55 @@ fn patch_loaded_chart_model_xml(
                         None => title_text.is_none(),
                     }
             });
+    let axis_gridlines_match = chart.axes.iter().enumerate().all(|(axis_index, axis)| {
+        let major_matches = match axis.has_major_gridlines {
+            Some(true) => {
+                axis_major_gridlines_written
+                    .get(axis_index)
+                    .copied()
+                    .unwrap_or(false)
+                    || axis_major_gridlines_inserted
+                        .get(axis_index)
+                        .copied()
+                        .unwrap_or(false)
+            }
+            Some(false) => {
+                !axis_major_gridlines_seen
+                    .get(axis_index)
+                    .copied()
+                    .unwrap_or(false)
+                    || axis_major_gridlines_removed
+                        .get(axis_index)
+                        .copied()
+                        .unwrap_or(false)
+            }
+            None => true,
+        };
+        let minor_matches = match axis.has_minor_gridlines {
+            Some(true) => {
+                axis_minor_gridlines_written
+                    .get(axis_index)
+                    .copied()
+                    .unwrap_or(false)
+                    || axis_minor_gridlines_inserted
+                        .get(axis_index)
+                        .copied()
+                        .unwrap_or(false)
+            }
+            Some(false) => {
+                !axis_minor_gridlines_seen
+                    .get(axis_index)
+                    .copied()
+                    .unwrap_or(false)
+                    || axis_minor_gridlines_removed
+                        .get(axis_index)
+                        .copied()
+                        .unwrap_or(false)
+            }
+            None => true,
+        };
+        major_matches && minor_matches
+    });
 
     if chart_type_matches
         && series_sources_match
@@ -24258,6 +24494,7 @@ fn patch_loaded_chart_model_xml(
         && chart_group_numeric_settings_match
         && chart_group_line_flags_match
         && axes_match
+        && axis_gridlines_match
     {
         Ok(Some(writer.into_inner().into_inner()))
     } else {
@@ -24518,8 +24755,18 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
                     )
                 })
                 .unwrap_or_default();
+            let major_gridlines_xml = if axis.has_major_gridlines == Some(true) {
+                r#"<c:majorGridlines/>"#
+            } else {
+                ""
+            };
+            let minor_gridlines_xml = if axis.has_minor_gridlines == Some(true) {
+                r#"<c:minorGridlines/>"#
+            } else {
+                ""
+            };
             axes_xml.push_str(&format!(
-                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{axis_title_xml}</c:{axis_tag}>"#
+                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{major_gridlines_xml}{minor_gridlines_xml}{axis_title_xml}</c:{axis_tag}>"#
             ));
         }
     }
@@ -24620,11 +24867,15 @@ fn default_chart_axes() -> Vec<AxisModel> {
             raw_id: Some("10".to_string()),
             kind: ChartAxisKind::Category,
             title: None,
+            has_major_gridlines: None,
+            has_minor_gridlines: None,
         },
         AxisModel {
             raw_id: Some("20".to_string()),
             kind: ChartAxisKind::Value,
             title: None,
+            has_major_gridlines: None,
+            has_minor_gridlines: None,
         },
     ]
 }
@@ -86718,6 +86969,174 @@ mod tests {
                 .dispatch_get(reopened_axis_title, "Text", &[])
                 .expect("reopened AxisTitle.Text"),
             OmValue::Text("Fiscal Quarter".to_string())
+        );
+    }
+
+    #[test]
+    fn loaded_chart_axis_gridline_setters_preserve_chart_extensions_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            r#"<c:valAx><c:axId val="20"/><c:title>"#,
+            r#"<c:valAx><c:axId val="20"/><c:majorGridlines/><c:title>"#,
+        )
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:axis-gridlines-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with value axis gridlines");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let value_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.Axes(xlValue)"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "HasMajorGridlines", &[])
+                .expect("Axis.HasMajorGridlines before set"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "HasMinorGridlines", &[])
+                .expect("Axis.HasMinorGridlines before set"),
+            OmValue::Bool(false)
+        );
+        runtime
+            .dispatch_set(value_axis, "HasMajorGridlines", OmValue::Bool(false), &[])
+            .expect("clear Axis.HasMajorGridlines");
+        runtime
+            .dispatch_set(value_axis, "HasMinorGridlines", OmValue::Bool(true), &[])
+            .expect("set Axis.HasMinorGridlines");
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    value_axis,
+                    "HasMajorGridlines",
+                    OmValue::Text("bad".to_string()),
+                    &[]
+                )
+                .expect_err("Axis.HasMajorGridlines rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after axis gridline edits");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:axis-gridlines-preserve"/>"#));
+        assert!(!saved_chart_xml.contains("<c:majorGridlines"));
+        assert!(saved_chart_xml.contains("<c:minorGridlines"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after axis gridline edits");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_value_axis = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("reopened Chart.Axes(xlValue)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_value_axis, "HasMajorGridlines", &[])
+                .expect("reopened Axis.HasMajorGridlines"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_value_axis, "HasMinorGridlines", &[])
+                .expect("reopened Axis.HasMinorGridlines"),
+            OmValue::Bool(true)
         );
     }
 

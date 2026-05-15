@@ -712,6 +712,8 @@ pub struct ChartAxisSummary {
     pub raw_id: Option<String>,
     pub kind: ChartAxisKind,
     pub title_text: Option<String>,
+    pub has_major_gridlines: Option<bool>,
+    pub has_minor_gridlines: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -3202,6 +3204,8 @@ fn build_chart_model_overlay(
                                 .title_text
                                 .as_ref()
                                 .map(|text| ChartText { text: text.clone() }),
+                            has_major_gridlines: axis.has_major_gridlines,
+                            has_minor_gridlines: axis.has_minor_gridlines,
                         })
                         .collect(),
                     raw_part_uri: Some(chart_part_uri.clone()),
@@ -16580,6 +16584,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         raw_id: None,
                         kind,
                         title_text: None,
+                        has_major_gridlines: None,
+                        has_minor_gridlines: None,
                     });
                     active_axis_index = Some(axes.len() - 1);
                     active_axis_depth = 1;
@@ -16592,6 +16598,16 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && axes[axis_index].raw_id.is_none()
                 {
                     axes[axis_index].raw_id = Some(axis_id);
+                }
+                if local_name == b"majorGridlines"
+                    && let Some(axis_index) = active_axis_index
+                {
+                    axes[axis_index].has_major_gridlines = Some(true);
+                }
+                if local_name == b"minorGridlines"
+                    && let Some(axis_index) = active_axis_index
+                {
+                    axes[axis_index].has_minor_gridlines = Some(true);
                 }
                 if local_name == b"ser" && active_series.is_none() {
                     active_series = Some(ChartSeriesSummary::default());
@@ -16752,6 +16768,16 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         b"showBubbleSize" => data_labels.show_bubble_size = Some(value),
                         _ => {}
                     }
+                }
+                if local_name == b"majorGridlines"
+                    && let Some(axis_index) = active_axis_index
+                {
+                    axes[axis_index].has_major_gridlines = Some(true);
+                }
+                if local_name == b"minorGridlines"
+                    && let Some(axis_index) = active_axis_index
+                {
+                    axes[axis_index].has_minor_gridlines = Some(true);
                 }
                 if local_name == b"varyColors"
                     && element_path
@@ -21843,7 +21869,7 @@ mod tests {
         <c:upDownBars/>
       </c:barChart>
       <c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx>
-      <c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx>
+      <c:valAx><c:axId val="20"/><c:majorGridlines/><c:minorGridlines/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx>
     </c:plotArea>
     <c:legend><c:legendPos val="r"/><c:overlay val="1"/></c:legend>
     <c:plotVisOnly val="0"/>
@@ -22100,11 +22126,15 @@ mod tests {
                     raw_id: Some("10".to_string()),
                     kind: ChartAxisKind::Category,
                     title_text: Some("Quarter".to_string()),
+                    has_major_gridlines: None,
+                    has_minor_gridlines: None,
                 },
                 ChartAxisSummary {
                     raw_id: Some("20".to_string()),
                     kind: ChartAxisKind::Value,
                     title_text: Some("Revenue".to_string()),
+                    has_major_gridlines: Some(true),
+                    has_minor_gridlines: Some(true),
                 }
             ]
         );

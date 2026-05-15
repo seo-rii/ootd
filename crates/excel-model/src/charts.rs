@@ -218,6 +218,8 @@ pub struct AxisModel {
     pub raw_id: Option<String>,
     pub kind: ChartAxisKind,
     pub title: Option<ChartText>,
+    pub has_major_gridlines: Option<bool>,
+    pub has_minor_gridlines: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
