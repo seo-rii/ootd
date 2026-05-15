@@ -1,8 +1,9 @@
 use excel_model::{
     AxisModel, ChartAxisKind, ChartDataLabelsModel, ChartDisplayBlanksAs, ChartLegendPosition,
     ChartModel, ChartObjectModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr,
-    ChartSplitType, ChartText, ChartType, DrawingModel, DrawingObjectModel, LegendModel,
-    SeriesModel, WorkbookState, WorksheetData, resolve_chart_source_reference_with_names,
+    ChartSplitType, ChartText, ChartTickLabelPosition, ChartTickMark, ChartType, DrawingModel,
+    DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
+    resolve_chart_source_reference_with_names,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
@@ -137,6 +138,14 @@ const XL_LEGEND_POSITION_CUSTOM: i32 = -4161;
 const XL_LEGEND_POSITION_LEFT: i32 = -4131;
 const XL_LEGEND_POSITION_RIGHT: i32 = -4152;
 const XL_LEGEND_POSITION_TOP: i32 = -4160;
+const XL_TICK_MARK_CROSS: i32 = 4;
+const XL_TICK_MARK_INSIDE: i32 = 2;
+const XL_TICK_MARK_NONE: i32 = -4142;
+const XL_TICK_MARK_OUTSIDE: i32 = 3;
+const XL_TICK_LABEL_POSITION_HIGH: i32 = -4127;
+const XL_TICK_LABEL_POSITION_LOW: i32 = -4134;
+const XL_TICK_LABEL_POSITION_NEXT_TO_AXIS: i32 = 4;
+const XL_TICK_LABEL_POSITION_NONE: i32 = -4142;
 const XL_MOVE_AND_SIZE: i32 = 1;
 const XL_MOVE: i32 = 2;
 const XL_FREE_FLOATING: i32 = 3;
@@ -4602,6 +4611,9 @@ impl ExcelRuntime {
                                         title: None,
                                         has_major_gridlines: None,
                                         has_minor_gridlines: None,
+                                        major_tick_mark: None,
+                                        minor_tick_mark: None,
+                                        tick_label_position: None,
                                         minimum_scale: None,
                                         maximum_scale: None,
                                         major_unit: None,
@@ -5089,6 +5101,74 @@ impl ExcelRuntime {
                                 *target = Some(number);
                                 true
                             }
+                        };
+                        if changed {
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "MajorTickMark" | "MinorTickMark" | "TickLabelPosition" => {
+                        let OmValue::Number(number) = value else {
+                            return Err(OmError::type_mismatch(format!(
+                                "Axis.{member} expects a numeric enum value"
+                            )));
+                        };
+                        if !number.is_finite() || number.fract() != 0.0 {
+                            return Err(OmError::invalid_argument(format!(
+                                "Axis.{member} expects an integral enum value"
+                            )));
+                        }
+                        let value = number as i32;
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let axis = chart
+                            .axes
+                            .get_mut(axis_index)
+                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
+                        let changed = match member {
+                            "MajorTickMark" => {
+                                let tick_mark = chart_tick_mark_from_excel_value(value)?;
+                                if axis.major_tick_mark == Some(tick_mark) {
+                                    false
+                                } else {
+                                    axis.major_tick_mark = Some(tick_mark);
+                                    true
+                                }
+                            }
+                            "MinorTickMark" => {
+                                let tick_mark = chart_tick_mark_from_excel_value(value)?;
+                                if axis.minor_tick_mark == Some(tick_mark) {
+                                    false
+                                } else {
+                                    axis.minor_tick_mark = Some(tick_mark);
+                                    true
+                                }
+                            }
+                            "TickLabelPosition" => {
+                                let position = chart_tick_label_position_from_excel_value(value)?;
+                                if axis.tick_label_position == Some(position) {
+                                    false
+                                } else {
+                                    axis.tick_label_position = Some(position);
+                                    true
+                                }
+                            }
+                            _ => unreachable!("matched axis tick property"),
                         };
                         if changed {
                             chart.dirty = true;
@@ -10240,6 +10320,9 @@ impl ExcelRuntime {
                             | "AxisGroup"
                             | "HasTitle"
                             | "AxisTitle"
+                            | "MajorTickMark"
+                            | "MinorTickMark"
+                            | "TickLabelPosition"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -13561,6 +13644,18 @@ impl ExcelRuntime {
             "HasTitle" => Ok(OmValue::Bool(axis.title.is_some())),
             "HasMajorGridlines" => Ok(OmValue::Bool(axis.has_major_gridlines == Some(true))),
             "HasMinorGridlines" => Ok(OmValue::Bool(axis.has_minor_gridlines == Some(true))),
+            "MajorTickMark" => Ok(OmValue::Number(f64::from(chart_tick_mark_to_excel_value(
+                axis.major_tick_mark.unwrap_or(ChartTickMark::Outside),
+            )))),
+            "MinorTickMark" => Ok(OmValue::Number(f64::from(chart_tick_mark_to_excel_value(
+                axis.minor_tick_mark.unwrap_or(ChartTickMark::None),
+            )))),
+            "TickLabelPosition" => Ok(OmValue::Number(f64::from(
+                chart_tick_label_position_to_excel_value(
+                    axis.tick_label_position
+                        .unwrap_or(ChartTickLabelPosition::NextToAxis),
+                ),
+            ))),
             "MinimumScale" => axis
                 .minimum_scale
                 .map(OmValue::Number)
@@ -21731,6 +21826,66 @@ fn chart_display_blanks_as_from_excel_value(value: i32) -> OmResult<ChartDisplay
     }
 }
 
+fn chart_tick_mark_xml_value(value: ChartTickMark) -> &'static str {
+    match value {
+        ChartTickMark::Cross => "cross",
+        ChartTickMark::Inside => "in",
+        ChartTickMark::None => "none",
+        ChartTickMark::Outside => "out",
+    }
+}
+
+fn chart_tick_mark_to_excel_value(value: ChartTickMark) -> i32 {
+    match value {
+        ChartTickMark::Cross => XL_TICK_MARK_CROSS,
+        ChartTickMark::Inside => XL_TICK_MARK_INSIDE,
+        ChartTickMark::None => XL_TICK_MARK_NONE,
+        ChartTickMark::Outside => XL_TICK_MARK_OUTSIDE,
+    }
+}
+
+fn chart_tick_mark_from_excel_value(value: i32) -> OmResult<ChartTickMark> {
+    match value {
+        XL_TICK_MARK_CROSS => Ok(ChartTickMark::Cross),
+        XL_TICK_MARK_INSIDE => Ok(ChartTickMark::Inside),
+        XL_TICK_MARK_NONE => Ok(ChartTickMark::None),
+        XL_TICK_MARK_OUTSIDE => Ok(ChartTickMark::Outside),
+        _ => Err(OmError::unsupported(
+            "Axis tick mark supports xlTickMarkCross, xlTickMarkInside, xlTickMarkNone, and xlTickMarkOutside",
+        )),
+    }
+}
+
+fn chart_tick_label_position_xml_value(value: ChartTickLabelPosition) -> &'static str {
+    match value {
+        ChartTickLabelPosition::High => "high",
+        ChartTickLabelPosition::Low => "low",
+        ChartTickLabelPosition::NextToAxis => "nextTo",
+        ChartTickLabelPosition::None => "none",
+    }
+}
+
+fn chart_tick_label_position_to_excel_value(value: ChartTickLabelPosition) -> i32 {
+    match value {
+        ChartTickLabelPosition::High => XL_TICK_LABEL_POSITION_HIGH,
+        ChartTickLabelPosition::Low => XL_TICK_LABEL_POSITION_LOW,
+        ChartTickLabelPosition::NextToAxis => XL_TICK_LABEL_POSITION_NEXT_TO_AXIS,
+        ChartTickLabelPosition::None => XL_TICK_LABEL_POSITION_NONE,
+    }
+}
+
+fn chart_tick_label_position_from_excel_value(value: i32) -> OmResult<ChartTickLabelPosition> {
+    match value {
+        XL_TICK_LABEL_POSITION_HIGH => Ok(ChartTickLabelPosition::High),
+        XL_TICK_LABEL_POSITION_LOW => Ok(ChartTickLabelPosition::Low),
+        XL_TICK_LABEL_POSITION_NEXT_TO_AXIS => Ok(ChartTickLabelPosition::NextToAxis),
+        XL_TICK_LABEL_POSITION_NONE => Ok(ChartTickLabelPosition::None),
+        _ => Err(OmError::unsupported(
+            "Axis.TickLabelPosition supports high, low, next to axis, and none",
+        )),
+    }
+}
+
 fn chart_size_represents_xml_value(value: ChartSizeRepresents) -> &'static str {
     match value {
         ChartSizeRepresents::Area => "area",
@@ -22239,6 +22394,18 @@ fn patch_loaded_chart_model_xml(
     let mut axis_minor_gridlines_written = Vec::<bool>::new();
     let mut axis_minor_gridlines_inserted = Vec::<bool>::new();
     let mut axis_minor_gridlines_removed = Vec::<bool>::new();
+    let mut axis_major_tick_mark_seen = Vec::<bool>::new();
+    let mut axis_major_tick_mark_written = Vec::<bool>::new();
+    let mut axis_major_tick_mark_inserted = Vec::<bool>::new();
+    let mut axis_major_tick_mark_removed = Vec::<bool>::new();
+    let mut axis_minor_tick_mark_seen = Vec::<bool>::new();
+    let mut axis_minor_tick_mark_written = Vec::<bool>::new();
+    let mut axis_minor_tick_mark_inserted = Vec::<bool>::new();
+    let mut axis_minor_tick_mark_removed = Vec::<bool>::new();
+    let mut axis_tick_label_position_seen = Vec::<bool>::new();
+    let mut axis_tick_label_position_written = Vec::<bool>::new();
+    let mut axis_tick_label_position_inserted = Vec::<bool>::new();
+    let mut axis_tick_label_position_removed = Vec::<bool>::new();
     let mut axis_scaling_seen = Vec::<bool>::new();
     let mut axis_minimum_scale_seen = Vec::<bool>::new();
     let mut axis_minimum_scale_written = Vec::<bool>::new();
@@ -22631,6 +22798,15 @@ fn patch_loaded_chart_model_xml(
                 .map_err(runtime_xml_error)?;
             Ok(())
         };
+    let write_chart_string_val_element =
+        |writer: &mut Writer<Cursor<Vec<u8>>>, element_name: &str, value: &str| -> OmResult<()> {
+            let mut element = BytesStart::new(element_name);
+            element.push_attribute(("val", value));
+            writer
+                .write_event(Event::Empty(element))
+                .map_err(runtime_xml_error)?;
+            Ok(())
+        };
     let write_chart_axis_scaling_element =
         |writer: &mut Writer<Cursor<Vec<u8>>>, axis: &AxisModel| -> OmResult<()> {
             if axis.minimum_scale.is_none() && axis.maximum_scale.is_none() {
@@ -22741,6 +22917,27 @@ fn patch_loaded_chart_model_xml(
         }
         if let Some(title) = axis.title.as_ref() {
             write_chart_text_element(writer, "c:title", &title.text)?;
+        }
+        if let Some(value) = axis.major_tick_mark {
+            write_chart_string_val_element(
+                writer,
+                "c:majorTickMark",
+                chart_tick_mark_xml_value(value),
+            )?;
+        }
+        if let Some(value) = axis.minor_tick_mark {
+            write_chart_string_val_element(
+                writer,
+                "c:minorTickMark",
+                chart_tick_mark_xml_value(value),
+            )?;
+        }
+        if let Some(value) = axis.tick_label_position {
+            write_chart_string_val_element(
+                writer,
+                "c:tickLblPos",
+                chart_tick_label_position_xml_value(value),
+            )?;
         }
         if let Some(value) = axis.major_unit {
             write_chart_val_element(writer, "c:majorUnit", value)?;
@@ -22909,6 +23106,18 @@ fn patch_loaded_chart_model_xml(
                     axis_minor_gridlines_written.push(false);
                     axis_minor_gridlines_inserted.push(false);
                     axis_minor_gridlines_removed.push(false);
+                    axis_major_tick_mark_seen.push(false);
+                    axis_major_tick_mark_written.push(false);
+                    axis_major_tick_mark_inserted.push(false);
+                    axis_major_tick_mark_removed.push(false);
+                    axis_minor_tick_mark_seen.push(false);
+                    axis_minor_tick_mark_written.push(false);
+                    axis_minor_tick_mark_inserted.push(false);
+                    axis_minor_tick_mark_removed.push(false);
+                    axis_tick_label_position_seen.push(false);
+                    axis_tick_label_position_written.push(false);
+                    axis_tick_label_position_inserted.push(false);
+                    axis_tick_label_position_removed.push(false);
                     axis_scaling_seen.push(false);
                     axis_minimum_scale_seen.push(false);
                     axis_minimum_scale_written.push(false);
@@ -23498,6 +23707,58 @@ fn patch_loaded_chart_model_xml(
                         continue;
                     }
                 } else if !wrote_start_element
+                    && matches!(
+                        local_name.as_slice(),
+                        b"majorTickMark" | b"minorTickMark" | b"tickLblPos"
+                    )
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    let (seen, written, removed, expected) = match local_name.as_slice() {
+                        b"majorTickMark" => (
+                            &mut axis_major_tick_mark_seen,
+                            &mut axis_major_tick_mark_written,
+                            &mut axis_major_tick_mark_removed,
+                            axis.major_tick_mark.map(chart_tick_mark_xml_value),
+                        ),
+                        b"minorTickMark" => (
+                            &mut axis_minor_tick_mark_seen,
+                            &mut axis_minor_tick_mark_written,
+                            &mut axis_minor_tick_mark_removed,
+                            axis.minor_tick_mark.map(chart_tick_mark_xml_value),
+                        ),
+                        b"tickLblPos" => (
+                            &mut axis_tick_label_position_seen,
+                            &mut axis_tick_label_position_written,
+                            &mut axis_tick_label_position_removed,
+                            axis.tick_label_position
+                                .map(chart_tick_label_position_xml_value),
+                        ),
+                        _ => unreachable!("matched axis tick property"),
+                    };
+                    if let Some(seen) = seen.get_mut(axis_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = expected {
+                        writer
+                            .write_event(Event::Start(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value,
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = written.get_mut(axis_index) {
+                            *written = true;
+                        }
+                    } else {
+                        if let Some(removed) = removed.get_mut(axis_index) {
+                            *removed = true;
+                        }
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    }
+                } else if !wrote_start_element
                     && let Some((setting_index, (_, _, Some(value)))) =
                         expected_chart_group_numeric_settings
                             .iter()
@@ -23635,6 +23896,54 @@ fn patch_loaded_chart_model_xml(
                                 &element,
                                 reader.decoder(),
                                 value.as_str(),
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = written.get_mut(axis_index) {
+                            *written = true;
+                        }
+                    } else if let Some(removed) = removed.get_mut(axis_index) {
+                        *removed = true;
+                    }
+                    buffer.clear();
+                    continue;
+                }
+                if matches!(
+                    local_name.as_slice(),
+                    b"majorTickMark" | b"minorTickMark" | b"tickLblPos"
+                ) && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    let (seen, written, removed, expected) = match local_name.as_slice() {
+                        b"majorTickMark" => (
+                            &mut axis_major_tick_mark_seen,
+                            &mut axis_major_tick_mark_written,
+                            &mut axis_major_tick_mark_removed,
+                            axis.major_tick_mark.map(chart_tick_mark_xml_value),
+                        ),
+                        b"minorTickMark" => (
+                            &mut axis_minor_tick_mark_seen,
+                            &mut axis_minor_tick_mark_written,
+                            &mut axis_minor_tick_mark_removed,
+                            axis.minor_tick_mark.map(chart_tick_mark_xml_value),
+                        ),
+                        b"tickLblPos" => (
+                            &mut axis_tick_label_position_seen,
+                            &mut axis_tick_label_position_written,
+                            &mut axis_tick_label_position_removed,
+                            axis.tick_label_position
+                                .map(chart_tick_label_position_xml_value),
+                        ),
+                        _ => unreachable!("matched axis tick property"),
+                    };
+                    if let Some(seen) = seen.get_mut(axis_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = expected {
+                        writer
+                            .write_event(Event::Empty(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value,
                             )?))
                             .map_err(runtime_xml_error)?;
                         if let Some(written) = written.get_mut(axis_index) {
@@ -24566,6 +24875,76 @@ fn patch_loaded_chart_model_xml(
                             *written = true;
                         }
                     }
+                    if axis.major_tick_mark.is_some()
+                        && !axis_major_tick_mark_seen
+                            .get(axis_index)
+                            .copied()
+                            .unwrap_or(false)
+                    {
+                        if let Some(value) = axis.major_tick_mark {
+                            write_chart_string_val_element(
+                                &mut writer,
+                                "c:majorTickMark",
+                                chart_tick_mark_xml_value(value),
+                            )?;
+                            if let Some(inserted) =
+                                axis_major_tick_mark_inserted.get_mut(axis_index)
+                            {
+                                *inserted = true;
+                            }
+                            if let Some(written) = axis_major_tick_mark_written.get_mut(axis_index)
+                            {
+                                *written = true;
+                            }
+                        }
+                    }
+                    if axis.minor_tick_mark.is_some()
+                        && !axis_minor_tick_mark_seen
+                            .get(axis_index)
+                            .copied()
+                            .unwrap_or(false)
+                    {
+                        if let Some(value) = axis.minor_tick_mark {
+                            write_chart_string_val_element(
+                                &mut writer,
+                                "c:minorTickMark",
+                                chart_tick_mark_xml_value(value),
+                            )?;
+                            if let Some(inserted) =
+                                axis_minor_tick_mark_inserted.get_mut(axis_index)
+                            {
+                                *inserted = true;
+                            }
+                            if let Some(written) = axis_minor_tick_mark_written.get_mut(axis_index)
+                            {
+                                *written = true;
+                            }
+                        }
+                    }
+                    if axis.tick_label_position.is_some()
+                        && !axis_tick_label_position_seen
+                            .get(axis_index)
+                            .copied()
+                            .unwrap_or(false)
+                    {
+                        if let Some(value) = axis.tick_label_position {
+                            write_chart_string_val_element(
+                                &mut writer,
+                                "c:tickLblPos",
+                                chart_tick_label_position_xml_value(value),
+                            )?;
+                            if let Some(inserted) =
+                                axis_tick_label_position_inserted.get_mut(axis_index)
+                            {
+                                *inserted = true;
+                            }
+                            if let Some(written) =
+                                axis_tick_label_position_written.get_mut(axis_index)
+                            {
+                                *written = true;
+                            }
+                        }
+                    }
                     if axis.major_unit.is_some()
                         && !axis_major_unit_seen
                             .get(axis_index)
@@ -24614,6 +24993,18 @@ fn patch_loaded_chart_model_xml(
                         axis_minor_gridlines_written.push(axis.has_minor_gridlines == Some(true));
                         axis_minor_gridlines_inserted.push(axis.has_minor_gridlines == Some(true));
                         axis_minor_gridlines_removed.push(false);
+                        axis_major_tick_mark_seen.push(axis.major_tick_mark.is_some());
+                        axis_major_tick_mark_written.push(axis.major_tick_mark.is_some());
+                        axis_major_tick_mark_inserted.push(axis.major_tick_mark.is_some());
+                        axis_major_tick_mark_removed.push(false);
+                        axis_minor_tick_mark_seen.push(axis.minor_tick_mark.is_some());
+                        axis_minor_tick_mark_written.push(axis.minor_tick_mark.is_some());
+                        axis_minor_tick_mark_inserted.push(axis.minor_tick_mark.is_some());
+                        axis_minor_tick_mark_removed.push(false);
+                        axis_tick_label_position_seen.push(axis.tick_label_position.is_some());
+                        axis_tick_label_position_written.push(axis.tick_label_position.is_some());
+                        axis_tick_label_position_inserted.push(axis.tick_label_position.is_some());
+                        axis_tick_label_position_removed.push(false);
                         let has_scaling =
                             axis.minimum_scale.is_some() || axis.maximum_scale.is_some();
                         axis_scaling_seen.push(has_scaling);
@@ -25155,6 +25546,21 @@ fn patch_loaded_chart_model_xml(
             }
         }
     };
+    let axis_optional_field_matches = |axis_index: usize,
+                                       expected: bool,
+                                       seen: &[bool],
+                                       written: &[bool],
+                                       inserted: &[bool],
+                                       removed: &[bool]|
+     -> bool {
+        if expected {
+            written.get(axis_index).copied().unwrap_or(false)
+                || inserted.get(axis_index).copied().unwrap_or(false)
+        } else {
+            !seen.get(axis_index).copied().unwrap_or(false)
+                || removed.get(axis_index).copied().unwrap_or(false)
+        }
+    };
     let axis_scale_units_match = chart.axes.iter().enumerate().all(|(axis_index, axis)| {
         axis_numeric_field_matches(
             axis_index,
@@ -25184,6 +25590,30 @@ fn patch_loaded_chart_model_xml(
             &axis_minor_unit_written,
             &axis_minor_unit_inserted,
             &axis_minor_unit_removed,
+        )
+    });
+    let axis_tick_settings_match = chart.axes.iter().enumerate().all(|(axis_index, axis)| {
+        axis_optional_field_matches(
+            axis_index,
+            axis.major_tick_mark.is_some(),
+            &axis_major_tick_mark_seen,
+            &axis_major_tick_mark_written,
+            &axis_major_tick_mark_inserted,
+            &axis_major_tick_mark_removed,
+        ) && axis_optional_field_matches(
+            axis_index,
+            axis.minor_tick_mark.is_some(),
+            &axis_minor_tick_mark_seen,
+            &axis_minor_tick_mark_written,
+            &axis_minor_tick_mark_inserted,
+            &axis_minor_tick_mark_removed,
+        ) && axis_optional_field_matches(
+            axis_index,
+            axis.tick_label_position.is_some(),
+            &axis_tick_label_position_seen,
+            &axis_tick_label_position_written,
+            &axis_tick_label_position_inserted,
+            &axis_tick_label_position_removed,
         )
     });
     let axis_gridlines_match = chart.axes.iter().enumerate().all(|(axis_index, axis)| {
@@ -25264,6 +25694,7 @@ fn patch_loaded_chart_model_xml(
         && chart_group_line_flags_match
         && axes_match
         && axis_scale_units_match
+        && axis_tick_settings_match
         && axis_gridlines_match
     {
         Ok(Some(writer.into_inner().into_inner()))
@@ -25552,6 +25983,33 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             } else {
                 ""
             };
+            let major_tick_mark_xml = axis
+                .major_tick_mark
+                .map(|value| {
+                    format!(
+                        r#"<c:majorTickMark val="{}"/>"#,
+                        chart_tick_mark_xml_value(value)
+                    )
+                })
+                .unwrap_or_default();
+            let minor_tick_mark_xml = axis
+                .minor_tick_mark
+                .map(|value| {
+                    format!(
+                        r#"<c:minorTickMark val="{}"/>"#,
+                        chart_tick_mark_xml_value(value)
+                    )
+                })
+                .unwrap_or_default();
+            let tick_label_position_xml = axis
+                .tick_label_position
+                .map(|value| {
+                    format!(
+                        r#"<c:tickLblPos val="{}"/>"#,
+                        chart_tick_label_position_xml_value(value)
+                    )
+                })
+                .unwrap_or_default();
             let major_unit_xml = axis
                 .major_unit
                 .map(|value| format!(r#"<c:majorUnit val="{}"/>"#, chart_number_xml_value(value)))
@@ -25561,7 +26019,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
                 .map(|value| format!(r#"<c:minorUnit val="{}"/>"#, chart_number_xml_value(value)))
                 .unwrap_or_default();
             axes_xml.push_str(&format!(
-                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{scaling_xml}{major_gridlines_xml}{minor_gridlines_xml}{axis_title_xml}{major_unit_xml}{minor_unit_xml}</c:{axis_tag}>"#
+                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{scaling_xml}{major_gridlines_xml}{minor_gridlines_xml}{axis_title_xml}{major_tick_mark_xml}{minor_tick_mark_xml}{tick_label_position_xml}{major_unit_xml}{minor_unit_xml}</c:{axis_tag}>"#
             ));
         }
     }
@@ -25664,6 +26122,9 @@ fn default_chart_axes() -> Vec<AxisModel> {
             title: None,
             has_major_gridlines: None,
             has_minor_gridlines: None,
+            major_tick_mark: None,
+            minor_tick_mark: None,
+            tick_label_position: None,
             minimum_scale: None,
             maximum_scale: None,
             major_unit: None,
@@ -25675,6 +26136,9 @@ fn default_chart_axes() -> Vec<AxisModel> {
             title: None,
             has_major_gridlines: None,
             has_minor_gridlines: None,
+            major_tick_mark: None,
+            minor_tick_mark: None,
+            tick_label_position: None,
             minimum_scale: None,
             maximum_scale: None,
             major_unit: None,
@@ -88247,6 +88711,267 @@ mod tests {
                 .expect_err("auto minor unit has no explicit value")
                 .code,
             OmErrorCode::NotFound
+        );
+    }
+
+    #[test]
+    fn loaded_chart_axis_tick_setters_preserve_chart_extensions_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            r#"</c:title></c:valAx>"#,
+            r#"</c:title><c:majorTickMark val="out"/><c:minorTickMark val="cross"/><c:tickLblPos val="nextTo"/></c:valAx>"#,
+        )
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:axis-ticks-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with value axis ticks");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let category_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.Axes(xlCategory)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(category_axis, "MajorTickMark", &[])
+                    .expect("default Axis.MajorTickMark")
+            ),
+            f64::from(super::XL_TICK_MARK_OUTSIDE)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(category_axis, "MinorTickMark", &[])
+                    .expect("default Axis.MinorTickMark")
+            ),
+            f64::from(super::XL_TICK_MARK_NONE)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(category_axis, "TickLabelPosition", &[])
+                    .expect("default Axis.TickLabelPosition")
+            ),
+            f64::from(super::XL_TICK_LABEL_POSITION_NEXT_TO_AXIS)
+        );
+
+        let value_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.Axes(xlValue)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(value_axis, "MajorTickMark", &[])
+                    .expect("Axis.MajorTickMark before set")
+            ),
+            f64::from(super::XL_TICK_MARK_OUTSIDE)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(value_axis, "MinorTickMark", &[])
+                    .expect("Axis.MinorTickMark before set")
+            ),
+            f64::from(super::XL_TICK_MARK_CROSS)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(value_axis, "TickLabelPosition", &[])
+                    .expect("Axis.TickLabelPosition before set")
+            ),
+            f64::from(super::XL_TICK_LABEL_POSITION_NEXT_TO_AXIS)
+        );
+
+        runtime
+            .dispatch_set(
+                value_axis,
+                "MajorTickMark",
+                OmValue::Number(f64::from(super::XL_TICK_MARK_INSIDE)),
+                &[],
+            )
+            .expect("set Axis.MajorTickMark");
+        runtime
+            .dispatch_set(
+                value_axis,
+                "MinorTickMark",
+                OmValue::Number(f64::from(super::XL_TICK_MARK_NONE)),
+                &[],
+            )
+            .expect("set Axis.MinorTickMark");
+        runtime
+            .dispatch_set(
+                value_axis,
+                "TickLabelPosition",
+                OmValue::Number(f64::from(super::XL_TICK_LABEL_POSITION_HIGH)),
+                &[],
+            )
+            .expect("set Axis.TickLabelPosition");
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    value_axis,
+                    "MajorTickMark",
+                    OmValue::Text("bad".to_string()),
+                    &[]
+                )
+                .expect_err("Axis.MajorTickMark rejects non-number")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(value_axis, "TickLabelPosition", OmValue::Number(1.5), &[])
+                .expect_err("Axis.TickLabelPosition rejects fractional value")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(value_axis, "MinorTickMark", OmValue::Number(999.0), &[])
+                .expect_err("Axis.MinorTickMark rejects unsupported enum")
+                .code,
+            OmErrorCode::Unsupported
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after axis tick edits");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:axis-ticks-preserve"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:majorTickMark val="in"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:minorTickMark val="none"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:tickLblPos val="high"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:minorTickMark val="cross"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after axis tick edits");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_value_axis = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("reopened Chart.Axes(xlValue)"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_value_axis, "MajorTickMark", &[])
+                    .expect("reopened Axis.MajorTickMark")
+            ),
+            f64::from(super::XL_TICK_MARK_INSIDE)
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_value_axis, "MinorTickMark", &[])
+                    .expect("reopened Axis.MinorTickMark")
+            ),
+            f64::from(super::XL_TICK_MARK_NONE)
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_value_axis, "TickLabelPosition", &[])
+                    .expect("reopened Axis.TickLabelPosition")
+            ),
+            f64::from(super::XL_TICK_LABEL_POSITION_HIGH)
         );
     }
 

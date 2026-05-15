@@ -220,6 +220,9 @@ pub struct AxisModel {
     pub title: Option<ChartText>,
     pub has_major_gridlines: Option<bool>,
     pub has_minor_gridlines: Option<bool>,
+    pub major_tick_mark: Option<ChartTickMark>,
+    pub minor_tick_mark: Option<ChartTickMark>,
+    pub tick_label_position: Option<ChartTickLabelPosition>,
     pub minimum_scale: Option<f64>,
     pub maximum_scale: Option<f64>,
     pub major_unit: Option<f64>,
@@ -232,6 +235,22 @@ pub enum ChartAxisKind {
     Value,
     Date,
     Series,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartTickMark {
+    Cross,
+    Inside,
+    None,
+    Outside,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartTickLabelPosition {
+    High,
+    Low,
+    NextToAxis,
+    None,
 }
 
 #[derive(Debug, Clone, PartialEq)]

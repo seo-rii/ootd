@@ -5,9 +5,9 @@ use excel_model::{
     AxisModel, CellData, ChartAxisKind, ChartCacheKind, ChartCacheSnapshot,
     ChartCellMarkerXmlAttrs, ChartDataLabelsModel, ChartDisplayBlanksAs, ChartLegendPosition,
     ChartMarkerXmlAttrs, ChartModel, ChartObjectModel, ChartSheetBinding, ChartSizeRepresents,
-    ChartSourceExpr, ChartSplitType, ChartText, ChartType, DefinedNameTable, DrawingModel,
-    DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
-    resolve_chart_source_reference_with_names,
+    ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition, ChartTickMark, ChartType,
+    DefinedNameTable, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState,
+    WorksheetData, resolve_chart_source_reference_with_names,
 };
 use office_common::{
     AbsoluteAnchor, CellError, CellMarker, CellValue, ChartId, ChartObjectId, DefinedName,
@@ -714,6 +714,9 @@ pub struct ChartAxisSummary {
     pub title_text: Option<String>,
     pub has_major_gridlines: Option<bool>,
     pub has_minor_gridlines: Option<bool>,
+    pub major_tick_mark: Option<ChartTickMark>,
+    pub minor_tick_mark: Option<ChartTickMark>,
+    pub tick_label_position: Option<ChartTickLabelPosition>,
     pub minimum_scale: Option<f64>,
     pub maximum_scale: Option<f64>,
     pub major_unit: Option<f64>,
@@ -3210,6 +3213,9 @@ fn build_chart_model_overlay(
                                 .map(|text| ChartText { text: text.clone() }),
                             has_major_gridlines: axis.has_major_gridlines,
                             has_minor_gridlines: axis.has_minor_gridlines,
+                            major_tick_mark: axis.major_tick_mark,
+                            minor_tick_mark: axis.minor_tick_mark,
+                            tick_label_position: axis.tick_label_position,
                             minimum_scale: axis.minimum_scale,
                             maximum_scale: axis.maximum_scale,
                             major_unit: axis.major_unit,
@@ -16189,6 +16195,28 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
             Some(_) | None => current,
         })
     };
+    let parse_tick_mark = |element: &BytesStart<'_>,
+                           reader: &Reader<Cursor<&[u8]>>|
+     -> OmResult<Option<ChartTickMark>> {
+        Ok(match parse_string_val_attr(element, reader)?.as_deref() {
+            Some("cross") => Some(ChartTickMark::Cross),
+            Some("in") => Some(ChartTickMark::Inside),
+            Some("none") => Some(ChartTickMark::None),
+            Some("out") => Some(ChartTickMark::Outside),
+            Some(_) | None => None,
+        })
+    };
+    let parse_tick_label_position = |element: &BytesStart<'_>,
+                                     reader: &Reader<Cursor<&[u8]>>|
+     -> OmResult<Option<ChartTickLabelPosition>> {
+        Ok(match parse_string_val_attr(element, reader)?.as_deref() {
+            Some("high") => Some(ChartTickLabelPosition::High),
+            Some("low") => Some(ChartTickLabelPosition::Low),
+            Some("nextTo") => Some(ChartTickLabelPosition::NextToAxis),
+            Some("none") => Some(ChartTickLabelPosition::None),
+            Some(_) | None => None,
+        })
+    };
 
     let detect_series_formula_slot = |path: &[String]| -> Option<ChartSeriesFormulaSlot> {
         let series_position = path.iter().rposition(|name| name == "ser")?;
@@ -16594,6 +16622,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         title_text: None,
                         has_major_gridlines: None,
                         has_minor_gridlines: None,
+                        major_tick_mark: None,
+                        minor_tick_mark: None,
+                        tick_label_position: None,
                         minimum_scale: None,
                         maximum_scale: None,
                         major_unit: None,
@@ -16620,6 +16651,24 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(axis_index) = active_axis_index
                 {
                     axes[axis_index].has_minor_gridlines = Some(true);
+                }
+                if local_name == b"majorTickMark"
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) = parse_tick_mark(&element, &reader)?
+                {
+                    axes[axis_index].major_tick_mark = Some(value);
+                }
+                if local_name == b"minorTickMark"
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) = parse_tick_mark(&element, &reader)?
+                {
+                    axes[axis_index].minor_tick_mark = Some(value);
+                }
+                if local_name == b"tickLblPos"
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) = parse_tick_label_position(&element, &reader)?
+                {
+                    axes[axis_index].tick_label_position = Some(value);
                 }
                 if local_name == b"min"
                     && element_path.last().is_some_and(|name| name == "scaling")
@@ -16818,6 +16867,24 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(axis_index) = active_axis_index
                 {
                     axes[axis_index].has_minor_gridlines = Some(true);
+                }
+                if local_name == b"majorTickMark"
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) = parse_tick_mark(&element, &reader)?
+                {
+                    axes[axis_index].major_tick_mark = Some(value);
+                }
+                if local_name == b"minorTickMark"
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) = parse_tick_mark(&element, &reader)?
+                {
+                    axes[axis_index].minor_tick_mark = Some(value);
+                }
+                if local_name == b"tickLblPos"
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) = parse_tick_label_position(&element, &reader)?
+                {
+                    axes[axis_index].tick_label_position = Some(value);
                 }
                 if local_name == b"min"
                     && element_path.last().is_some_and(|name| name == "scaling")
@@ -20871,13 +20938,14 @@ mod tests {
     use super::{
         BorderSummary, COMMENTS_RELATIONSHIP_TYPE, CellData, ChartAxisKind, ChartAxisSummary,
         ChartCacheKindSummary, ChartCacheSummary, ChartDataLabelsSummary, ChartLegendPosition,
-        ChartSeriesSummary, ChartSupportRelationshipBinding, CommentPartSummary, DrawingAnchorKind,
-        DrawingAnchorSummary, DrawingCellMarkerSummary, DrawingPointSummary, DrawingSizeSummary,
-        DxfSummary, FileFormat, FillSummary, FontSummary, HYPERLINK_RELATIONSHIP_TYPE, OpcPackage,
-        STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE, VML_DRAWING_RELATIONSHIP_TYPE,
-        WORKBOOK_RELS_PART_NAME, WorksheetCommentSummary, WorksheetData, WorksheetHyperlinkBinding,
-        WorksheetHyperlinkSummary, WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec,
-        chart_object_anchor_xml, collect_support_part_dimension_coords, compute_dimension_ref,
+        ChartSeriesSummary, ChartSupportRelationshipBinding, ChartTickLabelPosition, ChartTickMark,
+        CommentPartSummary, DrawingAnchorKind, DrawingAnchorSummary, DrawingCellMarkerSummary,
+        DrawingPointSummary, DrawingSizeSummary, DxfSummary, FileFormat, FillSummary, FontSummary,
+        HYPERLINK_RELATIONSHIP_TYPE, OpcPackage, STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE,
+        VML_DRAWING_RELATIONSHIP_TYPE, WORKBOOK_RELS_PART_NAME, WorksheetCommentSummary,
+        WorksheetData, WorksheetHyperlinkBinding, WorksheetHyperlinkSummary,
+        WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml,
+        collect_support_part_dimension_coords, compute_dimension_ref,
         compute_dimension_ref_with_preserved, parse_shared_strings, parse_workbook,
         parse_workbook_relationships, parse_worksheet_cells, rewrite_worksheet_xml,
     };
@@ -21936,8 +22004,8 @@ mod tests {
         <c:hiLowLines/>
         <c:upDownBars/>
       </c:barChart>
-      <c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx>
-      <c:valAx><c:axId val="20"/><c:scaling><c:min val="0"/><c:max val="1000"/></c:scaling><c:majorGridlines/><c:minorGridlines/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title><c:majorUnit val="250"/><c:minorUnit val="50"/></c:valAx>
+      <c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/></c:catAx>
+      <c:valAx><c:axId val="20"/><c:scaling><c:min val="0"/><c:max val="1000"/></c:scaling><c:majorGridlines/><c:minorGridlines/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title><c:majorTickMark val="cross"/><c:minorTickMark val="in"/><c:tickLblPos val="low"/><c:majorUnit val="250"/><c:minorUnit val="50"/></c:valAx>
     </c:plotArea>
     <c:legend><c:legendPos val="r"/><c:overlay val="1"/></c:legend>
     <c:plotVisOnly val="0"/>
@@ -22196,6 +22264,9 @@ mod tests {
                     title_text: Some("Quarter".to_string()),
                     has_major_gridlines: None,
                     has_minor_gridlines: None,
+                    major_tick_mark: Some(ChartTickMark::Outside),
+                    minor_tick_mark: Some(ChartTickMark::None),
+                    tick_label_position: Some(ChartTickLabelPosition::NextToAxis),
                     minimum_scale: None,
                     maximum_scale: None,
                     major_unit: None,
@@ -22207,6 +22278,9 @@ mod tests {
                     title_text: Some("Revenue".to_string()),
                     has_major_gridlines: Some(true),
                     has_minor_gridlines: Some(true),
+                    major_tick_mark: Some(ChartTickMark::Cross),
+                    minor_tick_mark: Some(ChartTickMark::Inside),
+                    tick_label_position: Some(ChartTickLabelPosition::Low),
                     minimum_scale: Some(0.0),
                     maximum_scale: Some(1000.0),
                     major_unit: Some(250.0),
