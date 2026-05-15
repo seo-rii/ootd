@@ -535,6 +535,12 @@ enum RuntimeObjectKind {
         chart_id: ChartId,
         axis_index: usize,
     },
+    Gridlines {
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        axis_index: usize,
+        major: bool,
+    },
     SeriesCollection {
         workbook: WorkbookHandle,
         chart_id: ChartId,
@@ -1963,6 +1969,12 @@ impl ExcelRuntime {
                 chart_id,
                 axis_index,
             } => self.dispatch_get_axis_title(workbook, chart_id, axis_index, member, args),
+            RuntimeObjectKind::Gridlines {
+                workbook,
+                chart_id,
+                axis_index,
+                major,
+            } => self.dispatch_get_gridlines(workbook, chart_id, axis_index, major, member, args),
             RuntimeObjectKind::SeriesCollection { workbook, chart_id } => {
                 self.dispatch_get_series_collection(workbook, chart_id, member, args)
             }
@@ -3570,6 +3582,7 @@ impl ExcelRuntime {
                 }
             }
             RuntimeObjectKind::PlotArea { .. }
+            | RuntimeObjectKind::Gridlines { .. }
             | RuntimeObjectKind::ChartGroups { .. }
             | RuntimeObjectKind::Axes { .. }
             | RuntimeObjectKind::SeriesCollection { .. }
@@ -4987,35 +5000,38 @@ impl ExcelRuntime {
                                 "Axis.{member} expects a boolean value"
                             )));
                         };
-                        let runtime = self.runtime_workbook_mut(workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
-                        }
-                        let chart =
-                            runtime
-                                .loaded
-                                .state
-                                .charts
-                                .get_mut(&chart_id)
-                                .ok_or_else(|| {
-                                    OmError::new(OmErrorCode::NotFound, "chart not found")
-                                })?;
-                        let axis = chart
-                            .axes
-                            .get_mut(axis_index)
-                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
-                        let target = match member {
-                            "HasMajorGridlines" => &mut axis.has_major_gridlines,
-                            "HasMinorGridlines" => &mut axis.has_minor_gridlines,
-                            _ => unreachable!("matched axis gridline property"),
+                        let major = member == "HasMajorGridlines";
+                        let removed_gridlines = {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            let axis = chart.axes.get_mut(axis_index).ok_or_else(|| {
+                                OmError::new(OmErrorCode::NotFound, "axis not found")
+                            })?;
+                            let target = match member {
+                                "HasMajorGridlines" => &mut axis.has_major_gridlines,
+                                "HasMinorGridlines" => &mut axis.has_minor_gridlines,
+                                _ => unreachable!("matched axis gridline property"),
+                            };
+                            let changed = *target != Some(has_gridlines);
+                            if changed {
+                                *target = Some(has_gridlines);
+                                chart.dirty = true;
+                                runtime.dirty = true;
+                            }
+                            changed && !has_gridlines
                         };
-                        if *target != Some(has_gridlines) {
-                            *target = Some(has_gridlines);
-                            chart.dirty = true;
-                            runtime.dirty = true;
+                        if removed_gridlines {
+                            self.stale_gridline_handles_for_axis(
+                                workbook, chart_id, axis_index, major,
+                            );
                         }
                         Ok(())
                     }
@@ -9725,6 +9741,74 @@ impl ExcelRuntime {
                     "DataLabel.{member} is not implemented as a method"
                 ))),
             },
+            RuntimeObjectKind::Gridlines {
+                workbook,
+                chart_id,
+                axis_index,
+                major,
+            } => {
+                match member {
+                    "Select" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "Gridlines.Select does not accept arguments",
+                            ));
+                        }
+                        let axis = self.axis_model(workbook, chart_id, axis_index)?;
+                        let has_gridlines = if major {
+                            axis.has_major_gridlines
+                        } else {
+                            axis.has_minor_gridlines
+                        };
+                        if has_gridlines != Some(true) {
+                            return Err(OmError::new(OmErrorCode::NotFound, "gridlines not found"));
+                        }
+                        let chart = self.register_chart_handle(workbook, chart_id);
+                        self.dispatch_invoke(chart, "Select", &[])
+                    }
+                    "Delete" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "Gridlines.Delete does not accept arguments",
+                            ));
+                        }
+                        {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            let axis = chart.axes.get_mut(axis_index).ok_or_else(|| {
+                                OmError::new(OmErrorCode::NotFound, "axis not found")
+                            })?;
+                            let target = if major {
+                                &mut axis.has_major_gridlines
+                            } else {
+                                &mut axis.has_minor_gridlines
+                            };
+                            if *target != Some(true) {
+                                return Err(OmError::new(
+                                    OmErrorCode::NotFound,
+                                    "gridlines not found",
+                                ));
+                            }
+                            *target = Some(false);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        self.stale_gridline_handles_for_axis(workbook, chart_id, axis_index, major);
+                        Ok(OmValue::Empty)
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "Gridlines.{member} is not implemented as a method"
+                    ))),
+                }
+            }
             RuntimeObjectKind::AxisTitle {
                 workbook,
                 chart_id,
@@ -13360,6 +13444,25 @@ impl ExcelRuntime {
             "HasTitle" => Ok(OmValue::Bool(axis.title.is_some())),
             "HasMajorGridlines" => Ok(OmValue::Bool(axis.has_major_gridlines == Some(true))),
             "HasMinorGridlines" => Ok(OmValue::Bool(axis.has_minor_gridlines == Some(true))),
+            "MajorGridlines" | "MinorGridlines" => {
+                let major = member == "MajorGridlines";
+                let has_gridlines = if major {
+                    axis.has_major_gridlines
+                } else {
+                    axis.has_minor_gridlines
+                };
+                if has_gridlines != Some(true) {
+                    return Err(OmError::new(OmErrorCode::NotFound, "gridlines not found"));
+                }
+                Ok(OmValue::Object(self.register_object(
+                    RuntimeObjectKind::Gridlines {
+                        workbook,
+                        chart_id,
+                        axis_index,
+                        major,
+                    },
+                )))
+            }
             "AxisTitle" => {
                 if axis.title.is_none() {
                     return Err(OmError::new(OmErrorCode::NotFound, "axis title not found"));
@@ -13416,6 +13519,51 @@ impl ExcelRuntime {
             ))),
             _ => Err(OmError::unsupported(format!(
                 "AxisTitle.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_get_gridlines(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        axis_index: usize,
+        major: bool,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        if !args.is_empty() {
+            return Err(OmError::invalid_argument(format!(
+                "Gridlines.{member} does not accept arguments"
+            )));
+        }
+        let axis = self.axis_model(workbook, chart_id, axis_index)?;
+        let has_gridlines = if major {
+            axis.has_major_gridlines
+        } else {
+            axis.has_minor_gridlines
+        };
+        if has_gridlines != Some(true) {
+            return Err(OmError::new(OmErrorCode::NotFound, "gridlines not found"));
+        }
+
+        match member {
+            "Name" => Ok(OmValue::Text(if major {
+                "Major Gridlines".to_string()
+            } else {
+                "Minor Gridlines".to_string()
+            })),
+            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+            "Application" => Ok(OmValue::Object(self.root_application())),
+            "Parent" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::Axis {
+                    workbook,
+                    chart_id,
+                    axis_index,
+                },
+            ))),
+            _ => Err(OmError::unsupported(format!(
+                "Gridlines.{member} is not implemented"
             ))),
         }
     }
@@ -18425,6 +18573,13 @@ impl ExcelRuntime {
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
                 }
+                RuntimeObjectKind::Gridlines {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    ..
+                } if *object_workbook == workbook && *object_chart_id == chart_id => {
+                    Some(object_id)
+                }
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -18517,6 +18672,11 @@ impl ExcelRuntime {
                     chart_id: object_chart_id,
                     ..
                 }
+                | RuntimeObjectKind::Gridlines {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    ..
+                }
                 | RuntimeObjectKind::SeriesCollection {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
@@ -18564,6 +18724,38 @@ impl ExcelRuntime {
                 } if *object_workbook == workbook
                     && *object_chart_id == chart_id
                     && *object_axis_index == axis_index =>
+                {
+                    Some(object_id)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for object_id in stale_object_ids {
+            self.objects.remove(&object_id);
+            self.stale_objects.insert(object_id);
+        }
+    }
+
+    fn stale_gridline_handles_for_axis(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        axis_index: usize,
+        major: bool,
+    ) {
+        let stale_object_ids = self
+            .objects
+            .iter()
+            .filter_map(|(&object_id, object)| match object {
+                RuntimeObjectKind::Gridlines {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    axis_index: object_axis_index,
+                    major: object_major,
+                } if *object_workbook == workbook
+                    && *object_chart_id == chart_id
+                    && *object_axis_index == axis_index
+                    && *object_major == major =>
                 {
                     Some(object_id)
                 }
@@ -25004,6 +25196,7 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         | RuntimeObjectKind::Axes { workbook, .. }
         | RuntimeObjectKind::Axis { workbook, .. }
         | RuntimeObjectKind::AxisTitle { workbook, .. }
+        | RuntimeObjectKind::Gridlines { workbook, .. }
         | RuntimeObjectKind::SeriesCollection { workbook, .. }
         | RuntimeObjectKind::Series { workbook, .. }
         | RuntimeObjectKind::Points { workbook, .. }
@@ -87046,12 +87239,62 @@ mod tests {
                 .expect("Axis.HasMinorGridlines before set"),
             OmValue::Bool(false)
         );
+        let major_gridlines = expect_object_handle(
+            runtime
+                .dispatch_get(value_axis, "MajorGridlines", &[])
+                .expect("Axis.MajorGridlines"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(major_gridlines, "Name", &[])
+                .expect("MajorGridlines.Name"),
+            OmValue::Text("Major Gridlines".to_string())
+        );
+        let major_gridlines_parent = expect_object_handle(
+            runtime
+                .dispatch_get(major_gridlines, "Parent", &[])
+                .expect("MajorGridlines.Parent"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(major_gridlines_parent, "Type", &[])
+                .expect("MajorGridlines.Parent.Type"),
+            OmValue::Number(f64::from(super::XL_VALUE))
+        );
         runtime
-            .dispatch_set(value_axis, "HasMajorGridlines", OmValue::Bool(false), &[])
-            .expect("clear Axis.HasMajorGridlines");
+            .dispatch_invoke(major_gridlines, "Select", &[])
+            .expect("MajorGridlines.Select");
+        runtime
+            .dispatch_invoke(major_gridlines, "Delete", &[])
+            .expect("MajorGridlines.Delete");
+        assert_eq!(
+            runtime
+                .dispatch_get(major_gridlines, "Name", &[])
+                .expect_err("deleted MajorGridlines handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "MajorGridlines", &[])
+                .expect_err("Axis.MajorGridlines after delete")
+                .code,
+            OmErrorCode::NotFound
+        );
         runtime
             .dispatch_set(value_axis, "HasMinorGridlines", OmValue::Bool(true), &[])
             .expect("set Axis.HasMinorGridlines");
+        let minor_gridlines = expect_object_handle(
+            runtime
+                .dispatch_get(value_axis, "MinorGridlines", &[])
+                .expect("Axis.MinorGridlines"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(minor_gridlines, "Name", &[])
+                .expect("MinorGridlines.Name"),
+            OmValue::Text("Minor Gridlines".to_string())
+        );
         assert_eq!(
             runtime
                 .dispatch_set(
