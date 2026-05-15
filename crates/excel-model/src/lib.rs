@@ -11,11 +11,11 @@ mod charts;
 mod names;
 
 pub use charts::{
-    AxisModel, ChartAxisKind, ChartCacheKind, ChartCacheSnapshot, ChartCellMarkerXmlAttrs,
-    ChartDataLabelsModel, ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerXmlAttrs,
-    ChartModel, ChartObjectModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr,
-    ChartSplitType, ChartText, ChartTickLabelPosition, ChartTickMark, ChartType, DrawingModel,
-    DrawingObjectModel, LegendModel, SeriesModel, resolve_chart_source_reference,
+    AxisModel, ChartAxisCrosses, ChartAxisKind, ChartCacheKind, ChartCacheSnapshot,
+    ChartCellMarkerXmlAttrs, ChartDataLabelsModel, ChartDisplayBlanksAs, ChartLegendPosition,
+    ChartMarkerXmlAttrs, ChartModel, ChartObjectModel, ChartSheetBinding, ChartSizeRepresents,
+    ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition, ChartTickMark, ChartType,
+    DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, resolve_chart_source_reference,
     resolve_chart_source_reference_with_names,
 };
 pub use names::DefinedNameTable;

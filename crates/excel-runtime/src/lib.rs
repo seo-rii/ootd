@@ -1,8 +1,8 @@
 use excel_model::{
-    AxisModel, ChartAxisKind, ChartDataLabelsModel, ChartDisplayBlanksAs, ChartLegendPosition,
-    ChartModel, ChartObjectModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr,
-    ChartSplitType, ChartText, ChartTickLabelPosition, ChartTickMark, ChartType, DrawingModel,
-    DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
+    AxisModel, ChartAxisCrosses, ChartAxisKind, ChartDataLabelsModel, ChartDisplayBlanksAs,
+    ChartLegendPosition, ChartModel, ChartObjectModel, ChartSheetBinding, ChartSizeRepresents,
+    ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition, ChartTickMark, ChartType,
+    DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
     resolve_chart_source_reference_with_names,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml};
@@ -146,6 +146,10 @@ const XL_TICK_LABEL_POSITION_HIGH: i32 = -4127;
 const XL_TICK_LABEL_POSITION_LOW: i32 = -4134;
 const XL_TICK_LABEL_POSITION_NEXT_TO_AXIS: i32 = 4;
 const XL_TICK_LABEL_POSITION_NONE: i32 = -4142;
+const XL_AXIS_CROSSES_AUTOMATIC: i32 = -4105;
+const XL_AXIS_CROSSES_CUSTOM: i32 = -4114;
+const XL_AXIS_CROSSES_MAXIMUM: i32 = 2;
+const XL_AXIS_CROSSES_MINIMUM: i32 = 4;
 const XL_MOVE_AND_SIZE: i32 = 1;
 const XL_MOVE: i32 = 2;
 const XL_FREE_FLOATING: i32 = 3;
@@ -4615,6 +4619,8 @@ impl ExcelRuntime {
                                         minor_tick_mark: None,
                                         tick_label_position: None,
                                         reverse_plot_order: None,
+                                        crosses: None,
+                                        crosses_at: None,
                                         minimum_scale: None,
                                         maximum_scale: None,
                                         major_unit: None,
@@ -5081,6 +5087,99 @@ impl ExcelRuntime {
                         let changed = axis.reverse_plot_order != Some(reverse_plot_order);
                         if changed {
                             axis.reverse_plot_order = Some(reverse_plot_order);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "Crosses" => {
+                        let OmValue::Number(number) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Axis.Crosses expects a numeric enum value",
+                            ));
+                        };
+                        if !number.is_finite() || number.fract() != 0.0 {
+                            return Err(OmError::invalid_argument(
+                                "Axis.Crosses expects an integral enum value",
+                            ));
+                        }
+                        let crosses = chart_axis_crosses_from_excel_value(number as i32)?;
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let axis = chart
+                            .axes
+                            .get_mut(axis_index)
+                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
+                        if crosses == ChartAxisCrosses::Custom && axis.crosses_at.is_none() {
+                            return Err(OmError::unsupported(
+                                "Axis.Crosses=xlAxisCrossesCustom requires Axis.CrossesAt",
+                            ));
+                        }
+                        let next_crosses_at = if crosses == ChartAxisCrosses::Custom {
+                            axis.crosses_at
+                        } else {
+                            None
+                        };
+                        let changed =
+                            axis.crosses != Some(crosses) || axis.crosses_at != next_crosses_at;
+                        if changed {
+                            axis.crosses = Some(crosses);
+                            axis.crosses_at = next_crosses_at;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "CrossesAt" => {
+                        let OmValue::Number(number) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Axis.CrossesAt expects a numeric value",
+                            ));
+                        };
+                        if !number.is_finite() {
+                            return Err(OmError::invalid_argument(
+                                "Axis.CrossesAt expects a finite numeric value",
+                            ));
+                        }
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let axis = chart
+                            .axes
+                            .get_mut(axis_index)
+                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
+                        let changed = axis.crosses != Some(ChartAxisCrosses::Custom)
+                            || axis.crosses_at != Some(number);
+                        if changed {
+                            axis.crosses = Some(ChartAxisCrosses::Custom);
+                            axis.crosses_at = Some(number);
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -10356,6 +10455,8 @@ impl ExcelRuntime {
                             | "HasTitle"
                             | "AxisTitle"
                             | "ReversePlotOrder"
+                            | "Crosses"
+                            | "CrossesAt"
                             | "MajorTickMark"
                             | "MinorTickMark"
                             | "TickLabelPosition"
@@ -13681,6 +13782,17 @@ impl ExcelRuntime {
             "HasMajorGridlines" => Ok(OmValue::Bool(axis.has_major_gridlines == Some(true))),
             "HasMinorGridlines" => Ok(OmValue::Bool(axis.has_minor_gridlines == Some(true))),
             "ReversePlotOrder" => Ok(OmValue::Bool(axis.reverse_plot_order.unwrap_or(false))),
+            "Crosses" => Ok(OmValue::Number(f64::from(
+                chart_axis_crosses_to_excel_value(if axis.crosses_at.is_some() {
+                    ChartAxisCrosses::Custom
+                } else {
+                    axis.crosses.unwrap_or(ChartAxisCrosses::Automatic)
+                }),
+            ))),
+            "CrossesAt" => axis
+                .crosses_at
+                .map(OmValue::Number)
+                .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis crossing is automatic")),
             "MajorTickMark" => Ok(OmValue::Number(f64::from(chart_tick_mark_to_excel_value(
                 axis.major_tick_mark.unwrap_or(ChartTickMark::Outside),
             )))),
@@ -21833,6 +21945,36 @@ fn chart_axis_orientation_xml_value(reverse_plot_order: bool) -> &'static str {
     }
 }
 
+fn chart_axis_crosses_xml_value(value: ChartAxisCrosses) -> Option<&'static str> {
+    match value {
+        ChartAxisCrosses::Automatic => Some("autoZero"),
+        ChartAxisCrosses::Custom => None,
+        ChartAxisCrosses::Maximum => Some("max"),
+        ChartAxisCrosses::Minimum => Some("min"),
+    }
+}
+
+fn chart_axis_crosses_to_excel_value(value: ChartAxisCrosses) -> i32 {
+    match value {
+        ChartAxisCrosses::Automatic => XL_AXIS_CROSSES_AUTOMATIC,
+        ChartAxisCrosses::Custom => XL_AXIS_CROSSES_CUSTOM,
+        ChartAxisCrosses::Maximum => XL_AXIS_CROSSES_MAXIMUM,
+        ChartAxisCrosses::Minimum => XL_AXIS_CROSSES_MINIMUM,
+    }
+}
+
+fn chart_axis_crosses_from_excel_value(value: i32) -> OmResult<ChartAxisCrosses> {
+    match value {
+        XL_AXIS_CROSSES_AUTOMATIC => Ok(ChartAxisCrosses::Automatic),
+        XL_AXIS_CROSSES_CUSTOM => Ok(ChartAxisCrosses::Custom),
+        XL_AXIS_CROSSES_MAXIMUM => Ok(ChartAxisCrosses::Maximum),
+        XL_AXIS_CROSSES_MINIMUM => Ok(ChartAxisCrosses::Minimum),
+        _ => Err(OmError::unsupported(
+            "Axis.Crosses supports automatic, custom, maximum, and minimum axis crossings",
+        )),
+    }
+}
+
 fn chart_legend_position_xml_value(position: ChartLegendPosition) -> &'static str {
     match position {
         ChartLegendPosition::Bottom => "b",
@@ -22472,6 +22614,14 @@ fn patch_loaded_chart_model_xml(
     let mut axis_minor_unit_written = Vec::<bool>::new();
     let mut axis_minor_unit_inserted = Vec::<bool>::new();
     let mut axis_minor_unit_removed = Vec::<bool>::new();
+    let mut axis_crosses_seen = Vec::<bool>::new();
+    let mut axis_crosses_written = Vec::<bool>::new();
+    let mut axis_crosses_inserted = Vec::<bool>::new();
+    let mut axis_crosses_removed = Vec::<bool>::new();
+    let mut axis_crosses_at_seen = Vec::<bool>::new();
+    let mut axis_crosses_at_written = Vec::<bool>::new();
+    let mut axis_crosses_at_inserted = Vec::<bool>::new();
+    let mut axis_crosses_at_removed = Vec::<bool>::new();
     let mut current_chart_group_depth = None::<usize>;
     let mut chart_group_axis_refs_seen = Vec::<String>::new();
     let mut skip_depth = 0usize;
@@ -22885,6 +23035,15 @@ fn patch_loaded_chart_model_xml(
                 .map_err(runtime_xml_error)?;
             Ok(())
         };
+    let write_chart_axis_crossing_elements =
+        |writer: &mut Writer<Cursor<Vec<u8>>>, axis: &AxisModel| -> OmResult<()> {
+            if let Some(value) = axis.crosses_at {
+                write_chart_val_element(writer, "c:crossesAt", value)?;
+            } else if let Some(value) = axis.crosses.and_then(chart_axis_crosses_xml_value) {
+                write_chart_string_val_element(writer, "c:crosses", value)?;
+            }
+            Ok(())
+        };
     let write_chart_data_labels_properties = |writer: &mut Writer<Cursor<Vec<u8>>>,
                                               data_labels: &ChartDataLabelsModel|
      -> OmResult<()> {
@@ -23004,6 +23163,7 @@ fn patch_loaded_chart_model_xml(
         if let Some(value) = axis.minor_unit {
             write_chart_val_element(writer, "c:minorUnit", value)?;
         }
+        write_chart_axis_crossing_elements(writer, axis)?;
         writer
             .write_event(Event::End(BytesEnd::new(axis_name.as_str())))
             .map_err(runtime_xml_error)?;
@@ -23198,6 +23358,14 @@ fn patch_loaded_chart_model_xml(
                     axis_minor_unit_written.push(false);
                     axis_minor_unit_inserted.push(false);
                     axis_minor_unit_removed.push(false);
+                    axis_crosses_seen.push(false);
+                    axis_crosses_written.push(false);
+                    axis_crosses_inserted.push(false);
+                    axis_crosses_removed.push(false);
+                    axis_crosses_at_seen.push(false);
+                    axis_crosses_at_written.push(false);
+                    axis_crosses_at_inserted.push(false);
+                    axis_crosses_at_removed.push(false);
                 }
                 if local_name.as_slice() == b"scaling"
                     && let Some(axis_index) = current_axis_index
@@ -23795,6 +23963,61 @@ fn patch_loaded_chart_model_xml(
                         continue;
                     }
                 } else if !wrote_start_element
+                    && matches!(local_name.as_slice(), b"crosses" | b"crossesAt")
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    if local_name.as_slice() == b"crosses" {
+                        if let Some(seen) = axis_crosses_seen.get_mut(axis_index) {
+                            *seen = true;
+                        }
+                        if axis.crosses_at.is_none()
+                            && let Some(value) = axis.crosses.and_then(chart_axis_crosses_xml_value)
+                        {
+                            writer
+                                .write_event(Event::Start(rewrite_val_attribute_element(
+                                    &element,
+                                    reader.decoder(),
+                                    value,
+                                )?))
+                                .map_err(runtime_xml_error)?;
+                            if let Some(written) = axis_crosses_written.get_mut(axis_index) {
+                                *written = true;
+                            }
+                        } else {
+                            if let Some(removed) = axis_crosses_removed.get_mut(axis_index) {
+                                *removed = true;
+                            }
+                            skip_depth = 1;
+                            buffer.clear();
+                            continue;
+                        }
+                    } else {
+                        if let Some(seen) = axis_crosses_at_seen.get_mut(axis_index) {
+                            *seen = true;
+                        }
+                        if let Some(value) = axis.crosses_at {
+                            let value = chart_number_xml_value(value);
+                            writer
+                                .write_event(Event::Start(rewrite_val_attribute_element(
+                                    &element,
+                                    reader.decoder(),
+                                    value.as_str(),
+                                )?))
+                                .map_err(runtime_xml_error)?;
+                            if let Some(written) = axis_crosses_at_written.get_mut(axis_index) {
+                                *written = true;
+                            }
+                        } else {
+                            if let Some(removed) = axis_crosses_at_removed.get_mut(axis_index) {
+                                *removed = true;
+                            }
+                            skip_depth = 1;
+                            buffer.clear();
+                            continue;
+                        }
+                    }
+                } else if !wrote_start_element
                     && matches!(
                         local_name.as_slice(),
                         b"majorTickMark" | b"minorTickMark" | b"tickLblPos"
@@ -24025,6 +24248,53 @@ fn patch_loaded_chart_model_xml(
                         }
                     } else if let Some(removed) = removed.get_mut(axis_index) {
                         *removed = true;
+                    }
+                    buffer.clear();
+                    continue;
+                }
+                if matches!(local_name.as_slice(), b"crosses" | b"crossesAt")
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    if local_name.as_slice() == b"crosses" {
+                        if let Some(seen) = axis_crosses_seen.get_mut(axis_index) {
+                            *seen = true;
+                        }
+                        if axis.crosses_at.is_none()
+                            && let Some(value) = axis.crosses.and_then(chart_axis_crosses_xml_value)
+                        {
+                            writer
+                                .write_event(Event::Empty(rewrite_val_attribute_element(
+                                    &element,
+                                    reader.decoder(),
+                                    value,
+                                )?))
+                                .map_err(runtime_xml_error)?;
+                            if let Some(written) = axis_crosses_written.get_mut(axis_index) {
+                                *written = true;
+                            }
+                        } else if let Some(removed) = axis_crosses_removed.get_mut(axis_index) {
+                            *removed = true;
+                        }
+                    } else {
+                        if let Some(seen) = axis_crosses_at_seen.get_mut(axis_index) {
+                            *seen = true;
+                        }
+                        if let Some(value) = axis.crosses_at {
+                            let value = chart_number_xml_value(value);
+                            writer
+                                .write_event(Event::Empty(rewrite_val_attribute_element(
+                                    &element,
+                                    reader.decoder(),
+                                    value.as_str(),
+                                )?))
+                                .map_err(runtime_xml_error)?;
+                            if let Some(written) = axis_crosses_at_written.get_mut(axis_index) {
+                                *written = true;
+                            }
+                        } else if let Some(removed) = axis_crosses_at_removed.get_mut(axis_index) {
+                            *removed = true;
+                        }
                     }
                     buffer.clear();
                     continue;
@@ -25129,6 +25399,32 @@ fn patch_loaded_chart_model_xml(
                             }
                         }
                     }
+                    if axis.crosses_at.is_some() {
+                        if !axis_crosses_at_seen
+                            .get(axis_index)
+                            .copied()
+                            .unwrap_or(false)
+                            && let Some(value) = axis.crosses_at
+                        {
+                            write_chart_val_element(&mut writer, "c:crossesAt", value)?;
+                            if let Some(inserted) = axis_crosses_at_inserted.get_mut(axis_index) {
+                                *inserted = true;
+                            }
+                            if let Some(written) = axis_crosses_at_written.get_mut(axis_index) {
+                                *written = true;
+                            }
+                        }
+                    } else if let Some(value) = axis.crosses.and_then(chart_axis_crosses_xml_value)
+                        && !axis_crosses_seen.get(axis_index).copied().unwrap_or(false)
+                    {
+                        write_chart_string_val_element(&mut writer, "c:crosses", value)?;
+                        if let Some(inserted) = axis_crosses_inserted.get_mut(axis_index) {
+                            *inserted = true;
+                        }
+                        if let Some(written) = axis_crosses_written.get_mut(axis_index) {
+                            *written = true;
+                        }
+                    }
                 }
                 if local_name.as_slice() == b"plotArea" {
                     while let Some(axis) = chart.axes.get(axis_kinds.len()) {
@@ -25181,6 +25477,18 @@ fn patch_loaded_chart_model_xml(
                         axis_minor_unit_written.push(axis.minor_unit.is_some());
                         axis_minor_unit_inserted.push(axis.minor_unit.is_some());
                         axis_minor_unit_removed.push(false);
+                        let has_crosses = axis.crosses_at.is_none()
+                            && axis
+                                .crosses
+                                .is_some_and(|value| chart_axis_crosses_xml_value(value).is_some());
+                        axis_crosses_seen.push(has_crosses);
+                        axis_crosses_written.push(has_crosses);
+                        axis_crosses_inserted.push(has_crosses);
+                        axis_crosses_removed.push(false);
+                        axis_crosses_at_seen.push(axis.crosses_at.is_some());
+                        axis_crosses_at_written.push(axis.crosses_at.is_some());
+                        axis_crosses_at_inserted.push(axis.crosses_at.is_some());
+                        axis_crosses_at_removed.push(false);
                     }
                 }
                 if chart_type_from_group_name(local_name.as_slice()).is_some()
@@ -25763,6 +26071,26 @@ fn patch_loaded_chart_model_xml(
             true
         }
     });
+    let axis_crossing_match = chart.axes.iter().enumerate().all(|(axis_index, axis)| {
+        axis_numeric_field_matches(
+            axis_index,
+            axis.crosses_at,
+            &axis_crosses_at_seen,
+            &axis_crosses_at_written,
+            &axis_crosses_at_inserted,
+            &axis_crosses_at_removed,
+        ) && axis_optional_field_matches(
+            axis_index,
+            axis.crosses_at.is_none()
+                && axis
+                    .crosses
+                    .is_some_and(|value| chart_axis_crosses_xml_value(value).is_some()),
+            &axis_crosses_seen,
+            &axis_crosses_written,
+            &axis_crosses_inserted,
+            &axis_crosses_removed,
+        )
+    });
     let axis_tick_settings_match = chart.axes.iter().enumerate().all(|(axis_index, axis)| {
         axis_optional_field_matches(
             axis_index,
@@ -25866,6 +26194,7 @@ fn patch_loaded_chart_model_xml(
         && axes_match
         && axis_scale_units_match
         && axis_orientation_match
+        && axis_crossing_match
         && axis_tick_settings_match
         && axis_gridlines_match
     {
@@ -26199,8 +26528,16 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
                 .minor_unit
                 .map(|value| format!(r#"<c:minorUnit val="{}"/>"#, chart_number_xml_value(value)))
                 .unwrap_or_default();
+            let crossing_xml = if let Some(value) = axis.crosses_at {
+                format!(r#"<c:crossesAt val="{}"/>"#, chart_number_xml_value(value))
+            } else {
+                axis.crosses
+                    .and_then(chart_axis_crosses_xml_value)
+                    .map(|value| format!(r#"<c:crosses val="{value}"/>"#))
+                    .unwrap_or_default()
+            };
             axes_xml.push_str(&format!(
-                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{scaling_xml}{major_gridlines_xml}{minor_gridlines_xml}{axis_title_xml}{major_tick_mark_xml}{minor_tick_mark_xml}{tick_label_position_xml}{major_unit_xml}{minor_unit_xml}</c:{axis_tag}>"#
+                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{scaling_xml}{major_gridlines_xml}{minor_gridlines_xml}{axis_title_xml}{major_tick_mark_xml}{minor_tick_mark_xml}{tick_label_position_xml}{major_unit_xml}{minor_unit_xml}{crossing_xml}</c:{axis_tag}>"#
             ));
         }
     }
@@ -26307,6 +26644,8 @@ fn default_chart_axes() -> Vec<AxisModel> {
             minor_tick_mark: None,
             tick_label_position: None,
             reverse_plot_order: None,
+            crosses: None,
+            crosses_at: None,
             minimum_scale: None,
             maximum_scale: None,
             major_unit: None,
@@ -26322,6 +26661,8 @@ fn default_chart_axes() -> Vec<AxisModel> {
             minor_tick_mark: None,
             tick_label_position: None,
             reverse_plot_order: None,
+            crosses: None,
+            crosses_at: None,
             minimum_scale: None,
             maximum_scale: None,
             major_unit: None,
@@ -89317,6 +89658,330 @@ mod tests {
                 .dispatch_get(reopened_value_axis, "ReversePlotOrder", &[])
                 .expect("reopened Axis.ReversePlotOrder")
         ));
+    }
+
+    #[test]
+    fn loaded_chart_axis_crossing_setters_preserve_chart_extensions_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            r#"</c:title></c:valAx>"#,
+            r#"</c:title><c:crosses val="max"/></c:valAx>"#,
+        )
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:axis-crossing-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with value axis crossing");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let category_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.Axes(xlCategory)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(category_axis, "Crosses", &[])
+                    .expect("default Axis.Crosses")
+            ),
+            f64::from(super::XL_AXIS_CROSSES_AUTOMATIC)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis, "CrossesAt", &[])
+                .expect_err("default Axis.CrossesAt is automatic")
+                .code,
+            OmErrorCode::NotFound
+        );
+
+        let value_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.Axes(xlValue)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(value_axis, "Crosses", &[])
+                    .expect("Axis.Crosses before set")
+            ),
+            f64::from(super::XL_AXIS_CROSSES_MAXIMUM)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    value_axis,
+                    "Crosses",
+                    OmValue::Number(f64::from(super::XL_AXIS_CROSSES_CUSTOM)),
+                    &[],
+                )
+                .expect_err("Axis.Crosses custom requires CrossesAt")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        runtime
+            .dispatch_set(value_axis, "CrossesAt", OmValue::Number(12.5), &[])
+            .expect("set Axis.CrossesAt");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(value_axis, "Crosses", &[])
+                    .expect("Axis.Crosses after CrossesAt")
+            ),
+            f64::from(super::XL_AXIS_CROSSES_CUSTOM)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(value_axis, "CrossesAt", &[])
+                    .expect("Axis.CrossesAt after set")
+            ),
+            12.5
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(value_axis, "Crosses", OmValue::Text("bad".to_string()), &[])
+                .expect_err("Axis.Crosses rejects non-number")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(value_axis, "Crosses", OmValue::Number(1.5), &[])
+                .expect_err("Axis.Crosses rejects fractional value")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(value_axis, "Crosses", OmValue::Number(999.0), &[])
+                .expect_err("Axis.Crosses rejects unsupported enum")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    value_axis,
+                    "CrossesAt",
+                    OmValue::Text("bad".to_string()),
+                    &[]
+                )
+                .expect_err("Axis.CrossesAt rejects non-number")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+
+        let saved_custom = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after axis crossing custom edit");
+        let saved_custom_package = OpcPackage::from_bytes(&saved_custom).expect("saved package");
+        let saved_custom_chart_xml = std::str::from_utf8(
+            saved_custom_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_custom_chart_xml.contains(r#"<c:ext uri="urn:axis-crossing-preserve"/>"#));
+        assert!(saved_custom_chart_xml.contains(r#"<c:crossesAt val="12.5"/>"#));
+        assert!(!saved_custom_chart_xml.contains(r#"<c:crosses val="max"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved_custom,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after axis crossing custom edit");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_value_axis = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("reopened Chart.Axes(xlValue)"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_value_axis, "Crosses", &[])
+                    .expect("reopened Axis.Crosses")
+            ),
+            f64::from(super::XL_AXIS_CROSSES_CUSTOM)
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_value_axis, "CrossesAt", &[])
+                    .expect("reopened Axis.CrossesAt")
+            ),
+            12.5
+        );
+
+        reopened_runtime
+            .dispatch_set(
+                reopened_value_axis,
+                "Crosses",
+                OmValue::Number(f64::from(super::XL_AXIS_CROSSES_MINIMUM)),
+                &[],
+            )
+            .expect("set Axis.Crosses minimum");
+        let saved_minimum = reopened_runtime
+            .save_workbook(
+                reopened_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after axis crossing minimum edit");
+        let saved_minimum_package = OpcPackage::from_bytes(&saved_minimum).expect("saved package");
+        let saved_minimum_chart_xml = std::str::from_utf8(
+            saved_minimum_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved minimum chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved minimum chart xml utf8");
+        assert!(saved_minimum_chart_xml.contains(r#"<c:ext uri="urn:axis-crossing-preserve"/>"#));
+        assert!(saved_minimum_chart_xml.contains(r#"<c:crosses val="min"/>"#));
+        assert!(!saved_minimum_chart_xml.contains("<c:crossesAt"));
+
+        let mut final_runtime = ExcelRuntime::new();
+        let final_workbook = final_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved_minimum,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after axis crossing minimum edit");
+        let final_worksheet = expect_object_handle(
+            final_runtime
+                .dispatch_get(final_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("final Workbook.Worksheets(1)"),
+        );
+        let final_chart_objects = expect_object_handle(
+            final_runtime
+                .dispatch_get(final_worksheet, "ChartObjects", &[])
+                .expect("final Worksheet.ChartObjects"),
+        );
+        let final_chart_object = expect_object_handle(
+            final_runtime
+                .dispatch_invoke(final_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("final ChartObjects.Item(1)"),
+        );
+        let final_chart = expect_object_handle(
+            final_runtime
+                .dispatch_get(final_chart_object, "Chart", &[])
+                .expect("final ChartObject.Chart"),
+        );
+        let final_value_axis = expect_object_handle(
+            final_runtime
+                .dispatch_get(
+                    final_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("final Chart.Axes(xlValue)"),
+        );
+        assert_eq!(
+            expect_number(
+                final_runtime
+                    .dispatch_get(final_value_axis, "Crosses", &[])
+                    .expect("final Axis.Crosses")
+            ),
+            f64::from(super::XL_AXIS_CROSSES_MINIMUM)
+        );
+        assert_eq!(
+            final_runtime
+                .dispatch_get(final_value_axis, "CrossesAt", &[])
+                .expect_err("final Axis.CrossesAt is not custom")
+                .code,
+            OmErrorCode::NotFound
+        );
     }
 
     #[test]

@@ -224,6 +224,8 @@ pub struct AxisModel {
     pub minor_tick_mark: Option<ChartTickMark>,
     pub tick_label_position: Option<ChartTickLabelPosition>,
     pub reverse_plot_order: Option<bool>,
+    pub crosses: Option<ChartAxisCrosses>,
+    pub crosses_at: Option<f64>,
     pub minimum_scale: Option<f64>,
     pub maximum_scale: Option<f64>,
     pub major_unit: Option<f64>,
@@ -236,6 +238,14 @@ pub enum ChartAxisKind {
     Value,
     Date,
     Series,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartAxisCrosses {
+    Automatic,
+    Custom,
+    Maximum,
+    Minimum,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
