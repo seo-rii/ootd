@@ -4602,6 +4602,10 @@ impl ExcelRuntime {
                                         title: None,
                                         has_major_gridlines: None,
                                         has_minor_gridlines: None,
+                                        minimum_scale: None,
+                                        maximum_scale: None,
+                                        major_unit: None,
+                                        minor_unit: None,
                                     });
                                     true
                                 }
@@ -5032,6 +5036,119 @@ impl ExcelRuntime {
                             self.stale_gridline_handles_for_axis(
                                 workbook, chart_id, axis_index, major,
                             );
+                        }
+                        Ok(())
+                    }
+                    "MinimumScale" | "MaximumScale" | "MajorUnit" | "MinorUnit" => {
+                        let OmValue::Number(number) = value else {
+                            return Err(OmError::type_mismatch(format!(
+                                "Axis.{member} expects a numeric value"
+                            )));
+                        };
+                        if !number.is_finite() {
+                            return Err(OmError::invalid_argument(format!(
+                                "Axis.{member} expects a finite numeric value"
+                            )));
+                        }
+                        if matches!(member, "MajorUnit" | "MinorUnit") && number <= 0.0 {
+                            return Err(OmError::invalid_argument(format!(
+                                "Axis.{member} expects a positive numeric value"
+                            )));
+                        }
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let axis = chart
+                            .axes
+                            .get_mut(axis_index)
+                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
+                        let changed = {
+                            let target = match member {
+                                "MinimumScale" => &mut axis.minimum_scale,
+                                "MaximumScale" => &mut axis.maximum_scale,
+                                "MajorUnit" => &mut axis.major_unit,
+                                "MinorUnit" => &mut axis.minor_unit,
+                                _ => unreachable!("matched axis numeric scale property"),
+                            };
+                            if *target == Some(number) {
+                                false
+                            } else {
+                                *target = Some(number);
+                                true
+                            }
+                        };
+                        if changed {
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "MinimumScaleIsAuto" | "MaximumScaleIsAuto" | "MajorUnitIsAuto"
+                    | "MinorUnitIsAuto" => {
+                        let OmValue::Bool(is_auto) = value else {
+                            return Err(OmError::type_mismatch(format!(
+                                "Axis.{member} expects a boolean value"
+                            )));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let axis = chart
+                            .axes
+                            .get_mut(axis_index)
+                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
+                        let changed = {
+                            let target = match member {
+                                "MinimumScaleIsAuto" => &mut axis.minimum_scale,
+                                "MaximumScaleIsAuto" => &mut axis.maximum_scale,
+                                "MajorUnitIsAuto" => &mut axis.major_unit,
+                                "MinorUnitIsAuto" => &mut axis.minor_unit,
+                                _ => unreachable!("matched axis auto scale property"),
+                            };
+                            if is_auto {
+                                if target.is_some() {
+                                    *target = None;
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else if target.is_some() {
+                                false
+                            } else {
+                                return Err(OmError::unsupported(format!(
+                                    "Axis.{member}=False requires an explicit axis value first"
+                                )));
+                            }
+                        };
+                        if changed {
+                            chart.dirty = true;
+                            runtime.dirty = true;
                         }
                         Ok(())
                     }
@@ -13444,6 +13561,26 @@ impl ExcelRuntime {
             "HasTitle" => Ok(OmValue::Bool(axis.title.is_some())),
             "HasMajorGridlines" => Ok(OmValue::Bool(axis.has_major_gridlines == Some(true))),
             "HasMinorGridlines" => Ok(OmValue::Bool(axis.has_minor_gridlines == Some(true))),
+            "MinimumScale" => axis
+                .minimum_scale
+                .map(OmValue::Number)
+                .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis minimum scale is auto")),
+            "MaximumScale" => axis
+                .maximum_scale
+                .map(OmValue::Number)
+                .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis maximum scale is auto")),
+            "MajorUnit" => axis
+                .major_unit
+                .map(OmValue::Number)
+                .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis major unit is auto")),
+            "MinorUnit" => axis
+                .minor_unit
+                .map(OmValue::Number)
+                .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis minor unit is auto")),
+            "MinimumScaleIsAuto" => Ok(OmValue::Bool(axis.minimum_scale.is_none())),
+            "MaximumScaleIsAuto" => Ok(OmValue::Bool(axis.maximum_scale.is_none())),
+            "MajorUnitIsAuto" => Ok(OmValue::Bool(axis.major_unit.is_none())),
+            "MinorUnitIsAuto" => Ok(OmValue::Bool(axis.minor_unit.is_none())),
             "MajorGridlines" | "MinorGridlines" => {
                 let major = member == "MajorGridlines";
                 let has_gridlines = if major {
@@ -22102,6 +22239,23 @@ fn patch_loaded_chart_model_xml(
     let mut axis_minor_gridlines_written = Vec::<bool>::new();
     let mut axis_minor_gridlines_inserted = Vec::<bool>::new();
     let mut axis_minor_gridlines_removed = Vec::<bool>::new();
+    let mut axis_scaling_seen = Vec::<bool>::new();
+    let mut axis_minimum_scale_seen = Vec::<bool>::new();
+    let mut axis_minimum_scale_written = Vec::<bool>::new();
+    let mut axis_minimum_scale_inserted = Vec::<bool>::new();
+    let mut axis_minimum_scale_removed = Vec::<bool>::new();
+    let mut axis_maximum_scale_seen = Vec::<bool>::new();
+    let mut axis_maximum_scale_written = Vec::<bool>::new();
+    let mut axis_maximum_scale_inserted = Vec::<bool>::new();
+    let mut axis_maximum_scale_removed = Vec::<bool>::new();
+    let mut axis_major_unit_seen = Vec::<bool>::new();
+    let mut axis_major_unit_written = Vec::<bool>::new();
+    let mut axis_major_unit_inserted = Vec::<bool>::new();
+    let mut axis_major_unit_removed = Vec::<bool>::new();
+    let mut axis_minor_unit_seen = Vec::<bool>::new();
+    let mut axis_minor_unit_written = Vec::<bool>::new();
+    let mut axis_minor_unit_inserted = Vec::<bool>::new();
+    let mut axis_minor_unit_removed = Vec::<bool>::new();
     let mut current_chart_group_depth = None::<usize>;
     let mut chart_group_axis_refs_seen = Vec::<String>::new();
     let mut skip_depth = 0usize;
@@ -22467,6 +22621,35 @@ fn patch_loaded_chart_model_xml(
                 .map_err(runtime_xml_error)?;
             Ok(())
         };
+    let write_chart_val_element =
+        |writer: &mut Writer<Cursor<Vec<u8>>>, element_name: &str, value: f64| -> OmResult<()> {
+            let value = chart_number_xml_value(value);
+            let mut element = BytesStart::new(element_name);
+            element.push_attribute(("val", value.as_str()));
+            writer
+                .write_event(Event::Empty(element))
+                .map_err(runtime_xml_error)?;
+            Ok(())
+        };
+    let write_chart_axis_scaling_element =
+        |writer: &mut Writer<Cursor<Vec<u8>>>, axis: &AxisModel| -> OmResult<()> {
+            if axis.minimum_scale.is_none() && axis.maximum_scale.is_none() {
+                return Ok(());
+            }
+            writer
+                .write_event(Event::Start(BytesStart::new("c:scaling")))
+                .map_err(runtime_xml_error)?;
+            if let Some(value) = axis.minimum_scale {
+                write_chart_val_element(writer, "c:min", value)?;
+            }
+            if let Some(value) = axis.maximum_scale {
+                write_chart_val_element(writer, "c:max", value)?;
+            }
+            writer
+                .write_event(Event::End(BytesEnd::new("c:scaling")))
+                .map_err(runtime_xml_error)?;
+            Ok(())
+        };
     let write_chart_data_labels_properties = |writer: &mut Writer<Cursor<Vec<u8>>>,
                                               data_labels: &ChartDataLabelsModel|
      -> OmResult<()> {
@@ -22545,6 +22728,7 @@ fn patch_loaded_chart_model_xml(
             .map_err(runtime_xml_error)?;
         let axis_id = chart_axis_id(axis_index, axis);
         write_chart_axis_ref_element(writer, &axis_id)?;
+        write_chart_axis_scaling_element(writer, axis)?;
         if axis.has_major_gridlines == Some(true) {
             writer
                 .write_event(Event::Empty(BytesStart::new("c:majorGridlines")))
@@ -22557,6 +22741,12 @@ fn patch_loaded_chart_model_xml(
         }
         if let Some(title) = axis.title.as_ref() {
             write_chart_text_element(writer, "c:title", &title.text)?;
+        }
+        if let Some(value) = axis.major_unit {
+            write_chart_val_element(writer, "c:majorUnit", value)?;
+        }
+        if let Some(value) = axis.minor_unit {
+            write_chart_val_element(writer, "c:minorUnit", value)?;
         }
         writer
             .write_event(Event::End(BytesEnd::new(axis_name.as_str())))
@@ -22719,6 +22909,29 @@ fn patch_loaded_chart_model_xml(
                     axis_minor_gridlines_written.push(false);
                     axis_minor_gridlines_inserted.push(false);
                     axis_minor_gridlines_removed.push(false);
+                    axis_scaling_seen.push(false);
+                    axis_minimum_scale_seen.push(false);
+                    axis_minimum_scale_written.push(false);
+                    axis_minimum_scale_inserted.push(false);
+                    axis_minimum_scale_removed.push(false);
+                    axis_maximum_scale_seen.push(false);
+                    axis_maximum_scale_written.push(false);
+                    axis_maximum_scale_inserted.push(false);
+                    axis_maximum_scale_removed.push(false);
+                    axis_major_unit_seen.push(false);
+                    axis_major_unit_written.push(false);
+                    axis_major_unit_inserted.push(false);
+                    axis_major_unit_removed.push(false);
+                    axis_minor_unit_seen.push(false);
+                    axis_minor_unit_written.push(false);
+                    axis_minor_unit_inserted.push(false);
+                    axis_minor_unit_removed.push(false);
+                }
+                if local_name.as_slice() == b"scaling"
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(seen) = axis_scaling_seen.get_mut(axis_index)
+                {
+                    *seen = true;
                 }
                 if local_name.as_slice() == b"title" && parent_name == Some(b"chart".as_slice()) {
                     chart_title_seen = true;
@@ -23197,6 +23410,94 @@ fn patch_loaded_chart_model_xml(
                         .map_err(runtime_xml_error)?;
                     overlap_written = true;
                 } else if !wrote_start_element
+                    && matches!(local_name.as_slice(), b"min" | b"max")
+                    && parent_name == Some(b"scaling".as_slice())
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    let (seen, written, removed, expected) = if local_name.as_slice() == b"min" {
+                        (
+                            &mut axis_minimum_scale_seen,
+                            &mut axis_minimum_scale_written,
+                            &mut axis_minimum_scale_removed,
+                            axis.minimum_scale,
+                        )
+                    } else {
+                        (
+                            &mut axis_maximum_scale_seen,
+                            &mut axis_maximum_scale_written,
+                            &mut axis_maximum_scale_removed,
+                            axis.maximum_scale,
+                        )
+                    };
+                    if let Some(seen) = seen.get_mut(axis_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = expected {
+                        let value = chart_number_xml_value(value);
+                        writer
+                            .write_event(Event::Start(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value.as_str(),
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = written.get_mut(axis_index) {
+                            *written = true;
+                        }
+                    } else {
+                        if let Some(removed) = removed.get_mut(axis_index) {
+                            *removed = true;
+                        }
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    }
+                } else if !wrote_start_element
+                    && matches!(local_name.as_slice(), b"majorUnit" | b"minorUnit")
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    let (seen, written, removed, expected) =
+                        if local_name.as_slice() == b"majorUnit" {
+                            (
+                                &mut axis_major_unit_seen,
+                                &mut axis_major_unit_written,
+                                &mut axis_major_unit_removed,
+                                axis.major_unit,
+                            )
+                        } else {
+                            (
+                                &mut axis_minor_unit_seen,
+                                &mut axis_minor_unit_written,
+                                &mut axis_minor_unit_removed,
+                                axis.minor_unit,
+                            )
+                        };
+                    if let Some(seen) = seen.get_mut(axis_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = expected {
+                        let value = chart_number_xml_value(value);
+                        writer
+                            .write_event(Event::Start(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value.as_str(),
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = written.get_mut(axis_index) {
+                            *written = true;
+                        }
+                    } else {
+                        if let Some(removed) = removed.get_mut(axis_index) {
+                            *removed = true;
+                        }
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    }
+                } else if !wrote_start_element
                     && let Some((setting_index, (_, _, Some(value)))) =
                         expected_chart_group_numeric_settings
                             .iter()
@@ -23232,6 +23533,119 @@ fn patch_loaded_chart_model_xml(
             Ok(Event::Empty(element)) => {
                 let local_name = xml_local_name(element.name().as_ref()).to_vec();
                 let parent_name = element_stack.last().map(Vec::as_slice);
+                if local_name.as_slice() == b"scaling"
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    if let Some(seen) = axis_scaling_seen.get_mut(axis_index) {
+                        *seen = true;
+                    }
+                    if axis.minimum_scale.is_some() || axis.maximum_scale.is_some() {
+                        write_chart_axis_scaling_element(&mut writer, axis)?;
+                        if axis.minimum_scale.is_some() {
+                            if let Some(inserted) = axis_minimum_scale_inserted.get_mut(axis_index)
+                            {
+                                *inserted = true;
+                            }
+                            if let Some(written) = axis_minimum_scale_written.get_mut(axis_index) {
+                                *written = true;
+                            }
+                        }
+                        if axis.maximum_scale.is_some() {
+                            if let Some(inserted) = axis_maximum_scale_inserted.get_mut(axis_index)
+                            {
+                                *inserted = true;
+                            }
+                            if let Some(written) = axis_maximum_scale_written.get_mut(axis_index) {
+                                *written = true;
+                            }
+                        }
+                        buffer.clear();
+                        continue;
+                    }
+                }
+                if matches!(local_name.as_slice(), b"min" | b"max")
+                    && parent_name == Some(b"scaling".as_slice())
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    let (seen, written, removed, expected) = if local_name.as_slice() == b"min" {
+                        (
+                            &mut axis_minimum_scale_seen,
+                            &mut axis_minimum_scale_written,
+                            &mut axis_minimum_scale_removed,
+                            axis.minimum_scale,
+                        )
+                    } else {
+                        (
+                            &mut axis_maximum_scale_seen,
+                            &mut axis_maximum_scale_written,
+                            &mut axis_maximum_scale_removed,
+                            axis.maximum_scale,
+                        )
+                    };
+                    if let Some(seen) = seen.get_mut(axis_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = expected {
+                        let value = chart_number_xml_value(value);
+                        writer
+                            .write_event(Event::Empty(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value.as_str(),
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = written.get_mut(axis_index) {
+                            *written = true;
+                        }
+                    } else if let Some(removed) = removed.get_mut(axis_index) {
+                        *removed = true;
+                    }
+                    buffer.clear();
+                    continue;
+                }
+                if matches!(local_name.as_slice(), b"majorUnit" | b"minorUnit")
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    let (seen, written, removed, expected) =
+                        if local_name.as_slice() == b"majorUnit" {
+                            (
+                                &mut axis_major_unit_seen,
+                                &mut axis_major_unit_written,
+                                &mut axis_major_unit_removed,
+                                axis.major_unit,
+                            )
+                        } else {
+                            (
+                                &mut axis_minor_unit_seen,
+                                &mut axis_minor_unit_written,
+                                &mut axis_minor_unit_removed,
+                                axis.minor_unit,
+                            )
+                        };
+                    if let Some(seen) = seen.get_mut(axis_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = expected {
+                        let value = chart_number_xml_value(value);
+                        writer
+                            .write_event(Event::Empty(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value.as_str(),
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = written.get_mut(axis_index) {
+                            *written = true;
+                        }
+                    } else if let Some(removed) = removed.get_mut(axis_index) {
+                        *removed = true;
+                    }
+                    buffer.clear();
+                    continue;
+                }
                 if let Some(next_chart_type) = chart_type_from_group_name(local_name.as_slice()) {
                     if chart_type.is_some() {
                         return Ok(None);
@@ -23996,6 +24410,46 @@ fn patch_loaded_chart_model_xml(
                     }
                 }
 
+                if local_name.as_slice() == b"scaling"
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    if axis.minimum_scale.is_some()
+                        && !axis_minimum_scale_seen
+                            .get(axis_index)
+                            .copied()
+                            .unwrap_or(false)
+                    {
+                        if let Some(value) = axis.minimum_scale {
+                            write_chart_val_element(&mut writer, "c:min", value)?;
+                            if let Some(inserted) = axis_minimum_scale_inserted.get_mut(axis_index)
+                            {
+                                *inserted = true;
+                            }
+                            if let Some(written) = axis_minimum_scale_written.get_mut(axis_index) {
+                                *written = true;
+                            }
+                        }
+                    }
+                    if axis.maximum_scale.is_some()
+                        && !axis_maximum_scale_seen
+                            .get(axis_index)
+                            .copied()
+                            .unwrap_or(false)
+                    {
+                        if let Some(value) = axis.maximum_scale {
+                            write_chart_val_element(&mut writer, "c:max", value)?;
+                            if let Some(inserted) = axis_maximum_scale_inserted.get_mut(axis_index)
+                            {
+                                *inserted = true;
+                            }
+                            if let Some(written) = axis_maximum_scale_written.get_mut(axis_index) {
+                                *written = true;
+                            }
+                        }
+                    }
+                }
+
                 if local_name.as_slice() == b"chart"
                     && !legend_seen
                     && let Some(position) = expected_legend_position
@@ -24047,6 +24501,29 @@ fn patch_loaded_chart_model_xml(
                     && let Some(axis_index) = current_axis_index
                     && let Some(axis) = chart.axes.get(axis_index)
                 {
+                    if (axis.minimum_scale.is_some() || axis.maximum_scale.is_some())
+                        && !axis_scaling_seen.get(axis_index).copied().unwrap_or(false)
+                    {
+                        write_chart_axis_scaling_element(&mut writer, axis)?;
+                        if axis.minimum_scale.is_some() {
+                            if let Some(inserted) = axis_minimum_scale_inserted.get_mut(axis_index)
+                            {
+                                *inserted = true;
+                            }
+                            if let Some(written) = axis_minimum_scale_written.get_mut(axis_index) {
+                                *written = true;
+                            }
+                        }
+                        if axis.maximum_scale.is_some() {
+                            if let Some(inserted) = axis_maximum_scale_inserted.get_mut(axis_index)
+                            {
+                                *inserted = true;
+                            }
+                            if let Some(written) = axis_maximum_scale_written.get_mut(axis_index) {
+                                *written = true;
+                            }
+                        }
+                    }
                     if axis.has_major_gridlines == Some(true)
                         && !axis_major_gridlines_seen
                             .get(axis_index)
@@ -24089,6 +24566,38 @@ fn patch_loaded_chart_model_xml(
                             *written = true;
                         }
                     }
+                    if axis.major_unit.is_some()
+                        && !axis_major_unit_seen
+                            .get(axis_index)
+                            .copied()
+                            .unwrap_or(false)
+                    {
+                        if let Some(value) = axis.major_unit {
+                            write_chart_val_element(&mut writer, "c:majorUnit", value)?;
+                            if let Some(inserted) = axis_major_unit_inserted.get_mut(axis_index) {
+                                *inserted = true;
+                            }
+                            if let Some(written) = axis_major_unit_written.get_mut(axis_index) {
+                                *written = true;
+                            }
+                        }
+                    }
+                    if axis.minor_unit.is_some()
+                        && !axis_minor_unit_seen
+                            .get(axis_index)
+                            .copied()
+                            .unwrap_or(false)
+                    {
+                        if let Some(value) = axis.minor_unit {
+                            write_chart_val_element(&mut writer, "c:minorUnit", value)?;
+                            if let Some(inserted) = axis_minor_unit_inserted.get_mut(axis_index) {
+                                *inserted = true;
+                            }
+                            if let Some(written) = axis_minor_unit_written.get_mut(axis_index) {
+                                *written = true;
+                            }
+                        }
+                    }
                 }
                 if local_name.as_slice() == b"plotArea" {
                     while let Some(axis) = chart.axes.get(axis_kinds.len()) {
@@ -24105,6 +24614,25 @@ fn patch_loaded_chart_model_xml(
                         axis_minor_gridlines_written.push(axis.has_minor_gridlines == Some(true));
                         axis_minor_gridlines_inserted.push(axis.has_minor_gridlines == Some(true));
                         axis_minor_gridlines_removed.push(false);
+                        let has_scaling =
+                            axis.minimum_scale.is_some() || axis.maximum_scale.is_some();
+                        axis_scaling_seen.push(has_scaling);
+                        axis_minimum_scale_seen.push(axis.minimum_scale.is_some());
+                        axis_minimum_scale_written.push(axis.minimum_scale.is_some());
+                        axis_minimum_scale_inserted.push(axis.minimum_scale.is_some());
+                        axis_minimum_scale_removed.push(false);
+                        axis_maximum_scale_seen.push(axis.maximum_scale.is_some());
+                        axis_maximum_scale_written.push(axis.maximum_scale.is_some());
+                        axis_maximum_scale_inserted.push(axis.maximum_scale.is_some());
+                        axis_maximum_scale_removed.push(false);
+                        axis_major_unit_seen.push(axis.major_unit.is_some());
+                        axis_major_unit_written.push(axis.major_unit.is_some());
+                        axis_major_unit_inserted.push(axis.major_unit.is_some());
+                        axis_major_unit_removed.push(false);
+                        axis_minor_unit_seen.push(axis.minor_unit.is_some());
+                        axis_minor_unit_written.push(axis.minor_unit.is_some());
+                        axis_minor_unit_inserted.push(axis.minor_unit.is_some());
+                        axis_minor_unit_removed.push(false);
                     }
                 }
                 if chart_type_from_group_name(local_name.as_slice()).is_some()
@@ -24609,6 +25137,55 @@ fn patch_loaded_chart_model_xml(
                         None => title_text.is_none(),
                     }
             });
+    let axis_numeric_field_matches = |axis_index: usize,
+                                      expected: Option<f64>,
+                                      seen: &[bool],
+                                      written: &[bool],
+                                      inserted: &[bool],
+                                      removed: &[bool]|
+     -> bool {
+        match expected {
+            Some(_) => {
+                written.get(axis_index).copied().unwrap_or(false)
+                    || inserted.get(axis_index).copied().unwrap_or(false)
+            }
+            None => {
+                !seen.get(axis_index).copied().unwrap_or(false)
+                    || removed.get(axis_index).copied().unwrap_or(false)
+            }
+        }
+    };
+    let axis_scale_units_match = chart.axes.iter().enumerate().all(|(axis_index, axis)| {
+        axis_numeric_field_matches(
+            axis_index,
+            axis.minimum_scale,
+            &axis_minimum_scale_seen,
+            &axis_minimum_scale_written,
+            &axis_minimum_scale_inserted,
+            &axis_minimum_scale_removed,
+        ) && axis_numeric_field_matches(
+            axis_index,
+            axis.maximum_scale,
+            &axis_maximum_scale_seen,
+            &axis_maximum_scale_written,
+            &axis_maximum_scale_inserted,
+            &axis_maximum_scale_removed,
+        ) && axis_numeric_field_matches(
+            axis_index,
+            axis.major_unit,
+            &axis_major_unit_seen,
+            &axis_major_unit_written,
+            &axis_major_unit_inserted,
+            &axis_major_unit_removed,
+        ) && axis_numeric_field_matches(
+            axis_index,
+            axis.minor_unit,
+            &axis_minor_unit_seen,
+            &axis_minor_unit_written,
+            &axis_minor_unit_inserted,
+            &axis_minor_unit_removed,
+        )
+    });
     let axis_gridlines_match = chart.axes.iter().enumerate().all(|(axis_index, axis)| {
         let major_matches = match axis.has_major_gridlines {
             Some(true) => {
@@ -24686,6 +25263,7 @@ fn patch_loaded_chart_model_xml(
         && chart_group_numeric_settings_match
         && chart_group_line_flags_match
         && axes_match
+        && axis_scale_units_match
         && axis_gridlines_match
     {
         Ok(Some(writer.into_inner().into_inner()))
@@ -24937,6 +25515,23 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             let escaped_axis_id = partial_escape(&axis_id).to_string();
             chart_group_axis_refs.push_str(&format!(r#"<c:axId val="{escaped_axis_id}"/>"#));
             let axis_tag = chart_axis_xml_name(axis.kind);
+            let mut scaling_xml = String::new();
+            if axis.minimum_scale.is_some() || axis.maximum_scale.is_some() {
+                scaling_xml.push_str("<c:scaling>");
+                if let Some(value) = axis.minimum_scale {
+                    scaling_xml.push_str(&format!(
+                        r#"<c:min val="{}"/>"#,
+                        chart_number_xml_value(value)
+                    ));
+                }
+                if let Some(value) = axis.maximum_scale {
+                    scaling_xml.push_str(&format!(
+                        r#"<c:max val="{}"/>"#,
+                        chart_number_xml_value(value)
+                    ));
+                }
+                scaling_xml.push_str("</c:scaling>");
+            }
             let axis_title_xml = axis
                 .title
                 .as_ref()
@@ -24957,8 +25552,16 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             } else {
                 ""
             };
+            let major_unit_xml = axis
+                .major_unit
+                .map(|value| format!(r#"<c:majorUnit val="{}"/>"#, chart_number_xml_value(value)))
+                .unwrap_or_default();
+            let minor_unit_xml = axis
+                .minor_unit
+                .map(|value| format!(r#"<c:minorUnit val="{}"/>"#, chart_number_xml_value(value)))
+                .unwrap_or_default();
             axes_xml.push_str(&format!(
-                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{major_gridlines_xml}{minor_gridlines_xml}{axis_title_xml}</c:{axis_tag}>"#
+                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{scaling_xml}{major_gridlines_xml}{minor_gridlines_xml}{axis_title_xml}{major_unit_xml}{minor_unit_xml}</c:{axis_tag}>"#
             ));
         }
     }
@@ -25061,6 +25664,10 @@ fn default_chart_axes() -> Vec<AxisModel> {
             title: None,
             has_major_gridlines: None,
             has_minor_gridlines: None,
+            minimum_scale: None,
+            maximum_scale: None,
+            major_unit: None,
+            minor_unit: None,
         },
         AxisModel {
             raw_id: Some("20".to_string()),
@@ -25068,6 +25675,10 @@ fn default_chart_axes() -> Vec<AxisModel> {
             title: None,
             has_major_gridlines: None,
             has_minor_gridlines: None,
+            minimum_scale: None,
+            maximum_scale: None,
+            major_unit: None,
+            minor_unit: None,
         },
     ]
 }
@@ -87380,6 +87991,262 @@ mod tests {
                 .dispatch_get(reopened_value_axis, "HasMinorGridlines", &[])
                 .expect("reopened Axis.HasMinorGridlines"),
             OmValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn loaded_chart_axis_scale_unit_setters_preserve_chart_extensions_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            r#"<c:valAx><c:axId val="20"/><c:title>"#,
+            r#"<c:valAx><c:axId val="20"/><c:scaling><c:min val="0"/><c:max val="100"/></c:scaling><c:title>"#,
+        )
+        .replace(
+            r#"</c:title></c:valAx>"#,
+            r#"</c:title><c:majorUnit val="25"/><c:minorUnit val="5"/></c:valAx>"#,
+        )
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:axis-scale-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with value axis scale");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let value_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.Axes(xlValue)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(value_axis, "MinimumScale", &[])
+                    .expect("Axis.MinimumScale before set")
+            ),
+            0.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(value_axis, "MaximumScale", &[])
+                    .expect("Axis.MaximumScale before set")
+            ),
+            100.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(value_axis, "MajorUnit", &[])
+                    .expect("Axis.MajorUnit before set")
+            ),
+            25.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(value_axis, "MinorUnit", &[])
+                    .expect("Axis.MinorUnit before set")
+            ),
+            5.0
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(value_axis, "MinimumScaleIsAuto", &[])
+                .expect("Axis.MinimumScaleIsAuto before set")
+        ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(value_axis, "MaximumScaleIsAuto", &[])
+                .expect("Axis.MaximumScaleIsAuto before set")
+        ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(value_axis, "MajorUnitIsAuto", &[])
+                .expect("Axis.MajorUnitIsAuto before set")
+        ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(value_axis, "MinorUnitIsAuto", &[])
+                .expect("Axis.MinorUnitIsAuto before set")
+        ));
+
+        runtime
+            .dispatch_set(value_axis, "MinimumScale", OmValue::Number(10.0), &[])
+            .expect("set Axis.MinimumScale");
+        runtime
+            .dispatch_set(value_axis, "MaximumScaleIsAuto", OmValue::Bool(true), &[])
+            .expect("set Axis.MaximumScaleIsAuto");
+        runtime
+            .dispatch_set(value_axis, "MajorUnit", OmValue::Number(20.0), &[])
+            .expect("set Axis.MajorUnit");
+        runtime
+            .dispatch_set(value_axis, "MinorUnitIsAuto", OmValue::Bool(true), &[])
+            .expect("set Axis.MinorUnitIsAuto");
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    value_axis,
+                    "MajorUnit",
+                    OmValue::Text("bad".to_string()),
+                    &[]
+                )
+                .expect_err("Axis.MajorUnit rejects non-number")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(value_axis, "MinorUnit", OmValue::Number(0.0), &[])
+                .expect_err("Axis.MinorUnit rejects non-positive")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after axis scale edits");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:axis-scale-preserve"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:min val="10"/>"#));
+        assert!(!saved_chart_xml.contains("<c:max"));
+        assert!(saved_chart_xml.contains(r#"<c:majorUnit val="20"/>"#));
+        assert!(!saved_chart_xml.contains("<c:minorUnit"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after axis scale edits");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_value_axis = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("reopened Chart.Axes(xlValue)"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_value_axis, "MinimumScale", &[])
+                    .expect("reopened Axis.MinimumScale")
+            ),
+            10.0
+        );
+        assert!(expect_bool(
+            reopened_runtime
+                .dispatch_get(reopened_value_axis, "MaximumScaleIsAuto", &[])
+                .expect("reopened Axis.MaximumScaleIsAuto")
+        ));
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_value_axis, "MajorUnit", &[])
+                    .expect("reopened Axis.MajorUnit")
+            ),
+            20.0
+        );
+        assert!(expect_bool(
+            reopened_runtime
+                .dispatch_get(reopened_value_axis, "MinorUnitIsAuto", &[])
+                .expect("reopened Axis.MinorUnitIsAuto")
+        ));
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_value_axis, "MaximumScale", &[])
+                .expect_err("auto maximum scale has no explicit value")
+                .code,
+            OmErrorCode::NotFound
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_value_axis, "MinorUnit", &[])
+                .expect_err("auto minor unit has no explicit value")
+                .code,
+            OmErrorCode::NotFound
         );
     }
 

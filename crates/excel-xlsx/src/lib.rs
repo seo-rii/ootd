@@ -707,13 +707,17 @@ pub struct ChartDataLabelsSummary {
     pub separator: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChartAxisSummary {
     pub raw_id: Option<String>,
     pub kind: ChartAxisKind,
     pub title_text: Option<String>,
     pub has_major_gridlines: Option<bool>,
     pub has_minor_gridlines: Option<bool>,
+    pub minimum_scale: Option<f64>,
+    pub maximum_scale: Option<f64>,
+    pub major_unit: Option<f64>,
+    pub minor_unit: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -3206,6 +3210,10 @@ fn build_chart_model_overlay(
                                 .map(|text| ChartText { text: text.clone() }),
                             has_major_gridlines: axis.has_major_gridlines,
                             has_minor_gridlines: axis.has_minor_gridlines,
+                            minimum_scale: axis.minimum_scale,
+                            maximum_scale: axis.maximum_scale,
+                            major_unit: axis.major_unit,
+                            minor_unit: axis.minor_unit,
                         })
                         .collect(),
                     raw_part_uri: Some(chart_part_uri.clone()),
@@ -16586,6 +16594,10 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         title_text: None,
                         has_major_gridlines: None,
                         has_minor_gridlines: None,
+                        minimum_scale: None,
+                        maximum_scale: None,
+                        major_unit: None,
+                        minor_unit: None,
                     });
                     active_axis_index = Some(axes.len() - 1);
                     active_axis_depth = 1;
@@ -16608,6 +16620,34 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(axis_index) = active_axis_index
                 {
                     axes[axis_index].has_minor_gridlines = Some(true);
+                }
+                if local_name == b"min"
+                    && element_path.last().is_some_and(|name| name == "scaling")
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) =
+                        parse_f64_val_attr(&element, &reader, "axis minimum scale")?
+                {
+                    axes[axis_index].minimum_scale = Some(value);
+                }
+                if local_name == b"max"
+                    && element_path.last().is_some_and(|name| name == "scaling")
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) =
+                        parse_f64_val_attr(&element, &reader, "axis maximum scale")?
+                {
+                    axes[axis_index].maximum_scale = Some(value);
+                }
+                if local_name == b"majorUnit"
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) = parse_f64_val_attr(&element, &reader, "axis major unit")?
+                {
+                    axes[axis_index].major_unit = Some(value);
+                }
+                if local_name == b"minorUnit"
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) = parse_f64_val_attr(&element, &reader, "axis minor unit")?
+                {
+                    axes[axis_index].minor_unit = Some(value);
                 }
                 if local_name == b"ser" && active_series.is_none() {
                     active_series = Some(ChartSeriesSummary::default());
@@ -16778,6 +16818,34 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(axis_index) = active_axis_index
                 {
                     axes[axis_index].has_minor_gridlines = Some(true);
+                }
+                if local_name == b"min"
+                    && element_path.last().is_some_and(|name| name == "scaling")
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) =
+                        parse_f64_val_attr(&element, &reader, "axis minimum scale")?
+                {
+                    axes[axis_index].minimum_scale = Some(value);
+                }
+                if local_name == b"max"
+                    && element_path.last().is_some_and(|name| name == "scaling")
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) =
+                        parse_f64_val_attr(&element, &reader, "axis maximum scale")?
+                {
+                    axes[axis_index].maximum_scale = Some(value);
+                }
+                if local_name == b"majorUnit"
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) = parse_f64_val_attr(&element, &reader, "axis major unit")?
+                {
+                    axes[axis_index].major_unit = Some(value);
+                }
+                if local_name == b"minorUnit"
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) = parse_f64_val_attr(&element, &reader, "axis minor unit")?
+                {
+                    axes[axis_index].minor_unit = Some(value);
                 }
                 if local_name == b"varyColors"
                     && element_path
@@ -21869,7 +21937,7 @@ mod tests {
         <c:upDownBars/>
       </c:barChart>
       <c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx>
-      <c:valAx><c:axId val="20"/><c:majorGridlines/><c:minorGridlines/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx>
+      <c:valAx><c:axId val="20"/><c:scaling><c:min val="0"/><c:max val="1000"/></c:scaling><c:majorGridlines/><c:minorGridlines/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title><c:majorUnit val="250"/><c:minorUnit val="50"/></c:valAx>
     </c:plotArea>
     <c:legend><c:legendPos val="r"/><c:overlay val="1"/></c:legend>
     <c:plotVisOnly val="0"/>
@@ -22128,6 +22196,10 @@ mod tests {
                     title_text: Some("Quarter".to_string()),
                     has_major_gridlines: None,
                     has_minor_gridlines: None,
+                    minimum_scale: None,
+                    maximum_scale: None,
+                    major_unit: None,
+                    minor_unit: None,
                 },
                 ChartAxisSummary {
                     raw_id: Some("20".to_string()),
@@ -22135,6 +22207,10 @@ mod tests {
                     title_text: Some("Revenue".to_string()),
                     has_major_gridlines: Some(true),
                     has_minor_gridlines: Some(true),
+                    minimum_scale: Some(0.0),
+                    maximum_scale: Some(1000.0),
+                    major_unit: Some(250.0),
+                    minor_unit: Some(50.0),
                 }
             ]
         );

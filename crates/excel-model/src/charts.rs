@@ -220,6 +220,10 @@ pub struct AxisModel {
     pub title: Option<ChartText>,
     pub has_major_gridlines: Option<bool>,
     pub has_minor_gridlines: Option<bool>,
+    pub minimum_scale: Option<f64>,
+    pub maximum_scale: Option<f64>,
+    pub major_unit: Option<f64>,
+    pub minor_unit: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
