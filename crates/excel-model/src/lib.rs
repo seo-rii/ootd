@@ -1196,6 +1196,7 @@ mod tests {
                         dirty: false,
                     }),
                     bubble_size: None,
+                    data_labels: None,
                     order: Some(0),
                 }],
                 title: None,

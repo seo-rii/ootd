@@ -724,6 +724,7 @@ pub struct ChartSeriesSummary {
     pub values_cache: Option<ChartCacheSummary>,
     pub bubble_size_ref: Option<String>,
     pub bubble_size_cache: Option<ChartCacheSummary>,
+    pub data_labels: Option<ChartDataLabelsSummary>,
     pub order: Option<u32>,
 }
 
@@ -3184,23 +3185,9 @@ fn build_chart_model_overlay(
                     size_represents: summary.and_then(|summary| summary.size_represents),
                     split_type: summary.and_then(|summary| summary.split_type),
                     split_value: summary.and_then(|summary| summary.split_value),
-                    data_labels: summary.and_then(|summary| {
-                        summary
-                            .data_labels
-                            .as_ref()
-                            .map(|data_labels| ChartDataLabelsModel {
-                                label_type: None,
-                                show_legend_key: data_labels.show_legend_key,
-                                has_leader_lines: data_labels.has_leader_lines,
-                                show_series_name: data_labels.show_series_name,
-                                show_category_name: data_labels.show_category_name,
-                                show_value: data_labels.show_value,
-                                show_percentage: data_labels.show_percentage,
-                                show_bubble_size: data_labels.show_bubble_size,
-                                separator: data_labels.separator.clone(),
-                                dirty: false,
-                            })
-                    }),
+                    data_labels: summary
+                        .and_then(|summary| summary.data_labels.as_ref())
+                        .map(chart_data_labels_model_from_summary),
                     display_blanks_as: summary.and_then(|summary| summary.display_blanks_as),
                     plot_visible_only: summary.and_then(|summary| summary.plot_visible_only),
                     rounded_corners: summary.and_then(|summary| summary.rounded_corners),
@@ -3567,6 +3554,10 @@ fn chart_series_from_summary(
                     .bubble_size_ref
                     .as_ref()
                     .map(|reference| source_from_ref(reference, series.bubble_size_cache.as_ref())),
+                data_labels: series
+                    .data_labels
+                    .as_ref()
+                    .map(chart_data_labels_model_from_summary),
                 order: series.order.or_else(|| u32::try_from(index).ok()),
             })
             .collect();
@@ -3581,9 +3572,27 @@ fn chart_series_from_summary(
             x_values: None,
             values: Some(source_from_ref(reference, None)),
             bubble_size: None,
+            data_labels: None,
             order: u32::try_from(index).ok(),
         })
         .collect()
+}
+
+fn chart_data_labels_model_from_summary(
+    data_labels: &ChartDataLabelsSummary,
+) -> ChartDataLabelsModel {
+    ChartDataLabelsModel {
+        label_type: None,
+        show_legend_key: data_labels.show_legend_key,
+        has_leader_lines: data_labels.has_leader_lines,
+        show_series_name: data_labels.show_series_name,
+        show_category_name: data_labels.show_category_name,
+        show_value: data_labels.show_value,
+        show_percentage: data_labels.show_percentage,
+        show_bubble_size: data_labels.show_bubble_size,
+        separator: data_labels.separator.clone(),
+        dirty: false,
+    }
 }
 
 fn drawing_anchor_from_summary(summary: &DrawingAnchorSummary) -> Option<DrawingAnchor> {
@@ -16000,6 +16009,11 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         Values,
         BubbleSize,
     }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum ChartDataLabelsTarget {
+        ChartGroup,
+        Series,
+    }
 
     let mut reader = Reader::from_reader(Cursor::new(chart_xml));
     reader.config_mut().trim_text(false);
@@ -16053,6 +16067,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut active_axis_index = None::<usize>;
     let mut active_axis_depth = 0usize;
     let mut axis_title_text_depth = 0usize;
+    let mut data_labels_target = None::<ChartDataLabelsTarget>;
     let mut data_label_separator_text = None::<String>;
     let mut data_label_separator_depth = 0usize;
     let mut element_path = Vec::<String>::new();
@@ -16221,6 +16236,15 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
                     data_labels.get_or_insert_with(ChartDataLabelsSummary::default);
+                    data_labels_target = Some(ChartDataLabelsTarget::ChartGroup);
+                } else if local_name == b"dLbls"
+                    && element_path.last().is_some_and(|name| name == "ser")
+                    && let Some(active_series) = active_series.as_mut()
+                {
+                    active_series
+                        .data_labels
+                        .get_or_insert_with(ChartDataLabelsSummary::default);
+                    data_labels_target = Some(ChartDataLabelsTarget::Series);
                 }
                 if element_path.last().is_some_and(|name| name == "dLbls") {
                     if local_name == b"separator" {
@@ -16237,8 +16261,17 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                             | b"showBubbleSize"
                     ) {
                         let value = parse_bool_val_attr(&element, &reader)?.unwrap_or(true);
-                        let data_labels =
-                            data_labels.get_or_insert_with(ChartDataLabelsSummary::default);
+                        let data_labels = match data_labels_target {
+                            Some(ChartDataLabelsTarget::Series) => active_series
+                                .as_mut()
+                                .and_then(|series| series.data_labels.as_mut()),
+                            Some(ChartDataLabelsTarget::ChartGroup) | None => Some(
+                                data_labels.get_or_insert_with(ChartDataLabelsSummary::default),
+                            ),
+                        };
+                        let Some(data_labels) = data_labels else {
+                            continue;
+                        };
                         match local_name {
                             b"showLegendKey" => data_labels.show_legend_key = Some(value),
                             b"showLeaderLines" => data_labels.has_leader_lines = Some(value),
@@ -16609,6 +16642,13 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
                     data_labels.get_or_insert_with(ChartDataLabelsSummary::default);
+                } else if local_name == b"dLbls"
+                    && element_path.last().is_some_and(|name| name == "ser")
+                    && let Some(active_series) = active_series.as_mut()
+                {
+                    active_series
+                        .data_labels
+                        .get_or_insert_with(ChartDataLabelsSummary::default);
                 }
                 if element_path.last().is_some_and(|name| name == "dLbls")
                     && matches!(
@@ -16623,8 +16663,18 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     )
                 {
                     let value = parse_bool_val_attr(&element, &reader)?.unwrap_or(true);
-                    let data_labels =
-                        data_labels.get_or_insert_with(ChartDataLabelsSummary::default);
+                    let data_labels = match data_labels_target {
+                        Some(ChartDataLabelsTarget::Series) => active_series
+                            .as_mut()
+                            .and_then(|series| series.data_labels.as_mut()),
+                        Some(ChartDataLabelsTarget::ChartGroup) | None => {
+                            Some(data_labels.get_or_insert_with(ChartDataLabelsSummary::default))
+                        }
+                    };
+                    let Some(data_labels) = data_labels else {
+                        buffer.clear();
+                        continue;
+                    };
                     match local_name {
                         b"showLegendKey" => data_labels.show_legend_key = Some(value),
                         b"showLeaderLines" => data_labels.has_leader_lines = Some(value),
@@ -17047,12 +17097,27 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         if let Some(separator) = data_label_separator_text.take()
                             && !separator.is_empty()
                         {
-                            data_labels
-                                .get_or_insert_with(ChartDataLabelsSummary::default)
-                                .separator = Some(separator);
+                            match data_labels_target {
+                                Some(ChartDataLabelsTarget::Series) => {
+                                    if let Some(series) = active_series.as_mut() {
+                                        series
+                                            .data_labels
+                                            .get_or_insert_with(ChartDataLabelsSummary::default)
+                                            .separator = Some(separator);
+                                    }
+                                }
+                                Some(ChartDataLabelsTarget::ChartGroup) | None => {
+                                    data_labels
+                                        .get_or_insert_with(ChartDataLabelsSummary::default)
+                                        .separator = Some(separator);
+                                }
+                            }
                         }
                     }
                     data_label_separator_depth -= 1;
+                }
+                if local_name == b"dLbls" {
+                    data_labels_target = None;
                 }
                 if active_axis_depth > 0 {
                     if active_axis_depth == 1
@@ -21672,6 +21737,7 @@ mod tests {
         <c:varyColors val="1"/>
         <c:ser>
           <c:idx val="0"/><c:order val="0"/>
+          <c:dLbls><c:showLegendKey val="0"/><c:showLeaderLines val="1"/><c:showSerName val="1"/><c:showCatName val="0"/><c:showVal val="1"/><c:showPercent val="0"/><c:showBubbleSize val="0"/><c:separator>; </c:separator></c:dLbls>
           <c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx>
           <c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat>
           <c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f><c:numCache><c:ptCount val="3"/></c:numCache></c:numRef></c:val>
@@ -21981,6 +22047,16 @@ mod tests {
                 }),
                 bubble_size_ref: None,
                 bubble_size_cache: None,
+                data_labels: Some(ChartDataLabelsSummary {
+                    show_legend_key: Some(false),
+                    has_leader_lines: Some(true),
+                    show_series_name: Some(true),
+                    show_category_name: Some(false),
+                    show_value: Some(true),
+                    show_percentage: Some(false),
+                    show_bubble_size: Some(false),
+                    separator: Some("; ".to_string()),
+                }),
                 order: Some(0),
             }]
         );
@@ -22073,6 +22149,19 @@ mod tests {
         assert_eq!(data_labels.show_bubble_size, Some(false));
         assert_eq!(data_labels.separator.as_deref(), Some(", "));
         assert!(!data_labels.dirty);
+        let series_data_labels = chart_model.series[0]
+            .data_labels
+            .as_ref()
+            .expect("series data labels");
+        assert_eq!(series_data_labels.show_legend_key, Some(false));
+        assert_eq!(series_data_labels.has_leader_lines, Some(true));
+        assert_eq!(series_data_labels.show_series_name, Some(true));
+        assert_eq!(series_data_labels.show_category_name, Some(false));
+        assert_eq!(series_data_labels.show_value, Some(true));
+        assert_eq!(series_data_labels.show_percentage, Some(false));
+        assert_eq!(series_data_labels.show_bubble_size, Some(false));
+        assert_eq!(series_data_labels.separator.as_deref(), Some("; "));
+        assert!(!series_data_labels.dirty);
         assert_eq!(chart_model.plot_visible_only, Some(false));
         assert_eq!(chart_model.rounded_corners, Some(true));
         assert_eq!(

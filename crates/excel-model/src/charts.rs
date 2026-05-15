@@ -149,6 +149,7 @@ pub struct SeriesModel {
     pub x_values: Option<ChartSourceExpr>,
     pub values: Option<ChartSourceExpr>,
     pub bubble_size: Option<ChartSourceExpr>,
+    pub data_labels: Option<ChartDataLabelsModel>,
     pub order: Option<u32>,
 }
 
