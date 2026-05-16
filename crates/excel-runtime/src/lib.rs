@@ -4620,6 +4620,8 @@ impl ExcelRuntime {
                                         major_tick_mark: None,
                                         minor_tick_mark: None,
                                         tick_label_position: None,
+                                        tick_label_spacing: None,
+                                        tick_mark_spacing: None,
                                         reverse_plot_order: None,
                                         scale_type: None,
                                         log_base: None,
@@ -5401,6 +5403,95 @@ impl ExcelRuntime {
                             _ => unreachable!("matched axis tick property"),
                         };
                         if changed {
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "TickLabelSpacing" | "TickMarkSpacing" => {
+                        let spacing = coerce_u32_arg(&value, format!("Axis.{member}").as_str())?;
+                        if spacing > 31_999 {
+                            return Err(OmError::invalid_argument(format!(
+                                "Axis.{member} expects a value from 1 through 31999"
+                            )));
+                        }
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let axis = chart
+                            .axes
+                            .get_mut(axis_index)
+                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
+                        if !matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Series) {
+                            return Err(OmError::unsupported(format!(
+                                "Axis.{member} applies only to category and series axes"
+                            )));
+                        }
+                        let target = match member {
+                            "TickLabelSpacing" => &mut axis.tick_label_spacing,
+                            "TickMarkSpacing" => &mut axis.tick_mark_spacing,
+                            _ => unreachable!("matched axis tick spacing property"),
+                        };
+                        let changed = *target != Some(spacing);
+                        if changed {
+                            *target = Some(spacing);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "TickLabelSpacingIsAuto" => {
+                        let OmValue::Bool(is_auto) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Axis.TickLabelSpacingIsAuto expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let axis = chart
+                            .axes
+                            .get_mut(axis_index)
+                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
+                        if !matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Series) {
+                            return Err(OmError::unsupported(
+                                "Axis.TickLabelSpacingIsAuto applies only to category and series axes",
+                            ));
+                        }
+                        let next = if is_auto {
+                            None
+                        } else {
+                            Some(axis.tick_label_spacing.unwrap_or(1))
+                        };
+                        let changed = axis.tick_label_spacing != next;
+                        if changed {
+                            axis.tick_label_spacing = next;
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -10558,6 +10649,9 @@ impl ExcelRuntime {
                             | "MajorTickMark"
                             | "MinorTickMark"
                             | "TickLabelPosition"
+                            | "TickLabelSpacing"
+                            | "TickLabelSpacingIsAuto"
+                            | "TickMarkSpacing"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -13913,6 +14007,13 @@ impl ExcelRuntime {
                     axis.tick_label_position
                         .unwrap_or(ChartTickLabelPosition::NextToAxis),
                 ),
+            ))),
+            "TickLabelSpacing" => Ok(OmValue::Number(f64::from(
+                axis.tick_label_spacing.unwrap_or(1),
+            ))),
+            "TickLabelSpacingIsAuto" => Ok(OmValue::Bool(axis.tick_label_spacing.is_none())),
+            "TickMarkSpacing" => Ok(OmValue::Number(f64::from(
+                axis.tick_mark_spacing.unwrap_or(1),
             ))),
             "MinimumScale" => axis
                 .minimum_scale
@@ -22734,6 +22835,14 @@ fn patch_loaded_chart_model_xml(
     let mut axis_tick_label_position_written = Vec::<bool>::new();
     let mut axis_tick_label_position_inserted = Vec::<bool>::new();
     let mut axis_tick_label_position_removed = Vec::<bool>::new();
+    let mut axis_tick_label_spacing_seen = Vec::<bool>::new();
+    let mut axis_tick_label_spacing_written = Vec::<bool>::new();
+    let mut axis_tick_label_spacing_inserted = Vec::<bool>::new();
+    let mut axis_tick_label_spacing_removed = Vec::<bool>::new();
+    let mut axis_tick_mark_spacing_seen = Vec::<bool>::new();
+    let mut axis_tick_mark_spacing_written = Vec::<bool>::new();
+    let mut axis_tick_mark_spacing_inserted = Vec::<bool>::new();
+    let mut axis_tick_mark_spacing_removed = Vec::<bool>::new();
     let mut axis_scaling_seen = Vec::<bool>::new();
     let mut axis_log_base_seen = Vec::<bool>::new();
     let mut axis_log_base_written = Vec::<bool>::new();
@@ -23142,6 +23251,16 @@ fn patch_loaded_chart_model_xml(
                 .map_err(runtime_xml_error)?;
             Ok(())
         };
+    let write_chart_u32_val_element =
+        |writer: &mut Writer<Cursor<Vec<u8>>>, element_name: &str, value: u32| -> OmResult<()> {
+            let value = value.to_string();
+            let mut element = BytesStart::new(element_name);
+            element.push_attribute(("val", value.as_str()));
+            writer
+                .write_event(Event::Empty(element))
+                .map_err(runtime_xml_error)?;
+            Ok(())
+        };
     let write_chart_string_val_element =
         |writer: &mut Writer<Cursor<Vec<u8>>>, element_name: &str, value: &str| -> OmResult<()> {
             let mut element = BytesStart::new(element_name);
@@ -23301,6 +23420,12 @@ fn patch_loaded_chart_model_xml(
                 "c:tickLblPos",
                 chart_tick_label_position_xml_value(value),
             )?;
+        }
+        if let Some(value) = axis.tick_label_spacing {
+            write_chart_u32_val_element(writer, "c:tickLblSkip", value)?;
+        }
+        if let Some(value) = axis.tick_mark_spacing {
+            write_chart_u32_val_element(writer, "c:tickMarkSkip", value)?;
         }
         if let Some(value) = axis.major_unit {
             write_chart_val_element(writer, "c:majorUnit", value)?;
@@ -23482,6 +23607,14 @@ fn patch_loaded_chart_model_xml(
                     axis_tick_label_position_written.push(false);
                     axis_tick_label_position_inserted.push(false);
                     axis_tick_label_position_removed.push(false);
+                    axis_tick_label_spacing_seen.push(false);
+                    axis_tick_label_spacing_written.push(false);
+                    axis_tick_label_spacing_inserted.push(false);
+                    axis_tick_label_spacing_removed.push(false);
+                    axis_tick_mark_spacing_seen.push(false);
+                    axis_tick_mark_spacing_written.push(false);
+                    axis_tick_mark_spacing_inserted.push(false);
+                    axis_tick_mark_spacing_removed.push(false);
                     axis_scaling_seen.push(false);
                     axis_log_base_seen.push(false);
                     axis_log_base_written.push(false);
@@ -24248,6 +24381,50 @@ fn patch_loaded_chart_model_xml(
                         continue;
                     }
                 } else if !wrote_start_element
+                    && matches!(local_name.as_slice(), b"tickLblSkip" | b"tickMarkSkip")
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    let (seen, written, removed, expected) =
+                        if local_name.as_slice() == b"tickLblSkip" {
+                            (
+                                &mut axis_tick_label_spacing_seen,
+                                &mut axis_tick_label_spacing_written,
+                                &mut axis_tick_label_spacing_removed,
+                                axis.tick_label_spacing,
+                            )
+                        } else {
+                            (
+                                &mut axis_tick_mark_spacing_seen,
+                                &mut axis_tick_mark_spacing_written,
+                                &mut axis_tick_mark_spacing_removed,
+                                axis.tick_mark_spacing,
+                            )
+                        };
+                    if let Some(seen) = seen.get_mut(axis_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = expected {
+                        let value = value.to_string();
+                        writer
+                            .write_event(Event::Start(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value.as_str(),
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = written.get_mut(axis_index) {
+                            *written = true;
+                        }
+                    } else {
+                        if let Some(removed) = removed.get_mut(axis_index) {
+                            *removed = true;
+                        }
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    }
+                } else if !wrote_start_element
                     && let Some((setting_index, (_, _, Some(value)))) =
                         expected_chart_group_numeric_settings
                             .iter()
@@ -24545,6 +24722,47 @@ fn patch_loaded_chart_model_xml(
                                 &element,
                                 reader.decoder(),
                                 value,
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = written.get_mut(axis_index) {
+                            *written = true;
+                        }
+                    } else if let Some(removed) = removed.get_mut(axis_index) {
+                        *removed = true;
+                    }
+                    buffer.clear();
+                    continue;
+                }
+                if matches!(local_name.as_slice(), b"tickLblSkip" | b"tickMarkSkip")
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    let (seen, written, removed, expected) =
+                        if local_name.as_slice() == b"tickLblSkip" {
+                            (
+                                &mut axis_tick_label_spacing_seen,
+                                &mut axis_tick_label_spacing_written,
+                                &mut axis_tick_label_spacing_removed,
+                                axis.tick_label_spacing,
+                            )
+                        } else {
+                            (
+                                &mut axis_tick_mark_spacing_seen,
+                                &mut axis_tick_mark_spacing_written,
+                                &mut axis_tick_mark_spacing_removed,
+                                axis.tick_mark_spacing,
+                            )
+                        };
+                    if let Some(seen) = seen.get_mut(axis_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = expected {
+                        let value = value.to_string();
+                        writer
+                            .write_event(Event::Empty(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value.as_str(),
                             )?))
                             .map_err(runtime_xml_error)?;
                         if let Some(written) = written.get_mut(axis_index) {
@@ -25595,6 +25813,46 @@ fn patch_loaded_chart_model_xml(
                             }
                         }
                     }
+                    if axis.tick_label_spacing.is_some()
+                        && !axis_tick_label_spacing_seen
+                            .get(axis_index)
+                            .copied()
+                            .unwrap_or(false)
+                    {
+                        if let Some(value) = axis.tick_label_spacing {
+                            write_chart_u32_val_element(&mut writer, "c:tickLblSkip", value)?;
+                            if let Some(inserted) =
+                                axis_tick_label_spacing_inserted.get_mut(axis_index)
+                            {
+                                *inserted = true;
+                            }
+                            if let Some(written) =
+                                axis_tick_label_spacing_written.get_mut(axis_index)
+                            {
+                                *written = true;
+                            }
+                        }
+                    }
+                    if axis.tick_mark_spacing.is_some()
+                        && !axis_tick_mark_spacing_seen
+                            .get(axis_index)
+                            .copied()
+                            .unwrap_or(false)
+                    {
+                        if let Some(value) = axis.tick_mark_spacing {
+                            write_chart_u32_val_element(&mut writer, "c:tickMarkSkip", value)?;
+                            if let Some(inserted) =
+                                axis_tick_mark_spacing_inserted.get_mut(axis_index)
+                            {
+                                *inserted = true;
+                            }
+                            if let Some(written) =
+                                axis_tick_mark_spacing_written.get_mut(axis_index)
+                            {
+                                *written = true;
+                            }
+                        }
+                    }
                     if axis.major_unit.is_some()
                         && !axis_major_unit_seen
                             .get(axis_index)
@@ -25681,6 +25939,14 @@ fn patch_loaded_chart_model_xml(
                         axis_tick_label_position_written.push(axis.tick_label_position.is_some());
                         axis_tick_label_position_inserted.push(axis.tick_label_position.is_some());
                         axis_tick_label_position_removed.push(false);
+                        axis_tick_label_spacing_seen.push(axis.tick_label_spacing.is_some());
+                        axis_tick_label_spacing_written.push(axis.tick_label_spacing.is_some());
+                        axis_tick_label_spacing_inserted.push(axis.tick_label_spacing.is_some());
+                        axis_tick_label_spacing_removed.push(false);
+                        axis_tick_mark_spacing_seen.push(axis.tick_mark_spacing.is_some());
+                        axis_tick_mark_spacing_written.push(axis.tick_mark_spacing.is_some());
+                        axis_tick_mark_spacing_inserted.push(axis.tick_mark_spacing.is_some());
+                        axis_tick_mark_spacing_removed.push(false);
                         let has_log_base = chart_axis_log_base_xml_value(axis).is_some();
                         let has_scaling = chart_axis_has_scaling_xml(axis);
                         axis_scaling_seen.push(has_scaling);
@@ -26351,6 +26617,20 @@ fn patch_loaded_chart_model_xml(
             &axis_tick_label_position_written,
             &axis_tick_label_position_inserted,
             &axis_tick_label_position_removed,
+        ) && axis_numeric_field_matches(
+            axis_index,
+            axis.tick_label_spacing.map(f64::from),
+            &axis_tick_label_spacing_seen,
+            &axis_tick_label_spacing_written,
+            &axis_tick_label_spacing_inserted,
+            &axis_tick_label_spacing_removed,
+        ) && axis_numeric_field_matches(
+            axis_index,
+            axis.tick_mark_spacing.map(f64::from),
+            &axis_tick_mark_spacing_seen,
+            &axis_tick_mark_spacing_written,
+            &axis_tick_mark_spacing_inserted,
+            &axis_tick_mark_spacing_removed,
         )
     });
     let axis_gridlines_match = chart.axes.iter().enumerate().all(|(axis_index, axis)| {
@@ -26761,6 +27041,14 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
                     )
                 })
                 .unwrap_or_default();
+            let tick_label_spacing_xml = axis
+                .tick_label_spacing
+                .map(|value| format!(r#"<c:tickLblSkip val="{value}"/>"#))
+                .unwrap_or_default();
+            let tick_mark_spacing_xml = axis
+                .tick_mark_spacing
+                .map(|value| format!(r#"<c:tickMarkSkip val="{value}"/>"#))
+                .unwrap_or_default();
             let major_unit_xml = axis
                 .major_unit
                 .map(|value| format!(r#"<c:majorUnit val="{}"/>"#, chart_number_xml_value(value)))
@@ -26778,7 +27066,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
                     .unwrap_or_default()
             };
             axes_xml.push_str(&format!(
-                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{scaling_xml}{major_gridlines_xml}{minor_gridlines_xml}{axis_title_xml}{major_tick_mark_xml}{minor_tick_mark_xml}{tick_label_position_xml}{major_unit_xml}{minor_unit_xml}{crossing_xml}</c:{axis_tag}>"#
+                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{scaling_xml}{major_gridlines_xml}{minor_gridlines_xml}{axis_title_xml}{major_tick_mark_xml}{minor_tick_mark_xml}{tick_label_position_xml}{tick_label_spacing_xml}{tick_mark_spacing_xml}{major_unit_xml}{minor_unit_xml}{crossing_xml}</c:{axis_tag}>"#
             ));
         }
     }
@@ -26884,6 +27172,8 @@ fn default_chart_axes() -> Vec<AxisModel> {
             major_tick_mark: None,
             minor_tick_mark: None,
             tick_label_position: None,
+            tick_label_spacing: None,
+            tick_mark_spacing: None,
             reverse_plot_order: None,
             scale_type: None,
             log_base: None,
@@ -26903,6 +27193,8 @@ fn default_chart_axes() -> Vec<AxisModel> {
             major_tick_mark: None,
             minor_tick_mark: None,
             tick_label_position: None,
+            tick_label_spacing: None,
+            tick_mark_spacing: None,
             reverse_plot_order: None,
             scale_type: None,
             log_base: None,
@@ -89821,6 +90113,10 @@ mod tests {
         )
         .expect("chart xml utf8")
         .replace(
+            r#"<c:catAx><c:axId val="10"/><c:title>"#,
+            r#"<c:catAx><c:axId val="10"/><c:tickLblSkip val="2"/><c:tickMarkSkip val="3"/><c:title>"#,
+        )
+        .replace(
             r#"</c:title></c:valAx>"#,
             r#"</c:title><c:majorTickMark val="out"/><c:minorTickMark val="cross"/><c:tickLblPos val="nextTo"/></c:valAx>"#,
         )
@@ -89894,6 +90190,27 @@ mod tests {
             ),
             f64::from(super::XL_TICK_LABEL_POSITION_NEXT_TO_AXIS)
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(category_axis, "TickLabelSpacing", &[])
+                    .expect("Axis.TickLabelSpacing before set")
+            ),
+            2.0
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(category_axis, "TickLabelSpacingIsAuto", &[])
+                .expect("Axis.TickLabelSpacingIsAuto before set")
+        ));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(category_axis, "TickMarkSpacing", &[])
+                    .expect("Axis.TickMarkSpacing before set")
+            ),
+            3.0
+        );
 
         let value_axis = expect_object_handle(
             runtime
@@ -89953,6 +90270,12 @@ mod tests {
                 &[],
             )
             .expect("set Axis.TickLabelPosition");
+        runtime
+            .dispatch_set(category_axis, "TickLabelSpacing", OmValue::Number(4.0), &[])
+            .expect("set Axis.TickLabelSpacing");
+        runtime
+            .dispatch_set(category_axis, "TickMarkSpacing", OmValue::Number(5.0), &[])
+            .expect("set Axis.TickMarkSpacing");
         assert_eq!(
             runtime
                 .dispatch_set(
@@ -89976,6 +90299,44 @@ mod tests {
             runtime
                 .dispatch_set(value_axis, "MinorTickMark", OmValue::Number(999.0), &[])
                 .expect_err("Axis.MinorTickMark rejects unsupported enum")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    category_axis,
+                    "TickLabelSpacing",
+                    OmValue::Text("bad".to_string()),
+                    &[]
+                )
+                .expect_err("Axis.TickLabelSpacing rejects non-number")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(category_axis, "TickMarkSpacing", OmValue::Number(1.5), &[])
+                .expect_err("Axis.TickMarkSpacing rejects fractional value")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    category_axis,
+                    "TickLabelSpacing",
+                    OmValue::Number(32_000.0),
+                    &[]
+                )
+                .expect_err("Axis.TickLabelSpacing rejects high value")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(value_axis, "TickMarkSpacing", OmValue::Number(2.0), &[])
+                .expect_err("Axis.TickMarkSpacing rejects value axis")
                 .code,
             OmErrorCode::Unsupported
         );
@@ -90003,7 +90364,11 @@ mod tests {
         assert!(saved_chart_xml.contains(r#"<c:majorTickMark val="in"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:minorTickMark val="none"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:tickLblPos val="high"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:tickLblSkip val="4"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:tickMarkSkip val="5"/>"#));
         assert!(!saved_chart_xml.contains(r#"<c:minorTickMark val="cross"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:tickLblSkip val="2"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:tickMarkSkip val="3"/>"#));
 
         let mut reopened_runtime = ExcelRuntime::new();
         let reopened_workbook = reopened_runtime
@@ -90034,6 +90399,15 @@ mod tests {
                 .dispatch_get(reopened_chart_object, "Chart", &[])
                 .expect("reopened ChartObject.Chart"),
         );
+        let reopened_category_axis = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("reopened Chart.Axes(xlCategory)"),
+        );
         let reopened_value_axis = expect_object_handle(
             reopened_runtime
                 .dispatch_get(
@@ -90042,6 +90416,27 @@ mod tests {
                     &[OmValue::Number(f64::from(super::XL_VALUE))],
                 )
                 .expect("reopened Chart.Axes(xlValue)"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_category_axis, "TickLabelSpacing", &[])
+                    .expect("reopened Axis.TickLabelSpacing")
+            ),
+            4.0
+        );
+        assert!(!expect_bool(
+            reopened_runtime
+                .dispatch_get(reopened_category_axis, "TickLabelSpacingIsAuto", &[])
+                .expect("reopened Axis.TickLabelSpacingIsAuto")
+        ));
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_category_axis, "TickMarkSpacing", &[])
+                    .expect("reopened Axis.TickMarkSpacing")
+            ),
+            5.0
         );
         assert_eq!(
             expect_number(
@@ -90067,6 +90462,37 @@ mod tests {
             ),
             f64::from(super::XL_TICK_LABEL_POSITION_HIGH)
         );
+
+        reopened_runtime
+            .dispatch_set(
+                reopened_category_axis,
+                "TickLabelSpacingIsAuto",
+                OmValue::Bool(true),
+                &[],
+            )
+            .expect("set Axis.TickLabelSpacingIsAuto");
+        let auto_saved = reopened_runtime
+            .save_workbook(
+                reopened_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after axis tick label spacing auto");
+        let auto_saved_package = OpcPackage::from_bytes(&auto_saved).expect("saved package");
+        let auto_saved_chart_xml = std::str::from_utf8(
+            auto_saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(auto_saved_chart_xml.contains(r#"<c:ext uri="urn:axis-ticks-preserve"/>"#));
+        assert!(!auto_saved_chart_xml.contains("<c:tickLblSkip"));
+        assert!(auto_saved_chart_xml.contains(r#"<c:tickMarkSkip val="5"/>"#));
     }
 
     #[test]

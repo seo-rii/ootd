@@ -717,6 +717,8 @@ pub struct ChartAxisSummary {
     pub major_tick_mark: Option<ChartTickMark>,
     pub minor_tick_mark: Option<ChartTickMark>,
     pub tick_label_position: Option<ChartTickLabelPosition>,
+    pub tick_label_spacing: Option<u32>,
+    pub tick_mark_spacing: Option<u32>,
     pub reverse_plot_order: Option<bool>,
     pub scale_type: Option<ChartAxisScaleType>,
     pub log_base: Option<f64>,
@@ -3221,6 +3223,8 @@ fn build_chart_model_overlay(
                             major_tick_mark: axis.major_tick_mark,
                             minor_tick_mark: axis.minor_tick_mark,
                             tick_label_position: axis.tick_label_position,
+                            tick_label_spacing: axis.tick_label_spacing,
+                            tick_mark_spacing: axis.tick_mark_spacing,
                             reverse_plot_order: axis.reverse_plot_order,
                             scale_type: axis.scale_type,
                             log_base: axis.log_base,
@@ -16658,6 +16662,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         major_tick_mark: None,
                         minor_tick_mark: None,
                         tick_label_position: None,
+                        tick_label_spacing: None,
+                        tick_mark_spacing: None,
                         reverse_plot_order: None,
                         scale_type: None,
                         log_base: None,
@@ -16707,6 +16713,22 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(value) = parse_tick_label_position(&element, &reader)?
                 {
                     axes[axis_index].tick_label_position = Some(value);
+                }
+                if local_name == b"tickLblSkip"
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) =
+                        parse_u32_val_attr(&element, &reader, "axis tick label spacing")?
+                    && value > 0
+                {
+                    axes[axis_index].tick_label_spacing = Some(value);
+                }
+                if local_name == b"tickMarkSkip"
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) =
+                        parse_u32_val_attr(&element, &reader, "axis tick mark spacing")?
+                    && value > 0
+                {
+                    axes[axis_index].tick_mark_spacing = Some(value);
                 }
                 if local_name == b"crosses"
                     && let Some(axis_index) = active_axis_index
@@ -16958,6 +16980,22 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(value) = parse_tick_label_position(&element, &reader)?
                 {
                     axes[axis_index].tick_label_position = Some(value);
+                }
+                if local_name == b"tickLblSkip"
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) =
+                        parse_u32_val_attr(&element, &reader, "axis tick label spacing")?
+                    && value > 0
+                {
+                    axes[axis_index].tick_label_spacing = Some(value);
+                }
+                if local_name == b"tickMarkSkip"
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) =
+                        parse_u32_val_attr(&element, &reader, "axis tick mark spacing")?
+                    && value > 0
+                {
+                    axes[axis_index].tick_mark_spacing = Some(value);
                 }
                 if local_name == b"crosses"
                     && let Some(axis_index) = active_axis_index
@@ -22113,7 +22151,7 @@ mod tests {
         <c:hiLowLines/>
         <c:upDownBars/>
       </c:barChart>
-      <c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crosses val="autoZero"/></c:catAx>
+      <c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:tickLblSkip val="2"/><c:tickMarkSkip val="3"/><c:crosses val="autoZero"/></c:catAx>
       <c:valAx><c:axId val="20"/><c:scaling><c:logBase val="10"/><c:orientation val="maxMin"/><c:min val="0"/><c:max val="1000"/></c:scaling><c:majorGridlines/><c:minorGridlines/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title><c:majorTickMark val="cross"/><c:minorTickMark val="in"/><c:tickLblPos val="low"/><c:majorUnit val="250"/><c:minorUnit val="50"/><c:crossesAt val="10"/></c:valAx>
     </c:plotArea>
     <c:legend><c:legendPos val="r"/><c:overlay val="1"/></c:legend>
@@ -22376,6 +22414,8 @@ mod tests {
                     major_tick_mark: Some(ChartTickMark::Outside),
                     minor_tick_mark: Some(ChartTickMark::None),
                     tick_label_position: Some(ChartTickLabelPosition::NextToAxis),
+                    tick_label_spacing: Some(2),
+                    tick_mark_spacing: Some(3),
                     reverse_plot_order: None,
                     scale_type: None,
                     log_base: None,
@@ -22395,6 +22435,8 @@ mod tests {
                     major_tick_mark: Some(ChartTickMark::Cross),
                     minor_tick_mark: Some(ChartTickMark::Inside),
                     tick_label_position: Some(ChartTickLabelPosition::Low),
+                    tick_label_spacing: None,
+                    tick_mark_spacing: None,
                     reverse_plot_order: Some(true),
                     scale_type: Some(ChartAxisScaleType::Logarithmic),
                     log_base: Some(10.0),
