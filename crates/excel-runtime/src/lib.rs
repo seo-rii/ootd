@@ -4622,6 +4622,7 @@ impl ExcelRuntime {
                                         tick_label_position: None,
                                         tick_label_spacing: None,
                                         tick_mark_spacing: None,
+                                        axis_between_categories: None,
                                         reverse_plot_order: None,
                                         scale_type: None,
                                         log_base: None,
@@ -5061,6 +5062,58 @@ impl ExcelRuntime {
                             self.stale_gridline_handles_for_axis(
                                 workbook, chart_id, axis_index, major,
                             );
+                        }
+                        Ok(())
+                    }
+                    "AxisBetweenCategories" => {
+                        let OmValue::Bool(axis_between_categories) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Axis.AxisBetweenCategories expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let axis = chart
+                            .axes
+                            .get(axis_index)
+                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
+                        if !matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date) {
+                            return Err(OmError::unsupported(
+                                "Axis.AxisBetweenCategories applies only to category axes",
+                            ));
+                        }
+                        let value_axis_index = chart
+                            .axes
+                            .iter()
+                            .position(|axis| axis.kind == ChartAxisKind::Value)
+                            .ok_or_else(|| {
+                                OmError::unsupported(
+                                    "Axis.AxisBetweenCategories requires a value axis",
+                                )
+                            })?;
+                        let value_axis = chart.axes.get_mut(value_axis_index).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "value axis not found")
+                        })?;
+                        let changed =
+                            value_axis.axis_between_categories != Some(axis_between_categories);
+                        if changed {
+                            value_axis.axis_between_categories = Some(axis_between_categories);
+                            chart.dirty = true;
+                            runtime.dirty = true;
                         }
                         Ok(())
                     }
@@ -10639,6 +10692,7 @@ impl ExcelRuntime {
                         "Axis",
                         "Type"
                             | "AxisGroup"
+                            | "AxisBetweenCategories"
                             | "HasTitle"
                             | "AxisTitle"
                             | "ReversePlotOrder"
@@ -13970,6 +14024,22 @@ impl ExcelRuntime {
                 ChartAxisKind::Series => XL_SERIES_AXIS,
             }))),
             "AxisGroup" => Ok(OmValue::Number(f64::from(XL_PRIMARY))),
+            "AxisBetweenCategories" => {
+                if !matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date) {
+                    return Err(OmError::unsupported(
+                        "Axis.AxisBetweenCategories applies only to category axes",
+                    ));
+                }
+                let chart = self.chart_model(workbook, chart_id)?;
+                Ok(OmValue::Bool(
+                    chart
+                        .axes
+                        .iter()
+                        .find(|axis| axis.kind == ChartAxisKind::Value)
+                        .and_then(|axis| axis.axis_between_categories)
+                        .unwrap_or(true),
+                ))
+            }
             "HasTitle" => Ok(OmValue::Bool(axis.title.is_some())),
             "HasMajorGridlines" => Ok(OmValue::Bool(axis.has_major_gridlines == Some(true))),
             "HasMinorGridlines" => Ok(OmValue::Bool(axis.has_minor_gridlines == Some(true))),
@@ -22217,6 +22287,10 @@ fn chart_axis_crosses_from_excel_value(value: i32) -> OmResult<ChartAxisCrosses>
     }
 }
 
+fn chart_axis_between_categories_xml_value(value: bool) -> &'static str {
+    if value { "between" } else { "midCat" }
+}
+
 fn chart_legend_position_xml_value(position: ChartLegendPosition) -> &'static str {
     match position {
         ChartLegendPosition::Bottom => "b",
@@ -22876,6 +22950,10 @@ fn patch_loaded_chart_model_xml(
     let mut axis_crosses_at_written = Vec::<bool>::new();
     let mut axis_crosses_at_inserted = Vec::<bool>::new();
     let mut axis_crosses_at_removed = Vec::<bool>::new();
+    let mut axis_cross_between_seen = Vec::<bool>::new();
+    let mut axis_cross_between_written = Vec::<bool>::new();
+    let mut axis_cross_between_inserted = Vec::<bool>::new();
+    let mut axis_cross_between_removed = Vec::<bool>::new();
     let mut current_chart_group_depth = None::<usize>;
     let mut chart_group_axis_refs_seen = Vec::<String>::new();
     let mut skip_depth = 0usize;
@@ -23306,6 +23384,13 @@ fn patch_loaded_chart_model_xml(
             } else if let Some(value) = axis.crosses.and_then(chart_axis_crosses_xml_value) {
                 write_chart_string_val_element(writer, "c:crosses", value)?;
             }
+            if let Some(value) = axis.axis_between_categories {
+                write_chart_string_val_element(
+                    writer,
+                    "c:crossBetween",
+                    chart_axis_between_categories_xml_value(value),
+                )?;
+            }
             Ok(())
         };
     let write_chart_data_labels_properties = |writer: &mut Writer<Cursor<Vec<u8>>>,
@@ -23648,6 +23733,10 @@ fn patch_loaded_chart_model_xml(
                     axis_crosses_at_written.push(false);
                     axis_crosses_at_inserted.push(false);
                     axis_crosses_at_removed.push(false);
+                    axis_cross_between_seen.push(false);
+                    axis_cross_between_written.push(false);
+                    axis_cross_between_inserted.push(false);
+                    axis_cross_between_removed.push(false);
                 }
                 if local_name.as_slice() == b"scaling"
                     && let Some(axis_index) = current_axis_index
@@ -24329,6 +24418,33 @@ fn patch_loaded_chart_model_xml(
                         }
                     }
                 } else if !wrote_start_element
+                    && local_name.as_slice() == b"crossBetween"
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    if let Some(seen) = axis_cross_between_seen.get_mut(axis_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = axis.axis_between_categories {
+                        writer
+                            .write_event(Event::Start(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                chart_axis_between_categories_xml_value(value),
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = axis_cross_between_written.get_mut(axis_index) {
+                            *written = true;
+                        }
+                    } else {
+                        if let Some(removed) = axis_cross_between_removed.get_mut(axis_index) {
+                            *removed = true;
+                        }
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    }
+                } else if !wrote_start_element
                     && matches!(
                         local_name.as_slice(),
                         b"majorTickMark" | b"minorTickMark" | b"tickLblPos"
@@ -24681,6 +24797,30 @@ fn patch_loaded_chart_model_xml(
                         } else if let Some(removed) = axis_crosses_at_removed.get_mut(axis_index) {
                             *removed = true;
                         }
+                    }
+                    buffer.clear();
+                    continue;
+                }
+                if local_name.as_slice() == b"crossBetween"
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    if let Some(seen) = axis_cross_between_seen.get_mut(axis_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = axis.axis_between_categories {
+                        writer
+                            .write_event(Event::Empty(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                chart_axis_between_categories_xml_value(value),
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = axis_cross_between_written.get_mut(axis_index) {
+                            *written = true;
+                        }
+                    } else if let Some(removed) = axis_cross_between_removed.get_mut(axis_index) {
+                        *removed = true;
                     }
                     buffer.clear();
                     continue;
@@ -25911,6 +26051,27 @@ fn patch_loaded_chart_model_xml(
                             *written = true;
                         }
                     }
+                    if axis.axis_between_categories.is_some()
+                        && !axis_cross_between_seen
+                            .get(axis_index)
+                            .copied()
+                            .unwrap_or(false)
+                    {
+                        if let Some(value) = axis.axis_between_categories {
+                            write_chart_string_val_element(
+                                &mut writer,
+                                "c:crossBetween",
+                                chart_axis_between_categories_xml_value(value),
+                            )?;
+                            if let Some(inserted) = axis_cross_between_inserted.get_mut(axis_index)
+                            {
+                                *inserted = true;
+                            }
+                            if let Some(written) = axis_cross_between_written.get_mut(axis_index) {
+                                *written = true;
+                            }
+                        }
+                    }
                 }
                 if local_name.as_slice() == b"plotArea" {
                     while let Some(axis) = chart.axes.get(axis_kinds.len()) {
@@ -25947,6 +26108,10 @@ fn patch_loaded_chart_model_xml(
                         axis_tick_mark_spacing_written.push(axis.tick_mark_spacing.is_some());
                         axis_tick_mark_spacing_inserted.push(axis.tick_mark_spacing.is_some());
                         axis_tick_mark_spacing_removed.push(false);
+                        axis_cross_between_seen.push(axis.axis_between_categories.is_some());
+                        axis_cross_between_written.push(axis.axis_between_categories.is_some());
+                        axis_cross_between_inserted.push(axis.axis_between_categories.is_some());
+                        axis_cross_between_removed.push(false);
                         let has_log_base = chart_axis_log_base_xml_value(axis).is_some();
                         let has_scaling = chart_axis_has_scaling_xml(axis);
                         axis_scaling_seen.push(has_scaling);
@@ -26593,6 +26758,13 @@ fn patch_loaded_chart_model_xml(
             &axis_crosses_written,
             &axis_crosses_inserted,
             &axis_crosses_removed,
+        ) && axis_optional_field_matches(
+            axis_index,
+            axis.axis_between_categories.is_some(),
+            &axis_cross_between_seen,
+            &axis_cross_between_written,
+            &axis_cross_between_inserted,
+            &axis_cross_between_removed,
         )
     });
     let axis_tick_settings_match = chart.axes.iter().enumerate().all(|(axis_index, axis)| {
@@ -27065,8 +27237,17 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
                     .map(|value| format!(r#"<c:crosses val="{value}"/>"#))
                     .unwrap_or_default()
             };
+            let cross_between_xml = axis
+                .axis_between_categories
+                .map(|value| {
+                    format!(
+                        r#"<c:crossBetween val="{}"/>"#,
+                        chart_axis_between_categories_xml_value(value)
+                    )
+                })
+                .unwrap_or_default();
             axes_xml.push_str(&format!(
-                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{scaling_xml}{major_gridlines_xml}{minor_gridlines_xml}{axis_title_xml}{major_tick_mark_xml}{minor_tick_mark_xml}{tick_label_position_xml}{tick_label_spacing_xml}{tick_mark_spacing_xml}{major_unit_xml}{minor_unit_xml}{crossing_xml}</c:{axis_tag}>"#
+                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{scaling_xml}{major_gridlines_xml}{minor_gridlines_xml}{axis_title_xml}{major_tick_mark_xml}{minor_tick_mark_xml}{tick_label_position_xml}{tick_label_spacing_xml}{tick_mark_spacing_xml}{major_unit_xml}{minor_unit_xml}{crossing_xml}{cross_between_xml}</c:{axis_tag}>"#
             ));
         }
     }
@@ -27174,6 +27355,7 @@ fn default_chart_axes() -> Vec<AxisModel> {
             tick_label_position: None,
             tick_label_spacing: None,
             tick_mark_spacing: None,
+            axis_between_categories: None,
             reverse_plot_order: None,
             scale_type: None,
             log_base: None,
@@ -27195,6 +27377,7 @@ fn default_chart_axes() -> Vec<AxisModel> {
             tick_label_position: None,
             tick_label_spacing: None,
             tick_mark_spacing: None,
+            axis_between_categories: None,
             reverse_plot_order: None,
             scale_type: None,
             log_base: None,
@@ -90978,6 +91161,191 @@ mod tests {
                 .code,
             OmErrorCode::NotFound
         );
+    }
+
+    #[test]
+    fn loaded_chart_axis_between_categories_setter_preserves_chart_extensions_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            r#"</c:title></c:valAx>"#,
+            r#"</c:title><c:crossBetween val="midCat"/></c:valAx>"#,
+        )
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:axis-between-categories-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with axis cross-between");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let category_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.Axes(xlCategory)"),
+        );
+        let value_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.Axes(xlValue)"),
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(category_axis, "AxisBetweenCategories", &[])
+                .expect("Axis.AxisBetweenCategories before set")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "AxisBetweenCategories", &[])
+                .expect_err("Axis.AxisBetweenCategories rejects value axis")
+                .code,
+            OmErrorCode::Unsupported
+        );
+
+        runtime
+            .dispatch_set(
+                category_axis,
+                "AxisBetweenCategories",
+                OmValue::Bool(true),
+                &[],
+            )
+            .expect("set Axis.AxisBetweenCategories");
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    category_axis,
+                    "AxisBetweenCategories",
+                    OmValue::Number(1.0),
+                    &[],
+                )
+                .expect_err("Axis.AxisBetweenCategories rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    value_axis,
+                    "AxisBetweenCategories",
+                    OmValue::Bool(false),
+                    &[],
+                )
+                .expect_err("Axis.AxisBetweenCategories rejects value axis setter")
+                .code,
+            OmErrorCode::Unsupported
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after axis cross-between edit");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:axis-between-categories-preserve"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:crossBetween val="between"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:crossBetween val="midCat"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after axis cross-between edit");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_category_axis = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("reopened Chart.Axes(xlCategory)"),
+        );
+        assert!(expect_bool(
+            reopened_runtime
+                .dispatch_get(reopened_category_axis, "AxisBetweenCategories", &[])
+                .expect("reopened Axis.AxisBetweenCategories")
+        ));
     }
 
     #[test]

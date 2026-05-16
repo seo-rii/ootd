@@ -719,6 +719,7 @@ pub struct ChartAxisSummary {
     pub tick_label_position: Option<ChartTickLabelPosition>,
     pub tick_label_spacing: Option<u32>,
     pub tick_mark_spacing: Option<u32>,
+    pub axis_between_categories: Option<bool>,
     pub reverse_plot_order: Option<bool>,
     pub scale_type: Option<ChartAxisScaleType>,
     pub log_base: Option<f64>,
@@ -3225,6 +3226,7 @@ fn build_chart_model_overlay(
                             tick_label_position: axis.tick_label_position,
                             tick_label_spacing: axis.tick_label_spacing,
                             tick_mark_spacing: axis.tick_mark_spacing,
+                            axis_between_categories: axis.axis_between_categories,
                             reverse_plot_order: axis.reverse_plot_order,
                             scale_type: axis.scale_type,
                             log_base: axis.log_base,
@@ -16241,6 +16243,14 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
             Some(_) | None => None,
         })
     };
+    let parse_axis_cross_between =
+        |element: &BytesStart<'_>, reader: &Reader<Cursor<&[u8]>>| -> OmResult<Option<bool>> {
+            Ok(match parse_string_val_attr(element, reader)?.as_deref() {
+                Some("between") => Some(true),
+                Some("midCat") => Some(false),
+                Some(_) | None => None,
+            })
+        };
     let parse_log_base =
         |element: &BytesStart<'_>, reader: &Reader<Cursor<&[u8]>>| -> OmResult<Option<f64>> {
             let Some(value) = parse_f64_val_attr(element, reader, "axis log base")? else {
@@ -16664,6 +16674,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         tick_label_position: None,
                         tick_label_spacing: None,
                         tick_mark_spacing: None,
+                        axis_between_categories: None,
                         reverse_plot_order: None,
                         scale_type: None,
                         log_base: None,
@@ -16745,6 +16756,12 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 {
                     axes[axis_index].crosses = Some(ChartAxisCrosses::Custom);
                     axes[axis_index].crosses_at = Some(value);
+                }
+                if local_name == b"crossBetween"
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) = parse_axis_cross_between(&element, &reader)?
+                {
+                    axes[axis_index].axis_between_categories = Some(value);
                 }
                 if local_name == b"orientation"
                     && element_path.last().is_some_and(|name| name == "scaling")
@@ -17012,6 +17029,12 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 {
                     axes[axis_index].crosses = Some(ChartAxisCrosses::Custom);
                     axes[axis_index].crosses_at = Some(value);
+                }
+                if local_name == b"crossBetween"
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) = parse_axis_cross_between(&element, &reader)?
+                {
+                    axes[axis_index].axis_between_categories = Some(value);
                 }
                 if local_name == b"orientation"
                     && element_path.last().is_some_and(|name| name == "scaling")
@@ -22152,7 +22175,7 @@ mod tests {
         <c:upDownBars/>
       </c:barChart>
       <c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:tickLblSkip val="2"/><c:tickMarkSkip val="3"/><c:crosses val="autoZero"/></c:catAx>
-      <c:valAx><c:axId val="20"/><c:scaling><c:logBase val="10"/><c:orientation val="maxMin"/><c:min val="0"/><c:max val="1000"/></c:scaling><c:majorGridlines/><c:minorGridlines/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title><c:majorTickMark val="cross"/><c:minorTickMark val="in"/><c:tickLblPos val="low"/><c:majorUnit val="250"/><c:minorUnit val="50"/><c:crossesAt val="10"/></c:valAx>
+      <c:valAx><c:axId val="20"/><c:scaling><c:logBase val="10"/><c:orientation val="maxMin"/><c:min val="0"/><c:max val="1000"/></c:scaling><c:majorGridlines/><c:minorGridlines/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title><c:majorTickMark val="cross"/><c:minorTickMark val="in"/><c:tickLblPos val="low"/><c:majorUnit val="250"/><c:minorUnit val="50"/><c:crossesAt val="10"/><c:crossBetween val="midCat"/></c:valAx>
     </c:plotArea>
     <c:legend><c:legendPos val="r"/><c:overlay val="1"/></c:legend>
     <c:plotVisOnly val="0"/>
@@ -22416,6 +22439,7 @@ mod tests {
                     tick_label_position: Some(ChartTickLabelPosition::NextToAxis),
                     tick_label_spacing: Some(2),
                     tick_mark_spacing: Some(3),
+                    axis_between_categories: None,
                     reverse_plot_order: None,
                     scale_type: None,
                     log_base: None,
@@ -22437,6 +22461,7 @@ mod tests {
                     tick_label_position: Some(ChartTickLabelPosition::Low),
                     tick_label_spacing: None,
                     tick_mark_spacing: None,
+                    axis_between_categories: Some(false),
                     reverse_plot_order: Some(true),
                     scale_type: Some(ChartAxisScaleType::Logarithmic),
                     log_base: Some(10.0),

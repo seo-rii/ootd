@@ -225,6 +225,7 @@ pub struct AxisModel {
     pub tick_label_position: Option<ChartTickLabelPosition>,
     pub tick_label_spacing: Option<u32>,
     pub tick_mark_spacing: Option<u32>,
+    pub axis_between_categories: Option<bool>,
     pub reverse_plot_order: Option<bool>,
     pub scale_type: Option<ChartAxisScaleType>,
     pub log_base: Option<f64>,
