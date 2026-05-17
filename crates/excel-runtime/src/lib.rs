@@ -11177,6 +11177,41 @@ impl ExcelRuntime {
                 series_index,
                 point_index,
             } => match member {
+                "Delete" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "DataLabel.Delete does not accept arguments",
+                        ));
+                    }
+                    self.validate_data_label_index(workbook, chart_id, series_index, point_index)?;
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    let chart = runtime
+                        .loaded
+                        .state
+                        .charts
+                        .get_mut(&chart_id)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    let series = chart
+                        .series
+                        .get_mut(series_index)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "series not found"))?;
+                    let point_index = u32::try_from(point_index).map_err(|_| {
+                        OmError::invalid_argument("DataLabel index is out of bounds")
+                    })?;
+                    let replacement = chart_data_labels_disabled_model();
+                    if series.point_data_labels.get(&point_index) != Some(&replacement) {
+                        series.point_data_labels.insert(point_index, replacement);
+                        chart.dirty = true;
+                        runtime.dirty = true;
+                    }
+                    Ok(OmValue::Empty)
+                }
                 "Select" => {
                     if !args.is_empty() {
                         return Err(OmError::invalid_argument(
@@ -85532,6 +85567,11 @@ mod tests {
                 .dispatch_get(series, "Points", &[OmValue::Number(1.0)])
                 .expect("Series.Points(1)"),
         );
+        let third_point = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Points", &[OmValue::Number(3.0)])
+                .expect("Series.Points(3)"),
+        );
 
         assert_eq!(
             runtime
@@ -85744,6 +85784,21 @@ mod tests {
             ),
             "Embedded Revenue Chart"
         );
+        runtime
+            .dispatch_invoke(third_label, "Delete", &[])
+            .expect("DataLabel.Delete");
+        assert_eq!(
+            runtime
+                .dispatch_get(third_point, "HasDataLabel", &[])
+                .expect("third Point.HasDataLabel after DataLabel.Delete"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(third_label, "ShowValue", &[])
+                .expect("third DataLabel.ShowValue after Delete"),
+            OmValue::Bool(false)
+        );
 
         assert_eq!(
             runtime
@@ -85763,6 +85818,13 @@ mod tests {
             runtime
                 .dispatch_invoke(second_label, "Select", &[OmValue::Bool(true)])
                 .expect_err("DataLabel.Select rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(third_label, "Delete", &[OmValue::Bool(true)])
+                .expect_err("DataLabel.Delete rejects arguments")
                 .code,
             OmErrorCode::InvalidArgument
         );
@@ -85788,6 +85850,9 @@ mod tests {
         .expect("saved chart xml utf8");
         assert!(saved_chart_xml.contains(
             r##"<c:dLbl><c:idx val="1"/><c:numFmt formatCode="#,##0.00" sourceLinked="0"/><c:dLblPos val="ctr"/><c:showCatName val="1"/><c:showVal val="0"/><c:separator> * </c:separator></c:dLbl>"##
+        ));
+        assert!(saved_chart_xml.contains(
+            r#"<c:dLbl><c:idx val="2"/><c:showLegendKey val="0"/><c:showLeaderLines val="0"/><c:showSerName val="0"/><c:showCatName val="0"/><c:showVal val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbl>"#
         ));
 
         let mut reopened_runtime = ExcelRuntime::new();
@@ -85839,6 +85904,16 @@ mod tests {
                 .dispatch_invoke(reopened_data_labels, "Item", &[OmValue::Number(2.0)])
                 .expect("reopened DataLabels.Item(2)"),
         );
+        let reopened_third_label = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_data_labels, "Item", &[OmValue::Number(3.0)])
+                .expect("reopened DataLabels.Item(3)"),
+        );
+        let reopened_third_point = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_series, "Points", &[OmValue::Number(3.0)])
+                .expect("reopened Series.Points(3)"),
+        );
         assert_eq!(
             reopened_runtime
                 .dispatch_get(reopened_second_label, "ShowValue", &[])
@@ -85876,6 +85951,18 @@ mod tests {
                     .expect("reopened DataLabel.Position")
             ),
             f64::from(super::XL_LABEL_POSITION_CENTER)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_third_point, "HasDataLabel", &[])
+                .expect("reopened third Point.HasDataLabel"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_third_label, "ShowValue", &[])
+                .expect("reopened third DataLabel.ShowValue"),
+            OmValue::Bool(false)
         );
     }
 
