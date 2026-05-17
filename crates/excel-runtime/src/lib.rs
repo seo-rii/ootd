@@ -4704,6 +4704,41 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
+                    "ChartStyle" => {
+                        let OmValue::Number(number) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Chart.ChartStyle expects a numeric value",
+                            ));
+                        };
+                        if !number.is_finite()
+                            || number.fract() != 0.0
+                            || number < 1.0
+                            || number > 48.0
+                        {
+                            return Err(OmError::invalid_argument(
+                                "Chart.ChartStyle must be an integer between 1 and 48",
+                            ));
+                        }
+                        let chart_style = number as u16;
+                        {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            if chart.style != Some(chart_style) {
+                                chart.style = Some(chart_style);
+                                chart.dirty = true;
+                                runtime.dirty = true;
+                            }
+                        }
+                        Ok(())
+                    }
                     "ProtectData" | "ProtectFormatting" | "ProtectSelection" => {
                         self.chart_model(workbook, chart_id)?;
                         let OmValue::Bool(protected) = value else {
@@ -11719,6 +11754,7 @@ impl ExcelRuntime {
                     | (
                         "Chart",
                         "ChartType"
+                            | "ChartStyle"
                             | "Index"
                             | "DisplayBlanksAs"
                             | "PlotVisibleOnly"
@@ -14124,6 +14160,7 @@ impl ExcelRuntime {
                             id: chart_id,
                             workbook_id,
                             chart_type: ChartType::Bar,
+                            style: None,
                             series: Vec::new(),
                             title: None,
                             legend: None,
@@ -14437,6 +14474,16 @@ impl ExcelRuntime {
                 Ok(OmValue::Number(f64::from(chart_type_to_excel_value(
                     &self.chart_model(workbook, chart_id)?.chart_type,
                 )?)))
+            }
+            "ChartStyle" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Chart.ChartStyle does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Number(f64::from(
+                    self.chart_model(workbook, chart_id)?.style.unwrap_or(0),
+                )))
             }
             "DisplayBlanksAs" => {
                 if !args.is_empty() {
@@ -17888,6 +17935,7 @@ impl ExcelRuntime {
                         id: chart_id,
                         workbook_id: runtime.loaded.state.model.id,
                         chart_type: ChartType::Bar,
+                        style: None,
                         series: Vec::new(),
                         title: None,
                         legend: None,
@@ -24519,6 +24567,8 @@ fn patch_loaded_chart_model_xml(
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
+    let expected_chart_style = chart.style.map(|style| style.to_string());
+    let expected_chart_style = expected_chart_style.as_deref();
     let expected_legend_position =
         chart
             .legend
@@ -24659,6 +24709,9 @@ fn patch_loaded_chart_model_xml(
     let mut patched_sources = 0usize;
     let mut chart_type = None::<ChartType>;
     let mut chart_type_rewritten = false;
+    let mut chart_style_seen = false;
+    let mut chart_style_written = false;
+    let mut chart_style_inserted = false;
     let mut chart_title_seen = false;
     let mut chart_title_removed = false;
     let mut chart_title_inserted = false;
@@ -25869,6 +25922,10 @@ fn patch_loaded_chart_model_xml(
                     && parent_name == Some(b"chartSpace".as_slice())
                 {
                     rounded_corners_seen = true;
+                } else if local_name.as_slice() == b"style"
+                    && parent_name == Some(b"chartSpace".as_slice())
+                {
+                    chart_style_seen = true;
                 } else if local_name.as_slice() == b"varyColors"
                     && current_chart_group_depth == Some(element_stack.len())
                 {
@@ -26019,6 +26076,19 @@ fn patch_loaded_chart_model_xml(
                         .map_err(runtime_xml_error)?;
                     rounded_corners_inserted = true;
                     rounded_corners_written = true;
+                }
+                if local_name.as_slice() == b"chart"
+                    && parent_name == Some(b"chartSpace".as_slice())
+                    && !chart_style_seen
+                    && let Some(value) = expected_chart_style
+                {
+                    let mut style = BytesStart::new("c:style");
+                    style.push_attribute(("val", value));
+                    writer
+                        .write_event(Event::Empty(style))
+                        .map_err(runtime_xml_error)?;
+                    chart_style_inserted = true;
+                    chart_style_written = true;
                 }
 
                 let mut wrote_start_element = false;
@@ -26187,6 +26257,19 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     rounded_corners_written = true;
+                } else if !wrote_start_element
+                    && local_name.as_slice() == b"style"
+                    && parent_name == Some(b"chartSpace".as_slice())
+                    && let Some(value) = expected_chart_style
+                {
+                    writer
+                        .write_event(Event::Start(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    chart_style_written = true;
                 } else if !wrote_start_element
                     && local_name.as_slice() == b"barDir"
                     && let Some(value) = expected_bar_direction
@@ -27397,6 +27480,10 @@ fn patch_loaded_chart_model_xml(
                     && parent_name == Some(b"chartSpace".as_slice())
                 {
                     rounded_corners_seen = true;
+                } else if local_name.as_slice() == b"style"
+                    && parent_name == Some(b"chartSpace".as_slice())
+                {
+                    chart_style_seen = true;
                 } else if local_name.as_slice() == b"varyColors"
                     && current_chart_group_depth == Some(element_stack.len())
                 {
@@ -27611,6 +27698,18 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     rounded_corners_written = true;
+                } else if local_name.as_slice() == b"style"
+                    && parent_name == Some(b"chartSpace".as_slice())
+                    && let Some(value) = expected_chart_style
+                {
+                    writer
+                        .write_event(Event::Empty(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    chart_style_written = true;
                 } else if local_name.as_slice() == b"barDir"
                     && let Some(value) = expected_bar_direction
                 {
@@ -29052,6 +29151,11 @@ fn patch_loaded_chart_model_xml(
         (Some(_), false) => rounded_corners_inserted,
         (None, _) => true,
     };
+    let chart_style_matches = match (expected_chart_style, chart_style_seen) {
+        (Some(_), true) => chart_style_written,
+        (Some(_), false) => chart_style_inserted,
+        (None, _) => true,
+    };
     let vary_colors_matches = match (expected_vary_colors, vary_colors_seen) {
         (Some(_), true) => vary_colors_written,
         (Some(_), false) => vary_colors_inserted,
@@ -29427,6 +29531,7 @@ fn patch_loaded_chart_model_xml(
         && display_blanks_as_matches
         && plot_visible_only_matches
         && rounded_corners_matches
+        && chart_style_matches
         && vary_colors_matches
         && bar_direction_matches
         && chart_grouping_matches
@@ -29694,6 +29799,10 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             )
         })
         .unwrap_or_default();
+    let chart_style_xml = chart
+        .style
+        .map(|value| format!(r#"<c:style val="{value}"/>"#))
+        .unwrap_or_default();
     let chart_has_axes = chart_type_has_axes(&chart.chart_type);
     let mut chart_group_axis_refs = String::new();
     let mut axes_xml = String::new();
@@ -29898,7 +30007,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  {rounded_corners_xml}<c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{bar_shape_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{data_labels_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
+  {rounded_corners_xml}{chart_style_xml}<c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{bar_shape_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{data_labels_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -85116,6 +85225,7 @@ mod tests {
                 .clone(),
         )
         .expect("chart xml utf8")
+        .replace("<c:chart>", r#"<c:style val="4"/><c:chart>"#)
         .replace(
             "</c:chartSpace>",
             r#"<c:extLst><c:ext uri="urn:content-preserve"/></c:extLst></c:chartSpace>"#,
@@ -85178,6 +85288,14 @@ mod tests {
             ),
             f64::from(super::XL_NOT_PLOTTED)
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "ChartStyle", &[])
+                    .expect("Chart.ChartStyle loaded")
+            ),
+            4.0
+        );
         let chart_title = expect_object_handle(
             runtime
                 .dispatch_get(chart, "ChartTitle", &[])
@@ -85227,6 +85345,9 @@ mod tests {
                 &[],
             )
             .expect("set loaded Chart.DisplayBlanksAs");
+        runtime
+            .dispatch_set(chart, "ChartStyle", OmValue::Number(8.0), &[])
+            .expect("set loaded Chart.ChartStyle");
         assert_eq!(
             runtime
                 .dispatch_set(chart, "PlotVisibleOnly", OmValue::Number(0.0), &[])
@@ -85247,6 +85368,27 @@ mod tests {
                 .expect_err("Chart.DisplayBlanksAs rejects unsupported constants")
                 .code,
             OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(chart, "ChartStyle", OmValue::Text("bad".to_string()), &[])
+                .expect_err("Chart.ChartStyle rejects non-number")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(chart, "ChartStyle", OmValue::Number(49.0), &[])
+                .expect_err("Chart.ChartStyle rejects out of range")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(chart, "ChartStyle", OmValue::Number(2.5), &[])
+                .expect_err("Chart.ChartStyle rejects fractional style")
+                .code,
+            OmErrorCode::InvalidArgument
         );
         assert_eq!(
             runtime
@@ -85280,6 +85422,7 @@ mod tests {
         assert!(saved_chart_xml.contains(r#"<c:legendPos val="l""#));
         assert!(saved_chart_xml.contains(r#"<c:overlay val="1""#));
         assert!(saved_chart_xml.contains(r#"<c:roundedCorners val="1"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:style val="8"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:plotVisOnly val="0"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:dispBlanksAs val="zero"/>"#));
 
@@ -85366,6 +85509,14 @@ mod tests {
                     .expect("reopened Chart.DisplayBlanksAs")
             ),
             f64::from(super::XL_ZERO)
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart, "ChartStyle", &[])
+                    .expect("reopened Chart.ChartStyle")
+            ),
+            8.0
         );
     }
 

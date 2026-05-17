@@ -656,6 +656,7 @@ pub struct DrawingSizeSummary {
 pub struct ChartPartSummary {
     pub root_name: Option<String>,
     pub chart_type_names: Vec<String>,
+    pub style: Option<u16>,
     pub bar_direction: Option<String>,
     pub chart_grouping: Option<String>,
     pub bar_shape: Option<String>,
@@ -3183,6 +3184,7 @@ fn build_chart_model_overlay(
                     id: chart_id,
                     workbook_id,
                     chart_type: chart_type_from_summary(summary),
+                    style: summary.and_then(|summary| summary.style),
                     series: chart_series_from_summary(
                         summary,
                         workbook_id,
@@ -16108,6 +16110,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut buffer = Vec::new();
     let mut root_name = None;
     let mut chart_type_names = Vec::new();
+    let mut chart_style = None::<u16>;
     let mut bar_direction = None::<String>;
     let mut chart_grouping = None::<String>;
     let mut bar_shape = None::<String>;
@@ -16415,6 +16418,13 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
                 if local_name == b"extLst" {
                     has_extension_list = true;
+                }
+                if local_name == b"style"
+                    && element_path.last().is_some_and(|name| name == "chartSpace")
+                    && let Some(value) = parse_i32_val_attr(&element, &reader, "chart style")?
+                    && (1..=48).contains(&value)
+                {
+                    chart_style = Some(value as u16);
                 }
                 if local_name == b"legend" {
                     has_legend = true;
@@ -17124,6 +17134,13 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
                 if local_name == b"extLst" {
                     has_extension_list = true;
+                }
+                if local_name == b"style"
+                    && element_path.last().is_some_and(|name| name == "chartSpace")
+                    && let Some(value) = parse_i32_val_attr(&element, &reader, "chart style")?
+                    && (1..=48).contains(&value)
+                {
+                    chart_style = Some(value as u16);
                 }
                 if local_name == b"legend" {
                     has_legend = true;
@@ -17968,6 +17985,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     Ok(ChartPartSummary {
         root_name,
         chart_type_names,
+        style: chart_style,
         bar_direction,
         chart_grouping,
         bar_shape,

@@ -614,6 +614,7 @@ mod tests {
                 id: chart_id,
                 workbook_id,
                 chart_type: ChartType::Bar,
+                style: None,
                 series: Vec::new(),
                 title: None,
                 legend: None,
@@ -1182,6 +1183,7 @@ mod tests {
                 id: chart_id,
                 workbook_id: state.model.id,
                 chart_type: ChartType::Bar,
+                style: None,
                 series: vec![super::SeriesModel {
                     name: None,
                     x_values: None,

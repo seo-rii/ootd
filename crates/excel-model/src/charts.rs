@@ -16,6 +16,7 @@ pub struct ChartModel {
     pub id: ChartId,
     pub workbook_id: WorkbookId,
     pub chart_type: ChartType,
+    pub style: Option<u16>,
     pub series: Vec<SeriesModel>,
     pub title: Option<ChartText>,
     pub legend: Option<LegendModel>,
