@@ -563,6 +563,11 @@ enum RuntimeObjectKind {
         chart_id: ChartId,
         axis_index: usize,
     },
+    TickLabels {
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        axis_index: usize,
+    },
     AxisTitle {
         workbook: WorkbookHandle,
         chart_id: ChartId,
@@ -2002,6 +2007,11 @@ impl ExcelRuntime {
                 chart_id,
                 axis_index,
             } => self.dispatch_get_axis(workbook, chart_id, axis_index, member, args),
+            RuntimeObjectKind::TickLabels {
+                workbook,
+                chart_id,
+                axis_index,
+            } => self.dispatch_get_tick_labels(workbook, chart_id, axis_index, member, args),
             RuntimeObjectKind::AxisTitle {
                 workbook,
                 chart_id,
@@ -4648,6 +4658,8 @@ impl ExcelRuntime {
                                         major_tick_mark: None,
                                         minor_tick_mark: None,
                                         tick_label_position: None,
+                                        tick_label_number_format: None,
+                                        tick_label_number_format_linked: None,
                                         tick_label_spacing: None,
                                         tick_mark_spacing: None,
                                         axis_between_categories: None,
@@ -5994,6 +6006,109 @@ impl ExcelRuntime {
                     }
                     _ => Err(OmError::unsupported(format!(
                         "Axis.{member} is not writable"
+                    ))),
+                }
+            }
+            RuntimeObjectKind::TickLabels {
+                workbook,
+                chart_id,
+                axis_index,
+            } => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "TickLabels.{member} does not accept index arguments"
+                    )));
+                }
+                match member {
+                    "NumberFormat" | "NumberFormatLocal" => {
+                        let OmValue::Text(format_code) = value else {
+                            return Err(OmError::type_mismatch(
+                                "TickLabels.NumberFormat expects a text value",
+                            ));
+                        };
+                        if format_code.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "TickLabels.NumberFormat must not be empty",
+                            ));
+                        }
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let axis = chart
+                            .axes
+                            .get_mut(axis_index)
+                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
+                        let changed = axis.tick_label_number_format.as_deref()
+                            != Some(format_code.as_str())
+                            || axis.tick_label_number_format_linked != Some(false);
+                        if changed {
+                            axis.tick_label_number_format = Some(format_code);
+                            axis.tick_label_number_format_linked = Some(false);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "NumberFormatLinked" => {
+                        let OmValue::Bool(linked) = value else {
+                            return Err(OmError::type_mismatch(
+                                "TickLabels.NumberFormatLinked expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let axis = chart
+                            .axes
+                            .get_mut(axis_index)
+                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
+                        let next_format = if linked {
+                            axis.tick_label_number_format.clone()
+                        } else {
+                            Some(
+                                axis.tick_label_number_format
+                                    .clone()
+                                    .unwrap_or_else(|| "General".to_string()),
+                            )
+                        };
+                        let changed = axis.tick_label_number_format_linked != Some(linked)
+                            || axis.tick_label_number_format != next_format;
+                        if changed {
+                            axis.tick_label_number_format_linked = Some(linked);
+                            axis.tick_label_number_format = next_format;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "TickLabels.{member} is not writable"
                     ))),
                 }
             }
@@ -10956,6 +11071,25 @@ impl ExcelRuntime {
                     ))),
                 }
             }
+            RuntimeObjectKind::TickLabels {
+                workbook,
+                chart_id,
+                axis_index,
+            } => match member {
+                "Select" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "TickLabels.Select does not accept arguments",
+                        ));
+                    }
+                    self.axis_model(workbook, chart_id, axis_index)?;
+                    let chart = self.register_chart_handle(workbook, chart_id);
+                    self.dispatch_invoke(chart, "Select", &[])
+                }
+                _ => Err(OmError::unsupported(format!(
+                    "TickLabels.{member} is not implemented as a method"
+                ))),
+            },
         }
     }
 
@@ -11226,6 +11360,7 @@ impl ExcelRuntime {
                             | "MajorTickMark"
                             | "MinorTickMark"
                             | "TickLabelPosition"
+                            | "TickLabels"
                             | "TickLabelSpacing"
                             | "TickLabelSpacingIsAuto"
                             | "TickMarkSpacing"
@@ -11234,6 +11369,17 @@ impl ExcelRuntime {
                             | "Parent"
                             | "Select"
                             | "Delete"
+                    )
+                    | (
+                        "TickLabels",
+                        "Name"
+                            | "NumberFormat"
+                            | "NumberFormatLocal"
+                            | "NumberFormatLinked"
+                            | "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Select"
                     )
                     | (
                         "DisplayUnitLabel",
@@ -14730,6 +14876,13 @@ impl ExcelRuntime {
                         .unwrap_or(ChartTickLabelPosition::NextToAxis),
                 ),
             ))),
+            "TickLabels" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::TickLabels {
+                    workbook,
+                    chart_id,
+                    axis_index,
+                },
+            ))),
             "TickLabelSpacing" => Ok(OmValue::Number(f64::from(
                 axis.tick_label_spacing.unwrap_or(1),
             ))),
@@ -14795,6 +14948,46 @@ impl ExcelRuntime {
             )),
             _ => Err(OmError::unsupported(format!(
                 "Axis.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_get_tick_labels(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        axis_index: usize,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        if !args.is_empty() {
+            return Err(OmError::invalid_argument(format!(
+                "TickLabels.{member} does not accept arguments"
+            )));
+        }
+        let axis = self.axis_model(workbook, chart_id, axis_index)?;
+
+        match member {
+            "Name" => Ok(OmValue::Text("Tick Labels".to_string())),
+            "NumberFormat" | "NumberFormatLocal" => Ok(OmValue::Text(
+                axis.tick_label_number_format
+                    .clone()
+                    .unwrap_or_else(|| "General".to_string()),
+            )),
+            "NumberFormatLinked" => Ok(OmValue::Bool(
+                axis.tick_label_number_format_linked.unwrap_or(true),
+            )),
+            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+            "Application" => Ok(OmValue::Object(self.root_application())),
+            "Parent" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::Axis {
+                    workbook,
+                    chart_id,
+                    axis_index,
+                },
+            ))),
+            _ => Err(OmError::unsupported(format!(
+                "TickLabels.{member} is not implemented"
             ))),
         }
     }
@@ -19923,6 +20116,11 @@ impl ExcelRuntime {
                     chart_id: object_chart_id,
                     ..
                 }
+                | RuntimeObjectKind::TickLabels {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    ..
+                }
                 | RuntimeObjectKind::AxisTitle {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
@@ -20027,6 +20225,11 @@ impl ExcelRuntime {
                     chart_id: object_chart_id,
                 }
                 | RuntimeObjectKind::Axis {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    ..
+                }
+                | RuntimeObjectKind::TickLabels {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
                     ..
@@ -23755,6 +23958,10 @@ fn patch_loaded_chart_model_xml(
     let mut axis_tick_label_position_written = Vec::<bool>::new();
     let mut axis_tick_label_position_inserted = Vec::<bool>::new();
     let mut axis_tick_label_position_removed = Vec::<bool>::new();
+    let mut axis_tick_label_number_format_seen = Vec::<bool>::new();
+    let mut axis_tick_label_number_format_written = Vec::<bool>::new();
+    let mut axis_tick_label_number_format_inserted = Vec::<bool>::new();
+    let mut axis_tick_label_number_format_removed = Vec::<bool>::new();
     let mut axis_tick_label_spacing_seen = Vec::<bool>::new();
     let mut axis_tick_label_spacing_written = Vec::<bool>::new();
     let mut axis_tick_label_spacing_inserted = Vec::<bool>::new();
@@ -24365,6 +24572,18 @@ fn patch_loaded_chart_model_xml(
                 .map_err(runtime_xml_error)?;
             Ok(())
         };
+    let write_chart_num_format_element = |writer: &mut Writer<Cursor<Vec<u8>>>,
+                                          format_code: &str,
+                                          source_linked: bool|
+     -> OmResult<()> {
+        let mut element = BytesStart::new("c:numFmt");
+        element.push_attribute(("formatCode", format_code));
+        element.push_attribute(("sourceLinked", if source_linked { "1" } else { "0" }));
+        writer
+            .write_event(Event::Empty(element))
+            .map_err(runtime_xml_error)?;
+        Ok(())
+    };
     let write_chart_axis_element = |writer: &mut Writer<Cursor<Vec<u8>>>,
                                     axis_index: usize,
                                     axis: &AxisModel|
@@ -24388,6 +24607,13 @@ fn patch_loaded_chart_model_xml(
         }
         if let Some(title) = axis.title.as_ref() {
             write_chart_text_element(writer, "c:title", &title.text)?;
+        }
+        if let Some(format_code) = axis.tick_label_number_format.as_deref() {
+            write_chart_num_format_element(
+                writer,
+                format_code,
+                axis.tick_label_number_format_linked.unwrap_or(true),
+            )?;
         }
         if let Some(value) = axis.major_tick_mark {
             write_chart_string_val_element(
@@ -24621,6 +24847,10 @@ fn patch_loaded_chart_model_xml(
                     axis_tick_label_position_written.push(false);
                     axis_tick_label_position_inserted.push(false);
                     axis_tick_label_position_removed.push(false);
+                    axis_tick_label_number_format_seen.push(false);
+                    axis_tick_label_number_format_written.push(false);
+                    axis_tick_label_number_format_inserted.push(false);
+                    axis_tick_label_number_format_removed.push(false);
                     axis_tick_label_spacing_seen.push(false);
                     axis_tick_label_spacing_written.push(false);
                     axis_tick_label_spacing_inserted.push(false);
@@ -25543,6 +25773,35 @@ fn patch_loaded_chart_model_xml(
                         continue;
                     }
                 } else if !wrote_start_element
+                    && local_name.as_slice() == b"numFmt"
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    if let Some(seen) = axis_tick_label_number_format_seen.get_mut(axis_index) {
+                        *seen = true;
+                    }
+                    if let Some(format_code) = axis.tick_label_number_format.as_deref() {
+                        write_chart_num_format_element(
+                            &mut writer,
+                            format_code,
+                            axis.tick_label_number_format_linked.unwrap_or(true),
+                        )?;
+                        if let Some(written) =
+                            axis_tick_label_number_format_written.get_mut(axis_index)
+                        {
+                            *written = true;
+                        }
+                    } else {
+                        if let Some(removed) =
+                            axis_tick_label_number_format_removed.get_mut(axis_index)
+                        {
+                            *removed = true;
+                        }
+                    }
+                    skip_depth = 1;
+                    buffer.clear();
+                    continue;
+                } else if !wrote_start_element
                     && matches!(local_name.as_slice(), b"tickLblSkip" | b"tickMarkSkip")
                     && let Some(axis_index) = current_axis_index
                     && let Some(axis) = chart.axes.get(axis_index)
@@ -26005,6 +26264,32 @@ fn patch_loaded_chart_model_xml(
                             *written = true;
                         }
                     } else if let Some(removed) = removed.get_mut(axis_index) {
+                        *removed = true;
+                    }
+                    buffer.clear();
+                    continue;
+                }
+                if local_name.as_slice() == b"numFmt"
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    if let Some(seen) = axis_tick_label_number_format_seen.get_mut(axis_index) {
+                        *seen = true;
+                    }
+                    if let Some(format_code) = axis.tick_label_number_format.as_deref() {
+                        write_chart_num_format_element(
+                            &mut writer,
+                            format_code,
+                            axis.tick_label_number_format_linked.unwrap_or(true),
+                        )?;
+                        if let Some(written) =
+                            axis_tick_label_number_format_written.get_mut(axis_index)
+                        {
+                            *written = true;
+                        }
+                    } else if let Some(removed) =
+                        axis_tick_label_number_format_removed.get_mut(axis_index)
+                    {
                         *removed = true;
                     }
                     buffer.clear();
@@ -27020,6 +27305,30 @@ fn patch_loaded_chart_model_xml(
                             *written = true;
                         }
                     }
+                    if axis.tick_label_number_format.is_some()
+                        && !axis_tick_label_number_format_seen
+                            .get(axis_index)
+                            .copied()
+                            .unwrap_or(false)
+                    {
+                        if let Some(format_code) = axis.tick_label_number_format.as_deref() {
+                            write_chart_num_format_element(
+                                &mut writer,
+                                format_code,
+                                axis.tick_label_number_format_linked.unwrap_or(true),
+                            )?;
+                            if let Some(inserted) =
+                                axis_tick_label_number_format_inserted.get_mut(axis_index)
+                            {
+                                *inserted = true;
+                            }
+                            if let Some(written) =
+                                axis_tick_label_number_format_written.get_mut(axis_index)
+                            {
+                                *written = true;
+                            }
+                        }
+                    }
                     if axis.major_tick_mark.is_some()
                         && !axis_major_tick_mark_seen
                             .get(axis_index)
@@ -27275,6 +27584,13 @@ fn patch_loaded_chart_model_xml(
                         axis_tick_label_position_written.push(axis.tick_label_position.is_some());
                         axis_tick_label_position_inserted.push(axis.tick_label_position.is_some());
                         axis_tick_label_position_removed.push(false);
+                        axis_tick_label_number_format_seen
+                            .push(axis.tick_label_number_format.is_some());
+                        axis_tick_label_number_format_written
+                            .push(axis.tick_label_number_format.is_some());
+                        axis_tick_label_number_format_inserted
+                            .push(axis.tick_label_number_format.is_some());
+                        axis_tick_label_number_format_removed.push(false);
                         axis_tick_label_spacing_seen.push(axis.tick_label_spacing.is_some());
                         axis_tick_label_spacing_written.push(axis.tick_label_spacing.is_some());
                         axis_tick_label_spacing_inserted.push(axis.tick_label_spacing.is_some());
@@ -28022,6 +28338,13 @@ fn patch_loaded_chart_model_xml(
             &axis_tick_label_position_written,
             &axis_tick_label_position_inserted,
             &axis_tick_label_position_removed,
+        ) && axis_optional_field_matches(
+            axis_index,
+            axis.tick_label_number_format.is_some(),
+            &axis_tick_label_number_format_seen,
+            &axis_tick_label_number_format_written,
+            &axis_tick_label_number_format_inserted,
+            &axis_tick_label_number_format_removed,
         ) && axis_numeric_field_matches(
             axis_index,
             axis.tick_label_spacing.map(f64::from),
@@ -28447,6 +28770,21 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
                     )
                 })
                 .unwrap_or_default();
+            let tick_label_number_format_xml = axis
+                .tick_label_number_format
+                .as_ref()
+                .map(|format_code| {
+                    let format_code = partial_escape(format_code).to_string();
+                    let source_linked = if axis.tick_label_number_format_linked.unwrap_or(true) {
+                        "1"
+                    } else {
+                        "0"
+                    };
+                    format!(
+                        r#"<c:numFmt formatCode="{format_code}" sourceLinked="{source_linked}"/>"#
+                    )
+                })
+                .unwrap_or_default();
             let tick_label_spacing_xml = axis
                 .tick_label_spacing
                 .map(|value| format!(r#"<c:tickLblSkip val="{value}"/>"#))
@@ -28541,7 +28879,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
                 })
                 .unwrap_or_default();
             axes_xml.push_str(&format!(
-                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{scaling_xml}{major_gridlines_xml}{minor_gridlines_xml}{axis_title_xml}{major_tick_mark_xml}{minor_tick_mark_xml}{tick_label_position_xml}{tick_label_spacing_xml}{tick_mark_spacing_xml}{major_unit_xml}{minor_unit_xml}{display_units_xml}{crossing_xml}{cross_between_xml}{category_type_auto_xml}{base_unit_xml}{major_time_unit_xml}{minor_time_unit_xml}</c:{axis_tag}>"#
+                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{scaling_xml}{major_gridlines_xml}{minor_gridlines_xml}{axis_title_xml}{tick_label_number_format_xml}{major_tick_mark_xml}{minor_tick_mark_xml}{tick_label_position_xml}{tick_label_spacing_xml}{tick_mark_spacing_xml}{major_unit_xml}{minor_unit_xml}{display_units_xml}{crossing_xml}{cross_between_xml}{category_type_auto_xml}{base_unit_xml}{major_time_unit_xml}{minor_time_unit_xml}</c:{axis_tag}>"#
             ));
         }
     }
@@ -28647,6 +28985,8 @@ fn default_chart_axes() -> Vec<AxisModel> {
             major_tick_mark: None,
             minor_tick_mark: None,
             tick_label_position: None,
+            tick_label_number_format: None,
+            tick_label_number_format_linked: None,
             tick_label_spacing: None,
             tick_mark_spacing: None,
             axis_between_categories: None,
@@ -28676,6 +29016,8 @@ fn default_chart_axes() -> Vec<AxisModel> {
             major_tick_mark: None,
             minor_tick_mark: None,
             tick_label_position: None,
+            tick_label_number_format: None,
+            tick_label_number_format_linked: None,
             tick_label_spacing: None,
             tick_mark_spacing: None,
             axis_between_categories: None,
@@ -28822,6 +29164,7 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         | RuntimeObjectKind::ChartGroup { workbook, .. }
         | RuntimeObjectKind::Axes { workbook, .. }
         | RuntimeObjectKind::Axis { workbook, .. }
+        | RuntimeObjectKind::TickLabels { workbook, .. }
         | RuntimeObjectKind::AxisTitle { workbook, .. }
         | RuntimeObjectKind::DisplayUnitLabel { workbook, .. }
         | RuntimeObjectKind::Gridlines { workbook, .. }
@@ -91985,6 +92328,280 @@ mod tests {
         assert!(auto_saved_chart_xml.contains(r#"<c:ext uri="urn:axis-ticks-preserve"/>"#));
         assert!(!auto_saved_chart_xml.contains("<c:tickLblSkip"));
         assert!(auto_saved_chart_xml.contains(r#"<c:tickMarkSkip val="5"/>"#));
+    }
+
+    #[test]
+    fn loaded_chart_axis_tick_labels_preserve_number_format_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            r#"</c:title></c:valAx>"#,
+            r##"</c:title><c:numFmt formatCode="#,##0.0" sourceLinked="0"/></c:valAx>"##,
+        )
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:axis-tick-labels-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with axis tick labels");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let value_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.Axes(xlValue)"),
+        );
+        let tick_labels = expect_object_handle(
+            runtime
+                .dispatch_get(value_axis, "TickLabels", &[])
+                .expect("Axis.TickLabels"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(tick_labels, "Name", &[])
+                    .expect("TickLabels.Name")
+            ),
+            "Tick Labels"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(tick_labels, "NumberFormat", &[])
+                    .expect("TickLabels.NumberFormat")
+            ),
+            "#,##0.0"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(tick_labels, "NumberFormatLocal", &[])
+                    .expect("TickLabels.NumberFormatLocal")
+            ),
+            "#,##0.0"
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(tick_labels, "NumberFormatLinked", &[])
+                .expect("TickLabels.NumberFormatLinked")
+        ));
+        runtime
+            .dispatch_invoke(tick_labels, "Select", &[])
+            .expect("TickLabels.Select");
+
+        runtime
+            .dispatch_set(
+                tick_labels,
+                "NumberFormat",
+                OmValue::Text("0.00%".to_string()),
+                &[],
+            )
+            .expect("set TickLabels.NumberFormat");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(tick_labels, "NumberFormat", &[])
+                    .expect("TickLabels.NumberFormat after set")
+            ),
+            "0.00%"
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(tick_labels, "NumberFormatLinked", &[])
+                .expect("TickLabels.NumberFormatLinked after format set")
+        ));
+        runtime
+            .dispatch_set(tick_labels, "NumberFormatLinked", OmValue::Bool(true), &[])
+            .expect("set TickLabels.NumberFormatLinked");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(tick_labels, "NumberFormatLinked", &[])
+                .expect("TickLabels.NumberFormatLinked after linked set")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_set(tick_labels, "NumberFormat", OmValue::Number(1.0), &[])
+                .expect_err("TickLabels.NumberFormat rejects non-text")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    tick_labels,
+                    "NumberFormatLocal",
+                    OmValue::Text(String::new()),
+                    &[]
+                )
+                .expect_err("TickLabels.NumberFormatLocal rejects empty")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    tick_labels,
+                    "NumberFormatLinked",
+                    OmValue::Text("bad".to_string()),
+                    &[]
+                )
+                .expect_err("TickLabels.NumberFormatLinked rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after tick label edits");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:axis-tick-labels-preserve"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:numFmt formatCode="0.00%" sourceLinked="1"/>"#));
+        assert!(!saved_chart_xml.contains(r##"formatCode="#,##0.0""##));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after tick label edits");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_value_axis = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("reopened Chart.Axes(xlValue)"),
+        );
+        let reopened_tick_labels = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_value_axis, "TickLabels", &[])
+                .expect("reopened Axis.TickLabels"),
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(reopened_tick_labels, "NumberFormat", &[])
+                    .expect("reopened TickLabels.NumberFormat")
+            ),
+            "0.00%"
+        );
+        assert!(expect_bool(
+            reopened_runtime
+                .dispatch_get(reopened_tick_labels, "NumberFormatLinked", &[])
+                .expect("reopened TickLabels.NumberFormatLinked")
+        ));
+
+        reopened_runtime
+            .dispatch_set(
+                reopened_tick_labels,
+                "NumberFormatLinked",
+                OmValue::Bool(false),
+                &[],
+            )
+            .expect("set reopened TickLabels.NumberFormatLinked false");
+        let linked_false_saved = reopened_runtime
+            .save_workbook(
+                reopened_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after TickLabels.NumberFormatLinked false");
+        let linked_false_package =
+            OpcPackage::from_bytes(&linked_false_saved).expect("linked false saved package");
+        let linked_false_chart_xml = std::str::from_utf8(
+            linked_false_package
+                .part("xl/charts/chart1.xml")
+                .expect("linked false chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("linked false chart xml utf8");
+        assert!(
+            linked_false_chart_xml.contains(r#"<c:numFmt formatCode="0.00%" sourceLinked="0"/>"#)
+        );
     }
 
     #[test]

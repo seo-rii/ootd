@@ -718,6 +718,8 @@ pub struct ChartAxisSummary {
     pub major_tick_mark: Option<ChartTickMark>,
     pub minor_tick_mark: Option<ChartTickMark>,
     pub tick_label_position: Option<ChartTickLabelPosition>,
+    pub tick_label_number_format: Option<String>,
+    pub tick_label_number_format_linked: Option<bool>,
     pub tick_label_spacing: Option<u32>,
     pub tick_mark_spacing: Option<u32>,
     pub axis_between_categories: Option<bool>,
@@ -3232,6 +3234,8 @@ fn build_chart_model_overlay(
                             major_tick_mark: axis.major_tick_mark,
                             minor_tick_mark: axis.minor_tick_mark,
                             tick_label_position: axis.tick_label_position,
+                            tick_label_number_format: axis.tick_label_number_format.clone(),
+                            tick_label_number_format_linked: axis.tick_label_number_format_linked,
                             tick_label_spacing: axis.tick_label_spacing,
                             tick_mark_spacing: axis.tick_mark_spacing,
                             axis_between_categories: axis.axis_between_categories,
@@ -16296,6 +16300,27 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
             Some(_) | None => None,
         })
     };
+    let parse_chart_num_format = |element: &BytesStart<'_>,
+                                  reader: &Reader<Cursor<&[u8]>>|
+     -> OmResult<Option<(String, Option<bool>)>> {
+        let mut format_code = None::<String>;
+        let mut source_linked = None::<bool>;
+        for attr in element.attributes() {
+            let attr = attr.map_err(xml_error)?;
+            let value = attr
+                .decode_and_unescape_value(reader.decoder())
+                .map_err(xml_error)?
+                .into_owned();
+            match xml_local_name(attr.key.as_ref()) {
+                b"formatCode" => format_code = Some(value),
+                b"sourceLinked" => source_linked = Some(parse_ooxml_bool(value.as_str())?),
+                _ => {}
+            }
+        }
+        Ok(format_code
+            .filter(|format_code| !format_code.is_empty())
+            .map(|format_code| (format_code, source_linked)))
+    };
     let parse_log_base =
         |element: &BytesStart<'_>, reader: &Reader<Cursor<&[u8]>>| -> OmResult<Option<f64>> {
             let Some(value) = parse_f64_val_attr(element, reader, "axis log base")? else {
@@ -16717,6 +16742,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         major_tick_mark: None,
                         minor_tick_mark: None,
                         tick_label_position: None,
+                        tick_label_number_format: None,
+                        tick_label_number_format_linked: None,
                         tick_label_spacing: None,
                         tick_mark_spacing: None,
                         axis_between_categories: None,
@@ -16776,6 +16803,14 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(value) = parse_tick_label_position(&element, &reader)?
                 {
                     axes[axis_index].tick_label_position = Some(value);
+                }
+                if local_name == b"numFmt"
+                    && let Some(axis_index) = active_axis_index
+                    && let Some((format_code, source_linked)) =
+                        parse_chart_num_format(&element, &reader)?
+                {
+                    axes[axis_index].tick_label_number_format = Some(format_code);
+                    axes[axis_index].tick_label_number_format_linked = source_linked.or(Some(true));
                 }
                 if local_name == b"tickLblSkip"
                     && let Some(axis_index) = active_axis_index
@@ -17098,6 +17133,14 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(value) = parse_tick_label_position(&element, &reader)?
                 {
                     axes[axis_index].tick_label_position = Some(value);
+                }
+                if local_name == b"numFmt"
+                    && let Some(axis_index) = active_axis_index
+                    && let Some((format_code, source_linked)) =
+                        parse_chart_num_format(&element, &reader)?
+                {
+                    axes[axis_index].tick_label_number_format = Some(format_code);
+                    axes[axis_index].tick_label_number_format_linked = source_linked.or(Some(true));
                 }
                 if local_name == b"tickLblSkip"
                     && let Some(axis_index) = active_axis_index
@@ -22604,6 +22647,8 @@ mod tests {
                     major_tick_mark: Some(ChartTickMark::Outside),
                     minor_tick_mark: Some(ChartTickMark::None),
                     tick_label_position: Some(ChartTickLabelPosition::NextToAxis),
+                    tick_label_number_format: None,
+                    tick_label_number_format_linked: None,
                     tick_label_spacing: Some(2),
                     tick_mark_spacing: Some(3),
                     axis_between_categories: None,
@@ -22633,6 +22678,8 @@ mod tests {
                     major_tick_mark: Some(ChartTickMark::Cross),
                     minor_tick_mark: Some(ChartTickMark::Inside),
                     tick_label_position: Some(ChartTickLabelPosition::Low),
+                    tick_label_number_format: None,
+                    tick_label_number_format_linked: None,
                     tick_label_spacing: None,
                     tick_mark_spacing: None,
                     axis_between_categories: Some(false),
