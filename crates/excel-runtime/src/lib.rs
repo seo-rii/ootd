@@ -24502,13 +24502,23 @@ fn patch_loaded_chart_model_xml(
             count
         })
         .sum::<usize>();
-    if chart
+    let expected_dirty_point_explosions = chart
         .series
         .iter()
-        .any(|series| series.points.values().any(|point| point.dirty))
-    {
-        return Ok(None);
-    }
+        .map(|series| {
+            series
+                .points
+                .iter()
+                .filter_map(|(point_index, point)| {
+                    point
+                        .dirty
+                        .then_some(point.explosion)
+                        .flatten()
+                        .map(|explosion| (*point_index, explosion))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
     let expected_legend_position =
         chart
             .legend
@@ -24634,6 +24644,7 @@ fn patch_loaded_chart_model_xml(
     let mut element_stack = Vec::<Vec<u8>>::new();
     let mut next_loaded_series_index = 0usize;
     let mut current_series_index = None::<usize>;
+    let mut current_point_index = None::<u32>;
     let mut source_stack = Vec::<ChartSourceXmlSlot>::new();
     let mut current_formula = None::<(ChartSourceXmlSlot, bool)>;
     let mut source_slots_seen = vec![[false; 4]; chart.series.len()];
@@ -24643,6 +24654,7 @@ fn patch_loaded_chart_model_xml(
     let mut series_explosion_written = vec![false; chart.series.len()];
     let mut series_explosion_inserted = vec![false; chart.series.len()];
     let mut series_explosion_removed = vec![false; chart.series.len()];
+    let mut series_point_explosions_inserted = vec![BTreeSet::<u32>::new(); chart.series.len()];
     let mut series_emitted = vec![false; chart.series.len()];
     let mut patched_sources = 0usize;
     let mut chart_type = None::<ChartType>;
@@ -24963,6 +24975,15 @@ fn patch_loaded_chart_model_xml(
                     ChartSourceXmlSlot::BubbleSize => None,
                 })
         };
+    let expected_point_explosion = |series_index: usize, point_index: u32| -> Option<u16> {
+        expected_dirty_point_explosions
+            .get(series_index)
+            .and_then(|points| {
+                points
+                    .iter()
+                    .find_map(|(index, explosion)| (*index == point_index).then_some(*explosion))
+            })
+    };
     let target_chart_group_name = chart_group_xml_name(&chart.chart_type);
     let qualified_replacement_name = |qualified_name: &[u8], replacement_local: &str| -> String {
         if let Some(prefix_len) = qualified_name.iter().position(|byte| *byte == b':') {
@@ -25190,6 +25211,18 @@ fn patch_loaded_chart_model_xml(
             element.push_attribute(("val", value.as_str()));
             writer
                 .write_event(Event::Empty(element))
+                .map_err(runtime_xml_error)?;
+            Ok(())
+        };
+    let write_chart_point_explosion_element =
+        |writer: &mut Writer<Cursor<Vec<u8>>>, point_index: u32, explosion: u16| -> OmResult<()> {
+            writer
+                .write_event(Event::Start(BytesStart::new("c:dPt")))
+                .map_err(runtime_xml_error)?;
+            write_chart_u32_val_element(writer, "c:idx", point_index)?;
+            write_chart_u32_val_element(writer, "c:explosion", u32::from(explosion))?;
+            writer
+                .write_event(Event::End(BytesEnd::new("c:dPt")))
                 .map_err(runtime_xml_error)?;
             Ok(())
         };
@@ -25522,7 +25555,37 @@ fn patch_loaded_chart_model_xml(
                     }
                     source_stack.clear();
                 } else if let Some(series_index) = current_series_index {
-                    if local_name.as_slice() == b"dLbls" && parent_name == Some(b"ser".as_slice()) {
+                    if local_name.as_slice() == b"dPt" && parent_name == Some(b"ser".as_slice()) {
+                        current_point_index = None;
+                    } else if local_name.as_slice() == b"idx"
+                        && parent_name == Some(b"dPt".as_slice())
+                    {
+                        current_point_index = element_val_attribute(&element, reader.decoder())?
+                            .and_then(|value| value.parse::<u32>().ok());
+                    } else if local_name.as_slice() == b"dLbls"
+                        && parent_name == Some(b"ser".as_slice())
+                    {
+                        if let Some(expected_points) =
+                            expected_dirty_point_explosions.get(series_index)
+                        {
+                            for (point_index, explosion) in expected_points {
+                                let already_inserted = series_point_explosions_inserted
+                                    .get(series_index)
+                                    .is_some_and(|inserted| inserted.contains(point_index));
+                                if !already_inserted {
+                                    write_chart_point_explosion_element(
+                                        &mut writer,
+                                        *point_index,
+                                        *explosion,
+                                    )?;
+                                    if let Some(inserted) =
+                                        series_point_explosions_inserted.get_mut(series_index)
+                                    {
+                                        inserted.insert(*point_index);
+                                    }
+                                }
+                            }
+                        }
                         if let Some(seen) = series_data_labels_seen.get_mut(series_index) {
                             *seen = true;
                         }
@@ -25557,6 +25620,27 @@ fn patch_loaded_chart_model_xml(
                             skip_depth = 1;
                             buffer.clear();
                             continue;
+                        }
+                        if let Some(expected_points) =
+                            expected_dirty_point_explosions.get(series_index)
+                        {
+                            for (point_index, explosion) in expected_points {
+                                let already_inserted = series_point_explosions_inserted
+                                    .get(series_index)
+                                    .is_some_and(|inserted| inserted.contains(point_index));
+                                if !already_inserted {
+                                    write_chart_point_explosion_element(
+                                        &mut writer,
+                                        *point_index,
+                                        *explosion,
+                                    )?;
+                                    if let Some(inserted) =
+                                        series_point_explosions_inserted.get_mut(series_index)
+                                    {
+                                        inserted.insert(*point_index);
+                                    }
+                                }
+                            }
                         }
                         if !series_data_labels_seen
                             .get(series_index)
@@ -25960,6 +26044,27 @@ fn patch_loaded_chart_model_xml(
                 }
                 if !wrote_start_element
                     && local_name.as_slice() == b"explosion"
+                    && parent_name == Some(b"dPt".as_slice())
+                    && let Some(series_index) = current_series_index
+                    && let Some(point_index) = current_point_index
+                    && let Some(explosion) = expected_point_explosion(series_index, point_index)
+                {
+                    let explosion = explosion.to_string();
+                    writer
+                        .write_event(Event::Start(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            explosion.as_str(),
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    if let Some(inserted) = series_point_explosions_inserted.get_mut(series_index) {
+                        inserted.insert(point_index);
+                    }
+                    wrote_start_element = true;
+                }
+                if !wrote_start_element
+                    && local_name.as_slice() == b"explosion"
+                    && parent_name == Some(b"ser".as_slice())
                     && let Some(series_index) = current_series_index
                 {
                     if let Some(seen) = series_explosion_seen.get_mut(series_index) {
@@ -26684,6 +26789,10 @@ fn patch_loaded_chart_model_xml(
             Ok(Event::Empty(element)) => {
                 let local_name = xml_local_name(element.name().as_ref()).to_vec();
                 let parent_name = element_stack.last().map(Vec::as_slice);
+                if local_name.as_slice() == b"idx" && parent_name == Some(b"dPt".as_slice()) {
+                    current_point_index = element_val_attribute(&element, reader.decoder())?
+                        .and_then(|value| value.parse::<u32>().ok());
+                }
                 if local_name.as_slice() == b"scaling"
                     && let Some(axis_index) = current_axis_index
                     && let Some(axis) = chart.axes.get(axis_index)
@@ -27186,6 +27295,27 @@ fn patch_loaded_chart_model_xml(
                     }
                 }
                 if local_name.as_slice() == b"explosion"
+                    && parent_name == Some(b"dPt".as_slice())
+                    && let Some(series_index) = current_series_index
+                    && let Some(point_index) = current_point_index
+                    && let Some(explosion) = expected_point_explosion(series_index, point_index)
+                {
+                    let explosion = explosion.to_string();
+                    writer
+                        .write_event(Event::Empty(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            explosion.as_str(),
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    if let Some(inserted) = series_point_explosions_inserted.get_mut(series_index) {
+                        inserted.insert(point_index);
+                    }
+                    buffer.clear();
+                    continue;
+                }
+                if local_name.as_slice() == b"explosion"
+                    && parent_name == Some(b"ser".as_slice())
                     && let Some(series_index) = current_series_index
                 {
                     if let Some(seen) = series_explosion_seen.get_mut(series_index) {
@@ -27817,6 +27947,26 @@ fn patch_loaded_chart_model_xml(
                         }
                         if let Some(written) = series_explosion_written.get_mut(series_index) {
                             *written = true;
+                        }
+                    }
+                    if let Some(expected_points) = expected_dirty_point_explosions.get(series_index)
+                    {
+                        for (point_index, explosion) in expected_points {
+                            let already_inserted = series_point_explosions_inserted
+                                .get(series_index)
+                                .is_some_and(|inserted| inserted.contains(point_index));
+                            if !already_inserted {
+                                write_chart_point_explosion_element(
+                                    &mut writer,
+                                    *point_index,
+                                    *explosion,
+                                )?;
+                                if let Some(inserted) =
+                                    series_point_explosions_inserted.get_mut(series_index)
+                                {
+                                    inserted.insert(*point_index);
+                                }
+                            }
                         }
                     }
                     if !series_data_labels_seen
@@ -28507,6 +28657,22 @@ fn patch_loaded_chart_model_xml(
                                 *written = true;
                             }
                         }
+                        if let Some(expected_points) =
+                            expected_dirty_point_explosions.get(series_index)
+                        {
+                            for (point_index, explosion) in expected_points {
+                                write_chart_point_explosion_element(
+                                    &mut writer,
+                                    *point_index,
+                                    *explosion,
+                                )?;
+                                if let Some(inserted) =
+                                    series_point_explosions_inserted.get_mut(series_index)
+                                {
+                                    inserted.insert(*point_index);
+                                }
+                            }
+                        }
                         if expected_dirty_series_data_label_sets
                             .get(series_index)
                             .copied()
@@ -28705,6 +28871,28 @@ fn patch_loaded_chart_model_xml(
                     legend_overlay_written = true;
                 }
 
+                if local_name.as_slice() == b"dPt"
+                    && let Some(series_index) = current_series_index
+                    && let Some(point_index) = current_point_index
+                    && let Some(explosion) = expected_point_explosion(series_index, point_index)
+                {
+                    let already_inserted = series_point_explosions_inserted
+                        .get(series_index)
+                        .is_some_and(|inserted| inserted.contains(&point_index));
+                    if !already_inserted {
+                        write_chart_u32_val_element(
+                            &mut writer,
+                            "c:explosion",
+                            u32::from(explosion),
+                        )?;
+                        if let Some(inserted) =
+                            series_point_explosions_inserted.get_mut(series_index)
+                        {
+                            inserted.insert(point_index);
+                        }
+                    }
+                }
+
                 if chart_type_from_group_name(local_name.as_slice()).is_some()
                     && chart_type.as_ref() != Some(&chart.chart_type)
                     && let Some(target_local_name) = target_chart_group_name
@@ -28744,7 +28932,11 @@ fn patch_loaded_chart_model_xml(
                         }
                         b"ser" => {
                             current_series_index = None;
+                            current_point_index = None;
                             source_stack.clear();
+                        }
+                        b"dPt" => {
+                            current_point_index = None;
                         }
                         _ => {}
                     }
@@ -28814,6 +29006,15 @@ fn patch_loaded_chart_model_xml(
                     None => true,
                 },
             );
+    let series_point_explosions_match = expected_dirty_point_explosions.iter().enumerate().all(
+        |(series_index, expected_points)| {
+            expected_points.iter().all(|(point_index, _)| {
+                series_point_explosions_inserted
+                    .get(series_index)
+                    .is_some_and(|inserted| inserted.contains(point_index))
+            })
+        },
+    );
     let title_matches = match (chart.title.as_ref(), chart_title_seen) {
         (Some(_), true) => chart_title_text_written,
         (Some(_), false) => chart_title_inserted,
@@ -29218,6 +29419,7 @@ fn patch_loaded_chart_model_xml(
         && series_sources_match
         && series_orders_match
         && series_explosions_match
+        && series_point_explosions_match
         && patched_sources == expected_dirty_sources
         && title_matches
         && legend_matches
@@ -85922,10 +86124,32 @@ mod tests {
 
     #[test]
     fn point_explosion_sets_pie_point_offsets_and_persists() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            r#"<c:ser><c:idx val="0"/><c:order val="0"/>"#,
+            r#"<c:ser><c:idx val="0"/><c:order val="0"/><c:dPt><c:idx val="0"/><c:explosion val="5"/></c:dPt>"#,
+        )
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:point-explosion-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
-                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                bytes: package.to_bytes().expect("package bytes"),
                 format_hint: Some(FileFormat::Xlsx),
                 profile: ExcelProfile::Excel365,
                 read_only: false,
@@ -85976,9 +86200,9 @@ mod tests {
             expect_number(
                 runtime
                     .dispatch_get(first_point, "Explosion", &[])
-                    .expect("Point.Explosion default")
+                    .expect("loaded Point.Explosion")
             ),
-            0.0
+            5.0
         );
         assert_eq!(
             runtime
@@ -86057,12 +86281,14 @@ mod tests {
         )
         .expect("saved chart xml utf8");
         assert!(saved_chart_xml.contains("<c:pieChart>"));
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:point-explosion-preserve"/>"#));
         assert!(
             saved_chart_xml.contains(r#"<c:dPt><c:idx val="0"/><c:explosion val="35"/></c:dPt>"#)
         );
         assert!(
             saved_chart_xml.contains(r#"<c:dPt><c:idx val="1"/><c:explosion val="10"/></c:dPt>"#)
         );
+        assert!(!saved_chart_xml.contains(r#"<c:explosion val="5"/>"#));
 
         let mut reopened_runtime = ExcelRuntime::new();
         let reopened_workbook = reopened_runtime

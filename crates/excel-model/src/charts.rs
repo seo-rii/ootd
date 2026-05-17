@@ -172,6 +172,7 @@ pub struct SeriesModel {
 pub struct ChartPointModel {
     pub explosion: Option<u16>,
     pub dirty: bool,
+    pub loaded: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

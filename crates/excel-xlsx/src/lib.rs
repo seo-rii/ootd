@@ -3625,6 +3625,7 @@ fn chart_series_from_summary(
                             ChartPointModel {
                                 explosion: Some(*explosion),
                                 dirty: false,
+                                loaded: true,
                             },
                         )
                     })
