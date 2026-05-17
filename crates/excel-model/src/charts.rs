@@ -42,8 +42,20 @@ pub struct ChartModel {
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,
     pub rounded_corners: Option<bool>,
+    pub protection: Option<ChartProtectionModel>,
+    pub protection_dirty: bool,
     pub raw_part_uri: Option<String>,
     pub dirty: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ChartProtectionModel {
+    pub drawing_objects: bool,
+    pub contents: bool,
+    pub data: bool,
+    pub formatting: bool,
+    pub selection: bool,
+    pub user_interface_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

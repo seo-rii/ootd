@@ -1,10 +1,11 @@
 use excel_model::{
     AxisModel, ChartAxisCrosses, ChartAxisDisplayUnit, ChartAxisKind, ChartAxisScaleType,
     ChartAxisTimeUnit, ChartBuiltInDisplayUnit, ChartDataLabelPosition, ChartDataLabelsModel,
-    ChartDisplayBlanksAs, ChartLegendPosition, ChartModel, ChartObjectModel, ChartSheetBinding,
-    ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition,
-    ChartTickMark, ChartType, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel,
-    WorkbookState, WorksheetData, resolve_chart_source_reference_with_names,
+    ChartDisplayBlanksAs, ChartLegendPosition, ChartModel, ChartObjectModel, ChartProtectionModel,
+    ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText,
+    ChartTickLabelPosition, ChartTickMark, ChartType, DrawingModel, DrawingObjectModel,
+    LegendModel, SeriesModel, WorkbookState, WorksheetData,
+    resolve_chart_source_reference_with_names,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
@@ -431,15 +432,6 @@ struct RuntimeClipboard {
     rect: Rect,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-struct RuntimeChartProtection {
-    drawing_objects: bool,
-    contents: bool,
-    data: bool,
-    formatting: bool,
-    selection: bool,
-}
-
 #[derive(Debug, Clone)]
 struct RuntimeFindState {
     workbook: WorkbookHandle,
@@ -658,7 +650,6 @@ pub struct ExcelRuntime {
     workbooks: BTreeMap<u64, RuntimeWorkbook>,
     objects: BTreeMap<u64, RuntimeObjectKind>,
     stale_objects: BTreeSet<u64>,
-    chart_protections: BTreeMap<(WorkbookHandle, ChartId), RuntimeChartProtection>,
 }
 
 impl ExcelRuntime {
@@ -704,7 +695,6 @@ impl ExcelRuntime {
             workbooks: BTreeMap::new(),
             objects,
             stale_objects: BTreeSet::new(),
-            chart_protections: BTreeMap::new(),
         }
     }
 
@@ -4740,21 +4730,48 @@ impl ExcelRuntime {
                         Ok(())
                     }
                     "ProtectData" | "ProtectFormatting" | "ProtectSelection" => {
-                        self.chart_model(workbook, chart_id)?;
                         let OmValue::Bool(protected) = value else {
                             return Err(OmError::type_mismatch(format!(
                                 "Chart.{member} expects a boolean value"
                             )));
                         };
-                        let state = self
-                            .chart_protections
-                            .entry((workbook, chart_id))
-                            .or_default();
-                        match member {
-                            "ProtectData" => state.data = protected,
-                            "ProtectFormatting" => state.formatting = protected,
-                            "ProtectSelection" => state.selection = protected,
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let current = chart.protection.unwrap_or_default();
+                        let next = match member {
+                            "ProtectData" => ChartProtectionModel {
+                                data: protected,
+                                ..current
+                            },
+                            "ProtectFormatting" => ChartProtectionModel {
+                                formatting: protected,
+                                ..current
+                            },
+                            "ProtectSelection" => ChartProtectionModel {
+                                selection: protected,
+                                ..current
+                            },
                             _ => unreachable!("chart protection setter was matched"),
+                        };
+                        if current != next {
+                            chart.protection = Some(next);
+                            chart.protection_dirty = true;
+                            chart.dirty = true;
+                            runtime.dirty = true;
                         }
                         Ok(())
                     }
@@ -9862,15 +9879,43 @@ impl ExcelRuntime {
                     if let Some(value) = args.get(3) {
                         coerce_optional_bool_arg(value, true, "Chart.Protect Scenarios")?;
                     }
-                    if let Some(value) = args.get(4) {
-                        coerce_optional_bool_arg(value, false, "Chart.Protect UserInterfaceOnly")?;
+                    let user_interface_only = args
+                        .get(4)
+                        .map(|value| {
+                            coerce_optional_bool_arg(
+                                value,
+                                false,
+                                "Chart.Protect UserInterfaceOnly",
+                            )
+                        })
+                        .transpose()?
+                        .unwrap_or(false);
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
                     }
-                    let state = self
-                        .chart_protections
-                        .entry((workbook, chart_id))
-                        .or_default();
-                    state.drawing_objects = drawing_objects;
-                    state.contents = contents;
+                    let chart = runtime
+                        .loaded
+                        .state
+                        .charts
+                        .get_mut(&chart_id)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    let current = chart.protection.unwrap_or_default();
+                    let next = ChartProtectionModel {
+                        drawing_objects,
+                        contents,
+                        user_interface_only,
+                        ..current
+                    };
+                    if chart.protection != Some(next) {
+                        chart.protection = Some(next);
+                        chart.protection_dirty = true;
+                        chart.dirty = true;
+                        runtime.dirty = true;
+                    }
                     Ok(OmValue::Empty)
                 }
                 "Unprotect" => {
@@ -9879,13 +9924,25 @@ impl ExcelRuntime {
                             "Chart.Unprotect accepts at most a Password argument",
                         ));
                     }
-                    self.chart_model(workbook, chart_id)?;
-                    let state = self
-                        .chart_protections
-                        .entry((workbook, chart_id))
-                        .or_default();
-                    state.drawing_objects = false;
-                    state.contents = false;
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    let chart = runtime
+                        .loaded
+                        .state
+                        .charts
+                        .get_mut(&chart_id)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    if chart.protection.is_some() {
+                        chart.protection = None;
+                        chart.protection_dirty = true;
+                        chart.dirty = true;
+                        runtime.dirty = true;
+                    }
                     Ok(OmValue::Empty)
                 }
                 "Refresh" => {
@@ -14186,6 +14243,8 @@ impl ExcelRuntime {
                             display_blanks_as: None,
                             plot_visible_only: None,
                             rounded_corners: None,
+                            protection: None,
+                            protection_dirty: false,
                             raw_part_uri: None,
                             dirty: true,
                         },
@@ -14521,11 +14580,9 @@ impl ExcelRuntime {
                         "Chart.{member} does not accept arguments"
                     )));
                 }
-                self.chart_model(workbook, chart_id)?;
                 let protection = self
-                    .chart_protections
-                    .get(&(workbook, chart_id))
-                    .copied()
+                    .chart_model(workbook, chart_id)?
+                    .protection
                     .unwrap_or_default();
                 Ok(OmValue::Bool(match member {
                     "ProtectContents" => protection.contents,
@@ -17961,6 +18018,8 @@ impl ExcelRuntime {
                         display_blanks_as: None,
                         plot_visible_only: None,
                         rounded_corners: None,
+                        protection: None,
+                        protection_dirty: false,
                         raw_part_uri: Some(chart_part_uri.clone()),
                         dirty: false,
                     };
@@ -20836,7 +20895,6 @@ impl ExcelRuntime {
     }
 
     fn stale_chart_handles_for_chart(&mut self, workbook: WorkbookHandle, chart_id: ChartId) {
-        self.chart_protections.remove(&(workbook, chart_id));
         let stale_object_ids = self
             .objects
             .iter()
@@ -24038,6 +24096,58 @@ fn chart_display_blanks_as_from_excel_value(value: i32) -> OmResult<ChartDisplay
     }
 }
 
+fn chart_protection_xml(protection: ChartProtectionModel) -> String {
+    let mut children = String::new();
+    for (name, protected) in [
+        ("chartObject", protection.contents),
+        ("data", protection.data),
+        ("formatting", protection.formatting),
+        ("selection", protection.selection),
+        ("userInterface", protection.user_interface_only),
+    ] {
+        if protected {
+            children.push_str(format!(r#"<c:{name} val="1"/>"#).as_str());
+        }
+    }
+    if children.is_empty() {
+        String::new()
+    } else {
+        format!("<c:protection>{children}</c:protection>")
+    }
+}
+
+fn write_chart_protection_element(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    protection: ChartProtectionModel,
+) -> OmResult<bool> {
+    let children = [
+        ("c:chartObject", protection.contents),
+        ("c:data", protection.data),
+        ("c:formatting", protection.formatting),
+        ("c:selection", protection.selection),
+        ("c:userInterface", protection.user_interface_only),
+    ];
+    if !children.iter().any(|(_, protected)| *protected) {
+        return Ok(false);
+    }
+    writer
+        .write_event(Event::Start(BytesStart::new("c:protection")))
+        .map_err(runtime_xml_error)?;
+    for (name, protected) in children {
+        if protected {
+            let mut child = BytesStart::new(name);
+            child.push_attribute(("val", "1"));
+            writer
+                .write_event(Event::Empty(child))
+                .map_err(runtime_xml_error)?;
+        }
+    }
+    writer
+        .write_event(Event::End(BytesEnd::new("c:protection")))
+        .map_err(runtime_xml_error)?;
+    Ok(true)
+}
+
 fn chart_tick_mark_xml_value(value: ChartTickMark) -> &'static str {
     match value {
         ChartTickMark::Cross => "cross",
@@ -24569,6 +24679,10 @@ fn patch_loaded_chart_model_xml(
         .collect::<Vec<_>>();
     let expected_chart_style = chart.style.map(|style| style.to_string());
     let expected_chart_style = expected_chart_style.as_deref();
+    let expected_chart_protection = chart.protection_dirty.then_some(chart.protection);
+    let expected_chart_protection_needs_xml = expected_chart_protection
+        .flatten()
+        .is_some_and(|protection| protection != ChartProtectionModel::default());
     let expected_legend_position =
         chart
             .legend
@@ -24712,6 +24826,10 @@ fn patch_loaded_chart_model_xml(
     let mut chart_style_seen = false;
     let mut chart_style_written = false;
     let mut chart_style_inserted = false;
+    let mut chart_protection_seen = false;
+    let mut chart_protection_written = false;
+    let mut chart_protection_inserted = false;
+    let mut chart_protection_removed = false;
     let mut chart_title_seen = false;
     let mut chart_title_removed = false;
     let mut chart_title_inserted = false;
@@ -25926,6 +26044,24 @@ fn patch_loaded_chart_model_xml(
                     && parent_name == Some(b"chartSpace".as_slice())
                 {
                     chart_style_seen = true;
+                } else if local_name.as_slice() == b"protection"
+                    && parent_name == Some(b"chartSpace".as_slice())
+                {
+                    chart_protection_seen = true;
+                    if let Some(protection) = expected_chart_protection {
+                        if let Some(protection) = protection {
+                            if write_chart_protection_element(&mut writer, protection)? {
+                                chart_protection_written = true;
+                            } else {
+                                chart_protection_removed = true;
+                            }
+                        } else {
+                            chart_protection_removed = true;
+                        }
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    }
                 } else if local_name.as_slice() == b"varyColors"
                     && current_chart_group_depth == Some(element_stack.len())
                 {
@@ -26089,6 +26225,16 @@ fn patch_loaded_chart_model_xml(
                         .map_err(runtime_xml_error)?;
                     chart_style_inserted = true;
                     chart_style_written = true;
+                }
+                if local_name.as_slice() == b"chart"
+                    && parent_name == Some(b"chartSpace".as_slice())
+                    && !chart_protection_seen
+                    && expected_chart_protection_needs_xml
+                    && let Some(Some(protection)) = expected_chart_protection
+                    && write_chart_protection_element(&mut writer, protection)?
+                {
+                    chart_protection_inserted = true;
+                    chart_protection_written = true;
                 }
 
                 let mut wrote_start_element = false;
@@ -27484,6 +27630,23 @@ fn patch_loaded_chart_model_xml(
                     && parent_name == Some(b"chartSpace".as_slice())
                 {
                     chart_style_seen = true;
+                } else if local_name.as_slice() == b"protection"
+                    && parent_name == Some(b"chartSpace".as_slice())
+                {
+                    chart_protection_seen = true;
+                    if let Some(protection) = expected_chart_protection {
+                        if let Some(protection) = protection {
+                            if write_chart_protection_element(&mut writer, protection)? {
+                                chart_protection_written = true;
+                            } else {
+                                chart_protection_removed = true;
+                            }
+                        } else {
+                            chart_protection_removed = true;
+                        }
+                        buffer.clear();
+                        continue;
+                    }
                 } else if local_name.as_slice() == b"varyColors"
                     && current_chart_group_depth == Some(element_stack.len())
                 {
@@ -29156,6 +29319,11 @@ fn patch_loaded_chart_model_xml(
         (Some(_), false) => chart_style_inserted,
         (None, _) => true,
     };
+    let chart_protection_matches = match expected_chart_protection {
+        None => true,
+        Some(_) if chart_protection_seen => chart_protection_written || chart_protection_removed,
+        Some(_) => !expected_chart_protection_needs_xml || chart_protection_inserted,
+    };
     let vary_colors_matches = match (expected_vary_colors, vary_colors_seen) {
         (Some(_), true) => vary_colors_written,
         (Some(_), false) => vary_colors_inserted,
@@ -29532,6 +29700,7 @@ fn patch_loaded_chart_model_xml(
         && plot_visible_only_matches
         && rounded_corners_matches
         && chart_style_matches
+        && chart_protection_matches
         && vary_colors_matches
         && bar_direction_matches
         && chart_grouping_matches
@@ -29803,6 +29972,10 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
         .style
         .map(|value| format!(r#"<c:style val="{value}"/>"#))
         .unwrap_or_default();
+    let chart_protection_xml = chart
+        .protection
+        .map(chart_protection_xml)
+        .unwrap_or_default();
     let chart_has_axes = chart_type_has_axes(&chart.chart_type);
     let mut chart_group_axis_refs = String::new();
     let mut axes_xml = String::new();
@@ -30007,7 +30180,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  {rounded_corners_xml}{chart_style_xml}<c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{bar_shape_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{data_labels_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
+  {rounded_corners_xml}{chart_style_xml}{chart_protection_xml}<c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{bar_shape_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{data_labels_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -85225,7 +85398,10 @@ mod tests {
                 .clone(),
         )
         .expect("chart xml utf8")
-        .replace("<c:chart>", r#"<c:style val="4"/><c:chart>"#)
+        .replace(
+            "<c:chart>",
+            r#"<c:style val="4"/><c:protection><c:chartObject val="1"/><c:data val="1"/></c:protection><c:chart>"#,
+        )
         .replace(
             "</c:chartSpace>",
             r#"<c:extLst><c:ext uri="urn:content-preserve"/></c:extLst></c:chartSpace>"#,
@@ -85295,6 +85471,24 @@ mod tests {
                     .expect("Chart.ChartStyle loaded")
             ),
             4.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ProtectContents", &[])
+                .expect("Chart.ProtectContents loaded"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ProtectData", &[])
+                .expect("Chart.ProtectData loaded"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ProtectFormatting", &[])
+                .expect("Chart.ProtectFormatting loaded"),
+            OmValue::Bool(false)
         );
         let chart_title = expect_object_handle(
             runtime
@@ -85423,6 +85617,9 @@ mod tests {
         assert!(saved_chart_xml.contains(r#"<c:overlay val="1""#));
         assert!(saved_chart_xml.contains(r#"<c:roundedCorners val="1"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:style val="8"/>"#));
+        assert!(saved_chart_xml.contains("<c:protection>"));
+        assert!(saved_chart_xml.contains(r#"<c:chartObject val="1"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:data val="1"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:plotVisOnly val="0"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:dispBlanksAs val="zero"/>"#));
 
@@ -85517,6 +85714,18 @@ mod tests {
                     .expect("reopened Chart.ChartStyle")
             ),
             8.0
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "ProtectContents", &[])
+                .expect("reopened Chart.ProtectContents"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "ProtectData", &[])
+                .expect("reopened Chart.ProtectData"),
+            OmValue::Bool(true)
         );
     }
 
@@ -87459,7 +87668,7 @@ mod tests {
     }
 
     #[test]
-    fn chart_protection_flags_are_runtime_only() {
+    fn chart_protection_flags_roundtrip_chart_xml() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -87587,23 +87796,8 @@ mod tests {
                 .code,
             OmErrorCode::TypeMismatch
         );
-        runtime
-            .dispatch_invoke(chart, "Unprotect", &[OmValue::Text("pw".to_string())])
-            .expect("Chart.Unprotect");
-        assert_eq!(
-            runtime
-                .dispatch_get(chart, "ProtectDrawingObjects", &[])
-                .expect("Chart.ProtectDrawingObjects after Unprotect"),
-            OmValue::Bool(false)
-        );
-        assert_eq!(
-            runtime
-                .dispatch_get(chart, "ProtectContents", &[])
-                .expect("Chart.ProtectContents after Unprotect"),
-            OmValue::Bool(false)
-        );
 
-        let saved = runtime
+        let protected_saved = runtime
             .save_workbook(
                 workbook,
                 SaveWorkbookSpec {
@@ -87612,36 +87806,77 @@ mod tests {
                     lossless: true,
                 },
             )
-            .expect("save workbook after transient chart protection");
-        let mut reopened_runtime = ExcelRuntime::new();
-        let reopened_workbook = reopened_runtime
+            .expect("save workbook after chart protection");
+        let protected_package =
+            OpcPackage::from_bytes(&protected_saved).expect("protected package");
+        let protected_chart_xml = String::from_utf8(
+            protected_package
+                .part("xl/charts/chart1.xml")
+                .expect("protected chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("protected chart xml utf8");
+        assert!(protected_chart_xml.contains("<c:protection>"));
+        assert!(protected_chart_xml.contains(r#"<c:chartObject val="1"/>"#));
+        assert!(protected_chart_xml.contains(r#"<c:data val="1"/>"#));
+        assert!(protected_chart_xml.contains(r#"<c:formatting val="1"/>"#));
+        assert!(protected_chart_xml.contains(r#"<c:selection val="1"/>"#));
+        assert!(protected_chart_xml.contains(r#"<c:userInterface val="1"/>"#));
+
+        let mut protected_runtime = ExcelRuntime::new();
+        let protected_workbook = protected_runtime
             .open_workbook(OpenWorkbookSpec {
-                bytes: saved,
+                bytes: protected_saved,
                 format_hint: Some(FileFormat::Xlsx),
                 profile: ExcelProfile::Excel365,
                 read_only: false,
             })
-            .expect("reopen workbook after transient chart protection");
-        let reopened_worksheet = expect_object_handle(
-            reopened_runtime
-                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
-                .expect("reopened Workbook.Worksheets(1)"),
+            .expect("reopen workbook after chart protection");
+        let protected_worksheet = expect_object_handle(
+            protected_runtime
+                .dispatch_get(protected_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("protected Workbook.Worksheets(1)"),
         );
-        let reopened_chart_objects = expect_object_handle(
-            reopened_runtime
-                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
-                .expect("reopened Worksheet.ChartObjects"),
+        let protected_chart_objects = expect_object_handle(
+            protected_runtime
+                .dispatch_get(protected_worksheet, "ChartObjects", &[])
+                .expect("protected Worksheet.ChartObjects"),
         );
-        let reopened_chart_object = expect_object_handle(
-            reopened_runtime
-                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
-                .expect("reopened ChartObjects.Item(1)"),
+        let protected_chart_object = expect_object_handle(
+            protected_runtime
+                .dispatch_invoke(protected_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("protected ChartObjects.Item(1)"),
         );
-        let reopened_chart = expect_object_handle(
-            reopened_runtime
-                .dispatch_get(reopened_chart_object, "Chart", &[])
-                .expect("reopened ChartObject.Chart"),
+        let protected_chart = expect_object_handle(
+            protected_runtime
+                .dispatch_get(protected_chart_object, "Chart", &[])
+                .expect("protected ChartObject.Chart"),
         );
+        for (member, expected) in [
+            ("ProtectContents", true),
+            ("ProtectDrawingObjects", false),
+            ("ProtectData", true),
+            ("ProtectFormatting", true),
+            ("ProtectSelection", true),
+        ] {
+            assert_eq!(
+                protected_runtime
+                    .dispatch_get(protected_chart, member, &[])
+                    .unwrap_or_else(|error| {
+                        panic!("protected Chart.{member} failed: {error:?}")
+                    }),
+                OmValue::Bool(expected)
+            );
+        }
+
+        protected_runtime
+            .dispatch_invoke(
+                protected_chart,
+                "Unprotect",
+                &[OmValue::Text("pw".to_string())],
+            )
+            .expect("Chart.Unprotect");
         for member in [
             "ProtectContents",
             "ProtectDrawingObjects",
@@ -87650,14 +87885,35 @@ mod tests {
             "ProtectSelection",
         ] {
             assert_eq!(
-                reopened_runtime
-                    .dispatch_get(reopened_chart, member, &[])
+                protected_runtime
+                    .dispatch_get(protected_chart, member, &[])
                     .unwrap_or_else(|error| {
-                        panic!("reopened Chart.{member} failed: {error:?}")
+                        panic!("unprotected Chart.{member} failed: {error:?}")
                     }),
                 OmValue::Bool(false)
             );
         }
+        let unprotected_saved = protected_runtime
+            .save_workbook(
+                protected_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after Chart.Unprotect");
+        let unprotected_package =
+            OpcPackage::from_bytes(&unprotected_saved).expect("unprotected package");
+        let unprotected_chart_xml = String::from_utf8(
+            unprotected_package
+                .part("xl/charts/chart1.xml")
+                .expect("unprotected chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("unprotected chart xml utf8");
+        assert!(!unprotected_chart_xml.contains("<c:protection"));
     }
 
     #[test]

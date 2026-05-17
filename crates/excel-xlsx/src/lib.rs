@@ -6,8 +6,8 @@ use excel_model::{
     ChartAxisTimeUnit, ChartBuiltInDisplayUnit, ChartCacheKind, ChartCacheSnapshot,
     ChartCellMarkerXmlAttrs, ChartDataLabelPosition, ChartDataLabelsModel, ChartDisplayBlanksAs,
     ChartLegendPosition, ChartMarkerXmlAttrs, ChartModel, ChartObjectModel, ChartPointModel,
-    ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText,
-    ChartTickLabelPosition, ChartTickMark, ChartType, DefinedNameTable, DrawingModel,
+    ChartProtectionModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartSplitType,
+    ChartText, ChartTickLabelPosition, ChartTickMark, ChartType, DefinedNameTable, DrawingModel,
     DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
     resolve_chart_source_reference_with_names,
 };
@@ -690,6 +690,7 @@ pub struct ChartPartSummary {
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,
     pub rounded_corners: Option<bool>,
+    pub protection: Option<ChartProtectionModel>,
     pub axes: Vec<ChartAxisSummary>,
     pub series: Vec<ChartSeriesSummary>,
     pub formula_refs: Vec<String>,
@@ -3226,6 +3227,8 @@ fn build_chart_model_overlay(
                     display_blanks_as: summary.and_then(|summary| summary.display_blanks_as),
                     plot_visible_only: summary.and_then(|summary| summary.plot_visible_only),
                     rounded_corners: summary.and_then(|summary| summary.rounded_corners),
+                    protection: summary.and_then(|summary| summary.protection),
+                    protection_dirty: false,
                     axes: summary
                         .into_iter()
                         .flat_map(|summary| summary.axes.iter())
@@ -16145,6 +16148,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut display_blanks_as = None;
     let mut plot_visible_only = None;
     let mut rounded_corners = None;
+    let mut protection = None::<ChartProtectionModel>;
     let mut axes = Vec::new();
     let mut series = Vec::new();
     let mut formula_refs = Vec::new();
@@ -16418,6 +16422,18 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
                 if local_name == b"extLst" {
                     has_extension_list = true;
+                }
+                if element_path.last().is_some_and(|name| name == "protection") {
+                    let value = parse_bool_val_attr(&element, &reader)?.unwrap_or(true);
+                    let protection = protection.get_or_insert_with(ChartProtectionModel::default);
+                    match local_name {
+                        b"chartObject" => protection.contents = value,
+                        b"data" => protection.data = value,
+                        b"formatting" => protection.formatting = value,
+                        b"selection" => protection.selection = value,
+                        b"userInterface" => protection.user_interface_only = value,
+                        _ => {}
+                    }
                 }
                 if local_name == b"style"
                     && element_path.last().is_some_and(|name| name == "chartSpace")
@@ -17134,6 +17150,18 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
                 if local_name == b"extLst" {
                     has_extension_list = true;
+                }
+                if element_path.last().is_some_and(|name| name == "protection") {
+                    let value = parse_bool_val_attr(&element, &reader)?.unwrap_or(true);
+                    let protection = protection.get_or_insert_with(ChartProtectionModel::default);
+                    match local_name {
+                        b"chartObject" => protection.contents = value,
+                        b"data" => protection.data = value,
+                        b"formatting" => protection.formatting = value,
+                        b"selection" => protection.selection = value,
+                        b"userInterface" => protection.user_interface_only = value,
+                        _ => {}
+                    }
                 }
                 if local_name == b"style"
                     && element_path.last().is_some_and(|name| name == "chartSpace")
@@ -18019,6 +18047,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         display_blanks_as,
         plot_visible_only,
         rounded_corners,
+        protection,
         axes,
         series,
         formula_refs,
