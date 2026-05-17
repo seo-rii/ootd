@@ -3724,8 +3724,8 @@ impl ExcelRuntime {
                 }
                 self.validate_data_label_index(workbook, chart_id, series_index, point_index)?;
                 match member {
-                    "ShowLegendKey" | "ShowSeriesName" | "ShowCategoryName" | "ShowValue"
-                    | "ShowPercentage" | "ShowBubbleSize" => {
+                    "ShowLegendKey" | "HasLeaderLines" | "ShowSeriesName" | "ShowCategoryName"
+                    | "ShowValue" | "ShowPercentage" | "ShowBubbleSize" => {
                         let OmValue::Bool(enabled) = value else {
                             return Err(OmError::type_mismatch(format!(
                                 "DataLabel.{member} expects a boolean value"
@@ -3763,6 +3763,7 @@ impl ExcelRuntime {
                             .or_insert(inherited);
                         let target = match member {
                             "ShowLegendKey" => &mut data_labels.show_legend_key,
+                            "HasLeaderLines" => &mut data_labels.has_leader_lines,
                             "ShowSeriesName" => &mut data_labels.show_series_name,
                             "ShowCategoryName" => &mut data_labels.show_category_name,
                             "ShowValue" => &mut data_labels.show_value,
@@ -5095,8 +5096,8 @@ impl ExcelRuntime {
                 }
                 self.series_model(workbook, chart_id, series_index)?;
                 match member {
-                    "ShowLegendKey" | "ShowSeriesName" | "ShowCategoryName" | "ShowValue"
-                    | "ShowPercentage" | "ShowBubbleSize" => {
+                    "ShowLegendKey" | "HasLeaderLines" | "ShowSeriesName" | "ShowCategoryName"
+                    | "ShowValue" | "ShowPercentage" | "ShowBubbleSize" => {
                         let OmValue::Bool(enabled) = value else {
                             return Err(OmError::type_mismatch(format!(
                                 "DataLabels.{member} expects a boolean value"
@@ -5128,6 +5129,7 @@ impl ExcelRuntime {
                         let data_labels = series.data_labels.get_or_insert(inherited);
                         let target = match member {
                             "ShowLegendKey" => &mut data_labels.show_legend_key,
+                            "HasLeaderLines" => &mut data_labels.has_leader_lines,
                             "ShowSeriesName" => &mut data_labels.show_series_name,
                             "ShowCategoryName" => &mut data_labels.show_category_name,
                             "ShowValue" => &mut data_labels.show_value,
@@ -11785,6 +11787,7 @@ impl ExcelRuntime {
                             | "Count"
                             | "Item"
                             | "ShowLegendKey"
+                            | "HasLeaderLines"
                             | "ShowSeriesName"
                             | "ShowCategoryName"
                             | "ShowValue"
@@ -11806,6 +11809,7 @@ impl ExcelRuntime {
                         "Name"
                             | "Index"
                             | "ShowLegendKey"
+                            | "HasLeaderLines"
                             | "ShowSeriesName"
                             | "ShowCategoryName"
                             | "ShowValue"
@@ -11819,6 +11823,7 @@ impl ExcelRuntime {
                             | "Creator"
                             | "Application"
                             | "Parent"
+                            | "Delete"
                             | "Select"
                     )
                     | (
@@ -15765,6 +15770,14 @@ impl ExcelRuntime {
                 .and_then(|labels| labels.show_legend_key)
                 .unwrap_or(false),
             )),
+            "HasLeaderLines" => Ok(OmValue::Bool(
+                chart_series_effective_data_labels(
+                    self.chart_model(workbook, chart_id)?,
+                    series_index,
+                )
+                .and_then(|labels| labels.has_leader_lines)
+                .unwrap_or(false),
+            )),
             "ShowSeriesName" => Ok(OmValue::Bool(
                 chart_series_effective_data_labels(
                     self.chart_model(workbook, chart_id)?,
@@ -15915,6 +15928,12 @@ impl ExcelRuntime {
                 data_labels
                     .as_ref()
                     .and_then(|labels| labels.show_legend_key)
+                    .unwrap_or(false),
+            )),
+            "HasLeaderLines" => Ok(OmValue::Bool(
+                data_labels
+                    .as_ref()
+                    .and_then(|labels| labels.has_leader_lines)
                     .unwrap_or(false),
             )),
             "ShowSeriesName" => Ok(OmValue::Bool(
@@ -85076,6 +85095,12 @@ mod tests {
         );
         assert_eq!(
             runtime
+                .dispatch_get(data_labels, "HasLeaderLines", &[])
+                .expect("DataLabels.HasLeaderLines default"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
                 .dispatch_get(data_labels, "NumberFormat", &[])
                 .expect("DataLabels.NumberFormat default"),
             OmValue::Text("General".to_string())
@@ -85128,6 +85153,9 @@ mod tests {
             .dispatch_set(data_labels, "ShowValue", OmValue::Bool(true), &[])
             .expect("DataLabels.ShowValue = true");
         runtime
+            .dispatch_set(data_labels, "HasLeaderLines", OmValue::Bool(true), &[])
+            .expect("DataLabels.HasLeaderLines = true");
+        runtime
             .dispatch_set(
                 data_labels,
                 "Separator",
@@ -85163,6 +85191,18 @@ mod tests {
                     &[]
                 )
                 .expect_err("DataLabels.ShowValue rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    data_labels,
+                    "HasLeaderLines",
+                    OmValue::Text("bad".to_string()),
+                    &[]
+                )
+                .expect_err("DataLabels.HasLeaderLines rejects non-bool")
                 .code,
             OmErrorCode::TypeMismatch
         );
@@ -85234,7 +85274,7 @@ mod tests {
         let first_series_xml = &saved_chart_xml[series_start..series_end];
         assert!(first_series_xml.contains("<c:dLbls>"));
         assert!(saved_chart_xml.contains(r#"<c:showLegendKey val="0"/>"#));
-        assert!(saved_chart_xml.contains(r#"<c:showLeaderLines val="0"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:showLeaderLines val="1"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:showSerName val="0"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:showCatName val="1"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:showVal val="1"/>"#));
@@ -85308,6 +85348,12 @@ mod tests {
         );
         assert_eq!(
             reopened_runtime
+                .dispatch_get(reopened_data_labels, "HasLeaderLines", &[])
+                .expect("reopened DataLabels.HasLeaderLines"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            reopened_runtime
                 .dispatch_get(reopened_data_labels, "Separator", &[])
                 .expect("reopened DataLabels.Separator"),
             OmValue::Text(" | ".to_string())
@@ -85346,7 +85392,7 @@ mod tests {
             .as_ref()
             .expect("reopened series data labels");
         assert_eq!(series_data_labels.show_legend_key, Some(false));
-        assert_eq!(series_data_labels.has_leader_lines, Some(false));
+        assert_eq!(series_data_labels.has_leader_lines, Some(true));
         assert_eq!(series_data_labels.show_series_name, Some(false));
         assert_eq!(series_data_labels.show_category_name, Some(true));
         assert_eq!(series_data_labels.show_value, Some(true));
@@ -85654,6 +85700,9 @@ mod tests {
             .dispatch_set(second_label, "ShowCategoryName", OmValue::Bool(true), &[])
             .expect("DataLabel.ShowCategoryName = true");
         runtime
+            .dispatch_set(second_label, "HasLeaderLines", OmValue::Bool(true), &[])
+            .expect("DataLabel.HasLeaderLines = true");
+        runtime
             .dispatch_set(
                 second_label,
                 "Separator",
@@ -85687,6 +85736,12 @@ mod tests {
             runtime
                 .dispatch_get(second_label, "ShowCategoryName", &[])
                 .expect("DataLabel.ShowCategoryName after set"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_label, "HasLeaderLines", &[])
+                .expect("DataLabel.HasLeaderLines after set"),
             OmValue::Bool(true)
         );
         assert_eq!(
@@ -85728,6 +85783,18 @@ mod tests {
         );
         assert_eq!(
             runtime
+                .dispatch_set(
+                    second_label,
+                    "HasLeaderLines",
+                    OmValue::Text("bad".to_string()),
+                    &[]
+                )
+                .expect_err("DataLabel.HasLeaderLines rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
                 .dispatch_set(second_label, "Position", OmValue::Number(1.5), &[])
                 .expect_err("DataLabel.Position rejects fractional value")
                 .code,
@@ -85740,6 +85807,7 @@ mod tests {
             .get(&1)
             .expect("second point data labels");
         assert_eq!(second_point_labels.show_category_name, Some(true));
+        assert_eq!(second_point_labels.has_leader_lines, Some(true));
         assert_eq!(second_point_labels.show_value, Some(false));
         assert_eq!(
             second_point_labels.number_format.as_deref(),
@@ -85849,7 +85917,7 @@ mod tests {
         )
         .expect("saved chart xml utf8");
         assert!(saved_chart_xml.contains(
-            r##"<c:dLbl><c:idx val="1"/><c:numFmt formatCode="#,##0.00" sourceLinked="0"/><c:dLblPos val="ctr"/><c:showCatName val="1"/><c:showVal val="0"/><c:separator> * </c:separator></c:dLbl>"##
+            r##"<c:dLbl><c:idx val="1"/><c:numFmt formatCode="#,##0.00" sourceLinked="0"/><c:dLblPos val="ctr"/><c:showLeaderLines val="1"/><c:showCatName val="1"/><c:showVal val="0"/><c:separator> * </c:separator></c:dLbl>"##
         ));
         assert!(saved_chart_xml.contains(
             r#"<c:dLbl><c:idx val="2"/><c:showLegendKey val="0"/><c:showLeaderLines val="0"/><c:showSerName val="0"/><c:showCatName val="0"/><c:showVal val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbl>"#
@@ -85924,6 +85992,12 @@ mod tests {
             reopened_runtime
                 .dispatch_get(reopened_second_label, "ShowCategoryName", &[])
                 .expect("reopened DataLabel.ShowCategoryName"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_second_label, "HasLeaderLines", &[])
+                .expect("reopened DataLabel.HasLeaderLines"),
             OmValue::Bool(true)
         );
         assert_eq!(
