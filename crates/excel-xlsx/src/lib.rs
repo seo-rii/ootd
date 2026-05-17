@@ -2,13 +2,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Write};
 
 use excel_model::{
-    AxisModel, CellData, ChartAxisCrosses, ChartAxisKind, ChartAxisScaleType, ChartAxisTimeUnit,
-    ChartCacheKind, ChartCacheSnapshot, ChartCellMarkerXmlAttrs, ChartDataLabelsModel,
-    ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerXmlAttrs, ChartModel, ChartObjectModel,
-    ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText,
-    ChartTickLabelPosition, ChartTickMark, ChartType, DefinedNameTable, DrawingModel,
-    DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
-    resolve_chart_source_reference_with_names,
+    AxisModel, CellData, ChartAxisCrosses, ChartAxisDisplayUnit, ChartAxisKind, ChartAxisScaleType,
+    ChartAxisTimeUnit, ChartBuiltInDisplayUnit, ChartCacheKind, ChartCacheSnapshot,
+    ChartCellMarkerXmlAttrs, ChartDataLabelsModel, ChartDisplayBlanksAs, ChartLegendPosition,
+    ChartMarkerXmlAttrs, ChartModel, ChartObjectModel, ChartSheetBinding, ChartSizeRepresents,
+    ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition, ChartTickMark, ChartType,
+    DefinedNameTable, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState,
+    WorksheetData, resolve_chart_source_reference_with_names,
 };
 use office_common::{
     AbsoluteAnchor, CellError, CellMarker, CellValue, ChartId, ChartObjectId, DefinedName,
@@ -725,6 +725,8 @@ pub struct ChartAxisSummary {
     pub base_unit: Option<ChartAxisTimeUnit>,
     pub major_unit_scale: Option<ChartAxisTimeUnit>,
     pub minor_unit_scale: Option<ChartAxisTimeUnit>,
+    pub display_unit: Option<ChartAxisDisplayUnit>,
+    pub has_display_unit_label: Option<bool>,
     pub reverse_plot_order: Option<bool>,
     pub scale_type: Option<ChartAxisScaleType>,
     pub log_base: Option<f64>,
@@ -3236,6 +3238,8 @@ fn build_chart_model_overlay(
                             base_unit: axis.base_unit,
                             major_unit_scale: axis.major_unit_scale,
                             minor_unit_scale: axis.minor_unit_scale,
+                            display_unit: axis.display_unit,
+                            has_display_unit_label: axis.has_display_unit_label,
                             reverse_plot_order: axis.reverse_plot_order,
                             scale_type: axis.scale_type,
                             log_base: axis.log_base,
@@ -16270,6 +16274,22 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
             Some(_) | None => None,
         })
     };
+    let parse_axis_display_unit = |element: &BytesStart<'_>,
+                                   reader: &Reader<Cursor<&[u8]>>|
+     -> OmResult<Option<ChartBuiltInDisplayUnit>> {
+        Ok(match parse_string_val_attr(element, reader)?.as_deref() {
+            Some("hundreds") => Some(ChartBuiltInDisplayUnit::Hundreds),
+            Some("thousands") => Some(ChartBuiltInDisplayUnit::Thousands),
+            Some("tenThousands") => Some(ChartBuiltInDisplayUnit::TenThousands),
+            Some("hundredThousands") => Some(ChartBuiltInDisplayUnit::HundredThousands),
+            Some("millions") => Some(ChartBuiltInDisplayUnit::Millions),
+            Some("tenMillions") => Some(ChartBuiltInDisplayUnit::TenMillions),
+            Some("hundredMillions") => Some(ChartBuiltInDisplayUnit::HundredMillions),
+            Some("billions") => Some(ChartBuiltInDisplayUnit::ThousandMillions),
+            Some("trillions") => Some(ChartBuiltInDisplayUnit::MillionMillions),
+            Some(_) | None => None,
+        })
+    };
     let parse_log_base =
         |element: &BytesStart<'_>, reader: &Reader<Cursor<&[u8]>>| -> OmResult<Option<f64>> {
             let Some(value) = parse_f64_val_attr(element, reader, "axis log base")? else {
@@ -16698,6 +16718,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         base_unit: None,
                         major_unit_scale: None,
                         minor_unit_scale: None,
+                        display_unit: None,
+                        has_display_unit_label: None,
                         reverse_plot_order: None,
                         scale_type: None,
                         log_base: None,
@@ -16804,6 +16826,27 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         b"minorTimeUnit" => axes[axis_index].minor_unit_scale = Some(value),
                         _ => unreachable!("matched axis time unit"),
                     }
+                }
+                if local_name == b"builtInUnit"
+                    && element_path.last().is_some_and(|name| name == "dispUnits")
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) = parse_axis_display_unit(&element, &reader)?
+                {
+                    axes[axis_index].display_unit = Some(ChartAxisDisplayUnit::BuiltIn(value));
+                }
+                if local_name == b"custUnit"
+                    && element_path.last().is_some_and(|name| name == "dispUnits")
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) =
+                        parse_f64_val_attr(&element, &reader, "axis custom display unit")?
+                {
+                    axes[axis_index].display_unit = Some(ChartAxisDisplayUnit::Custom(value));
+                }
+                if local_name == b"dispUnitsLbl"
+                    && element_path.last().is_some_and(|name| name == "dispUnits")
+                    && let Some(axis_index) = active_axis_index
+                {
+                    axes[axis_index].has_display_unit_label = Some(true);
                 }
                 if local_name == b"orientation"
                     && element_path.last().is_some_and(|name| name == "scaling")
@@ -17096,6 +17139,27 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         b"minorTimeUnit" => axes[axis_index].minor_unit_scale = Some(value),
                         _ => unreachable!("matched axis time unit"),
                     }
+                }
+                if local_name == b"builtInUnit"
+                    && element_path.last().is_some_and(|name| name == "dispUnits")
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) = parse_axis_display_unit(&element, &reader)?
+                {
+                    axes[axis_index].display_unit = Some(ChartAxisDisplayUnit::BuiltIn(value));
+                }
+                if local_name == b"custUnit"
+                    && element_path.last().is_some_and(|name| name == "dispUnits")
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(value) =
+                        parse_f64_val_attr(&element, &reader, "axis custom display unit")?
+                {
+                    axes[axis_index].display_unit = Some(ChartAxisDisplayUnit::Custom(value));
+                }
+                if local_name == b"dispUnitsLbl"
+                    && element_path.last().is_some_and(|name| name == "dispUnits")
+                    && let Some(axis_index) = active_axis_index
+                {
+                    axes[axis_index].has_display_unit_label = Some(true);
                 }
                 if local_name == b"orientation"
                     && element_path.last().is_some_and(|name| name == "scaling")
@@ -22505,6 +22569,8 @@ mod tests {
                     base_unit: None,
                     major_unit_scale: None,
                     minor_unit_scale: None,
+                    display_unit: None,
+                    has_display_unit_label: None,
                     reverse_plot_order: None,
                     scale_type: None,
                     log_base: None,
@@ -22531,6 +22597,8 @@ mod tests {
                     base_unit: None,
                     major_unit_scale: None,
                     minor_unit_scale: None,
+                    display_unit: None,
+                    has_display_unit_label: None,
                     reverse_plot_order: Some(true),
                     scale_type: Some(ChartAxisScaleType::Logarithmic),
                     log_base: Some(10.0),

@@ -230,6 +230,8 @@ pub struct AxisModel {
     pub base_unit: Option<ChartAxisTimeUnit>,
     pub major_unit_scale: Option<ChartAxisTimeUnit>,
     pub minor_unit_scale: Option<ChartAxisTimeUnit>,
+    pub display_unit: Option<ChartAxisDisplayUnit>,
+    pub has_display_unit_label: Option<bool>,
     pub reverse_plot_order: Option<bool>,
     pub scale_type: Option<ChartAxisScaleType>,
     pub log_base: Option<f64>,
@@ -268,6 +270,25 @@ pub enum ChartAxisTimeUnit {
     Days,
     Months,
     Years,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ChartAxisDisplayUnit {
+    BuiltIn(ChartBuiltInDisplayUnit),
+    Custom(f64),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartBuiltInDisplayUnit {
+    Hundreds,
+    Thousands,
+    TenThousands,
+    HundredThousands,
+    Millions,
+    TenMillions,
+    HundredMillions,
+    ThousandMillions,
+    MillionMillions,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
