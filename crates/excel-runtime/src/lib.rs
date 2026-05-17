@@ -1,10 +1,10 @@
 use excel_model::{
     AxisModel, ChartAxisCrosses, ChartAxisDisplayUnit, ChartAxisKind, ChartAxisScaleType,
-    ChartAxisTimeUnit, ChartBuiltInDisplayUnit, ChartDataLabelsModel, ChartDisplayBlanksAs,
-    ChartLegendPosition, ChartModel, ChartObjectModel, ChartSheetBinding, ChartSizeRepresents,
-    ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition, ChartTickMark, ChartType,
-    DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
-    resolve_chart_source_reference_with_names,
+    ChartAxisTimeUnit, ChartBuiltInDisplayUnit, ChartDataLabelPosition, ChartDataLabelsModel,
+    ChartDisplayBlanksAs, ChartLegendPosition, ChartModel, ChartObjectModel, ChartSheetBinding,
+    ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition,
+    ChartTickMark, ChartType, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel,
+    WorkbookState, WorksheetData, resolve_chart_source_reference_with_names,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
@@ -147,6 +147,17 @@ const XL_TICK_LABEL_POSITION_HIGH: i32 = -4127;
 const XL_TICK_LABEL_POSITION_LOW: i32 = -4134;
 const XL_TICK_LABEL_POSITION_NEXT_TO_AXIS: i32 = 4;
 const XL_TICK_LABEL_POSITION_NONE: i32 = -4142;
+const XL_LABEL_POSITION_ABOVE: i32 = 0;
+const XL_LABEL_POSITION_BELOW: i32 = 1;
+const XL_LABEL_POSITION_BEST_FIT: i32 = 5;
+const XL_LABEL_POSITION_CENTER: i32 = -4108;
+const XL_LABEL_POSITION_CUSTOM: i32 = 7;
+const XL_LABEL_POSITION_INSIDE_BASE: i32 = 4;
+const XL_LABEL_POSITION_INSIDE_END: i32 = 3;
+const XL_LABEL_POSITION_LEFT: i32 = -4131;
+const XL_LABEL_POSITION_MIXED: i32 = 6;
+const XL_LABEL_POSITION_OUTSIDE_END: i32 = 2;
+const XL_LABEL_POSITION_RIGHT: i32 = -4152;
 const XL_AXIS_CROSSES_AUTOMATIC: i32 = -4105;
 const XL_AXIS_CROSSES_CUSTOM: i32 = -4114;
 const XL_AXIS_CROSSES_MAXIMUM: i32 = 2;
@@ -3876,6 +3887,60 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
+                    "Position" => {
+                        let OmValue::Number(number) = value else {
+                            return Err(OmError::type_mismatch(
+                                "DataLabel.Position expects an XlDataLabelPosition numeric value",
+                            ));
+                        };
+                        if !number.is_finite()
+                            || number.fract() != 0.0
+                            || number < i32::MIN as f64
+                            || number > i32::MAX as f64
+                        {
+                            return Err(OmError::invalid_argument(
+                                "DataLabel.Position expects an integral XlDataLabelPosition value",
+                            ));
+                        }
+                        let position = chart_data_label_position_from_excel_value(number as i32)?;
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let inherited =
+                            chart_point_effective_data_labels(chart, series_index, point_index)
+                                .cloned()
+                                .unwrap_or_else(chart_data_labels_disabled_model);
+                        let series = chart.series.get_mut(series_index).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "series not found")
+                        })?;
+                        let point_index = u32::try_from(point_index).map_err(|_| {
+                            OmError::invalid_argument("DataLabel index is out of bounds")
+                        })?;
+                        let data_labels = series
+                            .point_data_labels
+                            .entry(point_index)
+                            .or_insert(inherited);
+                        if data_labels.position != Some(position) {
+                            data_labels.position = Some(position);
+                            data_labels.dirty = true;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     "Separator" => {
                         let OmValue::Text(separator) = value else {
                             return Err(OmError::type_mismatch(
@@ -5169,6 +5234,54 @@ impl ExcelRuntime {
                         {
                             data_labels.number_format_linked = Some(linked);
                             data_labels.number_format = next_format;
+                            data_labels.dirty = true;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "Position" => {
+                        let OmValue::Number(number) = value else {
+                            return Err(OmError::type_mismatch(
+                                "DataLabels.Position expects an XlDataLabelPosition numeric value",
+                            ));
+                        };
+                        if !number.is_finite()
+                            || number.fract() != 0.0
+                            || number < i32::MIN as f64
+                            || number > i32::MAX as f64
+                        {
+                            return Err(OmError::invalid_argument(
+                                "DataLabels.Position expects an integral XlDataLabelPosition value",
+                            ));
+                        }
+                        let position = chart_data_label_position_from_excel_value(number as i32)?;
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let inherited = chart
+                            .data_labels
+                            .clone()
+                            .unwrap_or_else(chart_data_labels_disabled_model);
+                        let series = chart.series.get_mut(series_index).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "series not found")
+                        })?;
+                        let data_labels = series.data_labels.get_or_insert(inherited);
+                        if data_labels.position != Some(position) {
+                            data_labels.position = Some(position);
                             data_labels.dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
@@ -11645,6 +11758,7 @@ impl ExcelRuntime {
                             | "NumberFormat"
                             | "NumberFormatLocal"
                             | "NumberFormatLinked"
+                            | "Position"
                             | "Separator"
                             | "Creator"
                             | "Application"
@@ -11665,6 +11779,7 @@ impl ExcelRuntime {
                             | "NumberFormat"
                             | "NumberFormatLocal"
                             | "NumberFormatLinked"
+                            | "Position"
                             | "Separator"
                             | "Creator"
                             | "Application"
@@ -15671,6 +15786,16 @@ impl ExcelRuntime {
                 .and_then(|labels| labels.number_format_linked)
                 .unwrap_or(true),
             )),
+            "Position" => Ok(OmValue::Number(f64::from(
+                chart_data_label_position_to_excel_value(
+                    chart_series_effective_data_labels(
+                        self.chart_model(workbook, chart_id)?,
+                        series_index,
+                    )
+                    .and_then(|labels| labels.position)
+                    .unwrap_or(ChartDataLabelPosition::BestFit),
+                ),
+            ))),
             "Separator" => Ok(chart_series_effective_data_labels(
                 self.chart_model(workbook, chart_id)?,
                 series_index,
@@ -15799,6 +15924,14 @@ impl ExcelRuntime {
                     .and_then(|labels| labels.number_format_linked)
                     .unwrap_or(true),
             )),
+            "Position" => Ok(OmValue::Number(f64::from(
+                chart_data_label_position_to_excel_value(
+                    data_labels
+                        .as_ref()
+                        .and_then(|labels| labels.position)
+                        .unwrap_or(ChartDataLabelPosition::BestFit),
+                ),
+            ))),
             "Separator" => Ok(data_labels
                 .as_ref()
                 .and_then(|labels| labels.separator.clone())
@@ -23678,6 +23811,54 @@ fn chart_tick_label_position_from_excel_value(value: i32) -> OmResult<ChartTickL
     }
 }
 
+fn chart_data_label_position_xml_value(value: ChartDataLabelPosition) -> &'static str {
+    match value {
+        ChartDataLabelPosition::Above => "t",
+        ChartDataLabelPosition::Below => "b",
+        ChartDataLabelPosition::BestFit => "bestFit",
+        ChartDataLabelPosition::Center => "ctr",
+        ChartDataLabelPosition::InsideBase => "inBase",
+        ChartDataLabelPosition::InsideEnd => "inEnd",
+        ChartDataLabelPosition::Left => "l",
+        ChartDataLabelPosition::OutsideEnd => "outEnd",
+        ChartDataLabelPosition::Right => "r",
+    }
+}
+
+fn chart_data_label_position_to_excel_value(value: ChartDataLabelPosition) -> i32 {
+    match value {
+        ChartDataLabelPosition::Above => XL_LABEL_POSITION_ABOVE,
+        ChartDataLabelPosition::Below => XL_LABEL_POSITION_BELOW,
+        ChartDataLabelPosition::BestFit => XL_LABEL_POSITION_BEST_FIT,
+        ChartDataLabelPosition::Center => XL_LABEL_POSITION_CENTER,
+        ChartDataLabelPosition::InsideBase => XL_LABEL_POSITION_INSIDE_BASE,
+        ChartDataLabelPosition::InsideEnd => XL_LABEL_POSITION_INSIDE_END,
+        ChartDataLabelPosition::Left => XL_LABEL_POSITION_LEFT,
+        ChartDataLabelPosition::OutsideEnd => XL_LABEL_POSITION_OUTSIDE_END,
+        ChartDataLabelPosition::Right => XL_LABEL_POSITION_RIGHT,
+    }
+}
+
+fn chart_data_label_position_from_excel_value(value: i32) -> OmResult<ChartDataLabelPosition> {
+    match value {
+        XL_LABEL_POSITION_ABOVE => Ok(ChartDataLabelPosition::Above),
+        XL_LABEL_POSITION_BELOW => Ok(ChartDataLabelPosition::Below),
+        XL_LABEL_POSITION_BEST_FIT => Ok(ChartDataLabelPosition::BestFit),
+        XL_LABEL_POSITION_CENTER => Ok(ChartDataLabelPosition::Center),
+        XL_LABEL_POSITION_INSIDE_BASE => Ok(ChartDataLabelPosition::InsideBase),
+        XL_LABEL_POSITION_INSIDE_END => Ok(ChartDataLabelPosition::InsideEnd),
+        XL_LABEL_POSITION_LEFT => Ok(ChartDataLabelPosition::Left),
+        XL_LABEL_POSITION_OUTSIDE_END => Ok(ChartDataLabelPosition::OutsideEnd),
+        XL_LABEL_POSITION_RIGHT => Ok(ChartDataLabelPosition::Right),
+        XL_LABEL_POSITION_CUSTOM | XL_LABEL_POSITION_MIXED => Err(OmError::unsupported(
+            "DataLabels.Position custom and mixed positions are not writable yet",
+        )),
+        _ => Err(OmError::unsupported(
+            "DataLabels.Position supports above, below, best fit, center, inside base, inside end, left, outside end, and right",
+        )),
+    }
+}
+
 fn chart_size_represents_xml_value(value: ChartSizeRepresents) -> &'static str {
     match value {
         ChartSizeRepresents::Area => "area",
@@ -23743,6 +23924,7 @@ fn parse_chart_data_labels_args(args: &[OmValue], owner: &str) -> OmResult<Chart
         show_bubble_size: optional_bool(8, "ShowBubbleSize")?,
         number_format: None,
         number_format_linked: None,
+        position: None,
         separator: match args.get(9) {
             None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => None,
             Some(OmValue::Text(value)) => Some(value.clone()),
@@ -23796,6 +23978,7 @@ fn chart_data_labels_default_visible_model() -> ChartDataLabelsModel {
         show_bubble_size: None,
         number_format: None,
         number_format_linked: None,
+        position: None,
         separator: None,
         dirty: true,
     }
@@ -23813,6 +23996,7 @@ fn chart_data_labels_disabled_model() -> ChartDataLabelsModel {
         show_bubble_size: Some(false),
         number_format: None,
         number_format_linked: None,
+        position: None,
         separator: None,
         dirty: true,
     }
@@ -23917,6 +24101,10 @@ fn push_chart_data_label_properties_xml(xml: &mut String, data_labels: &ChartDat
         xml.push_str(&format!(
             r#"<c:numFmt formatCode="{format_code}" sourceLinked="{source_linked}"/>"#
         ));
+    }
+    if let Some(position) = data_labels.position {
+        let position = chart_data_label_position_xml_value(position);
+        xml.push_str(&format!(r#"<c:dLblPos val="{position}"/>"#));
     }
     for (element_name, value) in [
         ("showLegendKey", data_labels.show_legend_key),
@@ -24737,6 +24925,13 @@ fn patch_loaded_chart_model_xml(
                     "0"
                 },
             ));
+            writer
+                .write_event(Event::Empty(element))
+                .map_err(runtime_xml_error)?;
+        }
+        if let Some(position) = data_labels.position {
+            let mut element = BytesStart::new("c:dLblPos");
+            element.push_attribute(("val", chart_data_label_position_xml_value(position)));
             writer
                 .write_event(Event::Empty(element))
                 .map_err(runtime_xml_error)?;
@@ -50544,7 +50739,7 @@ mod tests {
         XL_UPPER_CASE_ROW_LETTER, blank_workbook_bytes, formula_complex_from_text, supports_format,
         worksheet_relationships_part_uri_for,
     };
-    use excel_model::{ChartSheetBinding, DrawingObjectModel};
+    use excel_model::{ChartDataLabelPosition, ChartSheetBinding, DrawingObjectModel};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -84856,6 +85051,14 @@ mod tests {
                 .expect("DataLabels.NumberFormatLinked default"),
             OmValue::Bool(true)
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(data_labels, "Position", &[])
+                    .expect("DataLabels.Position default")
+            ),
+            f64::from(super::XL_LABEL_POSITION_BEST_FIT)
+        );
         runtime
             .dispatch_invoke(
                 series,
@@ -84908,6 +85111,14 @@ mod tests {
         runtime
             .dispatch_set(data_labels, "NumberFormatLinked", OmValue::Bool(true), &[])
             .expect("DataLabels.NumberFormatLinked = true");
+        runtime
+            .dispatch_set(
+                data_labels,
+                "Position",
+                OmValue::Number(f64::from(super::XL_LABEL_POSITION_OUTSIDE_END)),
+                &[],
+            )
+            .expect("DataLabels.Position = outside end");
         assert_eq!(
             runtime
                 .dispatch_set(
@@ -84941,6 +85152,18 @@ mod tests {
                     &[]
                 )
                 .expect_err("DataLabels.NumberFormatLinked rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    data_labels,
+                    "Position",
+                    OmValue::Text("bad".to_string()),
+                    &[]
+                )
+                .expect_err("DataLabels.Position rejects non-number")
                 .code,
             OmErrorCode::TypeMismatch
         );
@@ -84983,6 +85206,7 @@ mod tests {
         assert!(saved_chart_xml.contains(r#"<c:showPercent val="0"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:showBubbleSize val="0"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:numFmt formatCode="0.0%" sourceLinked="1"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:dLblPos val="outEnd"/>"#));
         assert!(saved_chart_xml.contains("<c:separator> | </c:separator>"));
 
         let mut reopened_runtime = ExcelRuntime::new();
@@ -85065,6 +85289,14 @@ mod tests {
                 .expect("reopened DataLabels.NumberFormatLinked"),
             OmValue::Bool(true)
         );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_data_labels, "Position", &[])
+                    .expect("reopened DataLabels.Position")
+            ),
+            f64::from(super::XL_LABEL_POSITION_OUTSIDE_END)
+        );
         let reopened_state = reopened_runtime
             .workbook_state(reopened_workbook)
             .expect("reopened workbook state");
@@ -85087,6 +85319,10 @@ mod tests {
         assert_eq!(series_data_labels.show_bubble_size, Some(false));
         assert_eq!(series_data_labels.number_format.as_deref(), Some("0.0%"));
         assert_eq!(series_data_labels.number_format_linked, Some(true));
+        assert_eq!(
+            series_data_labels.position,
+            Some(ChartDataLabelPosition::OutsideEnd)
+        );
         assert_eq!(series_data_labels.separator.as_deref(), Some(" | "));
         assert!(!series_data_labels.dirty);
     }
@@ -85393,6 +85629,14 @@ mod tests {
                 &[],
             )
             .expect("DataLabel.NumberFormatLocal = number");
+        runtime
+            .dispatch_set(
+                second_label,
+                "Position",
+                OmValue::Number(f64::from(super::XL_LABEL_POSITION_CENTER)),
+                &[],
+            )
+            .expect("DataLabel.Position = center");
         assert_eq!(
             runtime
                 .dispatch_get(second_label, "ShowValue", &[])
@@ -85442,6 +85686,13 @@ mod tests {
                 .code,
             OmErrorCode::TypeMismatch
         );
+        assert_eq!(
+            runtime
+                .dispatch_set(second_label, "Position", OmValue::Number(1.5), &[])
+                .expect_err("DataLabel.Position rejects fractional value")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
         let state = runtime.workbook_state(workbook).expect("workbook state");
         let chart_model = state.charts.values().next().expect("chart model");
         let second_point_labels = chart_model.series[0]
@@ -85455,6 +85706,10 @@ mod tests {
             Some("#,##0.00")
         );
         assert_eq!(second_point_labels.number_format_linked, Some(false));
+        assert_eq!(
+            second_point_labels.position,
+            Some(ChartDataLabelPosition::Center)
+        );
         assert_eq!(second_point_labels.separator.as_deref(), Some(" * "));
         let labels_parent = expect_object_handle(
             runtime
@@ -85532,7 +85787,7 @@ mod tests {
         )
         .expect("saved chart xml utf8");
         assert!(saved_chart_xml.contains(
-            r##"<c:dLbl><c:idx val="1"/><c:numFmt formatCode="#,##0.00" sourceLinked="0"/><c:showCatName val="1"/><c:showVal val="0"/><c:separator> * </c:separator></c:dLbl>"##
+            r##"<c:dLbl><c:idx val="1"/><c:numFmt formatCode="#,##0.00" sourceLinked="0"/><c:dLblPos val="ctr"/><c:showCatName val="1"/><c:showVal val="0"/><c:separator> * </c:separator></c:dLbl>"##
         ));
 
         let mut reopened_runtime = ExcelRuntime::new();
@@ -85613,6 +85868,14 @@ mod tests {
                 .dispatch_get(reopened_second_label, "NumberFormatLinked", &[])
                 .expect("reopened DataLabel.NumberFormatLinked"),
             OmValue::Bool(false)
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_second_label, "Position", &[])
+                    .expect("reopened DataLabel.Position")
+            ),
+            f64::from(super::XL_LABEL_POSITION_CENTER)
         );
     }
 

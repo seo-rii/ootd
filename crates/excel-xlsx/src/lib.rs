@@ -4,11 +4,11 @@ use std::io::{Cursor, Write};
 use excel_model::{
     AxisModel, CellData, ChartAxisCrosses, ChartAxisDisplayUnit, ChartAxisKind, ChartAxisScaleType,
     ChartAxisTimeUnit, ChartBuiltInDisplayUnit, ChartCacheKind, ChartCacheSnapshot,
-    ChartCellMarkerXmlAttrs, ChartDataLabelsModel, ChartDisplayBlanksAs, ChartLegendPosition,
-    ChartMarkerXmlAttrs, ChartModel, ChartObjectModel, ChartSheetBinding, ChartSizeRepresents,
-    ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition, ChartTickMark, ChartType,
-    DefinedNameTable, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState,
-    WorksheetData, resolve_chart_source_reference_with_names,
+    ChartCellMarkerXmlAttrs, ChartDataLabelPosition, ChartDataLabelsModel, ChartDisplayBlanksAs,
+    ChartLegendPosition, ChartMarkerXmlAttrs, ChartModel, ChartObjectModel, ChartSheetBinding,
+    ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition,
+    ChartTickMark, ChartType, DefinedNameTable, DrawingModel, DrawingObjectModel, LegendModel,
+    SeriesModel, WorkbookState, WorksheetData, resolve_chart_source_reference_with_names,
 };
 use office_common::{
     AbsoluteAnchor, CellError, CellMarker, CellValue, ChartId, ChartObjectId, DefinedName,
@@ -707,6 +707,7 @@ pub struct ChartDataLabelsSummary {
     pub show_bubble_size: Option<bool>,
     pub number_format: Option<String>,
     pub number_format_linked: Option<bool>,
+    pub position: Option<ChartDataLabelPosition>,
     pub separator: Option<String>,
 }
 
@@ -3659,6 +3660,7 @@ fn chart_data_labels_model_from_summary(
         show_bubble_size: data_labels.show_bubble_size,
         number_format: data_labels.number_format.clone(),
         number_format_linked: data_labels.number_format_linked,
+        position: data_labels.position,
         separator: data_labels.separator.clone(),
         dirty: false,
     }
@@ -16260,6 +16262,22 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
             Some(_) | None => None,
         })
     };
+    let parse_data_label_position = |element: &BytesStart<'_>,
+                                     reader: &Reader<Cursor<&[u8]>>|
+     -> OmResult<Option<ChartDataLabelPosition>> {
+        Ok(match parse_string_val_attr(element, reader)?.as_deref() {
+            Some("t") => Some(ChartDataLabelPosition::Above),
+            Some("b") => Some(ChartDataLabelPosition::Below),
+            Some("bestFit") => Some(ChartDataLabelPosition::BestFit),
+            Some("ctr") => Some(ChartDataLabelPosition::Center),
+            Some("inBase") => Some(ChartDataLabelPosition::InsideBase),
+            Some("inEnd") => Some(ChartDataLabelPosition::InsideEnd),
+            Some("l") => Some(ChartDataLabelPosition::Left),
+            Some("outEnd") => Some(ChartDataLabelPosition::OutsideEnd),
+            Some("r") => Some(ChartDataLabelPosition::Right),
+            Some(_) | None => None,
+        })
+    };
     let parse_axis_crosses = |element: &BytesStart<'_>,
                               reader: &Reader<Cursor<&[u8]>>|
      -> OmResult<Option<ChartAxisCrosses>> {
@@ -16442,7 +16460,31 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 if element_path.last().is_some_and(|name| name == "dLbls")
                     || active_point_data_label_index.is_some()
                 {
-                    if local_name == b"numFmt"
+                    if local_name == b"dLblPos"
+                        && let Some(position) = parse_data_label_position(&element, &reader)?
+                    {
+                        let data_labels = if let Some(index) = active_point_data_label_index {
+                            active_series.as_mut().map(|series| {
+                                series
+                                    .point_data_labels
+                                    .entry(index)
+                                    .or_insert_with(ChartDataLabelsSummary::default)
+                            })
+                        } else {
+                            match data_labels_target {
+                                Some(ChartDataLabelsTarget::Series) => active_series
+                                    .as_mut()
+                                    .and_then(|series| series.data_labels.as_mut()),
+                                Some(ChartDataLabelsTarget::ChartGroup) | None => Some(
+                                    data_labels.get_or_insert_with(ChartDataLabelsSummary::default),
+                                ),
+                            }
+                        };
+                        let Some(data_labels) = data_labels else {
+                            continue;
+                        };
+                        data_labels.position = Some(position);
+                    } else if local_name == b"numFmt"
                         && let Some((format_code, source_linked)) =
                             parse_chart_num_format(&element, &reader)?
                     {
@@ -17119,6 +17161,34 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     };
                     data_labels.number_format = Some(format_code);
                     data_labels.number_format_linked = source_linked.or(Some(true));
+                }
+                if (element_path.last().is_some_and(|name| name == "dLbls")
+                    || active_point_data_label_index.is_some())
+                    && local_name == b"dLblPos"
+                    && let Some(position) = parse_data_label_position(&element, &reader)?
+                {
+                    let data_labels = if let Some(index) = active_point_data_label_index {
+                        active_series.as_mut().map(|series| {
+                            series
+                                .point_data_labels
+                                .entry(index)
+                                .or_insert_with(ChartDataLabelsSummary::default)
+                        })
+                    } else {
+                        match data_labels_target {
+                            Some(ChartDataLabelsTarget::Series) => active_series
+                                .as_mut()
+                                .and_then(|series| series.data_labels.as_mut()),
+                            Some(ChartDataLabelsTarget::ChartGroup) | None => Some(
+                                data_labels.get_or_insert_with(ChartDataLabelsSummary::default),
+                            ),
+                        }
+                    };
+                    let Some(data_labels) = data_labels else {
+                        buffer.clear();
+                        continue;
+                    };
+                    data_labels.position = Some(position);
                 }
                 if (element_path.last().is_some_and(|name| name == "dLbls")
                     || active_point_data_label_index.is_some())
@@ -21377,7 +21447,7 @@ mod tests {
     use super::{
         BorderSummary, COMMENTS_RELATIONSHIP_TYPE, CellData, ChartAxisCrosses, ChartAxisKind,
         ChartAxisScaleType, ChartAxisSummary, ChartCacheKindSummary, ChartCacheSummary,
-        ChartDataLabelsSummary, ChartLegendPosition, ChartSeriesSummary,
+        ChartDataLabelPosition, ChartDataLabelsSummary, ChartLegendPosition, ChartSeriesSummary,
         ChartSupportRelationshipBinding, ChartTickLabelPosition, ChartTickMark, CommentPartSummary,
         DrawingAnchorKind, DrawingAnchorSummary, DrawingCellMarkerSummary, DrawingPointSummary,
         DrawingSizeSummary, DxfSummary, FileFormat, FillSummary, FontSummary,
@@ -22422,7 +22492,7 @@ mod tests {
         <c:varyColors val="1"/>
         <c:ser>
           <c:idx val="0"/><c:order val="0"/>
-          <c:dLbls><c:numFmt formatCode="#,##0" sourceLinked="1"/><c:showLegendKey val="0"/><c:showLeaderLines val="1"/><c:showSerName val="1"/><c:showCatName val="0"/><c:showVal val="1"/><c:showPercent val="0"/><c:showBubbleSize val="0"/><c:separator>; </c:separator></c:dLbls>
+          <c:dLbls><c:numFmt formatCode="#,##0" sourceLinked="1"/><c:dLblPos val="ctr"/><c:showLegendKey val="0"/><c:showLeaderLines val="1"/><c:showSerName val="1"/><c:showCatName val="0"/><c:showVal val="1"/><c:showPercent val="0"/><c:showBubbleSize val="0"/><c:separator>; </c:separator></c:dLbls>
           <c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx>
           <c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat>
           <c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f><c:numCache><c:ptCount val="3"/></c:numCache></c:numRef></c:val>
@@ -22438,7 +22508,7 @@ mod tests {
         <c:sizeRepresents val="w"/>
         <c:splitType val="val"/>
         <c:splitPos val="10"/>
-        <c:dLbls><c:numFmt formatCode="0.0%" sourceLinked="0"/><c:showLegendKey val="1"/><c:showSerName val="0"/><c:showCatName val="1"/><c:showVal val="1"/><c:showPercent val="0"/><c:showBubbleSize val="0"/><c:separator>, </c:separator></c:dLbls>
+        <c:dLbls><c:numFmt formatCode="0.0%" sourceLinked="0"/><c:dLblPos val="outEnd"/><c:showLegendKey val="1"/><c:showSerName val="0"/><c:showCatName val="1"/><c:showVal val="1"/><c:showPercent val="0"/><c:showBubbleSize val="0"/><c:separator>, </c:separator></c:dLbls>
         <c:serLines/>
         <c:dropLines/>
         <c:hiLowLines/>
@@ -22688,6 +22758,7 @@ mod tests {
                 show_bubble_size: Some(false),
                 number_format: Some("0.0%".to_string()),
                 number_format_linked: Some(false),
+                position: Some(ChartDataLabelPosition::OutsideEnd),
                 separator: Some(", ".to_string()),
             })
         );
@@ -22796,6 +22867,7 @@ mod tests {
                     show_bubble_size: Some(false),
                     number_format: Some("#,##0".to_string()),
                     number_format_linked: Some(true),
+                    position: Some(ChartDataLabelPosition::Center),
                     separator: Some("; ".to_string()),
                 }),
                 point_data_labels: BTreeMap::new(),
@@ -22891,6 +22963,10 @@ mod tests {
         assert_eq!(data_labels.show_bubble_size, Some(false));
         assert_eq!(data_labels.number_format.as_deref(), Some("0.0%"));
         assert_eq!(data_labels.number_format_linked, Some(false));
+        assert_eq!(
+            data_labels.position,
+            Some(ChartDataLabelPosition::OutsideEnd)
+        );
         assert_eq!(data_labels.separator.as_deref(), Some(", "));
         assert!(!data_labels.dirty);
         let series_data_labels = chart_model.series[0]
@@ -22906,6 +22982,10 @@ mod tests {
         assert_eq!(series_data_labels.show_bubble_size, Some(false));
         assert_eq!(series_data_labels.number_format.as_deref(), Some("#,##0"));
         assert_eq!(series_data_labels.number_format_linked, Some(true));
+        assert_eq!(
+            series_data_labels.position,
+            Some(ChartDataLabelPosition::Center)
+        );
         assert_eq!(series_data_labels.separator.as_deref(), Some("; "));
         assert!(!series_data_labels.dirty);
         assert_eq!(chart_model.plot_visible_only, Some(false));

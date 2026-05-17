@@ -143,6 +143,19 @@ pub enum ChartSplitType {
     Value,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartDataLabelPosition {
+    Above,
+    Below,
+    BestFit,
+    Center,
+    InsideBase,
+    InsideEnd,
+    Left,
+    OutsideEnd,
+    Right,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SeriesModel {
     pub name: Option<ChartSourceExpr>,
@@ -166,6 +179,7 @@ pub struct ChartDataLabelsModel {
     pub show_bubble_size: Option<bool>,
     pub number_format: Option<String>,
     pub number_format_linked: Option<bool>,
+    pub position: Option<ChartDataLabelPosition>,
     pub separator: Option<String>,
     pub dirty: bool,
 }
