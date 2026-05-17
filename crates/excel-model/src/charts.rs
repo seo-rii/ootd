@@ -226,6 +226,7 @@ pub struct AxisModel {
     pub tick_label_spacing: Option<u32>,
     pub tick_mark_spacing: Option<u32>,
     pub axis_between_categories: Option<bool>,
+    pub category_type_auto: Option<bool>,
     pub base_unit: Option<ChartAxisTimeUnit>,
     pub major_unit_scale: Option<ChartAxisTimeUnit>,
     pub minor_unit_scale: Option<ChartAxisTimeUnit>,

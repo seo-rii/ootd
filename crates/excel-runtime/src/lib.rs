@@ -153,6 +153,9 @@ const XL_AXIS_CROSSES_MAXIMUM: i32 = 2;
 const XL_AXIS_CROSSES_MINIMUM: i32 = 4;
 const XL_SCALE_LINEAR: i32 = -4132;
 const XL_SCALE_LOGARITHMIC: i32 = -4133;
+const XL_AUTOMATIC_SCALE: i32 = -4105;
+const XL_CATEGORY_SCALE: i32 = 2;
+const XL_TIME_SCALE: i32 = 3;
 const XL_DAYS: i32 = 0;
 const XL_MONTHS: i32 = 1;
 const XL_YEARS: i32 = 2;
@@ -4627,6 +4630,7 @@ impl ExcelRuntime {
                                         tick_label_spacing: None,
                                         tick_mark_spacing: None,
                                         axis_between_categories: None,
+                                        category_type_auto: None,
                                         base_unit: None,
                                         major_unit_scale: None,
                                         minor_unit_scale: None,
@@ -5119,6 +5123,82 @@ impl ExcelRuntime {
                             value_axis.axis_between_categories != Some(axis_between_categories);
                         if changed {
                             value_axis.axis_between_categories = Some(axis_between_categories);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "CategoryType" => {
+                        let OmValue::Number(number) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Axis.CategoryType expects a numeric enum value",
+                            ));
+                        };
+                        if !number.is_finite() || number.fract() != 0.0 {
+                            return Err(OmError::invalid_argument(
+                                "Axis.CategoryType expects an integral enum value",
+                            ));
+                        }
+                        let next_kind = match number as i32 {
+                            XL_AUTOMATIC_SCALE => None,
+                            XL_CATEGORY_SCALE => Some(ChartAxisKind::Category),
+                            XL_TIME_SCALE => Some(ChartAxisKind::Date),
+                            _ => {
+                                return Err(OmError::unsupported(
+                                    "Axis.CategoryType supports xlAutomaticScale, xlCategoryScale, and xlTimeScale",
+                                ));
+                            }
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let axis = chart
+                            .axes
+                            .get_mut(axis_index)
+                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
+                        if !matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date) {
+                            return Err(OmError::unsupported(
+                                "Axis.CategoryType applies only to category axes",
+                            ));
+                        }
+                        let mut changed = false;
+                        if let Some(next_kind) = next_kind {
+                            if axis.kind != next_kind {
+                                axis.kind = next_kind;
+                                changed = true;
+                            }
+                            if axis.category_type_auto != Some(false) {
+                                axis.category_type_auto = Some(false);
+                                changed = true;
+                            }
+                            if next_kind == ChartAxisKind::Category
+                                && (axis.base_unit.is_some()
+                                    || axis.major_unit_scale.is_some()
+                                    || axis.minor_unit_scale.is_some())
+                            {
+                                axis.base_unit = None;
+                                axis.major_unit_scale = None;
+                                axis.minor_unit_scale = None;
+                                changed = true;
+                            }
+                        } else if axis.category_type_auto != Some(true) {
+                            axis.category_type_auto = Some(true);
+                            changed = true;
+                        }
+                        if changed {
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -10795,6 +10875,7 @@ impl ExcelRuntime {
                         "Type"
                             | "AxisGroup"
                             | "AxisBetweenCategories"
+                            | "CategoryType"
                             | "BaseUnit"
                             | "BaseUnitIsAuto"
                             | "HasTitle"
@@ -14145,6 +14226,22 @@ impl ExcelRuntime {
                         .and_then(|axis| axis.axis_between_categories)
                         .unwrap_or(true),
                 ))
+            }
+            "CategoryType" => {
+                if !matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date) {
+                    return Err(OmError::unsupported(
+                        "Axis.CategoryType applies only to category axes",
+                    ));
+                }
+                Ok(OmValue::Number(f64::from(
+                    if axis.category_type_auto == Some(true) {
+                        XL_AUTOMATIC_SCALE
+                    } else if axis.kind == ChartAxisKind::Date {
+                        XL_TIME_SCALE
+                    } else {
+                        XL_CATEGORY_SCALE
+                    },
+                )))
             }
             "BaseUnit" => {
                 if axis.kind != ChartAxisKind::Date {
@@ -23131,6 +23228,10 @@ fn patch_loaded_chart_model_xml(
     let mut axis_cross_between_written = Vec::<bool>::new();
     let mut axis_cross_between_inserted = Vec::<bool>::new();
     let mut axis_cross_between_removed = Vec::<bool>::new();
+    let mut axis_category_type_auto_seen = Vec::<bool>::new();
+    let mut axis_category_type_auto_written = Vec::<bool>::new();
+    let mut axis_category_type_auto_inserted = Vec::<bool>::new();
+    let mut axis_category_type_auto_removed = Vec::<bool>::new();
     let mut axis_base_unit_seen = Vec::<bool>::new();
     let mut axis_base_unit_written = Vec::<bool>::new();
     let mut axis_base_unit_inserted = Vec::<bool>::new();
@@ -23708,6 +23809,9 @@ fn patch_loaded_chart_model_xml(
             write_chart_val_element(writer, "c:minorUnit", value)?;
         }
         write_chart_axis_crossing_elements(writer, axis)?;
+        if let Some(value) = axis.category_type_auto {
+            write_chart_string_val_element(writer, "c:auto", if value { "1" } else { "0" })?;
+        }
         if let Some(value) = axis.base_unit {
             write_chart_string_val_element(
                 writer,
@@ -23947,6 +24051,10 @@ fn patch_loaded_chart_model_xml(
                     axis_cross_between_written.push(false);
                     axis_cross_between_inserted.push(false);
                     axis_cross_between_removed.push(false);
+                    axis_category_type_auto_seen.push(false);
+                    axis_category_type_auto_written.push(false);
+                    axis_category_type_auto_inserted.push(false);
+                    axis_category_type_auto_removed.push(false);
                     axis_base_unit_seen.push(false);
                     axis_base_unit_written.push(false);
                     axis_base_unit_inserted.push(false);
@@ -24667,6 +24775,33 @@ fn patch_loaded_chart_model_xml(
                         continue;
                     }
                 } else if !wrote_start_element
+                    && local_name.as_slice() == b"auto"
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    if let Some(seen) = axis_category_type_auto_seen.get_mut(axis_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = axis.category_type_auto {
+                        writer
+                            .write_event(Event::Start(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                if value { "1" } else { "0" },
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = axis_category_type_auto_written.get_mut(axis_index) {
+                            *written = true;
+                        }
+                    } else {
+                        if let Some(removed) = axis_category_type_auto_removed.get_mut(axis_index) {
+                            *removed = true;
+                        }
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    }
+                } else if !wrote_start_element
                     && matches!(
                         local_name.as_slice(),
                         b"baseTimeUnit" | b"majorTimeUnit" | b"minorTimeUnit"
@@ -25093,6 +25228,32 @@ fn patch_loaded_chart_model_xml(
                             *written = true;
                         }
                     } else if let Some(removed) = axis_cross_between_removed.get_mut(axis_index) {
+                        *removed = true;
+                    }
+                    buffer.clear();
+                    continue;
+                }
+                if local_name.as_slice() == b"auto"
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    if let Some(seen) = axis_category_type_auto_seen.get_mut(axis_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = axis.category_type_auto {
+                        writer
+                            .write_event(Event::Empty(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                if value { "1" } else { "0" },
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = axis_category_type_auto_written.get_mut(axis_index) {
+                            *written = true;
+                        }
+                    } else if let Some(removed) =
+                        axis_category_type_auto_removed.get_mut(axis_index)
+                    {
                         *removed = true;
                     }
                     buffer.clear();
@@ -26392,6 +26553,30 @@ fn patch_loaded_chart_model_xml(
                             }
                         }
                     }
+                    if axis.category_type_auto.is_some()
+                        && !axis_category_type_auto_seen
+                            .get(axis_index)
+                            .copied()
+                            .unwrap_or(false)
+                    {
+                        if let Some(value) = axis.category_type_auto {
+                            write_chart_string_val_element(
+                                &mut writer,
+                                "c:auto",
+                                if value { "1" } else { "0" },
+                            )?;
+                            if let Some(inserted) =
+                                axis_category_type_auto_inserted.get_mut(axis_index)
+                            {
+                                *inserted = true;
+                            }
+                            if let Some(written) =
+                                axis_category_type_auto_written.get_mut(axis_index)
+                            {
+                                *written = true;
+                            }
+                        }
+                    }
                 }
                 if local_name.as_slice() == b"plotArea" {
                     while let Some(axis) = chart.axes.get(axis_kinds.len()) {
@@ -26432,6 +26617,10 @@ fn patch_loaded_chart_model_xml(
                         axis_cross_between_written.push(axis.axis_between_categories.is_some());
                         axis_cross_between_inserted.push(axis.axis_between_categories.is_some());
                         axis_cross_between_removed.push(false);
+                        axis_category_type_auto_seen.push(axis.category_type_auto.is_some());
+                        axis_category_type_auto_written.push(axis.category_type_auto.is_some());
+                        axis_category_type_auto_inserted.push(axis.category_type_auto.is_some());
+                        axis_category_type_auto_removed.push(false);
                         axis_base_unit_seen.push(axis.base_unit.is_some());
                         axis_base_unit_written.push(axis.base_unit.is_some());
                         axis_base_unit_inserted.push(axis.base_unit.is_some());
@@ -27120,6 +27309,16 @@ fn patch_loaded_chart_model_xml(
             &axis_cross_between_removed,
         )
     });
+    let axis_category_type_match = chart.axes.iter().enumerate().all(|(axis_index, axis)| {
+        axis_optional_field_matches(
+            axis_index,
+            axis.category_type_auto.is_some(),
+            &axis_category_type_auto_seen,
+            &axis_category_type_auto_written,
+            &axis_category_type_auto_inserted,
+            &axis_category_type_auto_removed,
+        )
+    });
     let axis_tick_settings_match = chart.axes.iter().enumerate().all(|(axis_index, axis)| {
         axis_optional_field_matches(
             axis_index,
@@ -27238,6 +27437,7 @@ fn patch_loaded_chart_model_xml(
         && axis_scale_units_match
         && axis_orientation_match
         && axis_crossing_match
+        && axis_category_type_match
         && axis_tick_settings_match
         && axis_gridlines_match
     {
@@ -27599,6 +27799,10 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
                     )
                 })
                 .unwrap_or_default();
+            let category_type_auto_xml = axis
+                .category_type_auto
+                .map(|value| format!(r#"<c:auto val="{}"/>"#, if value { "1" } else { "0" }))
+                .unwrap_or_default();
             let base_unit_xml = axis
                 .base_unit
                 .map(|value| {
@@ -27627,7 +27831,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
                 })
                 .unwrap_or_default();
             axes_xml.push_str(&format!(
-                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{scaling_xml}{major_gridlines_xml}{minor_gridlines_xml}{axis_title_xml}{major_tick_mark_xml}{minor_tick_mark_xml}{tick_label_position_xml}{tick_label_spacing_xml}{tick_mark_spacing_xml}{major_unit_xml}{minor_unit_xml}{crossing_xml}{cross_between_xml}{base_unit_xml}{major_time_unit_xml}{minor_time_unit_xml}</c:{axis_tag}>"#
+                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{scaling_xml}{major_gridlines_xml}{minor_gridlines_xml}{axis_title_xml}{major_tick_mark_xml}{minor_tick_mark_xml}{tick_label_position_xml}{tick_label_spacing_xml}{tick_mark_spacing_xml}{major_unit_xml}{minor_unit_xml}{crossing_xml}{cross_between_xml}{category_type_auto_xml}{base_unit_xml}{major_time_unit_xml}{minor_time_unit_xml}</c:{axis_tag}>"#
             ));
         }
     }
@@ -27736,6 +27940,7 @@ fn default_chart_axes() -> Vec<AxisModel> {
             tick_label_spacing: None,
             tick_mark_spacing: None,
             axis_between_categories: None,
+            category_type_auto: None,
             base_unit: None,
             major_unit_scale: None,
             minor_unit_scale: None,
@@ -27761,6 +27966,7 @@ fn default_chart_axes() -> Vec<AxisModel> {
             tick_label_spacing: None,
             tick_mark_spacing: None,
             axis_between_categories: None,
+            category_type_auto: None,
             base_unit: None,
             major_unit_scale: None,
             minor_unit_scale: None,
@@ -92036,6 +92242,305 @@ mod tests {
         assert!(!saved_auto_chart_xml.contains("<c:baseTimeUnit"));
         assert!(saved_auto_chart_xml.contains(r#"<c:majorTimeUnit val="months"/>"#));
         assert!(saved_auto_chart_xml.contains(r#"<c:minorTimeUnit val="days"/>"#));
+    }
+
+    #[test]
+    fn loaded_chart_axis_category_type_setter_rewrites_axis_tags_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace("</c:catAx>", r#"<c:auto val="1"/></c:catAx>"#)
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:axis-category-type-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with category axis auto type");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let category_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.Axes(xlCategory)"),
+        );
+        let value_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.Axes(xlValue)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(category_axis, "CategoryType", &[])
+                    .expect("Axis.CategoryType before set")
+            ),
+            f64::from(super::XL_AUTOMATIC_SCALE)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "CategoryType", &[])
+                .expect_err("Axis.CategoryType rejects value axis")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        runtime
+            .dispatch_set(
+                category_axis,
+                "CategoryType",
+                OmValue::Number(f64::from(super::XL_TIME_SCALE)),
+                &[],
+            )
+            .expect("set Axis.CategoryType to time scale");
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    category_axis,
+                    "CategoryType",
+                    OmValue::Text("bad".to_string()),
+                    &[],
+                )
+                .expect_err("Axis.CategoryType rejects non-number")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(category_axis, "CategoryType", OmValue::Number(2.5), &[],)
+                .expect_err("Axis.CategoryType rejects fractional value")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(category_axis, "CategoryType", OmValue::Number(99.0), &[],)
+                .expect_err("Axis.CategoryType rejects unsupported enum")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    value_axis,
+                    "CategoryType",
+                    OmValue::Number(f64::from(super::XL_CATEGORY_SCALE)),
+                    &[],
+                )
+                .expect_err("Axis.CategoryType rejects value axis setter")
+                .code,
+            OmErrorCode::Unsupported
+        );
+
+        let saved_time = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after CategoryType time edit");
+        let saved_time_package = OpcPackage::from_bytes(&saved_time).expect("saved time package");
+        let saved_time_chart_xml = std::str::from_utf8(
+            saved_time_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved time chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved time chart xml utf8");
+        assert!(saved_time_chart_xml.contains(r#"<c:ext uri="urn:axis-category-type-preserve"/>"#));
+        assert!(saved_time_chart_xml.contains("<c:dateAx>"));
+        assert!(!saved_time_chart_xml.contains("<c:catAx>"));
+        assert!(saved_time_chart_xml.contains(r#"<c:auto val="0"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved_time,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after CategoryType time edit");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_category_axis = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("reopened Chart.Axes(xlCategory)"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_category_axis, "CategoryType", &[])
+                    .expect("reopened Axis.CategoryType time")
+            ),
+            f64::from(super::XL_TIME_SCALE)
+        );
+        reopened_runtime
+            .dispatch_set(
+                reopened_category_axis,
+                "CategoryType",
+                OmValue::Number(f64::from(super::XL_CATEGORY_SCALE)),
+                &[],
+            )
+            .expect("set Axis.CategoryType to category scale");
+        let saved_category = reopened_runtime
+            .save_workbook(
+                reopened_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after CategoryType category edit");
+        let saved_category_package =
+            OpcPackage::from_bytes(&saved_category).expect("saved category package");
+        let saved_category_chart_xml = std::str::from_utf8(
+            saved_category_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved category chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved category chart xml utf8");
+        assert!(
+            saved_category_chart_xml.contains(r#"<c:ext uri="urn:axis-category-type-preserve"/>"#)
+        );
+        assert!(saved_category_chart_xml.contains("<c:catAx>"));
+        assert!(!saved_category_chart_xml.contains("<c:dateAx>"));
+        assert!(saved_category_chart_xml.contains(r#"<c:auto val="0"/>"#));
+
+        let mut final_runtime = ExcelRuntime::new();
+        let final_workbook = final_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved_category,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after CategoryType category edit");
+        let final_worksheet = expect_object_handle(
+            final_runtime
+                .dispatch_get(final_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("final Workbook.Worksheets(1)"),
+        );
+        let final_chart_objects = expect_object_handle(
+            final_runtime
+                .dispatch_get(final_worksheet, "ChartObjects", &[])
+                .expect("final Worksheet.ChartObjects"),
+        );
+        let final_chart_object = expect_object_handle(
+            final_runtime
+                .dispatch_invoke(final_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("final ChartObjects.Item(1)"),
+        );
+        let final_chart = expect_object_handle(
+            final_runtime
+                .dispatch_get(final_chart_object, "Chart", &[])
+                .expect("final ChartObject.Chart"),
+        );
+        let final_category_axis = expect_object_handle(
+            final_runtime
+                .dispatch_get(
+                    final_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("final Chart.Axes(xlCategory)"),
+        );
+        assert_eq!(
+            expect_number(
+                final_runtime
+                    .dispatch_get(final_category_axis, "CategoryType", &[])
+                    .expect("final Axis.CategoryType category")
+            ),
+            f64::from(super::XL_CATEGORY_SCALE)
+        );
+        final_runtime
+            .dispatch_set(
+                final_category_axis,
+                "CategoryType",
+                OmValue::Number(f64::from(super::XL_AUTOMATIC_SCALE)),
+                &[],
+            )
+            .expect("set Axis.CategoryType to automatic scale");
+        assert_eq!(
+            expect_number(
+                final_runtime
+                    .dispatch_get(final_category_axis, "CategoryType", &[])
+                    .expect("Axis.CategoryType automatic")
+            ),
+            f64::from(super::XL_AUTOMATIC_SCALE)
+        );
     }
 
     #[test]

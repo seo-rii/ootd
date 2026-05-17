@@ -721,6 +721,7 @@ pub struct ChartAxisSummary {
     pub tick_label_spacing: Option<u32>,
     pub tick_mark_spacing: Option<u32>,
     pub axis_between_categories: Option<bool>,
+    pub category_type_auto: Option<bool>,
     pub base_unit: Option<ChartAxisTimeUnit>,
     pub major_unit_scale: Option<ChartAxisTimeUnit>,
     pub minor_unit_scale: Option<ChartAxisTimeUnit>,
@@ -3231,6 +3232,7 @@ fn build_chart_model_overlay(
                             tick_label_spacing: axis.tick_label_spacing,
                             tick_mark_spacing: axis.tick_mark_spacing,
                             axis_between_categories: axis.axis_between_categories,
+                            category_type_auto: axis.category_type_auto,
                             base_unit: axis.base_unit,
                             major_unit_scale: axis.major_unit_scale,
                             minor_unit_scale: axis.minor_unit_scale,
@@ -16692,6 +16694,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         tick_label_spacing: None,
                         tick_mark_spacing: None,
                         axis_between_categories: None,
+                        category_type_auto: None,
                         base_unit: None,
                         major_unit_scale: None,
                         minor_unit_scale: None,
@@ -16782,6 +16785,12 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(value) = parse_axis_cross_between(&element, &reader)?
                 {
                     axes[axis_index].axis_between_categories = Some(value);
+                }
+                if local_name == b"auto"
+                    && let Some(axis_index) = active_axis_index
+                {
+                    axes[axis_index].category_type_auto =
+                        parse_bool_val_attr(&element, &reader)?.or(Some(true));
                 }
                 if matches!(
                     local_name,
@@ -17068,6 +17077,12 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(value) = parse_axis_cross_between(&element, &reader)?
                 {
                     axes[axis_index].axis_between_categories = Some(value);
+                }
+                if local_name == b"auto"
+                    && let Some(axis_index) = active_axis_index
+                {
+                    axes[axis_index].category_type_auto =
+                        parse_bool_val_attr(&element, &reader)?.or(Some(true));
                 }
                 if matches!(
                     local_name,
@@ -22486,6 +22501,7 @@ mod tests {
                     tick_label_spacing: Some(2),
                     tick_mark_spacing: Some(3),
                     axis_between_categories: None,
+                    category_type_auto: None,
                     base_unit: None,
                     major_unit_scale: None,
                     minor_unit_scale: None,
@@ -22511,6 +22527,7 @@ mod tests {
                     tick_label_spacing: None,
                     tick_mark_spacing: None,
                     axis_between_categories: Some(false),
+                    category_type_auto: None,
                     base_unit: None,
                     major_unit_scale: None,
                     minor_unit_scale: None,
