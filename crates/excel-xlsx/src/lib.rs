@@ -705,6 +705,8 @@ pub struct ChartDataLabelsSummary {
     pub show_value: Option<bool>,
     pub show_percentage: Option<bool>,
     pub show_bubble_size: Option<bool>,
+    pub number_format: Option<String>,
+    pub number_format_linked: Option<bool>,
     pub separator: Option<String>,
 }
 
@@ -3655,6 +3657,8 @@ fn chart_data_labels_model_from_summary(
         show_value: data_labels.show_value,
         show_percentage: data_labels.show_percentage,
         show_bubble_size: data_labels.show_bubble_size,
+        number_format: data_labels.number_format.clone(),
+        number_format_linked: data_labels.number_format_linked,
         separator: data_labels.separator.clone(),
         dirty: false,
     }
@@ -16438,7 +16442,33 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 if element_path.last().is_some_and(|name| name == "dLbls")
                     || active_point_data_label_index.is_some()
                 {
-                    if local_name == b"separator" {
+                    if local_name == b"numFmt"
+                        && let Some((format_code, source_linked)) =
+                            parse_chart_num_format(&element, &reader)?
+                    {
+                        let data_labels = if let Some(index) = active_point_data_label_index {
+                            active_series.as_mut().map(|series| {
+                                series
+                                    .point_data_labels
+                                    .entry(index)
+                                    .or_insert_with(ChartDataLabelsSummary::default)
+                            })
+                        } else {
+                            match data_labels_target {
+                                Some(ChartDataLabelsTarget::Series) => active_series
+                                    .as_mut()
+                                    .and_then(|series| series.data_labels.as_mut()),
+                                Some(ChartDataLabelsTarget::ChartGroup) | None => Some(
+                                    data_labels.get_or_insert_with(ChartDataLabelsSummary::default),
+                                ),
+                            }
+                        };
+                        let Some(data_labels) = data_labels else {
+                            continue;
+                        };
+                        data_labels.number_format = Some(format_code);
+                        data_labels.number_format_linked = source_linked.or(Some(true));
+                    } else if local_name == b"separator" {
                         data_label_separator_text = Some(String::new());
                         data_label_separator_depth = 1;
                     } else if matches!(
@@ -17059,6 +17089,36 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                             .entry(index)
                             .or_insert_with(ChartDataLabelsSummary::default);
                     }
+                }
+                if (element_path.last().is_some_and(|name| name == "dLbls")
+                    || active_point_data_label_index.is_some())
+                    && local_name == b"numFmt"
+                    && let Some((format_code, source_linked)) =
+                        parse_chart_num_format(&element, &reader)?
+                {
+                    let data_labels = if let Some(index) = active_point_data_label_index {
+                        active_series.as_mut().map(|series| {
+                            series
+                                .point_data_labels
+                                .entry(index)
+                                .or_insert_with(ChartDataLabelsSummary::default)
+                        })
+                    } else {
+                        match data_labels_target {
+                            Some(ChartDataLabelsTarget::Series) => active_series
+                                .as_mut()
+                                .and_then(|series| series.data_labels.as_mut()),
+                            Some(ChartDataLabelsTarget::ChartGroup) | None => Some(
+                                data_labels.get_or_insert_with(ChartDataLabelsSummary::default),
+                            ),
+                        }
+                    };
+                    let Some(data_labels) = data_labels else {
+                        buffer.clear();
+                        continue;
+                    };
+                    data_labels.number_format = Some(format_code);
+                    data_labels.number_format_linked = source_linked.or(Some(true));
                 }
                 if (element_path.last().is_some_and(|name| name == "dLbls")
                     || active_point_data_label_index.is_some())
@@ -22109,10 +22169,10 @@ mod tests {
                     .to_vec(),
             })
             .expect("add drawing rels");
-        let chart_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+        let chart_xml = br##"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
   <c:chart><c:plotArea><c:lineChart><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numRef><c:f>Sheet1!$A$1:$A$3</c:f></c:numRef></c:val></c:ser></c:lineChart></c:plotArea></c:chart>
-</c:chartSpace>"#
+</c:chartSpace>"##
             .to_vec();
         package
             .add_part(OpcPart {
@@ -22352,7 +22412,7 @@ mod tests {
                     .to_vec(),
             })
             .expect("add drawing rels");
-        let chart_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+        let chart_xml = br##"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
   <c:roundedCorners val="1"/>
   <c:chart>
@@ -22362,7 +22422,7 @@ mod tests {
         <c:varyColors val="1"/>
         <c:ser>
           <c:idx val="0"/><c:order val="0"/>
-          <c:dLbls><c:showLegendKey val="0"/><c:showLeaderLines val="1"/><c:showSerName val="1"/><c:showCatName val="0"/><c:showVal val="1"/><c:showPercent val="0"/><c:showBubbleSize val="0"/><c:separator>; </c:separator></c:dLbls>
+          <c:dLbls><c:numFmt formatCode="#,##0" sourceLinked="1"/><c:showLegendKey val="0"/><c:showLeaderLines val="1"/><c:showSerName val="1"/><c:showCatName val="0"/><c:showVal val="1"/><c:showPercent val="0"/><c:showBubbleSize val="0"/><c:separator>; </c:separator></c:dLbls>
           <c:tx><c:strRef><c:f>Sheet1!$C$1</c:f></c:strRef></c:tx>
           <c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat>
           <c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f><c:numCache><c:ptCount val="3"/></c:numCache></c:numRef></c:val>
@@ -22378,7 +22438,7 @@ mod tests {
         <c:sizeRepresents val="w"/>
         <c:splitType val="val"/>
         <c:splitPos val="10"/>
-        <c:dLbls><c:showLegendKey val="1"/><c:showSerName val="0"/><c:showCatName val="1"/><c:showVal val="1"/><c:showPercent val="0"/><c:showBubbleSize val="0"/><c:separator>, </c:separator></c:dLbls>
+        <c:dLbls><c:numFmt formatCode="0.0%" sourceLinked="0"/><c:showLegendKey val="1"/><c:showSerName val="0"/><c:showCatName val="1"/><c:showVal val="1"/><c:showPercent val="0"/><c:showBubbleSize val="0"/><c:separator>, </c:separator></c:dLbls>
         <c:serLines/>
         <c:dropLines/>
         <c:hiLowLines/>
@@ -22392,7 +22452,7 @@ mod tests {
     <c:dispBlanksAs val="span"/>
   </c:chart>
   <c:extLst><c:ext uri="urn:test"/></c:extLst>
-</c:chartSpace>"#
+</c:chartSpace>"##
             .to_vec();
         package
             .add_part(OpcPart {
@@ -22626,6 +22686,8 @@ mod tests {
                 show_value: Some(true),
                 show_percentage: Some(false),
                 show_bubble_size: Some(false),
+                number_format: Some("0.0%".to_string()),
+                number_format_linked: Some(false),
                 separator: Some(", ".to_string()),
             })
         );
@@ -22732,6 +22794,8 @@ mod tests {
                     show_value: Some(true),
                     show_percentage: Some(false),
                     show_bubble_size: Some(false),
+                    number_format: Some("#,##0".to_string()),
+                    number_format_linked: Some(true),
                     separator: Some("; ".to_string()),
                 }),
                 point_data_labels: BTreeMap::new(),
@@ -22825,6 +22889,8 @@ mod tests {
         assert_eq!(data_labels.show_value, Some(true));
         assert_eq!(data_labels.show_percentage, Some(false));
         assert_eq!(data_labels.show_bubble_size, Some(false));
+        assert_eq!(data_labels.number_format.as_deref(), Some("0.0%"));
+        assert_eq!(data_labels.number_format_linked, Some(false));
         assert_eq!(data_labels.separator.as_deref(), Some(", "));
         assert!(!data_labels.dirty);
         let series_data_labels = chart_model.series[0]
@@ -22838,6 +22904,8 @@ mod tests {
         assert_eq!(series_data_labels.show_value, Some(true));
         assert_eq!(series_data_labels.show_percentage, Some(false));
         assert_eq!(series_data_labels.show_bubble_size, Some(false));
+        assert_eq!(series_data_labels.number_format.as_deref(), Some("#,##0"));
+        assert_eq!(series_data_labels.number_format_linked, Some(true));
         assert_eq!(series_data_labels.separator.as_deref(), Some("; "));
         assert!(!series_data_labels.dirty);
         assert_eq!(chart_model.plot_visible_only, Some(false));

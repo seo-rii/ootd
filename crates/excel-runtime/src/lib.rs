@@ -3767,6 +3767,115 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
+                    "NumberFormat" | "NumberFormatLocal" => {
+                        let OmValue::Text(format_code) = value else {
+                            return Err(OmError::type_mismatch(
+                                "DataLabel.NumberFormat expects a text value",
+                            ));
+                        };
+                        if format_code.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "DataLabel.NumberFormat must not be empty",
+                            ));
+                        }
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let inherited =
+                            chart_point_effective_data_labels(chart, series_index, point_index)
+                                .cloned()
+                                .unwrap_or_else(chart_data_labels_disabled_model);
+                        let series = chart.series.get_mut(series_index).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "series not found")
+                        })?;
+                        let point_index = u32::try_from(point_index).map_err(|_| {
+                            OmError::invalid_argument("DataLabel index is out of bounds")
+                        })?;
+                        let data_labels = series
+                            .point_data_labels
+                            .entry(point_index)
+                            .or_insert(inherited);
+                        if data_labels.number_format.as_deref() != Some(format_code.as_str())
+                            || data_labels.number_format_linked != Some(false)
+                        {
+                            data_labels.number_format = Some(format_code);
+                            data_labels.number_format_linked = Some(false);
+                            data_labels.dirty = true;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "NumberFormatLinked" => {
+                        let OmValue::Bool(linked) = value else {
+                            return Err(OmError::type_mismatch(
+                                "DataLabel.NumberFormatLinked expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let inherited =
+                            chart_point_effective_data_labels(chart, series_index, point_index)
+                                .cloned()
+                                .unwrap_or_else(chart_data_labels_disabled_model);
+                        let series = chart.series.get_mut(series_index).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "series not found")
+                        })?;
+                        let point_index = u32::try_from(point_index).map_err(|_| {
+                            OmError::invalid_argument("DataLabel index is out of bounds")
+                        })?;
+                        let data_labels = series
+                            .point_data_labels
+                            .entry(point_index)
+                            .or_insert(inherited);
+                        let next_format = if linked {
+                            data_labels.number_format.clone()
+                        } else {
+                            Some(
+                                data_labels
+                                    .number_format
+                                    .clone()
+                                    .unwrap_or_else(|| "General".to_string()),
+                            )
+                        };
+                        if data_labels.number_format_linked != Some(linked)
+                            || data_labels.number_format != next_format
+                        {
+                            data_labels.number_format_linked = Some(linked);
+                            data_labels.number_format = next_format;
+                            data_labels.dirty = true;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     "Separator" => {
                         let OmValue::Text(separator) = value else {
                             return Err(OmError::type_mismatch(
@@ -4963,6 +5072,103 @@ impl ExcelRuntime {
                         };
                         if *target != Some(enabled) {
                             *target = Some(enabled);
+                            data_labels.dirty = true;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "NumberFormat" | "NumberFormatLocal" => {
+                        let OmValue::Text(format_code) = value else {
+                            return Err(OmError::type_mismatch(
+                                "DataLabels.NumberFormat expects a text value",
+                            ));
+                        };
+                        if format_code.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "DataLabels.NumberFormat must not be empty",
+                            ));
+                        }
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let inherited = chart
+                            .data_labels
+                            .clone()
+                            .unwrap_or_else(chart_data_labels_disabled_model);
+                        let series = chart.series.get_mut(series_index).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "series not found")
+                        })?;
+                        let data_labels = series.data_labels.get_or_insert(inherited);
+                        if data_labels.number_format.as_deref() != Some(format_code.as_str())
+                            || data_labels.number_format_linked != Some(false)
+                        {
+                            data_labels.number_format = Some(format_code);
+                            data_labels.number_format_linked = Some(false);
+                            data_labels.dirty = true;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "NumberFormatLinked" => {
+                        let OmValue::Bool(linked) = value else {
+                            return Err(OmError::type_mismatch(
+                                "DataLabels.NumberFormatLinked expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let inherited = chart
+                            .data_labels
+                            .clone()
+                            .unwrap_or_else(chart_data_labels_disabled_model);
+                        let series = chart.series.get_mut(series_index).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "series not found")
+                        })?;
+                        let data_labels = series.data_labels.get_or_insert(inherited);
+                        let next_format = if linked {
+                            data_labels.number_format.clone()
+                        } else {
+                            Some(
+                                data_labels
+                                    .number_format
+                                    .clone()
+                                    .unwrap_or_else(|| "General".to_string()),
+                            )
+                        };
+                        if data_labels.number_format_linked != Some(linked)
+                            || data_labels.number_format != next_format
+                        {
+                            data_labels.number_format_linked = Some(linked);
+                            data_labels.number_format = next_format;
                             data_labels.dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
@@ -11436,6 +11642,9 @@ impl ExcelRuntime {
                             | "ShowValue"
                             | "ShowPercentage"
                             | "ShowBubbleSize"
+                            | "NumberFormat"
+                            | "NumberFormatLocal"
+                            | "NumberFormatLinked"
                             | "Separator"
                             | "Creator"
                             | "Application"
@@ -11453,6 +11662,9 @@ impl ExcelRuntime {
                             | "ShowValue"
                             | "ShowPercentage"
                             | "ShowBubbleSize"
+                            | "NumberFormat"
+                            | "NumberFormatLocal"
+                            | "NumberFormatLinked"
                             | "Separator"
                             | "Creator"
                             | "Application"
@@ -15443,6 +15655,22 @@ impl ExcelRuntime {
                 .and_then(|labels| labels.show_bubble_size)
                 .unwrap_or(false),
             )),
+            "NumberFormat" | "NumberFormatLocal" => Ok(OmValue::Text(
+                chart_series_effective_data_labels(
+                    self.chart_model(workbook, chart_id)?,
+                    series_index,
+                )
+                .and_then(|labels| labels.number_format.clone())
+                .unwrap_or_else(|| "General".to_string()),
+            )),
+            "NumberFormatLinked" => Ok(OmValue::Bool(
+                chart_series_effective_data_labels(
+                    self.chart_model(workbook, chart_id)?,
+                    series_index,
+                )
+                .and_then(|labels| labels.number_format_linked)
+                .unwrap_or(true),
+            )),
             "Separator" => Ok(chart_series_effective_data_labels(
                 self.chart_model(workbook, chart_id)?,
                 series_index,
@@ -15558,6 +15786,18 @@ impl ExcelRuntime {
                     .as_ref()
                     .and_then(|labels| labels.show_bubble_size)
                     .unwrap_or(false),
+            )),
+            "NumberFormat" | "NumberFormatLocal" => Ok(OmValue::Text(
+                data_labels
+                    .as_ref()
+                    .and_then(|labels| labels.number_format.clone())
+                    .unwrap_or_else(|| "General".to_string()),
+            )),
+            "NumberFormatLinked" => Ok(OmValue::Bool(
+                data_labels
+                    .as_ref()
+                    .and_then(|labels| labels.number_format_linked)
+                    .unwrap_or(true),
             )),
             "Separator" => Ok(data_labels
                 .as_ref()
@@ -23501,6 +23741,8 @@ fn parse_chart_data_labels_args(args: &[OmValue], owner: &str) -> OmResult<Chart
         show_value: optional_bool(6, "ShowValue")?,
         show_percentage: optional_bool(7, "ShowPercentage")?,
         show_bubble_size: optional_bool(8, "ShowBubbleSize")?,
+        number_format: None,
+        number_format_linked: None,
         separator: match args.get(9) {
             None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => None,
             Some(OmValue::Text(value)) => Some(value.clone()),
@@ -23552,6 +23794,8 @@ fn chart_data_labels_default_visible_model() -> ChartDataLabelsModel {
         show_value: Some(true),
         show_percentage: None,
         show_bubble_size: None,
+        number_format: None,
+        number_format_linked: None,
         separator: None,
         dirty: true,
     }
@@ -23567,6 +23811,8 @@ fn chart_data_labels_disabled_model() -> ChartDataLabelsModel {
         show_value: Some(false),
         show_percentage: Some(false),
         show_bubble_size: Some(false),
+        number_format: None,
+        number_format_linked: None,
         separator: None,
         dirty: true,
     }
@@ -23661,6 +23907,17 @@ fn chart_number_xml_value(value: f64) -> String {
 }
 
 fn push_chart_data_label_properties_xml(xml: &mut String, data_labels: &ChartDataLabelsModel) {
+    if let Some(format_code) = data_labels.number_format.as_ref() {
+        let format_code = partial_escape(format_code).to_string();
+        let source_linked = if data_labels.number_format_linked.unwrap_or(true) {
+            "1"
+        } else {
+            "0"
+        };
+        xml.push_str(&format!(
+            r#"<c:numFmt formatCode="{format_code}" sourceLinked="{source_linked}"/>"#
+        ));
+    }
     for (element_name, value) in [
         ("showLegendKey", data_labels.show_legend_key),
         ("showLeaderLines", data_labels.has_leader_lines),
@@ -24469,6 +24726,21 @@ fn patch_loaded_chart_model_xml(
     let write_chart_data_labels_properties = |writer: &mut Writer<Cursor<Vec<u8>>>,
                                               data_labels: &ChartDataLabelsModel|
      -> OmResult<()> {
+        if let Some(format_code) = data_labels.number_format.as_ref() {
+            let mut element = BytesStart::new("c:numFmt");
+            element.push_attribute(("formatCode", format_code.as_str()));
+            element.push_attribute((
+                "sourceLinked",
+                if data_labels.number_format_linked.unwrap_or(true) {
+                    "1"
+                } else {
+                    "0"
+                },
+            ));
+            writer
+                .write_event(Event::Empty(element))
+                .map_err(runtime_xml_error)?;
+        }
         for (element_name, value) in [
             ("c:showLegendKey", data_labels.show_legend_key),
             ("c:showLeaderLines", data_labels.has_leader_lines),
@@ -84572,6 +84844,18 @@ mod tests {
                 .expect("DataLabels.ShowValue default"),
             OmValue::Bool(true)
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_labels, "NumberFormat", &[])
+                .expect("DataLabels.NumberFormat default"),
+            OmValue::Text("General".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_labels, "NumberFormatLinked", &[])
+                .expect("DataLabels.NumberFormatLinked default"),
+            OmValue::Bool(true)
+        );
         runtime
             .dispatch_invoke(
                 series,
@@ -84613,6 +84897,17 @@ mod tests {
                 &[],
             )
             .expect("DataLabels.Separator = pipe");
+        runtime
+            .dispatch_set(
+                data_labels,
+                "NumberFormat",
+                OmValue::Text("0.0%".to_string()),
+                &[],
+            )
+            .expect("DataLabels.NumberFormat = percent");
+        runtime
+            .dispatch_set(data_labels, "NumberFormatLinked", OmValue::Bool(true), &[])
+            .expect("DataLabels.NumberFormatLinked = true");
         assert_eq!(
             runtime
                 .dispatch_set(
@@ -84622,6 +84917,30 @@ mod tests {
                     &[]
                 )
                 .expect_err("DataLabels.ShowValue rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    data_labels,
+                    "NumberFormat",
+                    OmValue::Text(String::new()),
+                    &[]
+                )
+                .expect_err("DataLabels.NumberFormat rejects empty")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    data_labels,
+                    "NumberFormatLinked",
+                    OmValue::Text("bad".to_string()),
+                    &[]
+                )
+                .expect_err("DataLabels.NumberFormatLinked rejects non-bool")
                 .code,
             OmErrorCode::TypeMismatch
         );
@@ -84663,6 +84982,7 @@ mod tests {
         assert!(saved_chart_xml.contains(r#"<c:showVal val="1"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:showPercent val="0"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:showBubbleSize val="0"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:numFmt formatCode="0.0%" sourceLinked="1"/>"#));
         assert!(saved_chart_xml.contains("<c:separator> | </c:separator>"));
 
         let mut reopened_runtime = ExcelRuntime::new();
@@ -84733,6 +85053,18 @@ mod tests {
                 .expect("reopened DataLabels.Separator"),
             OmValue::Text(" | ".to_string())
         );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_data_labels, "NumberFormat", &[])
+                .expect("reopened DataLabels.NumberFormat"),
+            OmValue::Text("0.0%".to_string())
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_data_labels, "NumberFormatLinked", &[])
+                .expect("reopened DataLabels.NumberFormatLinked"),
+            OmValue::Bool(true)
+        );
         let reopened_state = reopened_runtime
             .workbook_state(reopened_workbook)
             .expect("reopened workbook state");
@@ -84753,6 +85085,8 @@ mod tests {
         assert_eq!(series_data_labels.show_value, Some(true));
         assert_eq!(series_data_labels.show_percentage, Some(false));
         assert_eq!(series_data_labels.show_bubble_size, Some(false));
+        assert_eq!(series_data_labels.number_format.as_deref(), Some("0.0%"));
+        assert_eq!(series_data_labels.number_format_linked, Some(true));
         assert_eq!(series_data_labels.separator.as_deref(), Some(" | "));
         assert!(!series_data_labels.dirty);
     }
@@ -85051,6 +85385,14 @@ mod tests {
                 &[],
             )
             .expect("DataLabel.Separator = star");
+        runtime
+            .dispatch_set(
+                second_label,
+                "NumberFormatLocal",
+                OmValue::Text("#,##0.00".to_string()),
+                &[],
+            )
+            .expect("DataLabel.NumberFormatLocal = number");
         assert_eq!(
             runtime
                 .dispatch_get(second_label, "ShowValue", &[])
@@ -85081,6 +85423,25 @@ mod tests {
                 .code,
             OmErrorCode::TypeMismatch
         );
+        assert_eq!(
+            runtime
+                .dispatch_set(second_label, "NumberFormat", OmValue::Number(1.0), &[])
+                .expect_err("DataLabel.NumberFormat rejects non-text")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    second_label,
+                    "NumberFormatLinked",
+                    OmValue::Text("bad".to_string()),
+                    &[]
+                )
+                .expect_err("DataLabel.NumberFormatLinked rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
         let state = runtime.workbook_state(workbook).expect("workbook state");
         let chart_model = state.charts.values().next().expect("chart model");
         let second_point_labels = chart_model.series[0]
@@ -85089,6 +85450,11 @@ mod tests {
             .expect("second point data labels");
         assert_eq!(second_point_labels.show_category_name, Some(true));
         assert_eq!(second_point_labels.show_value, Some(false));
+        assert_eq!(
+            second_point_labels.number_format.as_deref(),
+            Some("#,##0.00")
+        );
+        assert_eq!(second_point_labels.number_format_linked, Some(false));
         assert_eq!(second_point_labels.separator.as_deref(), Some(" * "));
         let labels_parent = expect_object_handle(
             runtime
@@ -85166,7 +85532,7 @@ mod tests {
         )
         .expect("saved chart xml utf8");
         assert!(saved_chart_xml.contains(
-            r#"<c:dLbl><c:idx val="1"/><c:showCatName val="1"/><c:showVal val="0"/><c:separator> * </c:separator></c:dLbl>"#
+            r##"<c:dLbl><c:idx val="1"/><c:numFmt formatCode="#,##0.00" sourceLinked="0"/><c:showCatName val="1"/><c:showVal val="0"/><c:separator> * </c:separator></c:dLbl>"##
         ));
 
         let mut reopened_runtime = ExcelRuntime::new();
@@ -85235,6 +85601,18 @@ mod tests {
                 .dispatch_get(reopened_second_label, "Separator", &[])
                 .expect("reopened DataLabel.Separator"),
             OmValue::Text(" * ".to_string())
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_second_label, "NumberFormat", &[])
+                .expect("reopened DataLabel.NumberFormat"),
+            OmValue::Text("#,##0.00".to_string())
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_second_label, "NumberFormatLinked", &[])
+                .expect("reopened DataLabel.NumberFormatLinked"),
+            OmValue::Bool(false)
         );
     }
 

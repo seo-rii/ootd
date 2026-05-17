@@ -164,6 +164,8 @@ pub struct ChartDataLabelsModel {
     pub show_value: Option<bool>,
     pub show_percentage: Option<bool>,
     pub show_bubble_size: Option<bool>,
+    pub number_format: Option<String>,
+    pub number_format_linked: Option<bool>,
     pub separator: Option<String>,
     pub dirty: bool,
 }
