@@ -158,6 +158,12 @@ const XL_LABEL_POSITION_LEFT: i32 = -4131;
 const XL_LABEL_POSITION_MIXED: i32 = 6;
 const XL_LABEL_POSITION_OUTSIDE_END: i32 = 2;
 const XL_LABEL_POSITION_RIGHT: i32 = -4152;
+const XL_DATA_LABELS_SHOW_NONE: i32 = -4142;
+const XL_DATA_LABELS_SHOW_VALUE: i32 = 2;
+const XL_DATA_LABELS_SHOW_PERCENT: i32 = 3;
+const XL_DATA_LABELS_SHOW_LABEL: i32 = 4;
+const XL_DATA_LABELS_SHOW_LABEL_AND_PERCENT: i32 = 5;
+const XL_DATA_LABELS_SHOW_BUBBLE_SIZES: i32 = 6;
 const XL_AXIS_CROSSES_AUTOMATIC: i32 = -4105;
 const XL_AXIS_CROSSES_CUSTOM: i32 = -4114;
 const XL_AXIS_CROSSES_MAXIMUM: i32 = 2;
@@ -3724,6 +3730,45 @@ impl ExcelRuntime {
                 }
                 self.validate_data_label_index(workbook, chart_id, series_index, point_index)?;
                 match member {
+                    "Type" => {
+                        let label_type = coerce_i32_arg(&value, "DataLabel.Type")?;
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let inherited =
+                            chart_point_effective_data_labels(chart, series_index, point_index)
+                                .cloned()
+                                .unwrap_or_else(chart_data_labels_disabled_model);
+                        let series = chart.series.get_mut(series_index).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "series not found")
+                        })?;
+                        let point_index = u32::try_from(point_index).map_err(|_| {
+                            OmError::invalid_argument("DataLabel index is out of bounds")
+                        })?;
+                        let data_labels = series
+                            .point_data_labels
+                            .entry(point_index)
+                            .or_insert(inherited);
+                        if set_chart_data_labels_type(data_labels, label_type)? {
+                            data_labels.dirty = true;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     "ShowLegendKey" | "HasLeaderLines" | "ShowSeriesName" | "ShowCategoryName"
                     | "ShowValue" | "ShowPercentage" | "ShowBubbleSize" => {
                         let OmValue::Bool(enabled) = value else {
@@ -3773,6 +3818,7 @@ impl ExcelRuntime {
                         };
                         if *target != Some(enabled) {
                             *target = Some(enabled);
+                            chart_data_labels_refresh_type_after_flag_change(data_labels, member);
                             data_labels.dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
@@ -5096,6 +5142,39 @@ impl ExcelRuntime {
                 }
                 self.series_model(workbook, chart_id, series_index)?;
                 match member {
+                    "Type" => {
+                        let label_type = coerce_i32_arg(&value, "DataLabels.Type")?;
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let inherited = chart
+                            .data_labels
+                            .clone()
+                            .unwrap_or_else(chart_data_labels_disabled_model);
+                        let series = chart.series.get_mut(series_index).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "series not found")
+                        })?;
+                        let data_labels = series.data_labels.get_or_insert(inherited);
+                        if set_chart_data_labels_type(data_labels, label_type)? {
+                            data_labels.dirty = true;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     "ShowLegendKey" | "HasLeaderLines" | "ShowSeriesName" | "ShowCategoryName"
                     | "ShowValue" | "ShowPercentage" | "ShowBubbleSize" => {
                         let OmValue::Bool(enabled) = value else {
@@ -5139,6 +5218,7 @@ impl ExcelRuntime {
                         };
                         if *target != Some(enabled) {
                             *target = Some(enabled);
+                            chart_data_labels_refresh_type_after_flag_change(data_labels, member);
                             data_labels.dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
@@ -11786,6 +11866,7 @@ impl ExcelRuntime {
                         "Name"
                             | "Count"
                             | "Item"
+                            | "Type"
                             | "ShowLegendKey"
                             | "HasLeaderLines"
                             | "ShowSeriesName"
@@ -11808,6 +11889,7 @@ impl ExcelRuntime {
                         "DataLabel",
                         "Name"
                             | "Index"
+                            | "Type"
                             | "ShowLegendKey"
                             | "HasLeaderLines"
                             | "ShowSeriesName"
@@ -15762,6 +15844,12 @@ impl ExcelRuntime {
                     chart_data_labels_count_for_chart_series(chart, series_index) as f64,
                 ))
             }
+            "Type" => Ok(OmValue::Number(f64::from(
+                chart_data_labels_type_to_excel_value(chart_series_effective_data_labels(
+                    self.chart_model(workbook, chart_id)?,
+                    series_index,
+                )),
+            ))),
             "ShowLegendKey" => Ok(OmValue::Bool(
                 chart_series_effective_data_labels(
                     self.chart_model(workbook, chart_id)?,
@@ -15924,6 +16012,9 @@ impl ExcelRuntime {
         match member {
             "Name" => Ok(OmValue::Text(format!("Data Label {}", point_index + 1))),
             "Index" => Ok(OmValue::Number((point_index + 1) as f64)),
+            "Type" => Ok(OmValue::Number(f64::from(
+                chart_data_labels_type_to_excel_value(data_labels.as_ref()),
+            ))),
             "ShowLegendKey" => Ok(OmValue::Bool(
                 data_labels
                     .as_ref()
@@ -23929,6 +24020,96 @@ fn chart_split_type_xml_value(value: ChartSplitType) -> &'static str {
     }
 }
 
+fn chart_data_labels_infer_type(data_labels: &ChartDataLabelsModel) -> Option<i32> {
+    if data_labels.show_series_name.unwrap_or(false) {
+        return None;
+    }
+
+    match (
+        data_labels.show_category_name.unwrap_or(false),
+        data_labels.show_value.unwrap_or(false),
+        data_labels.show_percentage.unwrap_or(false),
+        data_labels.show_bubble_size.unwrap_or(false),
+    ) {
+        (false, false, false, false) => Some(XL_DATA_LABELS_SHOW_NONE),
+        (false, true, false, false) => Some(XL_DATA_LABELS_SHOW_VALUE),
+        (false, false, true, false) => Some(XL_DATA_LABELS_SHOW_PERCENT),
+        (true, false, false, false) => Some(XL_DATA_LABELS_SHOW_LABEL),
+        (true, false, true, false) => Some(XL_DATA_LABELS_SHOW_LABEL_AND_PERCENT),
+        (false, false, false, true) => Some(XL_DATA_LABELS_SHOW_BUBBLE_SIZES),
+        _ => None,
+    }
+}
+
+fn chart_data_labels_type_to_excel_value(data_labels: Option<&ChartDataLabelsModel>) -> i32 {
+    data_labels
+        .and_then(|data_labels| {
+            data_labels
+                .label_type
+                .or_else(|| chart_data_labels_infer_type(data_labels))
+        })
+        .unwrap_or(XL_DATA_LABELS_SHOW_NONE)
+}
+
+fn chart_data_labels_refresh_type_after_flag_change(
+    data_labels: &mut ChartDataLabelsModel,
+    member: &str,
+) {
+    if matches!(
+        member,
+        "ShowSeriesName" | "ShowCategoryName" | "ShowValue" | "ShowPercentage" | "ShowBubbleSize"
+    ) {
+        data_labels.label_type = chart_data_labels_infer_type(data_labels);
+    }
+}
+
+fn set_chart_data_labels_type(
+    data_labels: &mut ChartDataLabelsModel,
+    label_type: i32,
+) -> OmResult<bool> {
+    let (
+        show_legend_key,
+        show_series_name,
+        show_category_name,
+        show_value,
+        show_percentage,
+        show_bubble_size,
+    ) = match label_type {
+        XL_DATA_LABELS_SHOW_NONE => (false, false, false, false, false, false),
+        XL_DATA_LABELS_SHOW_VALUE => (false, false, false, true, false, false),
+        XL_DATA_LABELS_SHOW_PERCENT => (false, false, false, false, true, false),
+        XL_DATA_LABELS_SHOW_LABEL => (false, false, true, false, false, false),
+        XL_DATA_LABELS_SHOW_LABEL_AND_PERCENT => (false, false, true, false, true, false),
+        XL_DATA_LABELS_SHOW_BUBBLE_SIZES => (false, false, false, false, false, true),
+        _ => {
+            return Err(OmError::unsupported(
+                "DataLabels.Type supports none, value, percent, label, label and percent, and bubble size labels",
+            ));
+        }
+    };
+
+    let mut changed = data_labels.label_type != Some(label_type);
+    data_labels.label_type = Some(label_type);
+    for (target, value) in [
+        (&mut data_labels.show_legend_key, show_legend_key),
+        (&mut data_labels.show_series_name, show_series_name),
+        (&mut data_labels.show_category_name, show_category_name),
+        (&mut data_labels.show_value, show_value),
+        (&mut data_labels.show_percentage, show_percentage),
+        (&mut data_labels.show_bubble_size, show_bubble_size),
+    ] {
+        if *target != Some(value) {
+            *target = Some(value);
+            changed = true;
+        }
+    }
+    if label_type == XL_DATA_LABELS_SHOW_NONE && data_labels.has_leader_lines != Some(false) {
+        data_labels.has_leader_lines = Some(false);
+        changed = true;
+    }
+    Ok(changed)
+}
+
 fn parse_chart_data_labels_args(args: &[OmValue], owner: &str) -> OmResult<ChartDataLabelsModel> {
     if args.len() > 10 {
         return Err(OmError::invalid_argument(format!(
@@ -23991,7 +24172,7 @@ fn parse_chart_data_labels_args(args: &[OmValue], owner: &str) -> OmResult<Chart
         dirty: true,
     };
     match label_type {
-        Some(-4142) => {
+        Some(XL_DATA_LABELS_SHOW_NONE) => {
             data_labels.show_legend_key.get_or_insert(false);
             data_labels.show_series_name.get_or_insert(false);
             data_labels.show_category_name.get_or_insert(false);
@@ -23999,20 +24180,20 @@ fn parse_chart_data_labels_args(args: &[OmValue], owner: &str) -> OmResult<Chart
             data_labels.show_percentage.get_or_insert(false);
             data_labels.show_bubble_size.get_or_insert(false);
         }
-        Some(2) => {
+        Some(XL_DATA_LABELS_SHOW_VALUE) => {
             data_labels.show_value.get_or_insert(true);
         }
-        Some(3) => {
+        Some(XL_DATA_LABELS_SHOW_PERCENT) => {
             data_labels.show_percentage.get_or_insert(true);
         }
-        Some(4) => {
+        Some(XL_DATA_LABELS_SHOW_LABEL) => {
             data_labels.show_category_name.get_or_insert(true);
         }
-        Some(5) => {
+        Some(XL_DATA_LABELS_SHOW_LABEL_AND_PERCENT) => {
             data_labels.show_category_name.get_or_insert(true);
             data_labels.show_percentage.get_or_insert(true);
         }
-        Some(6) => {
+        Some(XL_DATA_LABELS_SHOW_BUBBLE_SIZES) => {
             data_labels.show_bubble_size.get_or_insert(true);
         }
         _ => {}
@@ -24022,7 +24203,7 @@ fn parse_chart_data_labels_args(args: &[OmValue], owner: &str) -> OmResult<Chart
 
 fn chart_data_labels_default_visible_model() -> ChartDataLabelsModel {
     ChartDataLabelsModel {
-        label_type: Some(2),
+        label_type: Some(XL_DATA_LABELS_SHOW_VALUE),
         show_legend_key: None,
         has_leader_lines: None,
         show_series_name: None,
@@ -24040,7 +24221,7 @@ fn chart_data_labels_default_visible_model() -> ChartDataLabelsModel {
 
 fn chart_data_labels_disabled_model() -> ChartDataLabelsModel {
     ChartDataLabelsModel {
-        label_type: Some(-4142),
+        label_type: Some(XL_DATA_LABELS_SHOW_NONE),
         show_legend_key: Some(false),
         has_leader_lines: Some(false),
         show_series_name: Some(false),
@@ -85094,6 +85275,14 @@ mod tests {
             OmValue::Bool(true)
         );
         assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(data_labels, "Type", &[])
+                    .expect("DataLabels.Type default")
+            ),
+            f64::from(super::XL_DATA_LABELS_SHOW_VALUE)
+        );
+        assert_eq!(
             runtime
                 .dispatch_get(data_labels, "HasLeaderLines", &[])
                 .expect("DataLabels.HasLeaderLines default"),
@@ -85120,6 +85309,54 @@ mod tests {
             f64::from(super::XL_LABEL_POSITION_BEST_FIT)
         );
         runtime
+            .dispatch_set(
+                data_labels,
+                "Type",
+                OmValue::Number(f64::from(super::XL_DATA_LABELS_SHOW_LABEL_AND_PERCENT)),
+                &[],
+            )
+            .expect("DataLabels.Type = label and percent");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(data_labels, "Type", &[])
+                    .expect("DataLabels.Type after set")
+            ),
+            f64::from(super::XL_DATA_LABELS_SHOW_LABEL_AND_PERCENT)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_labels, "ShowCategoryName", &[])
+                .expect("DataLabels.ShowCategoryName after Type set"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_labels, "ShowPercentage", &[])
+                .expect("DataLabels.ShowPercentage after Type set"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_labels, "ShowValue", &[])
+                .expect("DataLabels.ShowValue after Type set"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(data_labels, "Type", OmValue::Text("bad".to_string()), &[])
+                .expect_err("DataLabels.Type rejects non-number")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(data_labels, "Type", OmValue::Number(99.0), &[])
+                .expect_err("DataLabels.Type rejects unsupported type")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        runtime
             .dispatch_invoke(
                 series,
                 "ApplyDataLabels",
@@ -85142,6 +85379,14 @@ mod tests {
                 .dispatch_get(data_labels, "ShowCategoryName", &[])
                 .expect("DataLabels.ShowCategoryName after Series.ApplyDataLabels"),
             OmValue::Bool(true)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(data_labels, "Type", &[])
+                    .expect("DataLabels.Type after Series.ApplyDataLabels")
+            ),
+            f64::from(super::XL_DATA_LABELS_SHOW_LABEL)
         );
         assert_eq!(
             runtime
@@ -86036,6 +86281,207 @@ mod tests {
             reopened_runtime
                 .dispatch_get(reopened_third_label, "ShowValue", &[])
                 .expect("reopened third DataLabel.ShowValue"),
+            OmValue::Bool(false)
+        );
+    }
+
+    #[test]
+    fn data_label_type_property_maps_point_label_modes_and_persists() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+
+        runtime
+            .dispatch_set(series, "HasDataLabels", OmValue::Bool(true), &[])
+            .expect("Series.HasDataLabels = true");
+        let data_labels = expect_object_handle(
+            runtime
+                .dispatch_get(series, "DataLabels", &[])
+                .expect("Series.DataLabels"),
+        );
+        let second_label = expect_object_handle(
+            runtime
+                .dispatch_invoke(data_labels, "Item", &[OmValue::Number(2.0)])
+                .expect("DataLabels.Item(2)"),
+        );
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_label, "Type", &[])
+                    .expect("DataLabel.Type default")
+            ),
+            f64::from(super::XL_DATA_LABELS_SHOW_VALUE)
+        );
+        runtime
+            .dispatch_set(
+                second_label,
+                "Type",
+                OmValue::Number(f64::from(super::XL_DATA_LABELS_SHOW_BUBBLE_SIZES)),
+                &[],
+            )
+            .expect("DataLabel.Type = bubble sizes");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_label, "Type", &[])
+                    .expect("DataLabel.Type after set")
+            ),
+            f64::from(super::XL_DATA_LABELS_SHOW_BUBBLE_SIZES)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_label, "ShowBubbleSize", &[])
+                .expect("DataLabel.ShowBubbleSize after Type set"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_label, "ShowValue", &[])
+                .expect("DataLabel.ShowValue after Type set"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(second_label, "Type", OmValue::Text("bad".to_string()), &[])
+                .expect_err("DataLabel.Type rejects non-number")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(second_label, "Type", OmValue::Number(99.0), &[])
+                .expect_err("DataLabel.Type rejects unsupported type")
+                .code,
+            OmErrorCode::Unsupported
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after point data label type edit");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(
+            r#"<c:dLbl><c:idx val="1"/><c:showLegendKey val="0"/><c:showSerName val="0"/><c:showCatName val="0"/><c:showVal val="0"/><c:showPercent val="0"/><c:showBubbleSize val="1"/></c:dLbl>"#
+        ));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after point data label type edit");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        let reopened_data_labels = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_series, "DataLabels", &[])
+                .expect("reopened Series.DataLabels"),
+        );
+        let reopened_second_label = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_data_labels, "Item", &[OmValue::Number(2.0)])
+                .expect("reopened DataLabels.Item(2)"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_second_label, "Type", &[])
+                    .expect("reopened DataLabel.Type")
+            ),
+            f64::from(super::XL_DATA_LABELS_SHOW_BUBBLE_SIZES)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_second_label, "ShowBubbleSize", &[])
+                .expect("reopened DataLabel.ShowBubbleSize"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_second_label, "ShowValue", &[])
+                .expect("reopened DataLabel.ShowValue"),
             OmValue::Bool(false)
         );
     }
