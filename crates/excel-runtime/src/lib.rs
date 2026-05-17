@@ -1,9 +1,10 @@
 use excel_model::{
-    AxisModel, ChartAxisCrosses, ChartAxisKind, ChartAxisScaleType, ChartDataLabelsModel,
-    ChartDisplayBlanksAs, ChartLegendPosition, ChartModel, ChartObjectModel, ChartSheetBinding,
-    ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition,
-    ChartTickMark, ChartType, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel,
-    WorkbookState, WorksheetData, resolve_chart_source_reference_with_names,
+    AxisModel, ChartAxisCrosses, ChartAxisKind, ChartAxisScaleType, ChartAxisTimeUnit,
+    ChartDataLabelsModel, ChartDisplayBlanksAs, ChartLegendPosition, ChartModel, ChartObjectModel,
+    ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText,
+    ChartTickLabelPosition, ChartTickMark, ChartType, DrawingModel, DrawingObjectModel,
+    LegendModel, SeriesModel, WorkbookState, WorksheetData,
+    resolve_chart_source_reference_with_names,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
@@ -152,6 +153,9 @@ const XL_AXIS_CROSSES_MAXIMUM: i32 = 2;
 const XL_AXIS_CROSSES_MINIMUM: i32 = 4;
 const XL_SCALE_LINEAR: i32 = -4132;
 const XL_SCALE_LOGARITHMIC: i32 = -4133;
+const XL_DAYS: i32 = 0;
+const XL_MONTHS: i32 = 1;
+const XL_YEARS: i32 = 2;
 const XL_MOVE_AND_SIZE: i32 = 1;
 const XL_MOVE: i32 = 2;
 const XL_FREE_FLOATING: i32 = 3;
@@ -4623,6 +4627,9 @@ impl ExcelRuntime {
                                         tick_label_spacing: None,
                                         tick_mark_spacing: None,
                                         axis_between_categories: None,
+                                        base_unit: None,
+                                        major_unit_scale: None,
+                                        minor_unit_scale: None,
                                         reverse_plot_order: None,
                                         scale_type: None,
                                         log_base: None,
@@ -5112,6 +5119,101 @@ impl ExcelRuntime {
                             value_axis.axis_between_categories != Some(axis_between_categories);
                         if changed {
                             value_axis.axis_between_categories = Some(axis_between_categories);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "BaseUnit" | "MajorUnitScale" | "MinorUnitScale" => {
+                        let OmValue::Number(number) = value else {
+                            return Err(OmError::type_mismatch(format!(
+                                "Axis.{member} expects a numeric enum value"
+                            )));
+                        };
+                        if !number.is_finite() || number.fract() != 0.0 {
+                            return Err(OmError::invalid_argument(format!(
+                                "Axis.{member} expects an integral enum value"
+                            )));
+                        }
+                        let time_unit = chart_axis_time_unit_from_excel_value(number as i32)?;
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let axis = chart
+                            .axes
+                            .get_mut(axis_index)
+                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
+                        if axis.kind != ChartAxisKind::Date {
+                            return Err(OmError::unsupported(format!(
+                                "Axis.{member} applies only to date category axes"
+                            )));
+                        }
+                        let target = match member {
+                            "BaseUnit" => &mut axis.base_unit,
+                            "MajorUnitScale" => &mut axis.major_unit_scale,
+                            "MinorUnitScale" => &mut axis.minor_unit_scale,
+                            _ => unreachable!("matched axis time unit property"),
+                        };
+                        let changed = *target != Some(time_unit);
+                        if changed {
+                            *target = Some(time_unit);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "BaseUnitIsAuto" => {
+                        let OmValue::Bool(is_auto) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Axis.BaseUnitIsAuto expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let axis = chart
+                            .axes
+                            .get_mut(axis_index)
+                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
+                        if axis.kind != ChartAxisKind::Date {
+                            return Err(OmError::unsupported(
+                                "Axis.BaseUnitIsAuto applies only to date category axes",
+                            ));
+                        }
+                        let next = if is_auto {
+                            None
+                        } else {
+                            Some(axis.base_unit.unwrap_or(ChartAxisTimeUnit::Days))
+                        };
+                        let changed = axis.base_unit != next;
+                        if changed {
+                            axis.base_unit = next;
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -10693,6 +10795,8 @@ impl ExcelRuntime {
                         "Type"
                             | "AxisGroup"
                             | "AxisBetweenCategories"
+                            | "BaseUnit"
+                            | "BaseUnitIsAuto"
                             | "HasTitle"
                             | "AxisTitle"
                             | "ReversePlotOrder"
@@ -10700,6 +10804,8 @@ impl ExcelRuntime {
                             | "LogBase"
                             | "Crosses"
                             | "CrossesAt"
+                            | "MajorUnitScale"
+                            | "MinorUnitScale"
                             | "MajorTickMark"
                             | "MinorTickMark"
                             | "TickLabelPosition"
@@ -14040,6 +14146,26 @@ impl ExcelRuntime {
                         .unwrap_or(true),
                 ))
             }
+            "BaseUnit" => {
+                if axis.kind != ChartAxisKind::Date {
+                    return Err(OmError::unsupported(
+                        "Axis.BaseUnit applies only to date category axes",
+                    ));
+                }
+                Ok(OmValue::Number(f64::from(
+                    chart_axis_time_unit_to_excel_value(
+                        axis.base_unit.unwrap_or(ChartAxisTimeUnit::Days),
+                    ),
+                )))
+            }
+            "BaseUnitIsAuto" => {
+                if axis.kind != ChartAxisKind::Date {
+                    return Err(OmError::unsupported(
+                        "Axis.BaseUnitIsAuto applies only to date category axes",
+                    ));
+                }
+                Ok(OmValue::Bool(axis.base_unit.is_none()))
+            }
             "HasTitle" => Ok(OmValue::Bool(axis.title.is_some())),
             "HasMajorGridlines" => Ok(OmValue::Bool(axis.has_major_gridlines == Some(true))),
             "HasMinorGridlines" => Ok(OmValue::Bool(axis.has_minor_gridlines == Some(true))),
@@ -14066,6 +14192,30 @@ impl ExcelRuntime {
                 .crosses_at
                 .map(OmValue::Number)
                 .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis crossing is automatic")),
+            "MajorUnitScale" => {
+                if axis.kind != ChartAxisKind::Date {
+                    return Err(OmError::unsupported(
+                        "Axis.MajorUnitScale applies only to date category axes",
+                    ));
+                }
+                Ok(OmValue::Number(f64::from(
+                    chart_axis_time_unit_to_excel_value(
+                        axis.major_unit_scale.unwrap_or(ChartAxisTimeUnit::Days),
+                    ),
+                )))
+            }
+            "MinorUnitScale" => {
+                if axis.kind != ChartAxisKind::Date {
+                    return Err(OmError::unsupported(
+                        "Axis.MinorUnitScale applies only to date category axes",
+                    ));
+                }
+                Ok(OmValue::Number(f64::from(
+                    chart_axis_time_unit_to_excel_value(
+                        axis.minor_unit_scale.unwrap_or(ChartAxisTimeUnit::Days),
+                    ),
+                )))
+            }
             "MajorTickMark" => Ok(OmValue::Number(f64::from(chart_tick_mark_to_excel_value(
                 axis.major_tick_mark.unwrap_or(ChartTickMark::Outside),
             )))),
@@ -22257,6 +22407,33 @@ fn chart_axis_has_scaling_xml(axis: &AxisModel) -> bool {
         || axis.reverse_plot_order.is_some()
 }
 
+fn chart_axis_time_unit_xml_value(value: ChartAxisTimeUnit) -> &'static str {
+    match value {
+        ChartAxisTimeUnit::Days => "days",
+        ChartAxisTimeUnit::Months => "months",
+        ChartAxisTimeUnit::Years => "years",
+    }
+}
+
+fn chart_axis_time_unit_to_excel_value(value: ChartAxisTimeUnit) -> i32 {
+    match value {
+        ChartAxisTimeUnit::Days => XL_DAYS,
+        ChartAxisTimeUnit::Months => XL_MONTHS,
+        ChartAxisTimeUnit::Years => XL_YEARS,
+    }
+}
+
+fn chart_axis_time_unit_from_excel_value(value: i32) -> OmResult<ChartAxisTimeUnit> {
+    match value {
+        XL_DAYS => Ok(ChartAxisTimeUnit::Days),
+        XL_MONTHS => Ok(ChartAxisTimeUnit::Months),
+        XL_YEARS => Ok(ChartAxisTimeUnit::Years),
+        _ => Err(OmError::unsupported(
+            "Axis time unit supports xlDays, xlMonths, and xlYears",
+        )),
+    }
+}
+
 fn chart_axis_crosses_xml_value(value: ChartAxisCrosses) -> Option<&'static str> {
     match value {
         ChartAxisCrosses::Automatic => Some("autoZero"),
@@ -22954,6 +23131,18 @@ fn patch_loaded_chart_model_xml(
     let mut axis_cross_between_written = Vec::<bool>::new();
     let mut axis_cross_between_inserted = Vec::<bool>::new();
     let mut axis_cross_between_removed = Vec::<bool>::new();
+    let mut axis_base_unit_seen = Vec::<bool>::new();
+    let mut axis_base_unit_written = Vec::<bool>::new();
+    let mut axis_base_unit_inserted = Vec::<bool>::new();
+    let mut axis_base_unit_removed = Vec::<bool>::new();
+    let mut axis_major_time_unit_seen = Vec::<bool>::new();
+    let mut axis_major_time_unit_written = Vec::<bool>::new();
+    let mut axis_major_time_unit_inserted = Vec::<bool>::new();
+    let mut axis_major_time_unit_removed = Vec::<bool>::new();
+    let mut axis_minor_time_unit_seen = Vec::<bool>::new();
+    let mut axis_minor_time_unit_written = Vec::<bool>::new();
+    let mut axis_minor_time_unit_inserted = Vec::<bool>::new();
+    let mut axis_minor_time_unit_removed = Vec::<bool>::new();
     let mut current_chart_group_depth = None::<usize>;
     let mut chart_group_axis_refs_seen = Vec::<String>::new();
     let mut skip_depth = 0usize;
@@ -23519,6 +23708,27 @@ fn patch_loaded_chart_model_xml(
             write_chart_val_element(writer, "c:minorUnit", value)?;
         }
         write_chart_axis_crossing_elements(writer, axis)?;
+        if let Some(value) = axis.base_unit {
+            write_chart_string_val_element(
+                writer,
+                "c:baseTimeUnit",
+                chart_axis_time_unit_xml_value(value),
+            )?;
+        }
+        if let Some(value) = axis.major_unit_scale {
+            write_chart_string_val_element(
+                writer,
+                "c:majorTimeUnit",
+                chart_axis_time_unit_xml_value(value),
+            )?;
+        }
+        if let Some(value) = axis.minor_unit_scale {
+            write_chart_string_val_element(
+                writer,
+                "c:minorTimeUnit",
+                chart_axis_time_unit_xml_value(value),
+            )?;
+        }
         writer
             .write_event(Event::End(BytesEnd::new(axis_name.as_str())))
             .map_err(runtime_xml_error)?;
@@ -23737,6 +23947,18 @@ fn patch_loaded_chart_model_xml(
                     axis_cross_between_written.push(false);
                     axis_cross_between_inserted.push(false);
                     axis_cross_between_removed.push(false);
+                    axis_base_unit_seen.push(false);
+                    axis_base_unit_written.push(false);
+                    axis_base_unit_inserted.push(false);
+                    axis_base_unit_removed.push(false);
+                    axis_major_time_unit_seen.push(false);
+                    axis_major_time_unit_written.push(false);
+                    axis_major_time_unit_inserted.push(false);
+                    axis_major_time_unit_removed.push(false);
+                    axis_minor_time_unit_seen.push(false);
+                    axis_minor_time_unit_written.push(false);
+                    axis_minor_time_unit_inserted.push(false);
+                    axis_minor_time_unit_removed.push(false);
                 }
                 if local_name.as_slice() == b"scaling"
                     && let Some(axis_index) = current_axis_index
@@ -24447,6 +24669,57 @@ fn patch_loaded_chart_model_xml(
                 } else if !wrote_start_element
                     && matches!(
                         local_name.as_slice(),
+                        b"baseTimeUnit" | b"majorTimeUnit" | b"minorTimeUnit"
+                    )
+                    && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    let (seen, written, removed, expected) = match local_name.as_slice() {
+                        b"baseTimeUnit" => (
+                            &mut axis_base_unit_seen,
+                            &mut axis_base_unit_written,
+                            &mut axis_base_unit_removed,
+                            axis.base_unit.map(chart_axis_time_unit_xml_value),
+                        ),
+                        b"majorTimeUnit" => (
+                            &mut axis_major_time_unit_seen,
+                            &mut axis_major_time_unit_written,
+                            &mut axis_major_time_unit_removed,
+                            axis.major_unit_scale.map(chart_axis_time_unit_xml_value),
+                        ),
+                        b"minorTimeUnit" => (
+                            &mut axis_minor_time_unit_seen,
+                            &mut axis_minor_time_unit_written,
+                            &mut axis_minor_time_unit_removed,
+                            axis.minor_unit_scale.map(chart_axis_time_unit_xml_value),
+                        ),
+                        _ => unreachable!("matched axis time unit"),
+                    };
+                    if let Some(seen) = seen.get_mut(axis_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = expected {
+                        writer
+                            .write_event(Event::Start(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value,
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = written.get_mut(axis_index) {
+                            *written = true;
+                        }
+                    } else {
+                        if let Some(removed) = removed.get_mut(axis_index) {
+                            *removed = true;
+                        }
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    }
+                } else if !wrote_start_element
+                    && matches!(
+                        local_name.as_slice(),
                         b"majorTickMark" | b"minorTickMark" | b"tickLblPos"
                     )
                     && let Some(axis_index) = current_axis_index
@@ -24820,6 +25093,53 @@ fn patch_loaded_chart_model_xml(
                             *written = true;
                         }
                     } else if let Some(removed) = axis_cross_between_removed.get_mut(axis_index) {
+                        *removed = true;
+                    }
+                    buffer.clear();
+                    continue;
+                }
+                if matches!(
+                    local_name.as_slice(),
+                    b"baseTimeUnit" | b"majorTimeUnit" | b"minorTimeUnit"
+                ) && let Some(axis_index) = current_axis_index
+                    && let Some(axis) = chart.axes.get(axis_index)
+                {
+                    let (seen, written, removed, expected) = match local_name.as_slice() {
+                        b"baseTimeUnit" => (
+                            &mut axis_base_unit_seen,
+                            &mut axis_base_unit_written,
+                            &mut axis_base_unit_removed,
+                            axis.base_unit.map(chart_axis_time_unit_xml_value),
+                        ),
+                        b"majorTimeUnit" => (
+                            &mut axis_major_time_unit_seen,
+                            &mut axis_major_time_unit_written,
+                            &mut axis_major_time_unit_removed,
+                            axis.major_unit_scale.map(chart_axis_time_unit_xml_value),
+                        ),
+                        b"minorTimeUnit" => (
+                            &mut axis_minor_time_unit_seen,
+                            &mut axis_minor_time_unit_written,
+                            &mut axis_minor_time_unit_removed,
+                            axis.minor_unit_scale.map(chart_axis_time_unit_xml_value),
+                        ),
+                        _ => unreachable!("matched axis time unit"),
+                    };
+                    if let Some(seen) = seen.get_mut(axis_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = expected {
+                        writer
+                            .write_event(Event::Empty(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value,
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = written.get_mut(axis_index) {
+                            *written = true;
+                        }
+                    } else if let Some(removed) = removed.get_mut(axis_index) {
                         *removed = true;
                     }
                     buffer.clear();
@@ -26112,6 +26432,18 @@ fn patch_loaded_chart_model_xml(
                         axis_cross_between_written.push(axis.axis_between_categories.is_some());
                         axis_cross_between_inserted.push(axis.axis_between_categories.is_some());
                         axis_cross_between_removed.push(false);
+                        axis_base_unit_seen.push(axis.base_unit.is_some());
+                        axis_base_unit_written.push(axis.base_unit.is_some());
+                        axis_base_unit_inserted.push(axis.base_unit.is_some());
+                        axis_base_unit_removed.push(false);
+                        axis_major_time_unit_seen.push(axis.major_unit_scale.is_some());
+                        axis_major_time_unit_written.push(axis.major_unit_scale.is_some());
+                        axis_major_time_unit_inserted.push(axis.major_unit_scale.is_some());
+                        axis_major_time_unit_removed.push(false);
+                        axis_minor_time_unit_seen.push(axis.minor_unit_scale.is_some());
+                        axis_minor_time_unit_written.push(axis.minor_unit_scale.is_some());
+                        axis_minor_time_unit_inserted.push(axis.minor_unit_scale.is_some());
+                        axis_minor_time_unit_removed.push(false);
                         let has_log_base = chart_axis_log_base_xml_value(axis).is_some();
                         let has_scaling = chart_axis_has_scaling_xml(axis);
                         axis_scaling_seen.push(has_scaling);
@@ -26724,6 +27056,27 @@ fn patch_loaded_chart_model_xml(
             &axis_minor_unit_written,
             &axis_minor_unit_inserted,
             &axis_minor_unit_removed,
+        ) && axis_optional_field_matches(
+            axis_index,
+            axis.base_unit.is_some(),
+            &axis_base_unit_seen,
+            &axis_base_unit_written,
+            &axis_base_unit_inserted,
+            &axis_base_unit_removed,
+        ) && axis_optional_field_matches(
+            axis_index,
+            axis.major_unit_scale.is_some(),
+            &axis_major_time_unit_seen,
+            &axis_major_time_unit_written,
+            &axis_major_time_unit_inserted,
+            &axis_major_time_unit_removed,
+        ) && axis_optional_field_matches(
+            axis_index,
+            axis.minor_unit_scale.is_some(),
+            &axis_minor_time_unit_seen,
+            &axis_minor_time_unit_written,
+            &axis_minor_time_unit_inserted,
+            &axis_minor_time_unit_removed,
         )
     });
     let axis_orientation_match = chart.axes.iter().enumerate().all(|(axis_index, axis)| {
@@ -27246,8 +27599,35 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
                     )
                 })
                 .unwrap_or_default();
+            let base_unit_xml = axis
+                .base_unit
+                .map(|value| {
+                    format!(
+                        r#"<c:baseTimeUnit val="{}"/>"#,
+                        chart_axis_time_unit_xml_value(value)
+                    )
+                })
+                .unwrap_or_default();
+            let major_time_unit_xml = axis
+                .major_unit_scale
+                .map(|value| {
+                    format!(
+                        r#"<c:majorTimeUnit val="{}"/>"#,
+                        chart_axis_time_unit_xml_value(value)
+                    )
+                })
+                .unwrap_or_default();
+            let minor_time_unit_xml = axis
+                .minor_unit_scale
+                .map(|value| {
+                    format!(
+                        r#"<c:minorTimeUnit val="{}"/>"#,
+                        chart_axis_time_unit_xml_value(value)
+                    )
+                })
+                .unwrap_or_default();
             axes_xml.push_str(&format!(
-                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{scaling_xml}{major_gridlines_xml}{minor_gridlines_xml}{axis_title_xml}{major_tick_mark_xml}{minor_tick_mark_xml}{tick_label_position_xml}{tick_label_spacing_xml}{tick_mark_spacing_xml}{major_unit_xml}{minor_unit_xml}{crossing_xml}{cross_between_xml}</c:{axis_tag}>"#
+                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{scaling_xml}{major_gridlines_xml}{minor_gridlines_xml}{axis_title_xml}{major_tick_mark_xml}{minor_tick_mark_xml}{tick_label_position_xml}{tick_label_spacing_xml}{tick_mark_spacing_xml}{major_unit_xml}{minor_unit_xml}{crossing_xml}{cross_between_xml}{base_unit_xml}{major_time_unit_xml}{minor_time_unit_xml}</c:{axis_tag}>"#
             ));
         }
     }
@@ -27356,6 +27736,9 @@ fn default_chart_axes() -> Vec<AxisModel> {
             tick_label_spacing: None,
             tick_mark_spacing: None,
             axis_between_categories: None,
+            base_unit: None,
+            major_unit_scale: None,
+            minor_unit_scale: None,
             reverse_plot_order: None,
             scale_type: None,
             log_base: None,
@@ -27378,6 +27761,9 @@ fn default_chart_axes() -> Vec<AxisModel> {
             tick_label_spacing: None,
             tick_mark_spacing: None,
             axis_between_categories: None,
+            base_unit: None,
+            major_unit_scale: None,
+            minor_unit_scale: None,
             reverse_plot_order: None,
             scale_type: None,
             log_base: None,
@@ -91346,6 +91732,310 @@ mod tests {
                 .dispatch_get(reopened_category_axis, "AxisBetweenCategories", &[])
                 .expect("reopened Axis.AxisBetweenCategories")
         ));
+    }
+
+    #[test]
+    fn loaded_chart_axis_time_unit_setters_preserve_chart_extensions_on_save() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace("<c:catAx>", "<c:dateAx>")
+        .replace("</c:catAx>", "</c:dateAx>")
+        .replace(
+            "</c:dateAx>",
+            r#"<c:baseTimeUnit val="months"/><c:majorTimeUnit val="years"/><c:minorTimeUnit val="months"/></c:dateAx>"#,
+        )
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:axis-time-units-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with date axis time units");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let category_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.Axes(xlCategory)"),
+        );
+        let value_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.Axes(xlValue)"),
+        );
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(category_axis, "BaseUnit", &[])
+                    .expect("Axis.BaseUnit before set")
+            ),
+            f64::from(super::XL_MONTHS)
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(category_axis, "BaseUnitIsAuto", &[])
+                .expect("Axis.BaseUnitIsAuto before set")
+        ));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(category_axis, "MajorUnitScale", &[])
+                    .expect("Axis.MajorUnitScale before set")
+            ),
+            f64::from(super::XL_YEARS)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(category_axis, "MinorUnitScale", &[])
+                    .expect("Axis.MinorUnitScale before set")
+            ),
+            f64::from(super::XL_MONTHS)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "BaseUnit", &[])
+                .expect_err("Axis.BaseUnit rejects value axis")
+                .code,
+            OmErrorCode::Unsupported
+        );
+
+        runtime
+            .dispatch_set(
+                category_axis,
+                "BaseUnit",
+                OmValue::Number(f64::from(super::XL_YEARS)),
+                &[],
+            )
+            .expect("set Axis.BaseUnit");
+        runtime
+            .dispatch_set(
+                category_axis,
+                "MajorUnitScale",
+                OmValue::Number(f64::from(super::XL_MONTHS)),
+                &[],
+            )
+            .expect("set Axis.MajorUnitScale");
+        runtime
+            .dispatch_set(
+                category_axis,
+                "MinorUnitScale",
+                OmValue::Number(f64::from(super::XL_DAYS)),
+                &[],
+            )
+            .expect("set Axis.MinorUnitScale");
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    category_axis,
+                    "BaseUnit",
+                    OmValue::Text("bad".to_string()),
+                    &[],
+                )
+                .expect_err("Axis.BaseUnit rejects non-number")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(category_axis, "MajorUnitScale", OmValue::Number(1.5), &[],)
+                .expect_err("Axis.MajorUnitScale rejects fractional value")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(category_axis, "MinorUnitScale", OmValue::Number(99.0), &[],)
+                .expect_err("Axis.MinorUnitScale rejects unsupported enum")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(value_axis, "BaseUnit", OmValue::Number(0.0), &[])
+                .expect_err("Axis.BaseUnit rejects value axis setter")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(category_axis, "BaseUnitIsAuto", OmValue::Number(1.0), &[],)
+                .expect_err("Axis.BaseUnitIsAuto rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after date axis time unit edit");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:axis-time-units-preserve"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:baseTimeUnit val="years"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:majorTimeUnit val="months"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:minorTimeUnit val="days"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:baseTimeUnit val="months"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:majorTimeUnit val="years"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:minorTimeUnit val="months"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after date axis time unit edit");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_category_axis = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("reopened Chart.Axes(xlCategory)"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_category_axis, "BaseUnit", &[])
+                    .expect("reopened Axis.BaseUnit")
+            ),
+            f64::from(super::XL_YEARS)
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_category_axis, "MajorUnitScale", &[])
+                    .expect("reopened Axis.MajorUnitScale")
+            ),
+            f64::from(super::XL_MONTHS)
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_category_axis, "MinorUnitScale", &[])
+                    .expect("reopened Axis.MinorUnitScale")
+            ),
+            f64::from(super::XL_DAYS)
+        );
+
+        reopened_runtime
+            .dispatch_set(
+                reopened_category_axis,
+                "BaseUnitIsAuto",
+                OmValue::Bool(true),
+                &[],
+            )
+            .expect("set Axis.BaseUnitIsAuto");
+        assert!(expect_bool(
+            reopened_runtime
+                .dispatch_get(reopened_category_axis, "BaseUnitIsAuto", &[])
+                .expect("Axis.BaseUnitIsAuto after auto")
+        ));
+        let saved_auto = reopened_runtime
+            .save_workbook(
+                reopened_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after base unit auto edit");
+        let saved_auto_package = OpcPackage::from_bytes(&saved_auto).expect("saved auto package");
+        let saved_auto_chart_xml = std::str::from_utf8(
+            saved_auto_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved auto chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved auto chart xml utf8");
+        assert!(saved_auto_chart_xml.contains(r#"<c:ext uri="urn:axis-time-units-preserve"/>"#));
+        assert!(!saved_auto_chart_xml.contains("<c:baseTimeUnit"));
+        assert!(saved_auto_chart_xml.contains(r#"<c:majorTimeUnit val="months"/>"#));
+        assert!(saved_auto_chart_xml.contains(r#"<c:minorTimeUnit val="days"/>"#));
     }
 
     #[test]

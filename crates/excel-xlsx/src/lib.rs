@@ -2,12 +2,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Write};
 
 use excel_model::{
-    AxisModel, CellData, ChartAxisCrosses, ChartAxisKind, ChartAxisScaleType, ChartCacheKind,
-    ChartCacheSnapshot, ChartCellMarkerXmlAttrs, ChartDataLabelsModel, ChartDisplayBlanksAs,
-    ChartLegendPosition, ChartMarkerXmlAttrs, ChartModel, ChartObjectModel, ChartSheetBinding,
-    ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition,
-    ChartTickMark, ChartType, DefinedNameTable, DrawingModel, DrawingObjectModel, LegendModel,
-    SeriesModel, WorkbookState, WorksheetData, resolve_chart_source_reference_with_names,
+    AxisModel, CellData, ChartAxisCrosses, ChartAxisKind, ChartAxisScaleType, ChartAxisTimeUnit,
+    ChartCacheKind, ChartCacheSnapshot, ChartCellMarkerXmlAttrs, ChartDataLabelsModel,
+    ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerXmlAttrs, ChartModel, ChartObjectModel,
+    ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText,
+    ChartTickLabelPosition, ChartTickMark, ChartType, DefinedNameTable, DrawingModel,
+    DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
+    resolve_chart_source_reference_with_names,
 };
 use office_common::{
     AbsoluteAnchor, CellError, CellMarker, CellValue, ChartId, ChartObjectId, DefinedName,
@@ -720,6 +721,9 @@ pub struct ChartAxisSummary {
     pub tick_label_spacing: Option<u32>,
     pub tick_mark_spacing: Option<u32>,
     pub axis_between_categories: Option<bool>,
+    pub base_unit: Option<ChartAxisTimeUnit>,
+    pub major_unit_scale: Option<ChartAxisTimeUnit>,
+    pub minor_unit_scale: Option<ChartAxisTimeUnit>,
     pub reverse_plot_order: Option<bool>,
     pub scale_type: Option<ChartAxisScaleType>,
     pub log_base: Option<f64>,
@@ -3227,6 +3231,9 @@ fn build_chart_model_overlay(
                             tick_label_spacing: axis.tick_label_spacing,
                             tick_mark_spacing: axis.tick_mark_spacing,
                             axis_between_categories: axis.axis_between_categories,
+                            base_unit: axis.base_unit,
+                            major_unit_scale: axis.major_unit_scale,
+                            minor_unit_scale: axis.minor_unit_scale,
                             reverse_plot_order: axis.reverse_plot_order,
                             scale_type: axis.scale_type,
                             log_base: axis.log_base,
@@ -16251,6 +16258,16 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 Some(_) | None => None,
             })
         };
+    let parse_axis_time_unit = |element: &BytesStart<'_>,
+                                reader: &Reader<Cursor<&[u8]>>|
+     -> OmResult<Option<ChartAxisTimeUnit>> {
+        Ok(match parse_string_val_attr(element, reader)?.as_deref() {
+            Some("days") => Some(ChartAxisTimeUnit::Days),
+            Some("months") => Some(ChartAxisTimeUnit::Months),
+            Some("years") => Some(ChartAxisTimeUnit::Years),
+            Some(_) | None => None,
+        })
+    };
     let parse_log_base =
         |element: &BytesStart<'_>, reader: &Reader<Cursor<&[u8]>>| -> OmResult<Option<f64>> {
             let Some(value) = parse_f64_val_attr(element, reader, "axis log base")? else {
@@ -16675,6 +16692,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         tick_label_spacing: None,
                         tick_mark_spacing: None,
                         axis_between_categories: None,
+                        base_unit: None,
+                        major_unit_scale: None,
+                        minor_unit_scale: None,
                         reverse_plot_order: None,
                         scale_type: None,
                         log_base: None,
@@ -16762,6 +16782,19 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(value) = parse_axis_cross_between(&element, &reader)?
                 {
                     axes[axis_index].axis_between_categories = Some(value);
+                }
+                if matches!(
+                    local_name,
+                    b"baseTimeUnit" | b"majorTimeUnit" | b"minorTimeUnit"
+                ) && let Some(axis_index) = active_axis_index
+                    && let Some(value) = parse_axis_time_unit(&element, &reader)?
+                {
+                    match local_name {
+                        b"baseTimeUnit" => axes[axis_index].base_unit = Some(value),
+                        b"majorTimeUnit" => axes[axis_index].major_unit_scale = Some(value),
+                        b"minorTimeUnit" => axes[axis_index].minor_unit_scale = Some(value),
+                        _ => unreachable!("matched axis time unit"),
+                    }
                 }
                 if local_name == b"orientation"
                     && element_path.last().is_some_and(|name| name == "scaling")
@@ -17035,6 +17068,19 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(value) = parse_axis_cross_between(&element, &reader)?
                 {
                     axes[axis_index].axis_between_categories = Some(value);
+                }
+                if matches!(
+                    local_name,
+                    b"baseTimeUnit" | b"majorTimeUnit" | b"minorTimeUnit"
+                ) && let Some(axis_index) = active_axis_index
+                    && let Some(value) = parse_axis_time_unit(&element, &reader)?
+                {
+                    match local_name {
+                        b"baseTimeUnit" => axes[axis_index].base_unit = Some(value),
+                        b"majorTimeUnit" => axes[axis_index].major_unit_scale = Some(value),
+                        b"minorTimeUnit" => axes[axis_index].minor_unit_scale = Some(value),
+                        _ => unreachable!("matched axis time unit"),
+                    }
                 }
                 if local_name == b"orientation"
                     && element_path.last().is_some_and(|name| name == "scaling")
@@ -22440,6 +22486,9 @@ mod tests {
                     tick_label_spacing: Some(2),
                     tick_mark_spacing: Some(3),
                     axis_between_categories: None,
+                    base_unit: None,
+                    major_unit_scale: None,
+                    minor_unit_scale: None,
                     reverse_plot_order: None,
                     scale_type: None,
                     log_base: None,
@@ -22462,6 +22511,9 @@ mod tests {
                     tick_label_spacing: None,
                     tick_mark_spacing: None,
                     axis_between_categories: Some(false),
+                    base_unit: None,
+                    major_unit_scale: None,
+                    minor_unit_scale: None,
                     reverse_plot_order: Some(true),
                     scale_type: Some(ChartAxisScaleType::Logarithmic),
                     log_base: Some(10.0),

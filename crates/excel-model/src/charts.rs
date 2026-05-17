@@ -226,6 +226,9 @@ pub struct AxisModel {
     pub tick_label_spacing: Option<u32>,
     pub tick_mark_spacing: Option<u32>,
     pub axis_between_categories: Option<bool>,
+    pub base_unit: Option<ChartAxisTimeUnit>,
+    pub major_unit_scale: Option<ChartAxisTimeUnit>,
+    pub minor_unit_scale: Option<ChartAxisTimeUnit>,
     pub reverse_plot_order: Option<bool>,
     pub scale_type: Option<ChartAxisScaleType>,
     pub log_base: Option<f64>,
@@ -257,6 +260,13 @@ pub enum ChartAxisCrosses {
     Custom,
     Maximum,
     Minimum,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartAxisTimeUnit {
+    Days,
+    Months,
+    Years,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
