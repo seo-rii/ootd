@@ -5,10 +5,11 @@ use excel_model::{
     AxisModel, CellData, ChartAxisCrosses, ChartAxisDisplayUnit, ChartAxisKind, ChartAxisScaleType,
     ChartAxisTimeUnit, ChartBuiltInDisplayUnit, ChartCacheKind, ChartCacheSnapshot,
     ChartCellMarkerXmlAttrs, ChartDataLabelPosition, ChartDataLabelsModel, ChartDisplayBlanksAs,
-    ChartLegendPosition, ChartMarkerXmlAttrs, ChartModel, ChartObjectModel, ChartSheetBinding,
-    ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition,
-    ChartTickMark, ChartType, DefinedNameTable, DrawingModel, DrawingObjectModel, LegendModel,
-    SeriesModel, WorkbookState, WorksheetData, resolve_chart_source_reference_with_names,
+    ChartLegendPosition, ChartMarkerXmlAttrs, ChartModel, ChartObjectModel, ChartPointModel,
+    ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText,
+    ChartTickLabelPosition, ChartTickMark, ChartType, DefinedNameTable, DrawingModel,
+    DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
+    resolve_chart_source_reference_with_names,
 };
 use office_common::{
     AbsoluteAnchor, CellError, CellMarker, CellValue, ChartId, ChartObjectId, DefinedName,
@@ -754,6 +755,7 @@ pub struct ChartSeriesSummary {
     pub values_cache: Option<ChartCacheSummary>,
     pub bubble_size_ref: Option<String>,
     pub bubble_size_cache: Option<ChartCacheSummary>,
+    pub point_explosions: BTreeMap<u32, u16>,
     pub data_labels: Option<ChartDataLabelsSummary>,
     pub point_data_labels: BTreeMap<u32, ChartDataLabelsSummary>,
     pub order: Option<u32>,
@@ -3614,6 +3616,19 @@ fn chart_series_from_summary(
                     .bubble_size_ref
                     .as_ref()
                     .map(|reference| source_from_ref(reference, series.bubble_size_cache.as_ref())),
+                points: series
+                    .point_explosions
+                    .iter()
+                    .map(|(index, explosion)| {
+                        (
+                            *index,
+                            ChartPointModel {
+                                explosion: Some(*explosion),
+                                dirty: false,
+                            },
+                        )
+                    })
+                    .collect(),
                 data_labels: series
                     .data_labels
                     .as_ref()
@@ -3639,6 +3654,7 @@ fn chart_series_from_summary(
             x_values: None,
             values: Some(source_from_ref(reference, None)),
             bubble_size: None,
+            points: BTreeMap::new(),
             data_labels: None,
             point_data_labels: BTreeMap::new(),
             order: u32::try_from(index).ok(),
@@ -16140,6 +16156,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut axis_title_text_depth = 0usize;
     let mut display_unit_label_text_depth = 0usize;
     let mut data_labels_target = None::<ChartDataLabelsTarget>;
+    let mut active_data_point_index = None::<u32>;
+    let mut active_data_point_depth = 0usize;
     let mut active_point_data_label_index = None::<u32>;
     let mut active_point_data_label_depth = 0usize;
     let mut data_label_separator_text = None::<String>;
@@ -16436,6 +16454,30 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .get_or_insert_with(ChartDataLabelsSummary::default);
                     data_labels_target = Some(ChartDataLabelsTarget::Series);
                 }
+                if local_name == b"dPt"
+                    && element_path.last().is_some_and(|name| name == "ser")
+                    && active_series.is_some()
+                {
+                    active_data_point_index = None;
+                    active_data_point_depth = 1;
+                } else if active_data_point_depth > 0 {
+                    active_data_point_depth += 1;
+                }
+                if local_name == b"idx"
+                    && active_data_point_depth > 0
+                    && let Some(index) = parse_u32_val_attr(&element, &reader, "data point index")?
+                {
+                    active_data_point_index = Some(index);
+                }
+                if local_name == b"explosion"
+                    && active_data_point_depth > 0
+                    && let Some(index) = active_data_point_index
+                    && let Some(value) = parse_i32_val_attr(&element, &reader, "point explosion")?
+                    && (0..=400).contains(&value)
+                    && let Some(active_series) = active_series.as_mut()
+                {
+                    active_series.point_explosions.insert(index, value as u16);
+                }
                 if local_name == b"dLbl"
                     && element_path.last().is_some_and(|name| name == "dLbls")
                     && active_series.is_some()
@@ -16699,6 +16741,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
                 if local_name == b"explosion"
                     && active_series.is_some()
+                    && element_path.last().is_some_and(|name| name == "ser")
                     && explosion.is_none()
                     && let Some(value) = parse_i32_val_attr(&element, &reader, "explosion")?
                     && (0..=400).contains(&value)
@@ -17121,6 +17164,21 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     data_labels_target = Some(ChartDataLabelsTarget::Series);
                 }
                 if local_name == b"idx"
+                    && active_data_point_depth > 0
+                    && let Some(index) = parse_u32_val_attr(&element, &reader, "data point index")?
+                {
+                    active_data_point_index = Some(index);
+                }
+                if local_name == b"explosion"
+                    && active_data_point_depth > 0
+                    && let Some(index) = active_data_point_index
+                    && let Some(value) = parse_i32_val_attr(&element, &reader, "point explosion")?
+                    && (0..=400).contains(&value)
+                    && let Some(active_series) = active_series.as_mut()
+                {
+                    active_series.point_explosions.insert(index, value as u16);
+                }
+                if local_name == b"idx"
                     && active_point_data_label_depth > 0
                     && let Some(index) = parse_u32_val_attr(&element, &reader, "data label index")?
                 {
@@ -17538,6 +17596,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
                 if local_name == b"explosion"
                     && active_series.is_some()
+                    && element_path.last().is_some_and(|name| name == "ser")
                     && explosion.is_none()
                     && let Some(value) = parse_i32_val_attr(&element, &reader, "explosion")?
                     && (0..=400).contains(&value)
@@ -17854,6 +17913,12 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         }
                     }
                     data_label_separator_depth -= 1;
+                }
+                if active_data_point_depth > 0 {
+                    if active_data_point_depth == 1 && local_name == b"dPt" {
+                        active_data_point_index = None;
+                    }
+                    active_data_point_depth -= 1;
                 }
                 if active_point_data_label_depth > 0 {
                     if active_point_data_label_depth == 1 && local_name == b"dLbl" {
@@ -22857,6 +22922,7 @@ mod tests {
                 }),
                 bubble_size_ref: None,
                 bubble_size_cache: None,
+                point_explosions: BTreeMap::new(),
                 data_labels: Some(ChartDataLabelsSummary {
                     show_legend_key: Some(false),
                     has_leader_lines: Some(true),

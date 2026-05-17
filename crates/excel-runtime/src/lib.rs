@@ -3671,6 +3671,51 @@ impl ExcelRuntime {
                     )));
                 }
                 match member {
+                    "Explosion" => {
+                        let numeric_value = coerce_i32_arg(&value, "Point.Explosion")?;
+                        if !(0..=400).contains(&numeric_value) {
+                            return Err(OmError::invalid_argument(
+                                "Point.Explosion must be between 0 and 400",
+                            ));
+                        }
+                        self.validate_point_index(workbook, chart_id, series_index, point_index)?;
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        if !chart_type_supports_explosion(&chart.chart_type) {
+                            return Err(OmError::unsupported(
+                                "Point.Explosion is only supported for pie, 3D pie, and doughnut charts",
+                            ));
+                        }
+                        let series = chart.series.get_mut(series_index).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "series not found")
+                        })?;
+                        let point_index = u32::try_from(point_index).map_err(|_| {
+                            OmError::invalid_argument("Point.Explosion index is out of bounds")
+                        })?;
+                        let numeric_value = numeric_value as u16;
+                        let point = series.points.entry(point_index).or_default();
+                        if point.explosion != Some(numeric_value) {
+                            point.explosion = Some(numeric_value);
+                            point.dirty = true;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     "HasDataLabel" => {
                         let OmValue::Bool(has_data_label) = value else {
                             return Err(OmError::type_mismatch(
@@ -10755,6 +10800,7 @@ impl ExcelRuntime {
                                         &worksheet_name,
                                     )?),
                                     bubble_size: None,
+                                    points: BTreeMap::new(),
                                     data_labels: None,
                                     point_data_labels: BTreeMap::new(),
                                     order: u32::try_from(index).ok(),
@@ -10781,6 +10827,7 @@ impl ExcelRuntime {
                                         &worksheet_name,
                                     )?),
                                     bubble_size: None,
+                                    points: BTreeMap::new(),
                                     data_labels: None,
                                     point_data_labels: BTreeMap::new(),
                                     order: u32::try_from(index).ok(),
@@ -10799,6 +10846,7 @@ impl ExcelRuntime {
                                     &worksheet_name,
                                 )?),
                                 bubble_size: None,
+                                points: BTreeMap::new(),
                                 data_labels: None,
                                 point_data_labels: BTreeMap::new(),
                                 order: Some(0),
@@ -11946,6 +11994,7 @@ impl ExcelRuntime {
                         "Point",
                         "Name"
                             | "Index"
+                            | "Explosion"
                             | "HasDataLabel"
                             | "DataLabel"
                             | "Creator"
@@ -15734,6 +15783,7 @@ impl ExcelRuntime {
                         x_values: None,
                         values: None,
                         bubble_size: None,
+                        points: BTreeMap::new(),
                         data_labels: None,
                         point_data_labels: BTreeMap::new(),
                         order: u32::try_from(series_index).ok(),
@@ -16243,6 +16293,19 @@ impl ExcelRuntime {
         match member {
             "Name" => Ok(OmValue::Text(format!("Point {}", point_index + 1))),
             "Index" => Ok(OmValue::Number((point_index + 1) as f64)),
+            "Explosion" => {
+                let point_index = u32::try_from(point_index).map_err(|_| {
+                    OmError::invalid_argument("Point.Explosion index is out of bounds")
+                })?;
+                let series = self.series_model(workbook, chart_id, series_index)?;
+                Ok(OmValue::Number(f64::from(
+                    series
+                        .points
+                        .get(&point_index)
+                        .and_then(|point| point.explosion)
+                        .unwrap_or(0),
+                )))
+            }
             "HasDataLabel" => {
                 self.validate_point_index(workbook, chart_id, series_index, point_index)?;
                 Ok(OmValue::Bool(chart_data_labels_visible(
@@ -24439,6 +24502,13 @@ fn patch_loaded_chart_model_xml(
             count
         })
         .sum::<usize>();
+    if chart
+        .series
+        .iter()
+        .any(|series| series.points.values().any(|point| point.dirty))
+    {
+        return Ok(None);
+    }
     let expected_legend_position =
         chart
             .legend
@@ -29194,6 +29264,13 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
         ));
         if let Some(explosion) = chart_explosion_xml_value(chart) {
             series_xml.push_str(&format!(r#"<c:explosion val="{explosion}"/>"#));
+        }
+        for (point_index, point) in &series.points {
+            if let Some(explosion) = point.explosion {
+                series_xml.push_str(&format!(
+                    r#"<c:dPt><c:idx val="{point_index}"/><c:explosion val="{explosion}"/></c:dPt>"#
+                ));
+            }
         }
         series_xml.push_str(&chart_series_data_labels_xml_string(series));
         if let Some(name) = series.name.as_ref() {
@@ -85840,6 +85917,218 @@ mod tests {
                 .expect_err("Point.Select rejects arguments")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn point_explosion_sets_pie_point_offsets_and_persists() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+        let first_point = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Points", &[OmValue::Number(1.0)])
+                .expect("Series.Points(1)"),
+        );
+        let second_point = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Points", &[OmValue::Number(2.0)])
+                .expect("Series.Points(2)"),
+        );
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_point, "Explosion", &[])
+                    .expect("Point.Explosion default")
+            ),
+            0.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(first_point, "Explosion", OmValue::Number(20.0), &[])
+                .expect_err("Point.Explosion rejects bar charts")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_PIE)),
+                &[],
+            )
+            .expect("set Chart.ChartType to pie");
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    first_point,
+                    "Explosion",
+                    OmValue::Text("bad".to_string()),
+                    &[],
+                )
+                .expect_err("Point.Explosion rejects non-number")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(first_point, "Explosion", OmValue::Number(401.0), &[])
+                .expect_err("Point.Explosion rejects out of range")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        runtime
+            .dispatch_set(first_point, "Explosion", OmValue::Number(35.0), &[])
+            .expect("set first Point.Explosion");
+        runtime
+            .dispatch_set(second_point, "Explosion", OmValue::Number(10.0), &[])
+            .expect("set second Point.Explosion");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_point, "Explosion", &[])
+                    .expect("first Point.Explosion after set")
+            ),
+            35.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_point, "Explosion", &[])
+                    .expect("second Point.Explosion after set")
+            ),
+            10.0
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after Point.Explosion");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:pieChart>"));
+        assert!(
+            saved_chart_xml.contains(r#"<c:dPt><c:idx val="0"/><c:explosion val="35"/></c:dPt>"#)
+        );
+        assert!(
+            saved_chart_xml.contains(r#"<c:dPt><c:idx val="1"/><c:explosion val="10"/></c:dPt>"#)
+        );
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after Point.Explosion");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        let reopened_first_point = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_series, "Points", &[OmValue::Number(1.0)])
+                .expect("reopened Series.Points(1)"),
+        );
+        let reopened_second_point = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_series, "Points", &[OmValue::Number(2.0)])
+                .expect("reopened Series.Points(2)"),
+        );
+
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_first_point, "Explosion", &[])
+                    .expect("reopened first Point.Explosion")
+            ),
+            35.0
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_second_point, "Explosion", &[])
+                    .expect("reopened second Point.Explosion")
+            ),
+            10.0
         );
     }
 
