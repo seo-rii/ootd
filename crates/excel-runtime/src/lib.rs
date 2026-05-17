@@ -10948,6 +10948,36 @@ impl ExcelRuntime {
                 series_index,
                 point_index,
             } => match member {
+                "ApplyDataLabels" => {
+                    let data_labels = parse_chart_data_labels_args(args, "Point")?;
+                    self.validate_point_index(workbook, chart_id, series_index, point_index)?;
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    let chart = runtime
+                        .loaded
+                        .state
+                        .charts
+                        .get_mut(&chart_id)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    let series = chart
+                        .series
+                        .get_mut(series_index)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "series not found"))?;
+                    let point_index = u32::try_from(point_index).map_err(|_| {
+                        OmError::invalid_argument("Point.ApplyDataLabels index is out of bounds")
+                    })?;
+                    if series.point_data_labels.get(&point_index) != Some(&data_labels) {
+                        series.point_data_labels.insert(point_index, data_labels);
+                        chart.dirty = true;
+                        runtime.dirty = true;
+                    }
+                    Ok(OmValue::Empty)
+                }
                 "Select" => {
                     if !args.is_empty() {
                         return Err(OmError::invalid_argument(
@@ -11921,6 +11951,7 @@ impl ExcelRuntime {
                             | "Creator"
                             | "Application"
                             | "Parent"
+                            | "ApplyDataLabels"
                             | "Select"
                     )
             )
@@ -85809,6 +85840,281 @@ mod tests {
                 .expect_err("Point.Select rejects arguments")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn point_apply_data_labels_creates_point_label_and_persists() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+        let first_point = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Points", &[OmValue::Number(1.0)])
+                .expect("Series.Points(1)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(first_point, "HasDataLabel", &[])
+                .expect("Point.HasDataLabel before ApplyDataLabels"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_point, "DataLabel", &[])
+                .expect_err("Point.DataLabel before ApplyDataLabels")
+                .code,
+            OmErrorCode::NotFound
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    first_point,
+                    "ApplyDataLabels",
+                    &[
+                        OmValue::Number(f64::from(super::XL_DATA_LABELS_SHOW_LABEL)),
+                        OmValue::Text("bad".to_string()),
+                    ],
+                )
+                .expect_err("Point.ApplyDataLabels rejects non-bool LegendKey")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    first_point,
+                    "ApplyDataLabels",
+                    &[
+                        OmValue::Number(f64::from(super::XL_DATA_LABELS_SHOW_LABEL)),
+                        OmValue::Bool(false),
+                        OmValue::Bool(true),
+                        OmValue::Bool(false),
+                        OmValue::Bool(false),
+                        OmValue::Bool(true),
+                        OmValue::Bool(false),
+                        OmValue::Bool(false),
+                        OmValue::Bool(false),
+                        OmValue::Text(" / ".to_string()),
+                        OmValue::Bool(false),
+                    ],
+                )
+                .expect_err("Point.ApplyDataLabels rejects too many arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+
+        runtime
+            .dispatch_invoke(
+                first_point,
+                "ApplyDataLabels",
+                &[
+                    OmValue::Number(f64::from(super::XL_DATA_LABELS_SHOW_LABEL)),
+                    OmValue::Bool(false),
+                    OmValue::Bool(true),
+                    OmValue::Bool(false),
+                    OmValue::Bool(false),
+                    OmValue::Bool(true),
+                    OmValue::Bool(false),
+                    OmValue::Bool(false),
+                    OmValue::Bool(false),
+                    OmValue::Text(" / ".to_string()),
+                ],
+            )
+            .expect("Point.ApplyDataLabels");
+        assert_eq!(
+            runtime
+                .dispatch_get(first_point, "HasDataLabel", &[])
+                .expect("Point.HasDataLabel after ApplyDataLabels"),
+            OmValue::Bool(true)
+        );
+        let first_label = expect_object_handle(
+            runtime
+                .dispatch_get(first_point, "DataLabel", &[])
+                .expect("Point.DataLabel after ApplyDataLabels"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_label, "Type", &[])
+                    .expect("DataLabel.Type after ApplyDataLabels")
+            ),
+            f64::from(super::XL_DATA_LABELS_SHOW_LABEL)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_label, "ShowCategoryName", &[])
+                .expect("DataLabel.ShowCategoryName after ApplyDataLabels"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_label, "ShowValue", &[])
+                .expect("DataLabel.ShowValue after ApplyDataLabels"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_label, "Separator", &[])
+                .expect("DataLabel.Separator after ApplyDataLabels"),
+            OmValue::Text(" / ".to_string())
+        );
+
+        let state = runtime.workbook_state(workbook).expect("workbook state");
+        let chart_model = state.charts.values().next().expect("chart model");
+        assert!(chart_model.series[0].data_labels.is_none());
+        let first_point_labels = chart_model.series[0]
+            .point_data_labels
+            .get(&0)
+            .expect("first point data labels");
+        assert_eq!(
+            first_point_labels.label_type,
+            Some(super::XL_DATA_LABELS_SHOW_LABEL)
+        );
+        assert_eq!(first_point_labels.show_category_name, Some(true));
+        assert_eq!(first_point_labels.show_value, Some(false));
+        assert_eq!(first_point_labels.separator.as_deref(), Some(" / "));
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after Point.ApplyDataLabels");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(
+            r#"<c:dLbl><c:idx val="0"/><c:showLegendKey val="0"/><c:showLeaderLines val="0"/><c:showSerName val="0"/><c:showCatName val="1"/><c:showVal val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/><c:separator> / </c:separator></c:dLbl>"#
+        ));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after Point.ApplyDataLabels");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        let reopened_first_point = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_series, "Points", &[OmValue::Number(1.0)])
+                .expect("reopened Series.Points(1)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_first_point, "HasDataLabel", &[])
+                .expect("reopened Point.HasDataLabel"),
+            OmValue::Bool(true)
+        );
+        let reopened_first_label = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_first_point, "DataLabel", &[])
+                .expect("reopened Point.DataLabel"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_first_label, "Type", &[])
+                    .expect("reopened DataLabel.Type")
+            ),
+            f64::from(super::XL_DATA_LABELS_SHOW_LABEL)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_first_label, "ShowCategoryName", &[])
+                .expect("reopened DataLabel.ShowCategoryName"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_first_label, "ShowValue", &[])
+                .expect("reopened DataLabel.ShowValue"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_first_label, "Separator", &[])
+                .expect("reopened DataLabel.Separator"),
+            OmValue::Text(" / ".to_string())
         );
     }
 
