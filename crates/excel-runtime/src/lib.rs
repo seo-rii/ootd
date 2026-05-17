@@ -568,6 +568,11 @@ enum RuntimeObjectKind {
         chart_id: ChartId,
         axis_index: usize,
     },
+    DisplayUnitLabel {
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        axis_index: usize,
+    },
     Gridlines {
         workbook: WorkbookHandle,
         chart_id: ChartId,
@@ -2002,6 +2007,11 @@ impl ExcelRuntime {
                 chart_id,
                 axis_index,
             } => self.dispatch_get_axis_title(workbook, chart_id, axis_index, member, args),
+            RuntimeObjectKind::DisplayUnitLabel {
+                workbook,
+                chart_id,
+                axis_index,
+            } => self.dispatch_get_display_unit_label(workbook, chart_id, axis_index, member, args),
             RuntimeObjectKind::Gridlines {
                 workbook,
                 chart_id,
@@ -4647,6 +4657,7 @@ impl ExcelRuntime {
                                         minor_unit_scale: None,
                                         display_unit: None,
                                         has_display_unit_label: None,
+                                        display_unit_label: None,
                                         reverse_plot_order: None,
                                         scale_type: None,
                                         log_base: None,
@@ -5235,51 +5246,62 @@ impl ExcelRuntime {
                                 chart_built_in_display_unit_from_excel_value(value)?,
                             )),
                         };
-                        let runtime = self.runtime_workbook_mut(workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
-                        }
-                        let chart =
-                            runtime
-                                .loaded
-                                .state
-                                .charts
-                                .get_mut(&chart_id)
-                                .ok_or_else(|| {
-                                    OmError::new(OmErrorCode::NotFound, "chart not found")
-                                })?;
-                        let axis = chart
-                            .axes
-                            .get_mut(axis_index)
-                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
-                        if axis.kind != ChartAxisKind::Value {
-                            return Err(OmError::unsupported(
-                                "Axis.DisplayUnit applies only to value axes",
-                            ));
-                        }
-                        let next_display_unit =
-                            next_display_unit.map(|unit| match (unit, axis.display_unit) {
-                                (
-                                    ChartAxisDisplayUnit::Custom(_),
-                                    Some(ChartAxisDisplayUnit::Custom(existing)),
-                                ) => ChartAxisDisplayUnit::Custom(existing),
-                                (unit, _) => unit,
-                            });
-                        let next_label = if next_display_unit.is_some() {
-                            Some(axis.has_display_unit_label.unwrap_or(true))
-                        } else {
-                            Some(false)
+                        let removed_display_unit_label = {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            let axis = chart.axes.get_mut(axis_index).ok_or_else(|| {
+                                OmError::new(OmErrorCode::NotFound, "axis not found")
+                            })?;
+                            if axis.kind != ChartAxisKind::Value {
+                                return Err(OmError::unsupported(
+                                    "Axis.DisplayUnit applies only to value axes",
+                                ));
+                            }
+                            let next_display_unit =
+                                next_display_unit.map(|unit| match (unit, axis.display_unit) {
+                                    (
+                                        ChartAxisDisplayUnit::Custom(_),
+                                        Some(ChartAxisDisplayUnit::Custom(existing)),
+                                    ) => ChartAxisDisplayUnit::Custom(existing),
+                                    (unit, _) => unit,
+                                });
+                            let next_label = if next_display_unit.is_some() {
+                                Some(axis.has_display_unit_label.unwrap_or(true))
+                            } else {
+                                Some(false)
+                            };
+                            let removed_display_unit_label = next_label != Some(true)
+                                && (axis.has_display_unit_label == Some(true)
+                                    || axis.display_unit_label.is_some());
+                            let next_display_unit_label = if next_label == Some(true) {
+                                axis.display_unit_label.clone()
+                            } else {
+                                None
+                            };
+                            let changed = axis.display_unit != next_display_unit
+                                || axis.has_display_unit_label != next_label
+                                || axis.display_unit_label != next_display_unit_label;
+                            if changed {
+                                axis.display_unit = next_display_unit;
+                                axis.has_display_unit_label = next_label;
+                                axis.display_unit_label = next_display_unit_label;
+                                chart.dirty = true;
+                                runtime.dirty = true;
+                            }
+                            removed_display_unit_label
                         };
-                        let changed = axis.display_unit != next_display_unit
-                            || axis.has_display_unit_label != next_label;
-                        if changed {
-                            axis.display_unit = next_display_unit;
-                            axis.has_display_unit_label = next_label;
-                            chart.dirty = true;
-                            runtime.dirty = true;
+                        if removed_display_unit_label {
+                            self.stale_display_unit_label_handles_for_axis(
+                                workbook, chart_id, axis_index,
+                            );
                         }
                         Ok(())
                     }
@@ -5337,41 +5359,52 @@ impl ExcelRuntime {
                                 "Axis.HasDisplayUnitLabel expects a boolean value",
                             ));
                         };
-                        let runtime = self.runtime_workbook_mut(workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
-                        }
-                        let chart =
-                            runtime
-                                .loaded
-                                .state
-                                .charts
-                                .get_mut(&chart_id)
-                                .ok_or_else(|| {
-                                    OmError::new(OmErrorCode::NotFound, "chart not found")
-                                })?;
-                        let axis = chart
-                            .axes
-                            .get_mut(axis_index)
-                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
-                        if axis.kind != ChartAxisKind::Value {
-                            return Err(OmError::unsupported(
-                                "Axis.HasDisplayUnitLabel applies only to value axes",
-                            ));
-                        }
-                        if has_label && axis.display_unit.is_none() {
-                            return Err(OmError::unsupported(
-                                "Axis.HasDisplayUnitLabel=True requires Axis.DisplayUnit",
-                            ));
-                        }
-                        let changed = axis.has_display_unit_label != Some(has_label);
-                        if changed {
-                            axis.has_display_unit_label = Some(has_label);
-                            chart.dirty = true;
-                            runtime.dirty = true;
+                        let removed_display_unit_label = {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            let axis = chart.axes.get_mut(axis_index).ok_or_else(|| {
+                                OmError::new(OmErrorCode::NotFound, "axis not found")
+                            })?;
+                            if axis.kind != ChartAxisKind::Value {
+                                return Err(OmError::unsupported(
+                                    "Axis.HasDisplayUnitLabel applies only to value axes",
+                                ));
+                            }
+                            if has_label && axis.display_unit.is_none() {
+                                return Err(OmError::unsupported(
+                                    "Axis.HasDisplayUnitLabel=True requires Axis.DisplayUnit",
+                                ));
+                            }
+                            let removed_display_unit_label = !has_label
+                                && (axis.has_display_unit_label == Some(true)
+                                    || axis.display_unit_label.is_some());
+                            let next_display_unit_label = if has_label {
+                                axis.display_unit_label.clone()
+                            } else {
+                                None
+                            };
+                            let changed = axis.has_display_unit_label != Some(has_label)
+                                || axis.display_unit_label != next_display_unit_label;
+                            if changed {
+                                axis.has_display_unit_label = Some(has_label);
+                                axis.display_unit_label = next_display_unit_label;
+                                chart.dirty = true;
+                                runtime.dirty = true;
+                            }
+                            removed_display_unit_label
+                        };
+                        if removed_display_unit_label {
+                            self.stale_display_unit_label_handles_for_axis(
+                                workbook, chart_id, axis_index,
+                            );
                         }
                         Ok(())
                     }
@@ -6013,6 +6046,65 @@ impl ExcelRuntime {
                     }
                     _ => Err(OmError::unsupported(format!(
                         "AxisTitle.{member} is not writable"
+                    ))),
+                }
+            }
+            RuntimeObjectKind::DisplayUnitLabel {
+                workbook,
+                chart_id,
+                axis_index,
+            } => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "DisplayUnitLabel.{member} does not accept index arguments"
+                    )));
+                }
+                match member {
+                    "Text" | "Caption" => {
+                        let OmValue::Text(text) = value else {
+                            return Err(OmError::type_mismatch(
+                                "DisplayUnitLabel.Text expects a text value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let axis = chart
+                            .axes
+                            .get_mut(axis_index)
+                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
+                        if axis.kind != ChartAxisKind::Value
+                            || axis.display_unit.is_none()
+                            || axis.has_display_unit_label != Some(true)
+                        {
+                            return Err(OmError::new(
+                                OmErrorCode::NotFound,
+                                "display unit label not found",
+                            ));
+                        }
+                        let next_label = Some(ChartText { text });
+                        if axis.display_unit_label != next_label {
+                            axis.display_unit_label = next_label;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "DisplayUnitLabel.{member} is not writable"
                     ))),
                 }
             }
@@ -10795,6 +10887,75 @@ impl ExcelRuntime {
                     ))),
                 }
             }
+            RuntimeObjectKind::DisplayUnitLabel {
+                workbook,
+                chart_id,
+                axis_index,
+            } => {
+                match member {
+                    "Select" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "DisplayUnitLabel.Select does not accept arguments",
+                            ));
+                        }
+                        let axis = self.axis_model(workbook, chart_id, axis_index)?;
+                        if axis.kind != ChartAxisKind::Value
+                            || axis.display_unit.is_none()
+                            || axis.has_display_unit_label != Some(true)
+                        {
+                            return Err(OmError::new(
+                                OmErrorCode::NotFound,
+                                "display unit label not found",
+                            ));
+                        }
+                        let chart = self.register_chart_handle(workbook, chart_id);
+                        self.dispatch_invoke(chart, "Select", &[])
+                    }
+                    "Delete" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "DisplayUnitLabel.Delete does not accept arguments",
+                            ));
+                        }
+                        {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            let axis = chart.axes.get_mut(axis_index).ok_or_else(|| {
+                                OmError::new(OmErrorCode::NotFound, "axis not found")
+                            })?;
+                            if axis.kind != ChartAxisKind::Value
+                                || axis.display_unit.is_none()
+                                || axis.has_display_unit_label != Some(true)
+                            {
+                                return Err(OmError::new(
+                                    OmErrorCode::NotFound,
+                                    "display unit label not found",
+                                ));
+                            }
+                            axis.has_display_unit_label = Some(false);
+                            axis.display_unit_label = None;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        self.stale_display_unit_label_handles_for_axis(
+                            workbook, chart_id, axis_index,
+                        );
+                        Ok(OmValue::Empty)
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "DisplayUnitLabel.{member} is not implemented as a method"
+                    ))),
+                }
+            }
         }
     }
 
@@ -11050,6 +11211,7 @@ impl ExcelRuntime {
                             | "DisplayUnit"
                             | "DisplayUnitCustom"
                             | "HasDisplayUnitLabel"
+                            | "DisplayUnitLabel"
                             | "BaseUnit"
                             | "BaseUnitIsAuto"
                             | "HasTitle"
@@ -11067,6 +11229,17 @@ impl ExcelRuntime {
                             | "TickLabelSpacing"
                             | "TickLabelSpacingIsAuto"
                             | "TickMarkSpacing"
+                            | "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Select"
+                            | "Delete"
+                    )
+                    | (
+                        "DisplayUnitLabel",
+                        "Name"
+                            | "Text"
+                            | "Caption"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -14455,6 +14628,26 @@ impl ExcelRuntime {
                     axis.display_unit.is_some() && axis.has_display_unit_label.unwrap_or(false),
                 ))
             }
+            "DisplayUnitLabel" => {
+                if axis.kind != ChartAxisKind::Value {
+                    return Err(OmError::unsupported(
+                        "Axis.DisplayUnitLabel applies only to value axes",
+                    ));
+                }
+                if axis.display_unit.is_none() || axis.has_display_unit_label != Some(true) {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        "display unit label not found",
+                    ));
+                }
+                Ok(OmValue::Object(self.register_object(
+                    RuntimeObjectKind::DisplayUnitLabel {
+                        workbook,
+                        chart_id,
+                        axis_index,
+                    },
+                )))
+            }
             "BaseUnit" => {
                 if axis.kind != ChartAxisKind::Date {
                     return Err(OmError::unsupported(
@@ -14639,6 +14832,50 @@ impl ExcelRuntime {
             ))),
             _ => Err(OmError::unsupported(format!(
                 "AxisTitle.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_get_display_unit_label(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        axis_index: usize,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        if !args.is_empty() {
+            return Err(OmError::invalid_argument(format!(
+                "DisplayUnitLabel.{member} does not accept arguments"
+            )));
+        }
+        let axis = self.axis_model(workbook, chart_id, axis_index)?;
+        if axis.kind != ChartAxisKind::Value {
+            return Err(OmError::unsupported(
+                "DisplayUnitLabel applies only to value axes",
+            ));
+        }
+        if axis.display_unit.is_none() || axis.has_display_unit_label != Some(true) {
+            return Err(OmError::new(
+                OmErrorCode::NotFound,
+                "display unit label not found",
+            ));
+        }
+
+        match member {
+            "Name" => Ok(OmValue::Text("Display Unit Label".to_string())),
+            "Text" | "Caption" => Ok(OmValue::Text(chart_axis_display_unit_label_text(axis))),
+            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+            "Application" => Ok(OmValue::Object(self.root_application())),
+            "Parent" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::Axis {
+                    workbook,
+                    chart_id,
+                    axis_index,
+                },
+            ))),
+            _ => Err(OmError::unsupported(format!(
+                "DisplayUnitLabel.{member} is not implemented"
             ))),
         }
     }
@@ -19693,6 +19930,13 @@ impl ExcelRuntime {
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
                 }
+                RuntimeObjectKind::DisplayUnitLabel {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    ..
+                } if *object_workbook == workbook && *object_chart_id == chart_id => {
+                    Some(object_id)
+                }
                 RuntimeObjectKind::Gridlines {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
@@ -19792,6 +20036,11 @@ impl ExcelRuntime {
                     chart_id: object_chart_id,
                     ..
                 }
+                | RuntimeObjectKind::DisplayUnitLabel {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    ..
+                }
                 | RuntimeObjectKind::Gridlines {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
@@ -19838,6 +20087,35 @@ impl ExcelRuntime {
             .iter()
             .filter_map(|(&object_id, object)| match object {
                 RuntimeObjectKind::AxisTitle {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    axis_index: object_axis_index,
+                } if *object_workbook == workbook
+                    && *object_chart_id == chart_id
+                    && *object_axis_index == axis_index =>
+                {
+                    Some(object_id)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for object_id in stale_object_ids {
+            self.objects.remove(&object_id);
+            self.stale_objects.insert(object_id);
+        }
+    }
+
+    fn stale_display_unit_label_handles_for_axis(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        axis_index: usize,
+    ) {
+        let stale_object_ids = self
+            .objects
+            .iter()
+            .filter_map(|(&object_id, object)| match object {
+                RuntimeObjectKind::DisplayUnitLabel {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
                     axis_index: object_axis_index,
@@ -22788,6 +23066,43 @@ fn chart_built_in_display_unit_from_excel_value(value: i32) -> OmResult<ChartBui
     }
 }
 
+fn chart_axis_display_unit_label_text(axis: &AxisModel) -> String {
+    if let Some(label) = axis.display_unit_label.as_ref() {
+        return label.text.clone();
+    }
+    match axis.display_unit {
+        Some(ChartAxisDisplayUnit::BuiltIn(ChartBuiltInDisplayUnit::Hundreds)) => {
+            "Hundreds".to_string()
+        }
+        Some(ChartAxisDisplayUnit::BuiltIn(ChartBuiltInDisplayUnit::Thousands)) => {
+            "Thousands".to_string()
+        }
+        Some(ChartAxisDisplayUnit::BuiltIn(ChartBuiltInDisplayUnit::TenThousands)) => {
+            "Ten Thousands".to_string()
+        }
+        Some(ChartAxisDisplayUnit::BuiltIn(ChartBuiltInDisplayUnit::HundredThousands)) => {
+            "Hundred Thousands".to_string()
+        }
+        Some(ChartAxisDisplayUnit::BuiltIn(ChartBuiltInDisplayUnit::Millions)) => {
+            "Millions".to_string()
+        }
+        Some(ChartAxisDisplayUnit::BuiltIn(ChartBuiltInDisplayUnit::TenMillions)) => {
+            "Ten Millions".to_string()
+        }
+        Some(ChartAxisDisplayUnit::BuiltIn(ChartBuiltInDisplayUnit::HundredMillions)) => {
+            "Hundred Millions".to_string()
+        }
+        Some(ChartAxisDisplayUnit::BuiltIn(ChartBuiltInDisplayUnit::ThousandMillions)) => {
+            "Billions".to_string()
+        }
+        Some(ChartAxisDisplayUnit::BuiltIn(ChartBuiltInDisplayUnit::MillionMillions)) => {
+            "Trillions".to_string()
+        }
+        Some(ChartAxisDisplayUnit::Custom(value)) => chart_number_xml_value(value),
+        None => String::new(),
+    }
+}
+
 fn chart_axis_crosses_xml_value(value: ChartAxisCrosses) -> Option<&'static str> {
     match value {
         ChartAxisCrosses::Automatic => Some("autoZero"),
@@ -24033,9 +24348,17 @@ fn patch_loaded_chart_model_xml(
                 }
             }
             if axis.has_display_unit_label == Some(true) {
-                writer
-                    .write_event(Event::Empty(BytesStart::new("c:dispUnitsLbl")))
-                    .map_err(runtime_xml_error)?;
+                if axis.display_unit_label.is_some() {
+                    write_chart_text_element(
+                        writer,
+                        "c:dispUnitsLbl",
+                        &chart_axis_display_unit_label_text(axis),
+                    )?;
+                } else {
+                    writer
+                        .write_event(Event::Empty(BytesStart::new("c:dispUnitsLbl")))
+                        .map_err(runtime_xml_error)?;
+                }
             }
             writer
                 .write_event(Event::End(BytesEnd::new("c:dispUnits")))
@@ -28153,9 +28476,18 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
                         }
                     };
                     let label_xml = if axis.has_display_unit_label == Some(true) {
-                        "<c:dispUnitsLbl/>"
+                        if axis.display_unit_label.is_some() {
+                            let label_text =
+                                partial_escape(&chart_axis_display_unit_label_text(axis))
+                                    .to_string();
+                            format!(
+                                r#"<c:dispUnitsLbl><c:tx><c:rich><a:p><a:r><a:t>{label_text}</a:t></a:r></a:p></c:rich></c:tx></c:dispUnitsLbl>"#
+                            )
+                        } else {
+                            "<c:dispUnitsLbl/>".to_string()
+                        }
                     } else {
-                        ""
+                        String::new()
                     };
                     format!(r#"<c:dispUnits>{unit_xml}{label_xml}</c:dispUnits>"#)
                 })
@@ -28324,6 +28656,7 @@ fn default_chart_axes() -> Vec<AxisModel> {
             minor_unit_scale: None,
             display_unit: None,
             has_display_unit_label: None,
+            display_unit_label: None,
             reverse_plot_order: None,
             scale_type: None,
             log_base: None,
@@ -28352,6 +28685,7 @@ fn default_chart_axes() -> Vec<AxisModel> {
             minor_unit_scale: None,
             display_unit: None,
             has_display_unit_label: None,
+            display_unit_label: None,
             reverse_plot_order: None,
             scale_type: None,
             log_base: None,
@@ -28489,6 +28823,7 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         | RuntimeObjectKind::Axes { workbook, .. }
         | RuntimeObjectKind::Axis { workbook, .. }
         | RuntimeObjectKind::AxisTitle { workbook, .. }
+        | RuntimeObjectKind::DisplayUnitLabel { workbook, .. }
         | RuntimeObjectKind::Gridlines { workbook, .. }
         | RuntimeObjectKind::SeriesCollection { workbook, .. }
         | RuntimeObjectKind::Series { workbook, .. }
@@ -92939,7 +93274,7 @@ mod tests {
         .expect("chart xml utf8")
         .replace(
             "</c:valAx>",
-            r#"<c:dispUnits><c:builtInUnit val="millions"/><c:dispUnitsLbl/></c:dispUnits></c:valAx>"#,
+            r#"<c:dispUnits><c:builtInUnit val="millions"/><c:dispUnitsLbl><c:tx><c:rich><a:p><a:r><a:t>Millions</a:t></a:r></a:p></c:rich></c:tx></c:dispUnitsLbl></c:dispUnits></c:valAx>"#,
         )
         .replace(
             "</c:chartSpace>",
@@ -93010,6 +93345,19 @@ mod tests {
                 .dispatch_get(value_axis, "HasDisplayUnitLabel", &[])
                 .expect("Axis.HasDisplayUnitLabel before set")
         ));
+        let display_unit_label = expect_object_handle(
+            runtime
+                .dispatch_get(value_axis, "DisplayUnitLabel", &[])
+                .expect("Axis.DisplayUnitLabel before set"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(display_unit_label, "Text", &[])
+                    .expect("DisplayUnitLabel.Text before set")
+            ),
+            "Millions"
+        );
         assert_eq!(
             runtime
                 .dispatch_get(value_axis, "DisplayUnitCustom", &[])
@@ -93036,6 +93384,13 @@ mod tests {
         runtime
             .dispatch_set(value_axis, "HasDisplayUnitLabel", OmValue::Bool(false), &[])
             .expect("clear Axis.HasDisplayUnitLabel");
+        assert_eq!(
+            runtime
+                .dispatch_get(display_unit_label, "Text", &[])
+                .expect_err("DisplayUnitLabel handle is stale after hiding label")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_set(
@@ -93196,6 +93551,27 @@ mod tests {
                 &[],
             )
             .expect("restore Axis.HasDisplayUnitLabel");
+        let custom_display_unit_label = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_value_axis, "DisplayUnitLabel", &[])
+                .expect("custom Axis.DisplayUnitLabel"),
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(custom_display_unit_label, "Caption", &[])
+                    .expect("default custom DisplayUnitLabel.Caption")
+            ),
+            "250"
+        );
+        reopened_runtime
+            .dispatch_set(
+                custom_display_unit_label,
+                "Text",
+                OmValue::Text("Custom Units".to_string()),
+                &[],
+            )
+            .expect("set DisplayUnitLabel.Text");
         let saved_custom = reopened_runtime
             .save_workbook(
                 reopened_workbook,
@@ -93221,6 +93597,7 @@ mod tests {
         );
         assert!(saved_custom_chart_xml.contains(r#"<c:custUnit val="250"/>"#));
         assert!(saved_custom_chart_xml.contains("<c:dispUnitsLbl"));
+        assert!(saved_custom_chart_xml.contains("<a:t>Custom Units</a:t>"));
 
         let mut final_runtime = ExcelRuntime::new();
         let final_workbook = final_runtime
@@ -93281,6 +93658,34 @@ mod tests {
                 .dispatch_get(final_value_axis, "HasDisplayUnitLabel", &[])
                 .expect("final Axis.HasDisplayUnitLabel")
         ));
+        let final_display_unit_label = expect_object_handle(
+            final_runtime
+                .dispatch_get(final_value_axis, "DisplayUnitLabel", &[])
+                .expect("final Axis.DisplayUnitLabel"),
+        );
+        assert_eq!(
+            expect_text(
+                final_runtime
+                    .dispatch_get(final_display_unit_label, "Text", &[])
+                    .expect("final DisplayUnitLabel.Text")
+            ),
+            "Custom Units"
+        );
+        final_runtime
+            .dispatch_invoke(final_display_unit_label, "Delete", &[])
+            .expect("DisplayUnitLabel.Delete");
+        assert!(!expect_bool(
+            final_runtime
+                .dispatch_get(final_value_axis, "HasDisplayUnitLabel", &[])
+                .expect("Axis.HasDisplayUnitLabel after DisplayUnitLabel.Delete")
+        ));
+        assert_eq!(
+            final_runtime
+                .dispatch_get(final_display_unit_label, "Text", &[])
+                .expect_err("DisplayUnitLabel handle is stale after delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
         final_runtime
             .dispatch_set(
                 final_value_axis,

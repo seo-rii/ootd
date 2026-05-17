@@ -727,6 +727,7 @@ pub struct ChartAxisSummary {
     pub minor_unit_scale: Option<ChartAxisTimeUnit>,
     pub display_unit: Option<ChartAxisDisplayUnit>,
     pub has_display_unit_label: Option<bool>,
+    pub display_unit_label_text: Option<String>,
     pub reverse_plot_order: Option<bool>,
     pub scale_type: Option<ChartAxisScaleType>,
     pub log_base: Option<f64>,
@@ -3240,6 +3241,10 @@ fn build_chart_model_overlay(
                             minor_unit_scale: axis.minor_unit_scale,
                             display_unit: axis.display_unit,
                             has_display_unit_label: axis.has_display_unit_label,
+                            display_unit_label: axis
+                                .display_unit_label_text
+                                .as_ref()
+                                .map(|text| ChartText { text: text.clone() }),
                             reverse_plot_order: axis.reverse_plot_order,
                             scale_type: axis.scale_type,
                             log_base: axis.log_base,
@@ -16123,6 +16128,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut active_axis_index = None::<usize>;
     let mut active_axis_depth = 0usize;
     let mut axis_title_text_depth = 0usize;
+    let mut display_unit_label_text_depth = 0usize;
     let mut data_labels_target = None::<ChartDataLabelsTarget>;
     let mut active_point_data_label_index = None::<u32>;
     let mut active_point_data_label_depth = 0usize;
@@ -16720,6 +16726,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         minor_unit_scale: None,
                         display_unit: None,
                         has_display_unit_label: None,
+                        display_unit_label_text: None,
                         reverse_plot_order: None,
                         scale_type: None,
                         log_base: None,
@@ -16928,7 +16935,14 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 } else if formula_depth > 0 {
                     formula_depth += 1;
                 }
-                if local_name == b"t" && element_path.iter().any(|name| name == "title") {
+                if local_name == b"t" && element_path.iter().any(|name| name == "dispUnitsLbl") {
+                    if let Some(axis_index) = active_axis_index {
+                        axes[axis_index]
+                            .display_unit_label_text
+                            .get_or_insert_with(String::new);
+                        display_unit_label_text_depth = 1;
+                    }
+                } else if local_name == b"t" && element_path.iter().any(|name| name == "title") {
                     if let Some(axis_index) = active_axis_index {
                         axes[axis_index].title_text.get_or_insert_with(String::new);
                         axis_title_text_depth = 1;
@@ -16940,6 +16954,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     title_text_depth += 1;
                 } else if axis_title_text_depth > 0 {
                     axis_title_text_depth += 1;
+                } else if display_unit_label_text_depth > 0 {
+                    display_unit_label_text_depth += 1;
                 }
                 element_path.push(local_name_text);
             }
@@ -17503,6 +17519,12 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 {
                     title_text.push_str(&text_value);
                 }
+                if display_unit_label_text_depth > 0
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(label_text) = &mut axes[axis_index].display_unit_label_text
+                {
+                    label_text.push_str(&text_value);
+                }
                 if let Some(separator) = data_label_separator_text.as_mut() {
                     separator.push_str(&text_value);
                 }
@@ -17522,6 +17544,12 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(title_text) = &mut axes[axis_index].title_text
                 {
                     title_text.push_str(&text_value);
+                }
+                if display_unit_label_text_depth > 0
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(label_text) = &mut axes[axis_index].display_unit_label_text
+                {
+                    label_text.push_str(&text_value);
                 }
                 if let Some(separator) = data_label_separator_text.as_mut() {
                     separator.push_str(&text_value);
@@ -17571,6 +17599,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 if axis_title_text_depth > 0 {
                     axis_title_text_depth -= 1;
                 }
+                if display_unit_label_text_depth > 0 {
+                    display_unit_label_text_depth -= 1;
+                }
                 if data_label_separator_depth > 0 {
                     data_label_separator_depth -= 1;
                 }
@@ -17613,6 +17644,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
                 if axis_title_text_depth > 0 {
                     axis_title_text_depth -= 1;
+                }
+                if display_unit_label_text_depth > 0 {
+                    display_unit_label_text_depth -= 1;
                 }
                 if data_label_separator_depth > 0 {
                     if data_label_separator_depth == 1 && local_name == b"separator" {
@@ -17668,6 +17702,14 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                                 .is_some_and(|text| text.is_empty())
                         {
                             axes[axis_index].title_text = None;
+                        }
+                        if let Some(axis_index) = active_axis_index
+                            && axes[axis_index]
+                                .display_unit_label_text
+                                .as_ref()
+                                .is_some_and(|text| text.is_empty())
+                        {
+                            axes[axis_index].display_unit_label_text = None;
                         }
                         active_axis_index = None;
                         active_axis_depth = 0;
@@ -22571,6 +22613,7 @@ mod tests {
                     minor_unit_scale: None,
                     display_unit: None,
                     has_display_unit_label: None,
+                    display_unit_label_text: None,
                     reverse_plot_order: None,
                     scale_type: None,
                     log_base: None,
@@ -22599,6 +22642,7 @@ mod tests {
                     minor_unit_scale: None,
                     display_unit: None,
                     has_display_unit_label: None,
+                    display_unit_label_text: None,
                     reverse_plot_order: Some(true),
                     scale_type: Some(ChartAxisScaleType::Logarithmic),
                     log_base: Some(10.0),

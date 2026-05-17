@@ -232,6 +232,7 @@ pub struct AxisModel {
     pub minor_unit_scale: Option<ChartAxisTimeUnit>,
     pub display_unit: Option<ChartAxisDisplayUnit>,
     pub has_display_unit_label: Option<bool>,
+    pub display_unit_label: Option<ChartText>,
     pub reverse_plot_order: Option<bool>,
     pub scale_type: Option<ChartAxisScaleType>,
     pub log_base: Option<f64>,
