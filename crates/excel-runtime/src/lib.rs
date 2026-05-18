@@ -4881,6 +4881,36 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
+                    "HasDataTable" => {
+                        let OmValue::Bool(has_data_table) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Chart.HasDataTable expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        if chart.has_data_table != Some(has_data_table) {
+                            chart.has_data_table = Some(has_data_table);
+                            chart.data_table_dirty = true;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     "HasAxis" => {
                         let OmValue::Bool(has_axis) = value else {
                             return Err(OmError::type_mismatch(
@@ -11824,6 +11854,7 @@ impl ExcelRuntime {
                             | "PlotArea"
                             | "HasTitle"
                             | "ChartTitle"
+                            | "HasDataTable"
                             | "HasAxis"
                             | "HasLegend"
                             | "Legend"
@@ -14240,6 +14271,8 @@ impl ExcelRuntime {
                             split_type: None,
                             split_value: None,
                             data_labels: None,
+                            has_data_table: None,
+                            data_table_dirty: false,
                             display_blanks_as: None,
                             plot_visible_only: None,
                             rounded_corners: None,
@@ -14776,6 +14809,18 @@ impl ExcelRuntime {
                 }
                 Ok(OmValue::Object(
                     self.register_chart_title_handle(workbook, chart_id),
+                ))
+            }
+            "HasDataTable" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Chart.HasDataTable does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Bool(
+                    self.chart_model(workbook, chart_id)?
+                        .has_data_table
+                        .unwrap_or(false),
                 ))
             }
             "HasLegend" => {
@@ -18015,6 +18060,8 @@ impl ExcelRuntime {
                         split_type: None,
                         split_value: None,
                         data_labels: None,
+                        has_data_table: None,
+                        data_table_dirty: false,
                         display_blanks_as: None,
                         plot_visible_only: None,
                         rounded_corners: None,
@@ -24739,6 +24786,9 @@ fn patch_loaded_chart_model_xml(
         .data_labels
         .as_ref()
         .filter(|data_labels| data_labels.dirty);
+    let expected_data_table = chart
+        .data_table_dirty
+        .then_some(chart.has_data_table.unwrap_or(false));
     let expected_dirty_series_data_label_sets = chart
         .series
         .iter()
@@ -24834,6 +24884,10 @@ fn patch_loaded_chart_model_xml(
     let mut chart_title_removed = false;
     let mut chart_title_inserted = false;
     let mut chart_title_text_written = false;
+    let mut data_table_seen = false;
+    let mut data_table_written = false;
+    let mut data_table_inserted = false;
+    let mut data_table_removed = false;
     let mut current_text_target = None::<(ChartTextXmlTarget, bool)>;
     let mut title_stack = Vec::<(usize, ChartTextXmlTarget)>::new();
     let mut legend_seen = false;
@@ -26009,6 +26063,22 @@ fn patch_loaded_chart_model_xml(
                     title_stack.push((depth, ChartTextXmlTarget::AxisTitle(axis_index)));
                     if let Some(axis_title_text) = axis_title_texts.get_mut(axis_index) {
                         axis_title_text.get_or_insert_with(String::new);
+                    }
+                } else if local_name.as_slice() == b"dTable"
+                    && parent_name == Some(b"plotArea".as_slice())
+                {
+                    data_table_seen = true;
+                    match expected_data_table {
+                        Some(true) => {
+                            data_table_written = true;
+                        }
+                        Some(false) => {
+                            data_table_removed = true;
+                            skip_depth = 1;
+                            buffer.clear();
+                            continue;
+                        }
+                        None => {}
                     }
                 } else if local_name.as_slice() == b"t"
                     && let Some((_, target)) = title_stack.last().copied()
@@ -27699,6 +27769,21 @@ fn patch_loaded_chart_model_xml(
                     && current_chart_group_depth == Some(element_stack.len())
                 {
                     overlap_seen = true;
+                } else if local_name.as_slice() == b"dTable"
+                    && parent_name == Some(b"plotArea".as_slice())
+                {
+                    data_table_seen = true;
+                    match expected_data_table {
+                        Some(true) => {
+                            data_table_written = true;
+                        }
+                        Some(false) => {
+                            data_table_removed = true;
+                            buffer.clear();
+                            continue;
+                        }
+                        None => {}
+                    }
                 } else if local_name.as_slice() == b"dLbls"
                     && parent_name == Some(b"ser".as_slice())
                     && let Some(series_index) = current_series_index
@@ -29133,6 +29218,17 @@ fn patch_loaded_chart_model_xml(
                     legend_overlay_written = true;
                 }
 
+                if local_name.as_slice() == b"plotArea"
+                    && !data_table_seen
+                    && expected_data_table == Some(true)
+                {
+                    writer
+                        .write_event(Event::Empty(BytesStart::new("c:dTable")))
+                        .map_err(runtime_xml_error)?;
+                    data_table_inserted = true;
+                    data_table_written = true;
+                }
+
                 if local_name.as_slice() == b"dPt"
                     && let Some(series_index) = current_series_index
                     && let Some(point_index) = current_point_index
@@ -29323,6 +29419,13 @@ fn patch_loaded_chart_model_xml(
         None => true,
         Some(_) if chart_protection_seen => chart_protection_written || chart_protection_removed,
         Some(_) => !expected_chart_protection_needs_xml || chart_protection_inserted,
+    };
+    let data_table_matches = match expected_data_table {
+        Some(true) if data_table_seen => data_table_written,
+        Some(true) => data_table_inserted,
+        Some(false) if data_table_seen => data_table_removed,
+        Some(false) => true,
+        None => true,
     };
     let vary_colors_matches = match (expected_vary_colors, vary_colors_seen) {
         (Some(_), true) => vary_colors_written,
@@ -29701,6 +29804,7 @@ fn patch_loaded_chart_model_xml(
         && rounded_corners_matches
         && chart_style_matches
         && chart_protection_matches
+        && data_table_matches
         && vary_colors_matches
         && bar_direction_matches
         && chart_grouping_matches
@@ -29976,6 +30080,11 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
         .protection
         .map(chart_protection_xml)
         .unwrap_or_default();
+    let data_table_xml = if chart.has_data_table.unwrap_or(false) {
+        "<c:dTable/>"
+    } else {
+        ""
+    };
     let chart_has_axes = chart_type_has_axes(&chart.chart_type);
     let mut chart_group_axis_refs = String::new();
     let mut axes_xml = String::new();
@@ -30180,7 +30289,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  {rounded_corners_xml}{chart_style_xml}{chart_protection_xml}<c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{bar_shape_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{data_labels_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
+  {rounded_corners_xml}{chart_style_xml}{chart_protection_xml}<c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{bar_shape_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{data_labels_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}{data_table_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -85403,6 +85512,10 @@ mod tests {
             r#"<c:style val="4"/><c:protection><c:chartObject val="1"/><c:data val="1"/></c:protection><c:chart>"#,
         )
         .replace(
+            "</c:plotArea>",
+            r#"<c:dTable><c:showHorzBorder val="1"/></c:dTable></c:plotArea>"#,
+        )
+        .replace(
             "</c:chartSpace>",
             r#"<c:extLst><c:ext uri="urn:content-preserve"/></c:extLst></c:chartSpace>"#,
         );
@@ -85489,6 +85602,12 @@ mod tests {
                 .dispatch_get(chart, "ProtectFormatting", &[])
                 .expect("Chart.ProtectFormatting loaded"),
             OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasDataTable", &[])
+                .expect("Chart.HasDataTable loaded"),
+            OmValue::Bool(true)
         );
         let chart_title = expect_object_handle(
             runtime
@@ -85620,6 +85739,8 @@ mod tests {
         assert!(saved_chart_xml.contains("<c:protection>"));
         assert!(saved_chart_xml.contains(r#"<c:chartObject val="1"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:data val="1"/>"#));
+        assert!(saved_chart_xml.contains("<c:dTable>"));
+        assert!(saved_chart_xml.contains(r#"<c:showHorzBorder val="1"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:plotVisOnly val="0"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:dispBlanksAs val="zero"/>"#));
 
@@ -85725,6 +85846,12 @@ mod tests {
             reopened_runtime
                 .dispatch_get(reopened_chart, "ProtectData", &[])
                 .expect("reopened Chart.ProtectData"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "HasDataTable", &[])
+                .expect("reopened Chart.HasDataTable"),
             OmValue::Bool(true)
         );
     }
@@ -85866,6 +85993,151 @@ mod tests {
         assert_eq!(data_labels.show_bubble_size, Some(false));
         assert_eq!(data_labels.separator.as_deref(), Some(", "));
         assert!(!data_labels.dirty);
+    }
+
+    #[test]
+    fn chart_has_data_table_roundtrips_chart_xml() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasDataTable", &[])
+                .expect("Chart.HasDataTable default"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(chart, "HasDataTable", OmValue::Number(1.0), &[])
+                .expect_err("Chart.HasDataTable rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        runtime
+            .dispatch_set(chart, "HasDataTable", OmValue::Bool(true), &[])
+            .expect("set Chart.HasDataTable true");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasDataTable", &[])
+                .expect("Chart.HasDataTable after set true"),
+            OmValue::Bool(true)
+        );
+
+        let with_table_saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with chart data table");
+        let with_table_package =
+            OpcPackage::from_bytes(&with_table_saved).expect("with table package");
+        let with_table_chart_xml = String::from_utf8(
+            with_table_package
+                .part("xl/charts/chart1.xml")
+                .expect("with table chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("with table chart xml utf8");
+        assert!(with_table_chart_xml.contains("<c:dTable"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: with_table_saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook with chart data table");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "HasDataTable", &[])
+                .expect("reopened Chart.HasDataTable"),
+            OmValue::Bool(true)
+        );
+
+        reopened_runtime
+            .dispatch_set(reopened_chart, "HasDataTable", OmValue::Bool(false), &[])
+            .expect("set reopened Chart.HasDataTable false");
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "HasDataTable", &[])
+                .expect("reopened Chart.HasDataTable after set false"),
+            OmValue::Bool(false)
+        );
+        let without_table_saved = reopened_runtime
+            .save_workbook(
+                reopened_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after removing chart data table");
+        let without_table_package =
+            OpcPackage::from_bytes(&without_table_saved).expect("without table package");
+        let without_table_chart_xml = String::from_utf8(
+            without_table_package
+                .part("xl/charts/chart1.xml")
+                .expect("without table chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("without table chart xml utf8");
+        assert!(!without_table_chart_xml.contains("<c:dTable"));
     }
 
     #[test]

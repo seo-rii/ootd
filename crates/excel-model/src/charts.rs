@@ -39,6 +39,8 @@ pub struct ChartModel {
     pub split_type: Option<ChartSplitType>,
     pub split_value: Option<f64>,
     pub data_labels: Option<ChartDataLabelsModel>,
+    pub has_data_table: Option<bool>,
+    pub data_table_dirty: bool,
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,
     pub rounded_corners: Option<bool>,

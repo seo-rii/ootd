@@ -687,6 +687,7 @@ pub struct ChartPartSummary {
     pub split_type: Option<ChartSplitType>,
     pub split_value: Option<f64>,
     pub data_labels: Option<ChartDataLabelsSummary>,
+    pub has_data_table: Option<bool>,
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,
     pub rounded_corners: Option<bool>,
@@ -3224,6 +3225,8 @@ fn build_chart_model_overlay(
                     data_labels: summary
                         .and_then(|summary| summary.data_labels.as_ref())
                         .map(chart_data_labels_model_from_summary),
+                    has_data_table: summary.and_then(|summary| summary.has_data_table),
+                    data_table_dirty: false,
                     display_blanks_as: summary.and_then(|summary| summary.display_blanks_as),
                     plot_visible_only: summary.and_then(|summary| summary.plot_visible_only),
                     rounded_corners: summary.and_then(|summary| summary.rounded_corners),
@@ -16145,6 +16148,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut split_type = None;
     let mut split_value = None;
     let mut data_labels = None::<ChartDataLabelsSummary>;
+    let mut has_data_table = None;
     let mut display_blanks_as = None;
     let mut plot_visible_only = None;
     let mut rounded_corners = None;
@@ -16444,6 +16448,11 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
                 if local_name == b"legend" {
                     has_legend = true;
+                }
+                if local_name == b"dTable"
+                    && element_path.last().is_some_and(|name| name == "plotArea")
+                {
+                    has_data_table = Some(true);
                 }
                 if local_name == b"legendPos"
                     && element_path.last().is_some_and(|name| name == "legend")
@@ -17172,6 +17181,11 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
                 if local_name == b"legend" {
                     has_legend = true;
+                }
+                if local_name == b"dTable"
+                    && element_path.last().is_some_and(|name| name == "plotArea")
+                {
+                    has_data_table = Some(true);
                 }
                 if local_name == b"legendPos"
                     && element_path.last().is_some_and(|name| name == "legend")
@@ -18044,6 +18058,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         split_type,
         split_value,
         data_labels,
+        has_data_table,
         display_blanks_as,
         plot_visible_only,
         rounded_corners,
