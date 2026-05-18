@@ -4736,7 +4736,7 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
-                    "Elevation" | "Rotation" | "Perspective" => {
+                    "Elevation" | "HeightPercent" | "Rotation" | "DepthPercent" | "Perspective" => {
                         let value = coerce_chart_view_3d_integer(&value, member)?;
                         let runtime = self.runtime_workbook_mut(workbook)?;
                         if runtime.read_only {
@@ -4760,8 +4760,10 @@ impl ExcelRuntime {
                                 (0, 44)
                             }
                             "Elevation" => (-90, 90),
+                            "HeightPercent" => (5, 500),
                             "Rotation" if chart_type_uses_3d_bar_view(&chart.chart_type) => (0, 44),
                             "Rotation" => (0, 360),
+                            "DepthPercent" => (20, 2000),
                             "Perspective" => (0, 100),
                             _ => unreachable!("checked chart 3D view numeric member"),
                         };
@@ -4781,10 +4783,28 @@ impl ExcelRuntime {
                                     false
                                 }
                             }
+                            "HeightPercent" => {
+                                let value = value as u16;
+                                if view_3d.height_percent != Some(value) {
+                                    view_3d.height_percent = Some(value);
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
                             "Rotation" => {
                                 let value = value as u16;
                                 if view_3d.rotation != Some(value) {
                                     view_3d.rotation = Some(value);
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                            "DepthPercent" => {
+                                let value = value as u16;
+                                if view_3d.depth_percent != Some(value) {
+                                    view_3d.depth_percent = Some(value);
                                     true
                                 } else {
                                     false
@@ -12099,7 +12119,9 @@ impl ExcelRuntime {
                             | "ChartStyle"
                             | "Index"
                             | "Elevation"
+                            | "HeightPercent"
                             | "Rotation"
+                            | "DepthPercent"
                             | "Perspective"
                             | "RightAngleAxes"
                             | "DisplayBlanksAs"
@@ -14853,7 +14875,7 @@ impl ExcelRuntime {
                     self.chart_model(workbook, chart_id)?.style.unwrap_or(0),
                 )))
             }
-            "Elevation" | "Rotation" | "Perspective" => {
+            "Elevation" | "HeightPercent" | "Rotation" | "DepthPercent" | "Perspective" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(format!(
                         "Chart.{member} does not accept arguments"
@@ -14864,7 +14886,9 @@ impl ExcelRuntime {
                 let view_3d = chart.view_3d.unwrap_or_default();
                 let value = match member {
                     "Elevation" => i32::from(view_3d.elevation.unwrap_or(15)),
+                    "HeightPercent" => i32::from(view_3d.height_percent.unwrap_or(100)),
                     "Rotation" => i32::from(view_3d.rotation.unwrap_or(20)),
+                    "DepthPercent" => i32::from(view_3d.depth_percent.unwrap_or(100)),
                     "Perspective" => i32::from(view_3d.perspective.unwrap_or(30)),
                     _ => unreachable!("checked chart 3D view numeric getter"),
                 };
@@ -24670,8 +24694,14 @@ fn chart_view_3d_xml_string(view_3d: &ChartView3DModel) -> Option<String> {
     if let Some(value) = view_3d.elevation {
         children.push_str(&format!(r#"<c:rotX val="{value}"/>"#));
     }
+    if let Some(value) = view_3d.height_percent {
+        children.push_str(&format!(r#"<c:hPercent val="{value}"/>"#));
+    }
     if let Some(value) = view_3d.rotation {
         children.push_str(&format!(r#"<c:rotY val="{value}"/>"#));
+    }
+    if let Some(value) = view_3d.depth_percent {
+        children.push_str(&format!(r#"<c:depthPercent val="{value}"/>"#));
     }
     if let Some(value) = view_3d.right_angle_axes {
         children.push_str(&format!(
@@ -86995,10 +87025,26 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
+                    .dispatch_get(chart, "HeightPercent", &[])
+                    .expect("Chart.HeightPercent default")
+            ),
+            100.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
                     .dispatch_get(chart, "Rotation", &[])
                     .expect("Chart.Rotation default")
             ),
             20.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "DepthPercent", &[])
+                    .expect("Chart.DepthPercent default")
+            ),
+            100.0
         );
         assert_eq!(
             expect_number(
@@ -87018,8 +87064,14 @@ mod tests {
             .dispatch_set(chart, "Elevation", OmValue::Number(34.0), &[])
             .expect("set Chart.Elevation");
         runtime
+            .dispatch_set(chart, "HeightPercent", OmValue::Number(180.0), &[])
+            .expect("set Chart.HeightPercent");
+        runtime
             .dispatch_set(chart, "Rotation", OmValue::Number(30.6), &[])
             .expect("set Chart.Rotation with rounding");
+        runtime
+            .dispatch_set(chart, "DepthPercent", OmValue::Number(250.0), &[])
+            .expect("set Chart.DepthPercent");
         runtime
             .dispatch_set(chart, "Perspective", OmValue::Number(70.0), &[])
             .expect("set Chart.Perspective");
@@ -87037,15 +87089,45 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
+                    .dispatch_get(chart, "HeightPercent", &[])
+                    .expect("Chart.HeightPercent after set")
+            ),
+            180.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
                     .dispatch_get(chart, "Rotation", &[])
                     .expect("Chart.Rotation after set")
             ),
             31.0
         );
         assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "DepthPercent", &[])
+                    .expect("Chart.DepthPercent after set")
+            ),
+            250.0
+        );
+        assert_eq!(
             runtime
                 .dispatch_set(chart, "Perspective", OmValue::Number(101.0), &[])
                 .expect_err("Chart.Perspective rejects out-of-range values")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(chart, "HeightPercent", OmValue::Number(4.0), &[])
+                .expect_err("Chart.HeightPercent rejects out-of-range values")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(chart, "DepthPercent", OmValue::Number(2001.0), &[])
+                .expect_err("Chart.DepthPercent rejects out-of-range values")
                 .code,
             OmErrorCode::InvalidArgument
         );
@@ -87078,7 +87160,9 @@ mod tests {
         .expect("saved chart xml utf8");
         assert!(saved_chart_xml.contains("<c:view3D>"));
         assert!(saved_chart_xml.contains(r#"<c:rotX val="34"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:hPercent val="180"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:rotY val="31"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:depthPercent val="250"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:rAngAx val="0"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:perspective val="70"/>"#));
 
@@ -87122,10 +87206,26 @@ mod tests {
         assert_eq!(
             expect_number(
                 reopened_runtime
+                    .dispatch_get(reopened_chart, "HeightPercent", &[])
+                    .expect("reopened Chart.HeightPercent")
+            ),
+            180.0
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
                     .dispatch_get(reopened_chart, "Rotation", &[])
                     .expect("reopened Chart.Rotation")
             ),
             31.0
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart, "DepthPercent", &[])
+                    .expect("reopened Chart.DepthPercent")
+            ),
+            250.0
         );
         assert_eq!(
             expect_number(

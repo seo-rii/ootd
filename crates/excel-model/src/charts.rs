@@ -56,7 +56,9 @@ pub struct ChartModel {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ChartView3DModel {
     pub elevation: Option<i16>,
+    pub height_percent: Option<u16>,
     pub rotation: Option<u16>,
+    pub depth_percent: Option<u16>,
     pub right_angle_axes: Option<bool>,
     pub perspective: Option<u16>,
 }

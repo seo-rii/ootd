@@ -16312,11 +16312,25 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     view_3d.elevation = Some(value as i16);
                 }
             }
+            b"hPercent" => {
+                if let Some(value) = parse_i32_val_attr(element, reader, "3D view height percent")?
+                    && (5..=500).contains(&value)
+                {
+                    view_3d.height_percent = Some(value as u16);
+                }
+            }
             b"rotY" => {
                 if let Some(value) = parse_i32_val_attr(element, reader, "3D view rotation Y")?
                     && (0..=360).contains(&value)
                 {
                     view_3d.rotation = Some(value as u16);
+                }
+            }
+            b"depthPercent" => {
+                if let Some(value) = parse_i32_val_attr(element, reader, "3D view depth percent")?
+                    && (20..=2000).contains(&value)
+                {
+                    view_3d.depth_percent = Some(value as u16);
                 }
             }
             b"rAngAx" => {
@@ -22731,7 +22745,7 @@ mod tests {
   <c:roundedCorners val="1"/>
   <c:chart>
     <c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title>
-    <c:view3D><c:rotX val="12"/><c:rotY val="34"/><c:rAngAx val="0"/><c:perspective val="45"/></c:view3D>
+    <c:view3D><c:rotX val="12"/><c:hPercent val="120"/><c:rotY val="34"/><c:depthPercent val="250"/><c:rAngAx val="0"/><c:perspective val="45"/></c:view3D>
     <c:plotArea>
       <c:barChart>
         <c:varyColors val="1"/>
@@ -23014,7 +23028,9 @@ mod tests {
             chart_summary.view_3d,
             Some(ChartView3DModel {
                 elevation: Some(12),
+                height_percent: Some(120),
                 rotation: Some(34),
+                depth_percent: Some(250),
                 right_angle_axes: Some(false),
                 perspective: Some(45),
             })
@@ -23251,7 +23267,9 @@ mod tests {
             chart_model.view_3d,
             Some(ChartView3DModel {
                 elevation: Some(12),
+                height_percent: Some(120),
                 rotation: Some(34),
+                depth_percent: Some(250),
                 right_angle_axes: Some(false),
                 perspective: Some(45),
             })
