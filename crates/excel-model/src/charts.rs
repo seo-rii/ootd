@@ -23,6 +23,7 @@ pub struct ChartModel {
     pub axes: Vec<AxisModel>,
     pub vary_by_categories: Option<bool>,
     pub gap_width: Option<u16>,
+    pub gap_depth: Option<u16>,
     pub overlap: Option<i16>,
     pub has_series_lines: Option<bool>,
     pub has_drop_lines: Option<bool>,

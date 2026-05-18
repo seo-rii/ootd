@@ -671,6 +671,7 @@ pub struct ChartPartSummary {
     pub legend_include_in_layout: Option<bool>,
     pub vary_by_categories: Option<bool>,
     pub gap_width: Option<u16>,
+    pub gap_depth: Option<u16>,
     pub overlap: Option<i16>,
     pub has_series_lines: Option<bool>,
     pub has_drop_lines: Option<bool>,
@@ -3216,6 +3217,7 @@ fn build_chart_model_overlay(
                     }),
                     vary_by_categories: summary.and_then(|summary| summary.vary_by_categories),
                     gap_width: summary.and_then(|summary| summary.gap_width),
+                    gap_depth: summary.and_then(|summary| summary.gap_depth),
                     overlap: summary.and_then(|summary| summary.overlap),
                     has_series_lines: summary.and_then(|summary| summary.has_series_lines),
                     has_drop_lines: summary.and_then(|summary| summary.has_drop_lines),
@@ -16158,6 +16160,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut legend_include_in_layout = None;
     let mut vary_by_categories = None;
     let mut gap_width = None;
+    let mut gap_depth = None;
     let mut overlap = None;
     let mut has_series_lines = None;
     let mut has_drop_lines = None;
@@ -16831,6 +16834,15 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && (0..=500).contains(&value)
                 {
                     gap_width = Some(value as u16);
+                }
+                if local_name == b"gapDepth"
+                    && element_path.last().is_some_and(|name| {
+                        matches!(name.as_str(), "area3DChart" | "bar3DChart" | "line3DChart")
+                    })
+                    && let Some(value) = parse_i32_val_attr(&element, &reader, "gap depth")?
+                    && (0..=500).contains(&value)
+                {
+                    gap_depth = Some(value as u16);
                 }
                 if local_name == b"overlap"
                     && element_path
@@ -17736,6 +17748,15 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 {
                     gap_width = Some(value as u16);
                 }
+                if local_name == b"gapDepth"
+                    && element_path.last().is_some_and(|name| {
+                        matches!(name.as_str(), "area3DChart" | "bar3DChart" | "line3DChart")
+                    })
+                    && let Some(value) = parse_i32_val_attr(&element, &reader, "gap depth")?
+                    && (0..=500).contains(&value)
+                {
+                    gap_depth = Some(value as u16);
+                }
                 if local_name == b"overlap"
                     && element_path
                         .last()
@@ -18170,6 +18191,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         legend_include_in_layout,
         vary_by_categories,
         gap_width,
+        gap_depth,
         overlap,
         has_series_lines,
         has_drop_lines,

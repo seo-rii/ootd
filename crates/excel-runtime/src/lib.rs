@@ -4828,6 +4828,38 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
+                    "GapDepth" => {
+                        let value = coerce_chart_view_3d_integer(&value, member)?;
+                        if !(0..=500).contains(&value) {
+                            return Err(OmError::invalid_argument(
+                                "Chart.GapDepth must be between 0 and 500",
+                            ));
+                        }
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        ensure_chart_supports_gap_depth(&chart.chart_type)?;
+                        let value = value as u16;
+                        if chart.gap_depth != Some(value) {
+                            chart.gap_depth = Some(value);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     "RightAngleAxes" => {
                         let OmValue::Bool(right_angle_axes) = value else {
                             return Err(OmError::type_mismatch(
@@ -12122,6 +12154,7 @@ impl ExcelRuntime {
                             | "HeightPercent"
                             | "Rotation"
                             | "DepthPercent"
+                            | "GapDepth"
                             | "Perspective"
                             | "RightAngleAxes"
                             | "DisplayBlanksAs"
@@ -14550,6 +14583,7 @@ impl ExcelRuntime {
                             axes: default_chart_axes(),
                             vary_by_categories: None,
                             gap_width: None,
+                            gap_depth: None,
                             overlap: None,
                             has_series_lines: None,
                             has_drop_lines: None,
@@ -14908,6 +14942,16 @@ impl ExcelRuntime {
                         .and_then(|view_3d| view_3d.right_angle_axes)
                         .unwrap_or(true),
                 ))
+            }
+            "GapDepth" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Chart.GapDepth does not accept arguments",
+                    ));
+                }
+                let chart = self.chart_model(workbook, chart_id)?;
+                ensure_chart_supports_gap_depth(&chart.chart_type)?;
+                Ok(OmValue::Number(f64::from(chart.gap_depth.unwrap_or(150))))
             }
             "DisplayBlanksAs" => {
                 if !args.is_empty() {
@@ -18440,6 +18484,7 @@ impl ExcelRuntime {
                         axes: default_chart_axes(),
                         vary_by_categories: None,
                         gap_width: None,
+                        gap_depth: None,
                         overlap: None,
                         has_series_lines: None,
                         has_drop_lines: None,
@@ -24421,6 +24466,23 @@ fn ensure_chart_supports_right_angle_axes(chart_type: &ChartType) -> OmResult<()
     }
 }
 
+fn ensure_chart_supports_gap_depth(chart_type: &ChartType) -> OmResult<()> {
+    if chart_type_supports_gap_depth(chart_type) {
+        Ok(())
+    } else {
+        Err(OmError::unsupported(
+            "Chart.GapDepth is only supported for 3D area, bar, column, and line chart types",
+        ))
+    }
+}
+
+fn chart_type_supports_gap_depth(chart_type: &ChartType) -> bool {
+    matches!(
+        chart_group_xml_name(chart_type),
+        Some("area3DChart" | "bar3DChart" | "line3DChart")
+    )
+}
+
 fn chart_type_supports_explosion(chart_type: &ChartType) -> bool {
     matches!(
         chart_type,
@@ -25403,6 +25465,10 @@ fn patch_loaded_chart_model_xml(
     let expected_of_pie_type = chart_type_of_pie_xml_value(&chart.chart_type);
     let expected_surface_wireframe = chart_type_surface_wireframe_xml_value(&chart.chart_type);
     let expected_gap_width = chart.gap_width.map(|value| value.to_string());
+    let expected_gap_depth = chart
+        .gap_depth
+        .filter(|_| chart_type_supports_gap_depth(&chart.chart_type))
+        .map(|value| value.to_string());
     let expected_overlap = chart.overlap.map(|value| value.to_string());
     let expected_first_slice_angle = chart.first_slice_angle.map(|value| value.to_string());
     let expected_explosion = chart_explosion_xml_value(chart);
@@ -25438,6 +25504,7 @@ fn patch_loaded_chart_model_xml(
         })
         .collect::<Vec<_>>();
     let expected_gap_width = expected_gap_width.as_deref();
+    let expected_gap_depth = expected_gap_depth.as_deref();
     let expected_overlap = expected_overlap.as_deref();
     let expected_first_slice_angle = expected_first_slice_angle.as_deref();
     let expected_explosion = expected_explosion.as_deref();
@@ -25576,6 +25643,9 @@ fn patch_loaded_chart_model_xml(
     let mut gap_width_seen = false;
     let mut gap_width_written = false;
     let mut gap_width_inserted = false;
+    let mut gap_depth_seen = false;
+    let mut gap_depth_written = false;
+    let mut gap_depth_inserted = false;
     let mut overlap_seen = false;
     let mut overlap_written = false;
     let mut overlap_inserted = false;
@@ -26842,6 +26912,10 @@ fn patch_loaded_chart_model_xml(
                     && current_chart_group_depth == Some(element_stack.len())
                 {
                     gap_width_seen = true;
+                } else if local_name.as_slice() == b"gapDepth"
+                    && current_chart_group_depth == Some(element_stack.len())
+                {
+                    gap_depth_seen = true;
                 } else if local_name.as_slice() == b"overlap"
                     && current_chart_group_depth == Some(element_stack.len())
                 {
@@ -27274,6 +27348,18 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     gap_width_written = true;
+                } else if !wrote_start_element
+                    && local_name.as_slice() == b"gapDepth"
+                    && let Some(value) = expected_gap_depth
+                {
+                    writer
+                        .write_event(Event::Start(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    gap_depth_written = true;
                 } else if !wrote_start_element
                     && local_name.as_slice() == b"overlap"
                     && let Some(value) = expected_overlap
@@ -28460,6 +28546,10 @@ fn patch_loaded_chart_model_xml(
                     && current_chart_group_depth == Some(element_stack.len())
                 {
                     gap_width_seen = true;
+                } else if local_name.as_slice() == b"gapDepth"
+                    && current_chart_group_depth == Some(element_stack.len())
+                {
+                    gap_depth_seen = true;
                 } else if local_name.as_slice() == b"overlap"
                     && current_chart_group_depth == Some(element_stack.len())
                 {
@@ -28774,6 +28864,17 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     gap_width_written = true;
+                } else if local_name.as_slice() == b"gapDepth"
+                    && let Some(value) = expected_gap_depth
+                {
+                    writer
+                        .write_event(Event::Empty(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    gap_depth_written = true;
                 } else if local_name.as_slice() == b"overlap"
                     && let Some(value) = expected_overlap
                 {
@@ -29877,6 +29978,15 @@ fn patch_loaded_chart_model_xml(
                         gap_width_inserted = true;
                         gap_width_written = true;
                     }
+                    if !gap_depth_seen && let Some(value) = expected_gap_depth {
+                        let mut gap_depth = BytesStart::new("c:gapDepth");
+                        gap_depth.push_attribute(("val", value));
+                        writer
+                            .write_event(Event::Empty(gap_depth))
+                            .map_err(runtime_xml_error)?;
+                        gap_depth_inserted = true;
+                        gap_depth_written = true;
+                    }
                     if !overlap_seen && let Some(value) = expected_overlap {
                         let mut overlap = BytesStart::new("c:overlap");
                         overlap.push_attribute(("val", value));
@@ -30214,6 +30324,11 @@ fn patch_loaded_chart_model_xml(
     let gap_width_matches = match (expected_gap_width, gap_width_seen) {
         (Some(_), true) => gap_width_written,
         (Some(_), false) => gap_width_inserted,
+        (None, _) => true,
+    };
+    let gap_depth_matches = match (expected_gap_depth, gap_depth_seen) {
+        (Some(_), true) => gap_depth_written,
+        (Some(_), false) => gap_depth_inserted,
         (None, _) => true,
     };
     let overlap_matches = match (expected_overlap, overlap_seen) {
@@ -30556,6 +30671,7 @@ fn patch_loaded_chart_model_xml(
         && of_pie_type_matches
         && surface_wireframe_matches
         && gap_width_matches
+        && gap_depth_matches
         && overlap_matches
         && data_labels_match
         && series_data_labels_match
@@ -30666,6 +30782,11 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     let gap_width_xml = chart
         .gap_width
         .map(|value| format!(r#"<c:gapWidth val="{value}"/>"#))
+        .unwrap_or_default();
+    let gap_depth_xml = chart
+        .gap_depth
+        .filter(|_| chart_type_supports_gap_depth(&chart.chart_type))
+        .map(|value| format!(r#"<c:gapDepth val="{value}"/>"#))
         .unwrap_or_default();
     let overlap_xml = chart
         .overlap
@@ -31044,7 +31165,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  {rounded_corners_xml}{chart_style_xml}{chart_protection_xml}<c:chart>{title_xml}{view_3d_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{bar_shape_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{data_labels_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}{data_table_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}{show_data_labels_over_maximum_xml}</c:chart>
+  {rounded_corners_xml}{chart_style_xml}{chart_protection_xml}<c:chart>{title_xml}{view_3d_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{bar_shape_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{gap_depth_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{data_labels_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}{data_table_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}{show_data_labels_over_maximum_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -87006,6 +87127,13 @@ mod tests {
                 .code,
             OmErrorCode::Unsupported
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "GapDepth", &[])
+                .expect_err("Chart.GapDepth rejects 2D charts")
+                .code,
+            OmErrorCode::Unsupported
+        );
         runtime
             .dispatch_set(
                 chart,
@@ -87049,6 +87177,14 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
+                    .dispatch_get(chart, "GapDepth", &[])
+                    .expect("Chart.GapDepth default")
+            ),
+            150.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
                     .dispatch_get(chart, "Perspective", &[])
                     .expect("Chart.Perspective default")
             ),
@@ -87072,6 +87208,9 @@ mod tests {
         runtime
             .dispatch_set(chart, "DepthPercent", OmValue::Number(250.0), &[])
             .expect("set Chart.DepthPercent");
+        runtime
+            .dispatch_set(chart, "GapDepth", OmValue::Number(300.0), &[])
+            .expect("set Chart.GapDepth");
         runtime
             .dispatch_set(chart, "Perspective", OmValue::Number(70.0), &[])
             .expect("set Chart.Perspective");
@@ -87111,6 +87250,14 @@ mod tests {
             250.0
         );
         assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "GapDepth", &[])
+                    .expect("Chart.GapDepth after set")
+            ),
+            300.0
+        );
+        assert_eq!(
             runtime
                 .dispatch_set(chart, "Perspective", OmValue::Number(101.0), &[])
                 .expect_err("Chart.Perspective rejects out-of-range values")
@@ -87128,6 +87275,13 @@ mod tests {
             runtime
                 .dispatch_set(chart, "DepthPercent", OmValue::Number(2001.0), &[])
                 .expect_err("Chart.DepthPercent rejects out-of-range values")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(chart, "GapDepth", OmValue::Number(501.0), &[])
+                .expect_err("Chart.GapDepth rejects out-of-range values")
                 .code,
             OmErrorCode::InvalidArgument
         );
@@ -87163,6 +87317,7 @@ mod tests {
         assert!(saved_chart_xml.contains(r#"<c:hPercent val="180"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:rotY val="31"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:depthPercent val="250"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:gapDepth val="300"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:rAngAx val="0"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:perspective val="70"/>"#));
 
@@ -87226,6 +87381,14 @@ mod tests {
                     .expect("reopened Chart.DepthPercent")
             ),
             250.0
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart, "GapDepth", &[])
+                    .expect("reopened Chart.GapDepth")
+            ),
+            300.0
         );
         assert_eq!(
             expect_number(
