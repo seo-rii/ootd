@@ -44,11 +44,21 @@ pub struct ChartModel {
     pub show_data_labels_over_maximum: Option<bool>,
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,
+    pub view_3d: Option<ChartView3DModel>,
+    pub view_3d_dirty: bool,
     pub rounded_corners: Option<bool>,
     pub protection: Option<ChartProtectionModel>,
     pub protection_dirty: bool,
     pub raw_part_uri: Option<String>,
     pub dirty: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ChartView3DModel {
+    pub elevation: Option<i16>,
+    pub rotation: Option<u16>,
+    pub right_angle_axes: Option<bool>,
+    pub perspective: Option<u16>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

@@ -3,8 +3,8 @@ use excel_model::{
     ChartAxisTimeUnit, ChartBuiltInDisplayUnit, ChartDataLabelPosition, ChartDataLabelsModel,
     ChartDataTableModel, ChartDisplayBlanksAs, ChartLegendPosition, ChartModel, ChartObjectModel,
     ChartProtectionModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartSplitType,
-    ChartText, ChartTickLabelPosition, ChartTickMark, ChartType, DrawingModel, DrawingObjectModel,
-    LegendModel, SeriesModel, WorkbookState, WorksheetData,
+    ChartText, ChartTickLabelPosition, ChartTickMark, ChartType, ChartView3DModel, DrawingModel,
+    DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
     resolve_chart_source_reference_with_names,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml};
@@ -4733,6 +4733,110 @@ impl ExcelRuntime {
                                 chart.dirty = true;
                                 runtime.dirty = true;
                             }
+                        }
+                        Ok(())
+                    }
+                    "Elevation" | "Rotation" | "Perspective" => {
+                        let value = coerce_chart_view_3d_integer(&value, member)?;
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        ensure_chart_supports_3d_view(&chart.chart_type, member)?;
+                        let (minimum, maximum) = match member {
+                            "Elevation" if chart_type_uses_3d_bar_view(&chart.chart_type) => {
+                                (0, 44)
+                            }
+                            "Elevation" => (-90, 90),
+                            "Rotation" if chart_type_uses_3d_bar_view(&chart.chart_type) => (0, 44),
+                            "Rotation" => (0, 360),
+                            "Perspective" => (0, 100),
+                            _ => unreachable!("checked chart 3D view numeric member"),
+                        };
+                        if !(minimum..=maximum).contains(&value) {
+                            return Err(OmError::invalid_argument(format!(
+                                "Chart.{member} must be between {minimum} and {maximum}"
+                            )));
+                        }
+                        let view_3d = chart.view_3d.get_or_insert_with(ChartView3DModel::default);
+                        let changed = match member {
+                            "Elevation" => {
+                                let value = value as i16;
+                                if view_3d.elevation != Some(value) {
+                                    view_3d.elevation = Some(value);
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                            "Rotation" => {
+                                let value = value as u16;
+                                if view_3d.rotation != Some(value) {
+                                    view_3d.rotation = Some(value);
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                            "Perspective" => {
+                                let value = value as u16;
+                                if view_3d.perspective != Some(value) {
+                                    view_3d.perspective = Some(value);
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                            _ => unreachable!("checked chart 3D view numeric member"),
+                        };
+                        if changed {
+                            chart.view_3d_dirty = true;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "RightAngleAxes" => {
+                        let OmValue::Bool(right_angle_axes) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Chart.RightAngleAxes expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        ensure_chart_supports_right_angle_axes(&chart.chart_type)?;
+                        let view_3d = chart.view_3d.get_or_insert_with(ChartView3DModel::default);
+                        if view_3d.right_angle_axes != Some(right_angle_axes) {
+                            view_3d.right_angle_axes = Some(right_angle_axes);
+                            chart.view_3d_dirty = true;
+                            chart.dirty = true;
+                            runtime.dirty = true;
                         }
                         Ok(())
                     }
@@ -11994,6 +12098,10 @@ impl ExcelRuntime {
                         "ChartType"
                             | "ChartStyle"
                             | "Index"
+                            | "Elevation"
+                            | "Rotation"
+                            | "Perspective"
+                            | "RightAngleAxes"
                             | "DisplayBlanksAs"
                             | "PlotVisibleOnly"
                             | "ShowDataLabelsOverMaximum"
@@ -14441,6 +14549,8 @@ impl ExcelRuntime {
                             show_data_labels_over_maximum: None,
                             display_blanks_as: None,
                             plot_visible_only: None,
+                            view_3d: None,
+                            view_3d_dirty: false,
                             rounded_corners: None,
                             protection: None,
                             protection_dirty: false,
@@ -14742,6 +14852,38 @@ impl ExcelRuntime {
                 Ok(OmValue::Number(f64::from(
                     self.chart_model(workbook, chart_id)?.style.unwrap_or(0),
                 )))
+            }
+            "Elevation" | "Rotation" | "Perspective" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "Chart.{member} does not accept arguments"
+                    )));
+                }
+                let chart = self.chart_model(workbook, chart_id)?;
+                ensure_chart_supports_3d_view(&chart.chart_type, member)?;
+                let view_3d = chart.view_3d.unwrap_or_default();
+                let value = match member {
+                    "Elevation" => i32::from(view_3d.elevation.unwrap_or(15)),
+                    "Rotation" => i32::from(view_3d.rotation.unwrap_or(20)),
+                    "Perspective" => i32::from(view_3d.perspective.unwrap_or(30)),
+                    _ => unreachable!("checked chart 3D view numeric getter"),
+                };
+                Ok(OmValue::Number(f64::from(value)))
+            }
+            "RightAngleAxes" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Chart.RightAngleAxes does not accept arguments",
+                    ));
+                }
+                let chart = self.chart_model(workbook, chart_id)?;
+                ensure_chart_supports_right_angle_axes(&chart.chart_type)?;
+                Ok(OmValue::Bool(
+                    chart
+                        .view_3d
+                        .and_then(|view_3d| view_3d.right_angle_axes)
+                        .unwrap_or(true),
+                ))
             }
             "DisplayBlanksAs" => {
                 if !args.is_empty() {
@@ -18295,6 +18437,8 @@ impl ExcelRuntime {
                         show_data_labels_over_maximum: None,
                         display_blanks_as: None,
                         plot_visible_only: None,
+                        view_3d: None,
+                        view_3d_dirty: false,
                         rounded_corners: None,
                         protection: None,
                         protection_dirty: false,
@@ -24138,6 +24282,121 @@ fn chart_type_has_axes(chart_type: &ChartType) -> bool {
     )
 }
 
+fn chart_type_supports_3d_view(chart_type: &ChartType) -> bool {
+    matches!(
+        chart_type,
+        ChartType::Area3D
+            | ChartType::Area3DStacked
+            | ChartType::Area3DStacked100
+            | ChartType::Bar3DClustered
+            | ChartType::Bar3DStacked
+            | ChartType::Bar3DStacked100
+            | ChartType::Column3D
+            | ChartType::Column3DClustered
+            | ChartType::Column3DStacked
+            | ChartType::Column3DStacked100
+            | ChartType::CylinderColumn
+            | ChartType::CylinderColumnClustered
+            | ChartType::CylinderColumnStacked
+            | ChartType::CylinderColumnStacked100
+            | ChartType::CylinderBarClustered
+            | ChartType::CylinderBarStacked
+            | ChartType::CylinderBarStacked100
+            | ChartType::ConeColumn
+            | ChartType::ConeColumnClustered
+            | ChartType::ConeColumnStacked
+            | ChartType::ConeColumnStacked100
+            | ChartType::ConeBarClustered
+            | ChartType::ConeBarStacked
+            | ChartType::ConeBarStacked100
+            | ChartType::PyramidColumn
+            | ChartType::PyramidColumnClustered
+            | ChartType::PyramidColumnStacked
+            | ChartType::PyramidColumnStacked100
+            | ChartType::PyramidBarClustered
+            | ChartType::PyramidBarStacked
+            | ChartType::PyramidBarStacked100
+            | ChartType::Line3D
+            | ChartType::Pie3D
+            | ChartType::Pie3DExploded
+            | ChartType::Surface
+            | ChartType::SurfaceWireframe
+    )
+}
+
+fn chart_type_uses_3d_bar_view(chart_type: &ChartType) -> bool {
+    matches!(
+        chart_type,
+        ChartType::Bar3DClustered
+            | ChartType::Bar3DStacked
+            | ChartType::Bar3DStacked100
+            | ChartType::CylinderBarClustered
+            | ChartType::CylinderBarStacked
+            | ChartType::CylinderBarStacked100
+            | ChartType::ConeBarClustered
+            | ChartType::ConeBarStacked
+            | ChartType::ConeBarStacked100
+            | ChartType::PyramidBarClustered
+            | ChartType::PyramidBarStacked
+            | ChartType::PyramidBarStacked100
+    )
+}
+
+fn chart_type_supports_right_angle_axes(chart_type: &ChartType) -> bool {
+    matches!(chart_type, ChartType::Line3D)
+        || matches!(
+            chart_type,
+            ChartType::Bar3DClustered
+                | ChartType::Bar3DStacked
+                | ChartType::Bar3DStacked100
+                | ChartType::Column3D
+                | ChartType::Column3DClustered
+                | ChartType::Column3DStacked
+                | ChartType::Column3DStacked100
+                | ChartType::CylinderColumn
+                | ChartType::CylinderColumnClustered
+                | ChartType::CylinderColumnStacked
+                | ChartType::CylinderColumnStacked100
+                | ChartType::CylinderBarClustered
+                | ChartType::CylinderBarStacked
+                | ChartType::CylinderBarStacked100
+                | ChartType::ConeColumn
+                | ChartType::ConeColumnClustered
+                | ChartType::ConeColumnStacked
+                | ChartType::ConeColumnStacked100
+                | ChartType::ConeBarClustered
+                | ChartType::ConeBarStacked
+                | ChartType::ConeBarStacked100
+                | ChartType::PyramidColumn
+                | ChartType::PyramidColumnClustered
+                | ChartType::PyramidColumnStacked
+                | ChartType::PyramidColumnStacked100
+                | ChartType::PyramidBarClustered
+                | ChartType::PyramidBarStacked
+                | ChartType::PyramidBarStacked100
+        )
+}
+
+fn ensure_chart_supports_3d_view(chart_type: &ChartType, member: &str) -> OmResult<()> {
+    if chart_type_supports_3d_view(chart_type) {
+        Ok(())
+    } else {
+        Err(OmError::unsupported(format!(
+            "Chart.{member} is only supported for 3D chart types"
+        )))
+    }
+}
+
+fn ensure_chart_supports_right_angle_axes(chart_type: &ChartType) -> OmResult<()> {
+    if chart_type_supports_right_angle_axes(chart_type) {
+        Ok(())
+    } else {
+        Err(OmError::unsupported(
+            "Chart.RightAngleAxes is only supported for 3D line, column, and bar chart types",
+        ))
+    }
+}
+
 fn chart_type_supports_explosion(chart_type: &ChartType) -> bool {
     matches!(
         chart_type,
@@ -24404,6 +24663,40 @@ fn chart_display_blanks_as_from_excel_value(value: i32) -> OmResult<ChartDisplay
             "Chart.DisplayBlanksAs supports xlNotPlotted, xlZero, and xlInterpolated",
         )),
     }
+}
+
+fn chart_view_3d_xml_string(view_3d: &ChartView3DModel) -> Option<String> {
+    let mut children = String::new();
+    if let Some(value) = view_3d.elevation {
+        children.push_str(&format!(r#"<c:rotX val="{value}"/>"#));
+    }
+    if let Some(value) = view_3d.rotation {
+        children.push_str(&format!(r#"<c:rotY val="{value}"/>"#));
+    }
+    if let Some(value) = view_3d.right_angle_axes {
+        children.push_str(&format!(
+            r#"<c:rAngAx val="{}"/>"#,
+            if value { "1" } else { "0" }
+        ));
+    }
+    if let Some(value) = view_3d.perspective {
+        children.push_str(&format!(r#"<c:perspective val="{value}"/>"#));
+    }
+    (!children.is_empty()).then(|| format!("<c:view3D>{children}</c:view3D>"))
+}
+
+fn write_chart_view_3d_element(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    view_3d: &ChartView3DModel,
+) -> OmResult<bool> {
+    let Some(xml) = chart_view_3d_xml_string(view_3d) else {
+        return Ok(false);
+    };
+    writer
+        .get_mut()
+        .write_all(xml.as_bytes())
+        .map_err(runtime_xml_error)?;
+    Ok(true)
 }
 
 fn chart_protection_xml(protection: ChartProtectionModel) -> String {
@@ -25064,6 +25357,7 @@ fn patch_loaded_chart_model_xml(
     let expected_show_data_labels_over_maximum = chart
         .show_data_labels_over_maximum
         .map(|value| if value { "1" } else { "0" });
+    let expected_dirty_view_3d = chart.view_3d_dirty.then_some(chart.view_3d.as_ref());
     let expected_rounded_corners = chart
         .rounded_corners
         .map(|value| if value { "1" } else { "0" });
@@ -25216,6 +25510,9 @@ fn patch_loaded_chart_model_xml(
     let mut show_data_labels_over_maximum_seen = false;
     let mut show_data_labels_over_maximum_written = false;
     let mut show_data_labels_over_maximum_inserted = false;
+    let mut view_3d_seen = false;
+    let mut view_3d_written = false;
+    let mut view_3d_inserted = false;
     let mut rounded_corners_seen = false;
     let mut rounded_corners_written = false;
     let mut rounded_corners_inserted = false;
@@ -26415,6 +26712,18 @@ fn patch_loaded_chart_model_xml(
                     && parent_name == Some(b"legend".as_slice())
                 {
                     legend_overlay_seen = true;
+                } else if local_name.as_slice() == b"view3D"
+                    && parent_name == Some(b"chart".as_slice())
+                {
+                    view_3d_seen = true;
+                    if let Some(Some(view_3d)) = expected_dirty_view_3d {
+                        if write_chart_view_3d_element(&mut writer, view_3d)? {
+                            view_3d_written = true;
+                        }
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    }
                 } else if local_name.as_slice() == b"plotVisOnly"
                     && parent_name == Some(b"chart".as_slice())
                 {
@@ -26590,6 +26899,14 @@ fn patch_loaded_chart_model_xml(
                     write_chart_text_element(&mut writer, "c:title", &title.text)?;
                     chart_title_inserted = true;
                     chart_title_text_written = true;
+                }
+                if local_name.as_slice() == b"plotArea"
+                    && !view_3d_seen
+                    && let Some(Some(view_3d)) = expected_dirty_view_3d
+                    && write_chart_view_3d_element(&mut writer, view_3d)?
+                {
+                    view_3d_inserted = true;
+                    view_3d_written = true;
                 }
                 if local_name.as_slice() == b"chart"
                     && parent_name == Some(b"chartSpace".as_slice())
@@ -28017,6 +28334,17 @@ fn patch_loaded_chart_model_xml(
                     && parent_name == Some(b"legend".as_slice())
                 {
                     legend_overlay_seen = true;
+                } else if local_name.as_slice() == b"view3D"
+                    && parent_name == Some(b"chart".as_slice())
+                {
+                    view_3d_seen = true;
+                    if let Some(Some(view_3d)) = expected_dirty_view_3d {
+                        if write_chart_view_3d_element(&mut writer, view_3d)? {
+                            view_3d_written = true;
+                        }
+                        buffer.clear();
+                        continue;
+                    }
                 } else if local_name.as_slice() == b"plotVisOnly"
                     && parent_name == Some(b"chart".as_slice())
                 {
@@ -28226,6 +28554,14 @@ fn patch_loaded_chart_model_xml(
                         }
                         None => {}
                     }
+                }
+                if local_name.as_slice() == b"plotArea"
+                    && !view_3d_seen
+                    && let Some(Some(view_3d)) = expected_dirty_view_3d
+                    && write_chart_view_3d_element(&mut writer, view_3d)?
+                {
+                    view_3d_inserted = true;
+                    view_3d_written = true;
                 }
                 if local_name.as_slice() == b"legendPos"
                     && expected_legend_position.is_some()
@@ -29773,6 +30109,11 @@ fn patch_loaded_chart_model_xml(
         (Some(_), false) => show_data_labels_over_maximum_inserted,
         (None, _) => true,
     };
+    let view_3d_matches = match expected_dirty_view_3d {
+        Some(Some(_)) if view_3d_seen => view_3d_written,
+        Some(Some(_)) => view_3d_inserted,
+        Some(None) | None => true,
+    };
     let rounded_corners_matches = match (expected_rounded_corners, rounded_corners_seen) {
         (Some(_), true) => rounded_corners_written,
         (Some(_), false) => rounded_corners_inserted,
@@ -30170,6 +30511,7 @@ fn patch_loaded_chart_model_xml(
         && display_blanks_as_matches
         && plot_visible_only_matches
         && show_data_labels_over_maximum_matches
+        && view_3d_matches
         && rounded_corners_matches
         && chart_style_matches
         && chart_protection_matches
@@ -30441,6 +30783,11 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             )
         })
         .unwrap_or_default();
+    let view_3d_xml = chart
+        .view_3d
+        .as_ref()
+        .and_then(chart_view_3d_xml_string)
+        .unwrap_or_default();
     let rounded_corners_xml = chart
         .rounded_corners
         .map(|value| {
@@ -30667,7 +31014,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  {rounded_corners_xml}{chart_style_xml}{chart_protection_xml}<c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{bar_shape_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{data_labels_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}{data_table_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}{show_data_labels_over_maximum_xml}</c:chart>
+  {rounded_corners_xml}{chart_style_xml}{chart_protection_xml}<c:chart>{title_xml}{view_3d_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{bar_shape_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{data_labels_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}{data_table_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}{show_data_labels_over_maximum_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -30987,6 +31334,26 @@ fn coerce_i32_arg(value: &OmValue, label: impl AsRef<str>) -> OmResult<i32> {
         ))),
         _ => Err(OmError::type_mismatch(format!("{label} must be numeric"))),
     }
+}
+
+fn coerce_chart_view_3d_integer(value: &OmValue, member: &str) -> OmResult<i32> {
+    let OmValue::Number(number) = value else {
+        return Err(OmError::type_mismatch(format!(
+            "Chart.{member} expects a numeric value"
+        )));
+    };
+    if !number.is_finite() {
+        return Err(OmError::invalid_argument(format!(
+            "Chart.{member} expects a finite numeric value"
+        )));
+    }
+    let value = number.round();
+    if value < i32::MIN as f64 || value > i32::MAX as f64 {
+        return Err(OmError::invalid_argument(format!(
+            "Chart.{member} value is out of range"
+        )));
+    }
+    Ok(value as i32)
 }
 
 fn coerce_positive_index(value: f64, label: &str) -> OmResult<u32> {
@@ -85888,7 +86255,7 @@ mod tests {
         .expect("chart xml utf8")
         .replace(
             "<c:chart>",
-            r#"<c:style val="4"/><c:protection><c:chartObject val="1"/><c:data val="1"/></c:protection><c:chart>"#,
+            r#"<c:style val="4"/><c:protection><c:chartObject val="1"/><c:data val="1"/></c:protection><c:chart><c:view3D><c:rotX val="12"/><c:hPercent val="222"/><c:rotY val="44"/></c:view3D>"#,
         )
         .replace(
             "</c:plotArea>",
@@ -86159,6 +86526,7 @@ mod tests {
         assert!(saved_chart_xml.contains("<c:protection>"));
         assert!(saved_chart_xml.contains(r#"<c:chartObject val="1"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:data val="1"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:hPercent val="222"/>"#));
         assert!(saved_chart_xml.contains("<c:dTable>"));
         assert!(saved_chart_xml.contains(r#"<c:showHorzBorder val="1"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:plotVisOnly val="0"/>"#));
@@ -86567,6 +86935,212 @@ mod tests {
         )
         .expect("disabled chart xml utf8");
         assert!(disabled_chart_xml.contains(r#"<c:showDLblsOverMax val="0"/>"#));
+    }
+
+    #[test]
+    fn chart_view_3d_properties_roundtrip_chart_xml() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "Elevation", &[])
+                .expect_err("Chart.Elevation rejects 2D charts")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_3D_COLUMN)),
+                &[],
+            )
+            .expect("set Chart.ChartType to 3D column");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "Elevation", &[])
+                    .expect("Chart.Elevation default")
+            ),
+            15.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "Rotation", &[])
+                    .expect("Chart.Rotation default")
+            ),
+            20.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "Perspective", &[])
+                    .expect("Chart.Perspective default")
+            ),
+            30.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "RightAngleAxes", &[])
+                .expect("Chart.RightAngleAxes default"),
+            OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_set(chart, "Elevation", OmValue::Number(34.0), &[])
+            .expect("set Chart.Elevation");
+        runtime
+            .dispatch_set(chart, "Rotation", OmValue::Number(30.6), &[])
+            .expect("set Chart.Rotation with rounding");
+        runtime
+            .dispatch_set(chart, "Perspective", OmValue::Number(70.0), &[])
+            .expect("set Chart.Perspective");
+        runtime
+            .dispatch_set(chart, "RightAngleAxes", OmValue::Bool(false), &[])
+            .expect("set Chart.RightAngleAxes");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "Elevation", &[])
+                    .expect("Chart.Elevation after set")
+            ),
+            34.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "Rotation", &[])
+                    .expect("Chart.Rotation after set")
+            ),
+            31.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(chart, "Perspective", OmValue::Number(101.0), &[])
+                .expect_err("Chart.Perspective rejects out-of-range values")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(chart, "RightAngleAxes", OmValue::Number(1.0), &[])
+                .expect_err("Chart.RightAngleAxes rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with chart 3D view");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:view3D>"));
+        assert!(saved_chart_xml.contains(r#"<c:rotX val="34"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:rotY val="31"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:rAngAx val="0"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:perspective val="70"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook with chart 3D view");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart, "Elevation", &[])
+                    .expect("reopened Chart.Elevation")
+            ),
+            34.0
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart, "Rotation", &[])
+                    .expect("reopened Chart.Rotation")
+            ),
+            31.0
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart, "Perspective", &[])
+                    .expect("reopened Chart.Perspective")
+            ),
+            70.0
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "RightAngleAxes", &[])
+                .expect("reopened Chart.RightAngleAxes"),
+            OmValue::Bool(false)
+        );
     }
 
     #[test]

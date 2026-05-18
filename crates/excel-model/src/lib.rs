@@ -16,8 +16,8 @@ pub use charts::{
     ChartCellMarkerXmlAttrs, ChartDataLabelPosition, ChartDataLabelsModel, ChartDataTableModel,
     ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerXmlAttrs, ChartModel, ChartObjectModel,
     ChartPointModel, ChartProtectionModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr,
-    ChartSplitType, ChartText, ChartTickLabelPosition, ChartTickMark, ChartType, DrawingModel,
-    DrawingObjectModel, LegendModel, SeriesModel, resolve_chart_source_reference,
+    ChartSplitType, ChartText, ChartTickLabelPosition, ChartTickMark, ChartType, ChartView3DModel,
+    DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, resolve_chart_source_reference,
     resolve_chart_source_reference_with_names,
 };
 pub use names::DefinedNameTable;
@@ -642,6 +642,8 @@ mod tests {
                 show_data_labels_over_maximum: None,
                 display_blanks_as: None,
                 plot_visible_only: None,
+                view_3d: None,
+                view_3d_dirty: false,
                 rounded_corners: None,
                 protection: None,
                 protection_dirty: false,
@@ -1237,6 +1239,8 @@ mod tests {
                 show_data_labels_over_maximum: None,
                 display_blanks_as: None,
                 plot_visible_only: None,
+                view_3d: None,
+                view_3d_dirty: false,
                 rounded_corners: None,
                 protection: None,
                 protection_dirty: false,

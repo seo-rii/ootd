@@ -7,9 +7,9 @@ use excel_model::{
     ChartCellMarkerXmlAttrs, ChartDataLabelPosition, ChartDataLabelsModel, ChartDataTableModel,
     ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerXmlAttrs, ChartModel, ChartObjectModel,
     ChartPointModel, ChartProtectionModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr,
-    ChartSplitType, ChartText, ChartTickLabelPosition, ChartTickMark, ChartType, DefinedNameTable,
-    DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
-    resolve_chart_source_reference_with_names,
+    ChartSplitType, ChartText, ChartTickLabelPosition, ChartTickMark, ChartType, ChartView3DModel,
+    DefinedNameTable, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState,
+    WorksheetData, resolve_chart_source_reference_with_names,
 };
 use office_common::{
     AbsoluteAnchor, CellError, CellMarker, CellValue, ChartId, ChartObjectId, DefinedName,
@@ -691,6 +691,7 @@ pub struct ChartPartSummary {
     pub show_data_labels_over_maximum: Option<bool>,
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,
+    pub view_3d: Option<ChartView3DModel>,
     pub rounded_corners: Option<bool>,
     pub protection: Option<ChartProtectionModel>,
     pub axes: Vec<ChartAxisSummary>,
@@ -3242,6 +3243,8 @@ fn build_chart_model_overlay(
                         .and_then(|summary| summary.show_data_labels_over_maximum),
                     display_blanks_as: summary.and_then(|summary| summary.display_blanks_as),
                     plot_visible_only: summary.and_then(|summary| summary.plot_visible_only),
+                    view_3d: summary.and_then(|summary| summary.view_3d),
+                    view_3d_dirty: false,
                     rounded_corners: summary.and_then(|summary| summary.rounded_corners),
                     protection: summary.and_then(|summary| summary.protection),
                     protection_dirty: false,
@@ -16175,6 +16178,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut show_data_labels_over_maximum = None;
     let mut display_blanks_as = None;
     let mut plot_visible_only = None;
+    let mut view_3d = None::<ChartView3DModel>;
     let mut rounded_corners = None;
     let mut protection = None::<ChartProtectionModel>;
     let mut axes = Vec::new();
@@ -16293,6 +16297,42 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
             Some("zero") => Some(ChartDisplayBlanksAs::Zero),
             Some(_) | None => current,
         })
+    };
+    let parse_chart_view_3d_child = |local_name: &[u8],
+                                     element: &BytesStart<'_>,
+                                     reader: &Reader<Cursor<&[u8]>>,
+                                     view_3d: &mut Option<ChartView3DModel>|
+     -> OmResult<()> {
+        let view_3d = view_3d.get_or_insert_with(ChartView3DModel::default);
+        match local_name {
+            b"rotX" => {
+                if let Some(value) = parse_i32_val_attr(element, reader, "3D view rotation X")?
+                    && (-90..=90).contains(&value)
+                {
+                    view_3d.elevation = Some(value as i16);
+                }
+            }
+            b"rotY" => {
+                if let Some(value) = parse_i32_val_attr(element, reader, "3D view rotation Y")?
+                    && (0..=360).contains(&value)
+                {
+                    view_3d.rotation = Some(value as u16);
+                }
+            }
+            b"rAngAx" => {
+                view_3d.right_angle_axes =
+                    Some(parse_bool_val_attr(element, reader)?.unwrap_or(true));
+            }
+            b"perspective" => {
+                if let Some(value) = parse_i32_val_attr(element, reader, "3D view perspective")?
+                    && (0..=100).contains(&value)
+                {
+                    view_3d.perspective = Some(value as u16);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     };
     let parse_tick_mark = |element: &BytesStart<'_>,
                            reader: &Reader<Cursor<&[u8]>>|
@@ -16472,6 +16512,14 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
                 if local_name == b"legend" {
                     has_legend = true;
+                }
+                if local_name == b"view3D"
+                    && element_path.last().is_some_and(|name| name == "chart")
+                {
+                    view_3d.get_or_insert_with(ChartView3DModel::default);
+                }
+                if element_path.last().is_some_and(|name| name == "view3D") {
+                    parse_chart_view_3d_child(local_name, &element, &reader, &mut view_3d)?;
                 }
                 if local_name == b"dTable"
                     && element_path.last().is_some_and(|name| name == "plotArea")
@@ -17222,6 +17270,14 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
                 if local_name == b"legend" {
                     has_legend = true;
+                }
+                if local_name == b"view3D"
+                    && element_path.last().is_some_and(|name| name == "chart")
+                {
+                    view_3d.get_or_insert_with(ChartView3DModel::default);
+                }
+                if element_path.last().is_some_and(|name| name == "view3D") {
+                    parse_chart_view_3d_child(local_name, &element, &reader, &mut view_3d)?;
                 }
                 if local_name == b"dTable"
                     && element_path.last().is_some_and(|name| name == "plotArea")
@@ -18120,6 +18176,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         show_data_labels_over_maximum,
         display_blanks_as,
         plot_visible_only,
+        view_3d,
         rounded_corners,
         protection,
         axes,
@@ -21635,9 +21692,9 @@ mod tests {
         BorderSummary, COMMENTS_RELATIONSHIP_TYPE, CellData, ChartAxisCrosses, ChartAxisKind,
         ChartAxisScaleType, ChartAxisSummary, ChartCacheKindSummary, ChartCacheSummary,
         ChartDataLabelPosition, ChartDataLabelsSummary, ChartLegendPosition, ChartSeriesSummary,
-        ChartSupportRelationshipBinding, ChartTickLabelPosition, ChartTickMark, CommentPartSummary,
-        DrawingAnchorKind, DrawingAnchorSummary, DrawingCellMarkerSummary, DrawingPointSummary,
-        DrawingSizeSummary, DxfSummary, FileFormat, FillSummary, FontSummary,
+        ChartSupportRelationshipBinding, ChartTickLabelPosition, ChartTickMark, ChartView3DModel,
+        CommentPartSummary, DrawingAnchorKind, DrawingAnchorSummary, DrawingCellMarkerSummary,
+        DrawingPointSummary, DrawingSizeSummary, DxfSummary, FileFormat, FillSummary, FontSummary,
         HYPERLINK_RELATIONSHIP_TYPE, OpcPackage, STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE,
         VML_DRAWING_RELATIONSHIP_TYPE, WORKBOOK_RELS_PART_NAME, WorksheetCommentSummary,
         WorksheetData, WorksheetHyperlinkBinding, WorksheetHyperlinkSummary,
@@ -22674,6 +22731,7 @@ mod tests {
   <c:roundedCorners val="1"/>
   <c:chart>
     <c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue Trend</a:t></a:r></a:p></c:rich></c:tx></c:title>
+    <c:view3D><c:rotX val="12"/><c:rotY val="34"/><c:rAngAx val="0"/><c:perspective val="45"/></c:view3D>
     <c:plotArea>
       <c:barChart>
         <c:varyColors val="1"/>
@@ -22952,6 +23010,15 @@ mod tests {
         );
         assert_eq!(chart_summary.plot_visible_only, Some(false));
         assert_eq!(chart_summary.show_data_labels_over_maximum, Some(true));
+        assert_eq!(
+            chart_summary.view_3d,
+            Some(ChartView3DModel {
+                elevation: Some(12),
+                rotation: Some(34),
+                right_angle_axes: Some(false),
+                perspective: Some(45),
+            })
+        );
         assert_eq!(chart_summary.rounded_corners, Some(true));
         assert_eq!(
             chart_summary.display_blanks_as,
@@ -23180,6 +23247,16 @@ mod tests {
         assert!(!series_data_labels.dirty);
         assert_eq!(chart_model.plot_visible_only, Some(false));
         assert_eq!(chart_model.show_data_labels_over_maximum, Some(true));
+        assert_eq!(
+            chart_model.view_3d,
+            Some(ChartView3DModel {
+                elevation: Some(12),
+                rotation: Some(34),
+                right_angle_axes: Some(false),
+                perspective: Some(45),
+            })
+        );
+        assert!(!chart_model.view_3d_dirty);
         assert_eq!(chart_model.rounded_corners, Some(true));
         assert_eq!(
             chart_model.display_blanks_as,
