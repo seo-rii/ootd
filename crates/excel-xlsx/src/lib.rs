@@ -3,7 +3,7 @@ use std::io::{Cursor, Write};
 
 use excel_model::{
     AxisModel, CellData, ChartAxisCrosses, ChartAxisDisplayUnit, ChartAxisKind, ChartAxisScaleType,
-    ChartAxisTimeUnit, ChartBuiltInDisplayUnit, ChartCacheKind, ChartCacheSnapshot,
+    ChartAxisTimeUnit, ChartBarShape, ChartBuiltInDisplayUnit, ChartCacheKind, ChartCacheSnapshot,
     ChartCellMarkerXmlAttrs, ChartDataLabelPosition, ChartDataLabelsModel, ChartDataTableModel,
     ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerXmlAttrs, ChartModel, ChartObjectModel,
     ChartPointModel, ChartProtectionModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr,
@@ -659,7 +659,7 @@ pub struct ChartPartSummary {
     pub style: Option<u16>,
     pub bar_direction: Option<String>,
     pub chart_grouping: Option<String>,
-    pub bar_shape: Option<String>,
+    pub bar_shape: Option<ChartBarShape>,
     pub line_has_markers: Option<bool>,
     pub scatter_style: Option<String>,
     pub radar_style: Option<String>,
@@ -3219,6 +3219,7 @@ fn build_chart_model_overlay(
                     gap_width: summary.and_then(|summary| summary.gap_width),
                     gap_depth: summary.and_then(|summary| summary.gap_depth),
                     overlap: summary.and_then(|summary| summary.overlap),
+                    bar_shape: summary.and_then(|summary| summary.bar_shape),
                     has_series_lines: summary.and_then(|summary| summary.has_series_lines),
                     has_drop_lines: summary.and_then(|summary| summary.has_drop_lines),
                     has_hi_lo_lines: summary.and_then(|summary| summary.has_hi_lo_lines),
@@ -3467,35 +3468,94 @@ fn chart_type_from_summary(summary: Option<&ChartPartSummary>) -> ChartType {
         Some("bar3DChart") => match (
             summary.bar_direction.as_deref(),
             summary.chart_grouping.as_deref(),
-            summary.bar_shape.as_deref(),
+            summary.bar_shape,
         ) {
-            (Some("col"), Some("stacked"), Some("cylinder")) => ChartType::CylinderColumnStacked,
-            (Some("col"), Some("percentStacked"), Some("cylinder")) => {
+            (Some("col"), Some("stacked"), Some(ChartBarShape::Cylinder)) => {
+                ChartType::CylinderColumnStacked
+            }
+            (Some("col"), Some("percentStacked"), Some(ChartBarShape::Cylinder)) => {
                 ChartType::CylinderColumnStacked100
             }
-            (Some("col"), Some("clustered"), Some("cylinder")) => {
+            (Some("col"), Some("clustered"), Some(ChartBarShape::Cylinder)) => {
                 ChartType::CylinderColumnClustered
             }
-            (Some("col"), _, Some("cylinder")) => ChartType::CylinderColumn,
-            (_, Some("stacked"), Some("cylinder")) => ChartType::CylinderBarStacked,
-            (_, Some("percentStacked"), Some("cylinder")) => ChartType::CylinderBarStacked100,
-            (_, _, Some("cylinder")) => ChartType::CylinderBarClustered,
-            (Some("col"), Some("stacked"), Some("cone")) => ChartType::ConeColumnStacked,
-            (Some("col"), Some("percentStacked"), Some("cone")) => ChartType::ConeColumnStacked100,
-            (Some("col"), Some("clustered"), Some("cone")) => ChartType::ConeColumnClustered,
-            (Some("col"), _, Some("cone")) => ChartType::ConeColumn,
-            (_, Some("stacked"), Some("cone")) => ChartType::ConeBarStacked,
-            (_, Some("percentStacked"), Some("cone")) => ChartType::ConeBarStacked100,
-            (_, _, Some("cone")) => ChartType::ConeBarClustered,
-            (Some("col"), Some("stacked"), Some("pyramid")) => ChartType::PyramidColumnStacked,
-            (Some("col"), Some("percentStacked"), Some("pyramid")) => {
-                ChartType::PyramidColumnStacked100
+            (Some("col"), _, Some(ChartBarShape::Cylinder)) => ChartType::CylinderColumn,
+            (_, Some("stacked"), Some(ChartBarShape::Cylinder)) => ChartType::CylinderBarStacked,
+            (_, Some("percentStacked"), Some(ChartBarShape::Cylinder)) => {
+                ChartType::CylinderBarStacked100
             }
-            (Some("col"), Some("clustered"), Some("pyramid")) => ChartType::PyramidColumnClustered,
-            (Some("col"), _, Some("pyramid")) => ChartType::PyramidColumn,
-            (_, Some("stacked"), Some("pyramid")) => ChartType::PyramidBarStacked,
-            (_, Some("percentStacked"), Some("pyramid")) => ChartType::PyramidBarStacked100,
-            (_, _, Some("pyramid")) => ChartType::PyramidBarClustered,
+            (_, _, Some(ChartBarShape::Cylinder)) => ChartType::CylinderBarClustered,
+            (
+                Some("col"),
+                Some("stacked"),
+                Some(ChartBarShape::ConeToPoint | ChartBarShape::ConeToMax),
+            ) => ChartType::ConeColumnStacked,
+            (
+                Some("col"),
+                Some("percentStacked"),
+                Some(ChartBarShape::ConeToPoint | ChartBarShape::ConeToMax),
+            ) => ChartType::ConeColumnStacked100,
+            (
+                Some("col"),
+                Some("clustered"),
+                Some(ChartBarShape::ConeToPoint | ChartBarShape::ConeToMax),
+            ) => ChartType::ConeColumnClustered,
+            (Some("col"), _, Some(ChartBarShape::ConeToPoint | ChartBarShape::ConeToMax)) => {
+                ChartType::ConeColumn
+            }
+            (_, Some("stacked"), Some(ChartBarShape::ConeToPoint | ChartBarShape::ConeToMax)) => {
+                ChartType::ConeBarStacked
+            }
+            (
+                _,
+                Some("percentStacked"),
+                Some(ChartBarShape::ConeToPoint | ChartBarShape::ConeToMax),
+            ) => ChartType::ConeBarStacked100,
+            (_, _, Some(ChartBarShape::ConeToPoint | ChartBarShape::ConeToMax)) => {
+                ChartType::ConeBarClustered
+            }
+            (
+                Some("col"),
+                Some("stacked"),
+                Some(ChartBarShape::PyramidToPoint | ChartBarShape::PyramidToMax),
+            ) => ChartType::PyramidColumnStacked,
+            (
+                Some("col"),
+                Some("percentStacked"),
+                Some(ChartBarShape::PyramidToPoint | ChartBarShape::PyramidToMax),
+            ) => ChartType::PyramidColumnStacked100,
+            (
+                Some("col"),
+                Some("clustered"),
+                Some(ChartBarShape::PyramidToPoint | ChartBarShape::PyramidToMax),
+            ) => ChartType::PyramidColumnClustered,
+            (Some("col"), _, Some(ChartBarShape::PyramidToPoint | ChartBarShape::PyramidToMax)) => {
+                ChartType::PyramidColumn
+            }
+            (
+                _,
+                Some("stacked"),
+                Some(ChartBarShape::PyramidToPoint | ChartBarShape::PyramidToMax),
+            ) => ChartType::PyramidBarStacked,
+            (
+                _,
+                Some("percentStacked"),
+                Some(ChartBarShape::PyramidToPoint | ChartBarShape::PyramidToMax),
+            ) => ChartType::PyramidBarStacked100,
+            (_, _, Some(ChartBarShape::PyramidToPoint | ChartBarShape::PyramidToMax)) => {
+                ChartType::PyramidBarClustered
+            }
+            (Some("col"), Some("stacked"), Some(ChartBarShape::Box)) => ChartType::Column3DStacked,
+            (Some("col"), Some("percentStacked"), Some(ChartBarShape::Box)) => {
+                ChartType::Column3DStacked100
+            }
+            (Some("col"), Some("clustered"), Some(ChartBarShape::Box)) => {
+                ChartType::Column3DClustered
+            }
+            (Some("col"), _, Some(ChartBarShape::Box)) => ChartType::Column3D,
+            (_, Some("stacked"), Some(ChartBarShape::Box)) => ChartType::Bar3DStacked,
+            (_, Some("percentStacked"), Some(ChartBarShape::Box)) => ChartType::Bar3DStacked100,
+            (_, _, Some(ChartBarShape::Box)) => ChartType::Bar3DClustered,
             (Some("col"), Some("stacked"), _) => ChartType::Column3DStacked,
             (Some("col"), Some("percentStacked"), _) => ChartType::Column3DStacked100,
             (Some("col"), Some("clustered"), _) => ChartType::Column3DClustered,
@@ -16147,7 +16207,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut chart_style = None::<u16>;
     let mut bar_direction = None::<String>;
     let mut chart_grouping = None::<String>;
-    let mut bar_shape = None::<String>;
+    let mut bar_shape = None::<ChartBarShape>;
     let mut line_has_markers = None;
     let mut scatter_style = None::<String>;
     let mut radar_style = None::<String>;
@@ -16778,7 +16838,12 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(value) = parse_string_val_attr(&element, &reader)?
                 {
                     bar_shape = match value.as_str() {
-                        "box" | "cone" | "cylinder" | "pyramid" => Some(value),
+                        "box" => Some(ChartBarShape::Box),
+                        "pyramid" => Some(ChartBarShape::PyramidToPoint),
+                        "pyramidToMax" => Some(ChartBarShape::PyramidToMax),
+                        "cylinder" => Some(ChartBarShape::Cylinder),
+                        "cone" => Some(ChartBarShape::ConeToPoint),
+                        "coneToMax" => Some(ChartBarShape::ConeToMax),
                         _ => bar_shape,
                     };
                 }
@@ -17691,7 +17756,12 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(value) = parse_string_val_attr(&element, &reader)?
                 {
                     bar_shape = match value.as_str() {
-                        "box" | "cone" | "cylinder" | "pyramid" => Some(value),
+                        "box" => Some(ChartBarShape::Box),
+                        "pyramid" => Some(ChartBarShape::PyramidToPoint),
+                        "pyramidToMax" => Some(ChartBarShape::PyramidToMax),
+                        "cylinder" => Some(ChartBarShape::Cylinder),
+                        "cone" => Some(ChartBarShape::ConeToPoint),
+                        "coneToMax" => Some(ChartBarShape::ConeToMax),
                         _ => bar_shape,
                     };
                 }

@@ -12,7 +12,7 @@ mod names;
 
 pub use charts::{
     AxisModel, ChartAxisCrosses, ChartAxisDisplayUnit, ChartAxisKind, ChartAxisScaleType,
-    ChartAxisTimeUnit, ChartBuiltInDisplayUnit, ChartCacheKind, ChartCacheSnapshot,
+    ChartAxisTimeUnit, ChartBarShape, ChartBuiltInDisplayUnit, ChartCacheKind, ChartCacheSnapshot,
     ChartCellMarkerXmlAttrs, ChartDataLabelPosition, ChartDataLabelsModel, ChartDataTableModel,
     ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerXmlAttrs, ChartModel, ChartObjectModel,
     ChartPointModel, ChartProtectionModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr,
@@ -623,6 +623,7 @@ mod tests {
                 gap_width: None,
                 gap_depth: None,
                 overlap: None,
+                bar_shape: None,
                 has_series_lines: None,
                 has_drop_lines: None,
                 has_hi_lo_lines: None,
@@ -1221,6 +1222,7 @@ mod tests {
                 gap_width: None,
                 gap_depth: None,
                 overlap: None,
+                bar_shape: None,
                 has_series_lines: None,
                 has_drop_lines: None,
                 has_hi_lo_lines: None,

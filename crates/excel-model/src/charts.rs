@@ -25,6 +25,7 @@ pub struct ChartModel {
     pub gap_width: Option<u16>,
     pub gap_depth: Option<u16>,
     pub overlap: Option<i16>,
+    pub bar_shape: Option<ChartBarShape>,
     pub has_series_lines: Option<bool>,
     pub has_drop_lines: Option<bool>,
     pub has_hi_lo_lines: Option<bool>,
@@ -156,6 +157,16 @@ pub enum ChartDisplayBlanksAs {
     Gap,
     Span,
     Zero,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartBarShape {
+    Box,
+    PyramidToPoint,
+    PyramidToMax,
+    Cylinder,
+    ConeToPoint,
+    ConeToMax,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

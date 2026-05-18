@@ -1,11 +1,11 @@
 use excel_model::{
     AxisModel, ChartAxisCrosses, ChartAxisDisplayUnit, ChartAxisKind, ChartAxisScaleType,
-    ChartAxisTimeUnit, ChartBuiltInDisplayUnit, ChartDataLabelPosition, ChartDataLabelsModel,
-    ChartDataTableModel, ChartDisplayBlanksAs, ChartLegendPosition, ChartModel, ChartObjectModel,
-    ChartProtectionModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartSplitType,
-    ChartText, ChartTickLabelPosition, ChartTickMark, ChartType, ChartView3DModel, DrawingModel,
-    DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
-    resolve_chart_source_reference_with_names,
+    ChartAxisTimeUnit, ChartBarShape, ChartBuiltInDisplayUnit, ChartDataLabelPosition,
+    ChartDataLabelsModel, ChartDataTableModel, ChartDisplayBlanksAs, ChartLegendPosition,
+    ChartModel, ChartObjectModel, ChartProtectionModel, ChartSheetBinding, ChartSizeRepresents,
+    ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition, ChartTickMark, ChartType,
+    ChartView3DModel, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState,
+    WorksheetData, resolve_chart_source_reference_with_names,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
@@ -125,6 +125,12 @@ const XL_PRIMARY: u32 = 1;
 const XL_SECONDARY: u32 = 2;
 const XL_PLOT_BY_ROWS: i32 = 1;
 const XL_PLOT_BY_COLUMNS: i32 = 2;
+const XL_BOX: i32 = 0;
+const XL_PYRAMID_TO_POINT: i32 = 1;
+const XL_PYRAMID_TO_MAX: i32 = 2;
+const XL_CYLINDER: i32 = 3;
+const XL_CONE_TO_POINT: i32 = 4;
+const XL_CONE_TO_MAX: i32 = 5;
 const XL_NOT_PLOTTED: i32 = 1;
 const XL_ZERO: i32 = 2;
 const XL_INTERPOLATED: i32 = 3;
@@ -4654,6 +4660,7 @@ impl ExcelRuntime {
                                 || OmError::new(OmErrorCode::NotFound, "chart not found"),
                             )?;
                             if chart.chart_type != chart_type {
+                                let chart_bar_shape = chart_bar_shape_from_chart_type(&chart_type);
                                 let chart_type_has_axes = chart_type_has_axes(&chart_type);
                                 let chart_type_bubble_3d = match chart_type {
                                     ChartType::Bubble => Some(false),
@@ -4672,6 +4679,7 @@ impl ExcelRuntime {
                                     _ => None,
                                 };
                                 chart.chart_type = chart_type;
+                                chart.bar_shape = chart_bar_shape;
                                 if !chart_type_uses_bubble_size(&chart.chart_type) {
                                     for series in &mut chart.series {
                                         series.bubble_size = None;
@@ -4855,6 +4863,37 @@ impl ExcelRuntime {
                         let value = value as u16;
                         if chart.gap_depth != Some(value) {
                             chart.gap_depth = Some(value);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "BarShape" => {
+                        let bar_shape = chart_bar_shape_from_excel_value(coerce_i32_arg(
+                            &value,
+                            "Chart.BarShape",
+                        )?)?;
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        ensure_chart_supports_bar_shape(&chart.chart_type)?;
+                        let chart_type = chart_type_with_bar_shape(&chart.chart_type, bar_shape)?;
+                        if chart.bar_shape != Some(bar_shape) || chart.chart_type != chart_type {
+                            chart.bar_shape = Some(bar_shape);
+                            chart.chart_type = chart_type;
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -12150,6 +12189,7 @@ impl ExcelRuntime {
                         "ChartType"
                             | "ChartStyle"
                             | "Index"
+                            | "BarShape"
                             | "Elevation"
                             | "HeightPercent"
                             | "Rotation"
@@ -14585,6 +14625,7 @@ impl ExcelRuntime {
                             gap_width: None,
                             gap_depth: None,
                             overlap: None,
+                            bar_shape: None,
                             has_series_lines: None,
                             has_drop_lines: None,
                             has_hi_lo_lines: None,
@@ -14907,6 +14948,20 @@ impl ExcelRuntime {
                 }
                 Ok(OmValue::Number(f64::from(
                     self.chart_model(workbook, chart_id)?.style.unwrap_or(0),
+                )))
+            }
+            "BarShape" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Chart.BarShape does not accept arguments",
+                    ));
+                }
+                let chart = self.chart_model(workbook, chart_id)?;
+                ensure_chart_supports_bar_shape(&chart.chart_type)?;
+                Ok(OmValue::Number(f64::from(
+                    chart_effective_bar_shape(chart)
+                        .map(chart_bar_shape_to_excel_value)
+                        .unwrap_or(XL_BOX),
                 )))
             }
             "Elevation" | "HeightPercent" | "Rotation" | "DepthPercent" | "Perspective" => {
@@ -18486,6 +18541,7 @@ impl ExcelRuntime {
                         gap_width: None,
                         gap_depth: None,
                         overlap: None,
+                        bar_shape: None,
                         has_series_lines: None,
                         has_drop_lines: None,
                         has_hi_lo_lines: None,
@@ -24264,31 +24320,150 @@ fn chart_type_grouping_xml_value(chart_type: &ChartType) -> Option<&'static str>
     }
 }
 
-fn chart_type_bar_shape_xml_value(chart_type: &ChartType) -> Option<&'static str> {
+fn chart_bar_shape_xml_value(shape: ChartBarShape) -> &'static str {
+    match shape {
+        ChartBarShape::Box => "box",
+        ChartBarShape::PyramidToPoint => "pyramid",
+        ChartBarShape::PyramidToMax => "pyramidToMax",
+        ChartBarShape::Cylinder => "cylinder",
+        ChartBarShape::ConeToPoint => "cone",
+        ChartBarShape::ConeToMax => "coneToMax",
+    }
+}
+
+fn chart_bar_shape_to_excel_value(shape: ChartBarShape) -> i32 {
+    match shape {
+        ChartBarShape::Box => XL_BOX,
+        ChartBarShape::PyramidToPoint => XL_PYRAMID_TO_POINT,
+        ChartBarShape::PyramidToMax => XL_PYRAMID_TO_MAX,
+        ChartBarShape::Cylinder => XL_CYLINDER,
+        ChartBarShape::ConeToPoint => XL_CONE_TO_POINT,
+        ChartBarShape::ConeToMax => XL_CONE_TO_MAX,
+    }
+}
+
+fn chart_bar_shape_from_excel_value(value: i32) -> OmResult<ChartBarShape> {
+    match value {
+        XL_BOX => Ok(ChartBarShape::Box),
+        XL_PYRAMID_TO_POINT => Ok(ChartBarShape::PyramidToPoint),
+        XL_PYRAMID_TO_MAX => Ok(ChartBarShape::PyramidToMax),
+        XL_CYLINDER => Ok(ChartBarShape::Cylinder),
+        XL_CONE_TO_POINT => Ok(ChartBarShape::ConeToPoint),
+        XL_CONE_TO_MAX => Ok(ChartBarShape::ConeToMax),
+        _ => Err(OmError::unsupported(
+            "Chart.BarShape supports xlBox, xlPyramidToPoint, xlPyramidToMax, xlCylinder, xlConeToPoint, and xlConeToMax",
+        )),
+    }
+}
+
+fn chart_bar_shape_from_chart_type(chart_type: &ChartType) -> Option<ChartBarShape> {
     match chart_type {
+        ChartType::Bar3DClustered
+        | ChartType::Bar3DStacked
+        | ChartType::Bar3DStacked100
+        | ChartType::Column3D
+        | ChartType::Column3DClustered
+        | ChartType::Column3DStacked
+        | ChartType::Column3DStacked100 => Some(ChartBarShape::Box),
         ChartType::CylinderColumn
         | ChartType::CylinderColumnClustered
         | ChartType::CylinderColumnStacked
         | ChartType::CylinderColumnStacked100
         | ChartType::CylinderBarClustered
         | ChartType::CylinderBarStacked
-        | ChartType::CylinderBarStacked100 => Some("cylinder"),
+        | ChartType::CylinderBarStacked100 => Some(ChartBarShape::Cylinder),
         ChartType::ConeColumn
         | ChartType::ConeColumnClustered
         | ChartType::ConeColumnStacked
         | ChartType::ConeColumnStacked100
         | ChartType::ConeBarClustered
         | ChartType::ConeBarStacked
-        | ChartType::ConeBarStacked100 => Some("cone"),
+        | ChartType::ConeBarStacked100 => Some(ChartBarShape::ConeToPoint),
         ChartType::PyramidColumn
         | ChartType::PyramidColumnClustered
         | ChartType::PyramidColumnStacked
         | ChartType::PyramidColumnStacked100
         | ChartType::PyramidBarClustered
         | ChartType::PyramidBarStacked
-        | ChartType::PyramidBarStacked100 => Some("pyramid"),
+        | ChartType::PyramidBarStacked100 => Some(ChartBarShape::PyramidToPoint),
         _ => None,
     }
+}
+
+fn chart_effective_bar_shape(chart: &ChartModel) -> Option<ChartBarShape> {
+    if chart_type_supports_bar_shape(&chart.chart_type) {
+        chart
+            .bar_shape
+            .or_else(|| chart_bar_shape_from_chart_type(&chart.chart_type))
+    } else {
+        None
+    }
+}
+
+fn chart_type_with_bar_shape(
+    chart_type: &ChartType,
+    bar_shape: ChartBarShape,
+) -> OmResult<ChartType> {
+    let direction = chart_type_bar_direction_xml_value(chart_type).ok_or_else(|| {
+        OmError::unsupported("Chart.BarShape is only supported for 3D bar and column chart types")
+    })?;
+    let grouping = chart_type_grouping_xml_value(chart_type).unwrap_or("clustered");
+    Ok(match (direction, grouping, bar_shape) {
+        ("col", "stacked", ChartBarShape::Box) => ChartType::Column3DStacked,
+        ("col", "percentStacked", ChartBarShape::Box) => ChartType::Column3DStacked100,
+        ("col", "clustered", ChartBarShape::Box) => ChartType::Column3DClustered,
+        ("col", _, ChartBarShape::Box) => ChartType::Column3D,
+        (_, "stacked", ChartBarShape::Box) => ChartType::Bar3DStacked,
+        (_, "percentStacked", ChartBarShape::Box) => ChartType::Bar3DStacked100,
+        (_, _, ChartBarShape::Box) => ChartType::Bar3DClustered,
+        ("col", "stacked", ChartBarShape::Cylinder) => ChartType::CylinderColumnStacked,
+        ("col", "percentStacked", ChartBarShape::Cylinder) => ChartType::CylinderColumnStacked100,
+        ("col", "clustered", ChartBarShape::Cylinder) => ChartType::CylinderColumnClustered,
+        ("col", _, ChartBarShape::Cylinder) => ChartType::CylinderColumn,
+        (_, "stacked", ChartBarShape::Cylinder) => ChartType::CylinderBarStacked,
+        (_, "percentStacked", ChartBarShape::Cylinder) => ChartType::CylinderBarStacked100,
+        (_, _, ChartBarShape::Cylinder) => ChartType::CylinderBarClustered,
+        ("col", "stacked", ChartBarShape::ConeToPoint | ChartBarShape::ConeToMax) => {
+            ChartType::ConeColumnStacked
+        }
+        ("col", "percentStacked", ChartBarShape::ConeToPoint | ChartBarShape::ConeToMax) => {
+            ChartType::ConeColumnStacked100
+        }
+        ("col", "clustered", ChartBarShape::ConeToPoint | ChartBarShape::ConeToMax) => {
+            ChartType::ConeColumnClustered
+        }
+        ("col", _, ChartBarShape::ConeToPoint | ChartBarShape::ConeToMax) => ChartType::ConeColumn,
+        (_, "stacked", ChartBarShape::ConeToPoint | ChartBarShape::ConeToMax) => {
+            ChartType::ConeBarStacked
+        }
+        (_, "percentStacked", ChartBarShape::ConeToPoint | ChartBarShape::ConeToMax) => {
+            ChartType::ConeBarStacked100
+        }
+        (_, _, ChartBarShape::ConeToPoint | ChartBarShape::ConeToMax) => {
+            ChartType::ConeBarClustered
+        }
+        ("col", "stacked", ChartBarShape::PyramidToPoint | ChartBarShape::PyramidToMax) => {
+            ChartType::PyramidColumnStacked
+        }
+        ("col", "percentStacked", ChartBarShape::PyramidToPoint | ChartBarShape::PyramidToMax) => {
+            ChartType::PyramidColumnStacked100
+        }
+        ("col", "clustered", ChartBarShape::PyramidToPoint | ChartBarShape::PyramidToMax) => {
+            ChartType::PyramidColumnClustered
+        }
+        ("col", _, ChartBarShape::PyramidToPoint | ChartBarShape::PyramidToMax) => {
+            ChartType::PyramidColumn
+        }
+        (_, "stacked", ChartBarShape::PyramidToPoint | ChartBarShape::PyramidToMax) => {
+            ChartType::PyramidBarStacked
+        }
+        (_, "percentStacked", ChartBarShape::PyramidToPoint | ChartBarShape::PyramidToMax) => {
+            ChartType::PyramidBarStacked100
+        }
+        (_, _, ChartBarShape::PyramidToPoint | ChartBarShape::PyramidToMax) => {
+            ChartType::PyramidBarClustered
+        }
+    })
 }
 
 fn chart_type_line_marker_xml_value(chart_type: &ChartType) -> Option<&'static str> {
@@ -24474,6 +24649,20 @@ fn ensure_chart_supports_gap_depth(chart_type: &ChartType) -> OmResult<()> {
             "Chart.GapDepth is only supported for 3D area, bar, column, and line chart types",
         ))
     }
+}
+
+fn ensure_chart_supports_bar_shape(chart_type: &ChartType) -> OmResult<()> {
+    if chart_type_supports_bar_shape(chart_type) {
+        Ok(())
+    } else {
+        Err(OmError::unsupported(
+            "Chart.BarShape is only supported for 3D bar and column chart types",
+        ))
+    }
+}
+
+fn chart_type_supports_bar_shape(chart_type: &ChartType) -> bool {
+    matches!(chart_group_xml_name(chart_type), Some("bar3DChart"))
 }
 
 fn chart_type_supports_gap_depth(chart_type: &ChartType) -> bool {
@@ -25458,7 +25647,7 @@ fn patch_loaded_chart_model_xml(
         .map(|value| if value { "1" } else { "0" });
     let expected_bar_direction = chart_type_bar_direction_xml_value(&chart.chart_type);
     let expected_chart_grouping = chart_type_grouping_xml_value(&chart.chart_type);
-    let expected_bar_shape = chart_type_bar_shape_xml_value(&chart.chart_type);
+    let expected_bar_shape = chart_effective_bar_shape(chart).map(chart_bar_shape_xml_value);
     let expected_line_marker = chart_type_line_marker_xml_value(&chart.chart_type);
     let expected_scatter_style = chart_type_scatter_style_xml_value(&chart.chart_type);
     let expected_radar_style = chart_type_radar_style_xml_value(&chart.chart_type);
@@ -30761,7 +30950,8 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     let chart_grouping_xml = chart_type_grouping_xml_value(&chart.chart_type)
         .map(|value| format!(r#"<c:grouping val="{value}"/>"#))
         .unwrap_or_default();
-    let bar_shape_xml = chart_type_bar_shape_xml_value(&chart.chart_type)
+    let bar_shape_xml = chart_effective_bar_shape(chart)
+        .map(chart_bar_shape_xml_value)
         .map(|value| format!(r#"<c:shape val="{value}"/>"#))
         .unwrap_or_default();
     let line_marker_xml = chart_type_line_marker_xml_value(&chart.chart_type)
@@ -87403,6 +87593,146 @@ mod tests {
                 .dispatch_get(reopened_chart, "RightAngleAxes", &[])
                 .expect("reopened Chart.RightAngleAxes"),
             OmValue::Bool(false)
+        );
+    }
+
+    #[test]
+    fn chart_bar_shape_roundtrips_exact_shape_values() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "BarShape", &[])
+                .expect_err("Chart.BarShape rejects 2D charts")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_3D_COLUMN)),
+                &[],
+            )
+            .expect("set Chart.ChartType to 3D column");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "BarShape", &[])
+                    .expect("Chart.BarShape default")
+            ),
+            f64::from(super::XL_BOX)
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "BarShape",
+                OmValue::Number(f64::from(super::XL_CONE_TO_MAX)),
+                &[],
+            )
+            .expect("set Chart.BarShape to xlConeToMax");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "BarShape", &[])
+                    .expect("Chart.BarShape after set")
+            ),
+            f64::from(super::XL_CONE_TO_MAX)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(chart, "BarShape", OmValue::Number(6.0), &[])
+                .expect_err("Chart.BarShape rejects unsupported enum values")
+                .code,
+            OmErrorCode::Unsupported
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with chart bar shape");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:bar3DChart>"));
+        assert!(saved_chart_xml.contains(r#"<c:shape val="coneToMax"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook with chart bar shape");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart, "BarShape", &[])
+                    .expect("reopened Chart.BarShape")
+            ),
+            f64::from(super::XL_CONE_TO_MAX)
         );
     }
 
