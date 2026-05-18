@@ -1,9 +1,9 @@
 use excel_model::{
     AxisModel, ChartAxisCrosses, ChartAxisDisplayUnit, ChartAxisKind, ChartAxisScaleType,
     ChartAxisTimeUnit, ChartBuiltInDisplayUnit, ChartDataLabelPosition, ChartDataLabelsModel,
-    ChartDisplayBlanksAs, ChartLegendPosition, ChartModel, ChartObjectModel, ChartProtectionModel,
-    ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText,
-    ChartTickLabelPosition, ChartTickMark, ChartType, DrawingModel, DrawingObjectModel,
+    ChartDataTableModel, ChartDisplayBlanksAs, ChartLegendPosition, ChartModel, ChartObjectModel,
+    ChartProtectionModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartSplitType,
+    ChartText, ChartTickLabelPosition, ChartTickMark, ChartType, DrawingModel, DrawingObjectModel,
     LegendModel, SeriesModel, WorkbookState, WorksheetData,
     resolve_chart_source_reference_with_names,
 };
@@ -540,6 +540,10 @@ enum RuntimeObjectKind {
         chart_id: ChartId,
     },
     Legend {
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+    },
+    DataTable {
         workbook: WorkbookHandle,
         chart_id: ChartId,
     },
@@ -1979,6 +1983,9 @@ impl ExcelRuntime {
             }
             RuntimeObjectKind::Legend { workbook, chart_id } => {
                 self.dispatch_get_legend(workbook, chart_id, member, args)
+            }
+            RuntimeObjectKind::DataTable { workbook, chart_id } => {
+                self.dispatch_get_data_table(workbook, chart_id, member, args)
             }
             RuntimeObjectKind::DataLabels {
                 workbook,
@@ -4887,27 +4894,40 @@ impl ExcelRuntime {
                                 "Chart.HasDataTable expects a boolean value",
                             ));
                         };
-                        let runtime = self.runtime_workbook_mut(workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
-                        }
-                        let chart =
-                            runtime
-                                .loaded
-                                .state
-                                .charts
-                                .get_mut(&chart_id)
-                                .ok_or_else(|| {
-                                    OmError::new(OmErrorCode::NotFound, "chart not found")
-                                })?;
-                        if chart.has_data_table != Some(has_data_table) {
-                            chart.has_data_table = Some(has_data_table);
-                            chart.data_table_dirty = true;
-                            chart.dirty = true;
-                            runtime.dirty = true;
+                        let removed_data_table = {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            let removed_data_table = chart.data_table.is_some() && !has_data_table;
+                            let changed = if has_data_table {
+                                if chart.data_table.is_none() {
+                                    chart.data_table = Some(ChartDataTableModel::default());
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else if chart.data_table.is_some() {
+                                chart.data_table = None;
+                                true
+                            } else {
+                                false
+                            };
+                            if changed {
+                                chart.data_table_dirty = true;
+                                chart.dirty = true;
+                                runtime.dirty = true;
+                            }
+                            removed_data_table
+                        };
+                        if removed_data_table {
+                            self.stale_data_table_handles_for_chart(workbook, chart_id);
                         }
                         Ok(())
                     }
@@ -5256,6 +5276,60 @@ impl ExcelRuntime {
                         "Legend.{member} is not writable"
                     ))),
                 }
+            }
+            RuntimeObjectKind::DataTable { workbook, chart_id } => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "DataTable.{member} does not accept index arguments"
+                    )));
+                }
+                let OmValue::Bool(flag) = value else {
+                    return Err(OmError::type_mismatch(format!(
+                        "DataTable.{member} expects a boolean value"
+                    )));
+                };
+                if !matches!(
+                    member,
+                    "HasBorderHorizontal"
+                        | "HasBorderVertical"
+                        | "HasBorderOutline"
+                        | "ShowLegendKey"
+                ) {
+                    return Err(OmError::unsupported(format!(
+                        "DataTable.{member} is not writable"
+                    )));
+                }
+                let runtime = self.runtime_workbook_mut(workbook)?;
+                if runtime.read_only {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        "cannot modify a read-only workbook",
+                    ));
+                }
+                let chart = runtime
+                    .loaded
+                    .state
+                    .charts
+                    .get_mut(&chart_id)
+                    .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                let data_table = chart.data_table.as_mut().ok_or_else(|| {
+                    OmError::new(OmErrorCode::NotFound, "chart data table not found")
+                })?;
+                let target = match member {
+                    "HasBorderHorizontal" => &mut data_table.has_border_horizontal,
+                    "HasBorderVertical" => &mut data_table.has_border_vertical,
+                    "HasBorderOutline" => &mut data_table.has_border_outline,
+                    "ShowLegendKey" => &mut data_table.show_legend_key,
+                    _ => unreachable!("checked DataTable writable member"),
+                };
+                if *target != Some(flag) {
+                    *target = Some(flag);
+                    data_table.dirty = true;
+                    chart.data_table_dirty = true;
+                    chart.dirty = true;
+                    runtime.dirty = true;
+                }
+                Ok(())
             }
             RuntimeObjectKind::DataLabels {
                 workbook,
@@ -11402,6 +11476,58 @@ impl ExcelRuntime {
                     ))),
                 }
             }
+            RuntimeObjectKind::DataTable { workbook, chart_id } => {
+                match member {
+                    "Select" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "DataTable.Select does not accept arguments",
+                            ));
+                        }
+                        if self.chart_model(workbook, chart_id)?.data_table.is_none() {
+                            return Err(OmError::new(
+                                OmErrorCode::NotFound,
+                                "chart data table not found",
+                            ));
+                        }
+                        let chart = self.register_chart_handle(workbook, chart_id);
+                        self.dispatch_invoke(chart, "Select", &[])
+                    }
+                    "Delete" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "DataTable.Delete does not accept arguments",
+                            ));
+                        }
+                        {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            if chart.data_table.take().is_none() {
+                                return Err(OmError::new(
+                                    OmErrorCode::NotFound,
+                                    "chart data table not found",
+                                ));
+                            }
+                            chart.data_table_dirty = true;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        self.stale_data_table_handles_for_chart(workbook, chart_id);
+                        Ok(OmValue::Empty)
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "DataTable.{member} is not implemented as a method"
+                    ))),
+                }
+            }
             RuntimeObjectKind::DataLabels {
                 workbook,
                 chart_id,
@@ -11855,6 +11981,7 @@ impl ExcelRuntime {
                             | "HasTitle"
                             | "ChartTitle"
                             | "HasDataTable"
+                            | "DataTable"
                             | "HasAxis"
                             | "HasLegend"
                             | "Legend"
@@ -11937,6 +12064,18 @@ impl ExcelRuntime {
                             | "Parent"
                             | "Select"
                             | "Clear"
+                            | "Delete"
+                    )
+                    | (
+                        "DataTable",
+                        "HasBorderHorizontal"
+                            | "HasBorderVertical"
+                            | "HasBorderOutline"
+                            | "ShowLegendKey"
+                            | "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Select"
                             | "Delete"
                     )
                     | (
@@ -14271,7 +14410,7 @@ impl ExcelRuntime {
                             split_type: None,
                             split_value: None,
                             data_labels: None,
-                            has_data_table: None,
+                            data_table: None,
                             data_table_dirty: false,
                             display_blanks_as: None,
                             plot_visible_only: None,
@@ -14818,9 +14957,23 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Bool(
-                    self.chart_model(workbook, chart_id)?
-                        .has_data_table
-                        .unwrap_or(false),
+                    self.chart_model(workbook, chart_id)?.data_table.is_some(),
+                ))
+            }
+            "DataTable" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Chart.DataTable does not accept arguments",
+                    ));
+                }
+                if self.chart_model(workbook, chart_id)?.data_table.is_none() {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        "chart data table not found",
+                    ));
+                }
+                Ok(OmValue::Object(
+                    self.register_data_table_handle(workbook, chart_id),
                 ))
             }
             "HasLegend" => {
@@ -15062,6 +15215,44 @@ impl ExcelRuntime {
             )),
             _ => Err(OmError::unsupported(format!(
                 "Legend.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_get_data_table(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        if !args.is_empty() {
+            return Err(OmError::invalid_argument(format!(
+                "DataTable.{member} does not accept arguments"
+            )));
+        }
+        let data_table = self
+            .chart_model(workbook, chart_id)?
+            .data_table
+            .as_ref()
+            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart data table not found"))?;
+
+        match member {
+            "HasBorderHorizontal" => Ok(OmValue::Bool(
+                data_table.has_border_horizontal.unwrap_or(true),
+            )),
+            "HasBorderVertical" => Ok(OmValue::Bool(
+                data_table.has_border_vertical.unwrap_or(true),
+            )),
+            "HasBorderOutline" => Ok(OmValue::Bool(data_table.has_border_outline.unwrap_or(true))),
+            "ShowLegendKey" => Ok(OmValue::Bool(data_table.show_legend_key.unwrap_or(false))),
+            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+            "Application" => Ok(OmValue::Object(self.root_application())),
+            "Parent" => Ok(OmValue::Object(
+                self.register_chart_handle(workbook, chart_id),
+            )),
+            _ => Err(OmError::unsupported(format!(
+                "DataTable.{member} is not implemented"
             ))),
         }
     }
@@ -18060,7 +18251,7 @@ impl ExcelRuntime {
                         split_type: None,
                         split_value: None,
                         data_labels: None,
-                        has_data_table: None,
+                        data_table: None,
                         data_table_dirty: false,
                         display_blanks_as: None,
                         plot_visible_only: None,
@@ -19757,6 +19948,14 @@ impl ExcelRuntime {
         self.register_object(RuntimeObjectKind::Legend { workbook, chart_id })
     }
 
+    fn register_data_table_handle(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+    ) -> ObjectHandle {
+        self.register_object(RuntimeObjectKind::DataTable { workbook, chart_id })
+    }
+
     fn register_data_labels_handle(
         &mut self,
         workbook: WorkbookHandle,
@@ -20966,6 +21165,10 @@ impl ExcelRuntime {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
                 }
+                | RuntimeObjectKind::DataTable {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                }
                 | RuntimeObjectKind::DataLabels {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
@@ -21160,6 +21363,26 @@ impl ExcelRuntime {
             .iter()
             .filter_map(|(&object_id, object)| match object {
                 RuntimeObjectKind::Legend {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                } if *object_workbook == workbook && *object_chart_id == chart_id => {
+                    Some(object_id)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for object_id in stale_object_ids {
+            self.objects.remove(&object_id);
+            self.stale_objects.insert(object_id);
+        }
+    }
+
+    fn stale_data_table_handles_for_chart(&mut self, workbook: WorkbookHandle, chart_id: ChartId) {
+        let stale_object_ids = self
+            .objects
+            .iter()
+            .filter_map(|(&object_id, object)| match object {
+                RuntimeObjectKind::DataTable {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
@@ -24669,6 +24892,52 @@ fn chart_data_labels_xml_string(data_labels: &ChartDataLabelsModel) -> String {
     xml
 }
 
+fn chart_data_table_xml_string(data_table: &ChartDataTableModel) -> String {
+    let mut xml = String::from("<c:dTable>");
+    for (element_name, value) in [
+        ("showHorzBorder", data_table.has_border_horizontal),
+        ("showVertBorder", data_table.has_border_vertical),
+        ("showOutline", data_table.has_border_outline),
+        ("showKeys", data_table.show_legend_key),
+    ] {
+        if let Some(value) = value {
+            xml.push_str(&format!(
+                r#"<c:{element_name} val="{}"/>"#,
+                if value { "1" } else { "0" }
+            ));
+        }
+    }
+    xml.push_str("</c:dTable>");
+    xml
+}
+
+fn write_chart_data_table_element<W: Write>(
+    writer: &mut Writer<W>,
+    data_table: &ChartDataTableModel,
+) -> OmResult<()> {
+    writer
+        .write_event(Event::Start(BytesStart::new("c:dTable")))
+        .map_err(runtime_xml_error)?;
+    for (element_name, value) in [
+        ("c:showHorzBorder", data_table.has_border_horizontal),
+        ("c:showVertBorder", data_table.has_border_vertical),
+        ("c:showOutline", data_table.has_border_outline),
+        ("c:showKeys", data_table.show_legend_key),
+    ] {
+        if let Some(value) = value {
+            let mut element = BytesStart::new(element_name);
+            element.push_attribute(("val", if value { "1" } else { "0" }));
+            writer
+                .write_event(Event::Empty(element))
+                .map_err(runtime_xml_error)?;
+        }
+    }
+    writer
+        .write_event(Event::End(BytesEnd::new("c:dTable")))
+        .map_err(runtime_xml_error)?;
+    Ok(())
+}
+
 fn chart_series_data_labels_xml_string(series: &SeriesModel) -> String {
     if series.data_labels.is_none() && series.point_data_labels.is_empty() {
         return String::new();
@@ -24786,9 +25055,7 @@ fn patch_loaded_chart_model_xml(
         .data_labels
         .as_ref()
         .filter(|data_labels| data_labels.dirty);
-    let expected_data_table = chart
-        .data_table_dirty
-        .then_some(chart.has_data_table.unwrap_or(false));
+    let expected_data_table = chart.data_table_dirty.then_some(chart.data_table.as_ref());
     let expected_dirty_series_data_label_sets = chart
         .series
         .iter()
@@ -26069,10 +26336,14 @@ fn patch_loaded_chart_model_xml(
                 {
                     data_table_seen = true;
                     match expected_data_table {
-                        Some(true) => {
+                        Some(Some(data_table)) => {
+                            write_chart_data_table_element(&mut writer, data_table)?;
                             data_table_written = true;
+                            skip_depth = 1;
+                            buffer.clear();
+                            continue;
                         }
-                        Some(false) => {
+                        Some(None) => {
                             data_table_removed = true;
                             skip_depth = 1;
                             buffer.clear();
@@ -27774,10 +28045,13 @@ fn patch_loaded_chart_model_xml(
                 {
                     data_table_seen = true;
                     match expected_data_table {
-                        Some(true) => {
+                        Some(Some(data_table)) => {
+                            write_chart_data_table_element(&mut writer, data_table)?;
                             data_table_written = true;
+                            buffer.clear();
+                            continue;
                         }
-                        Some(false) => {
+                        Some(None) => {
                             data_table_removed = true;
                             buffer.clear();
                             continue;
@@ -29220,11 +29494,9 @@ fn patch_loaded_chart_model_xml(
 
                 if local_name.as_slice() == b"plotArea"
                     && !data_table_seen
-                    && expected_data_table == Some(true)
+                    && let Some(Some(data_table)) = expected_data_table
                 {
-                    writer
-                        .write_event(Event::Empty(BytesStart::new("c:dTable")))
-                        .map_err(runtime_xml_error)?;
+                    write_chart_data_table_element(&mut writer, data_table)?;
                     data_table_inserted = true;
                     data_table_written = true;
                 }
@@ -29421,10 +29693,10 @@ fn patch_loaded_chart_model_xml(
         Some(_) => !expected_chart_protection_needs_xml || chart_protection_inserted,
     };
     let data_table_matches = match expected_data_table {
-        Some(true) if data_table_seen => data_table_written,
-        Some(true) => data_table_inserted,
-        Some(false) if data_table_seen => data_table_removed,
-        Some(false) => true,
+        Some(Some(_)) if data_table_seen => data_table_written,
+        Some(Some(_)) => data_table_inserted,
+        Some(None) if data_table_seen => data_table_removed,
+        Some(None) => true,
         None => true,
     };
     let vary_colors_matches = match (expected_vary_colors, vary_colors_seen) {
@@ -30080,11 +30352,11 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
         .protection
         .map(chart_protection_xml)
         .unwrap_or_default();
-    let data_table_xml = if chart.has_data_table.unwrap_or(false) {
-        "<c:dTable/>"
-    } else {
-        ""
-    };
+    let data_table_xml = chart
+        .data_table
+        .as_ref()
+        .map(chart_data_table_xml_string)
+        .unwrap_or_default();
     let chart_has_axes = chart_type_has_axes(&chart.chart_type);
     let mut chart_group_axis_refs = String::new();
     let mut axes_xml = String::new();
@@ -30561,6 +30833,7 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         | RuntimeObjectKind::PlotArea { workbook, .. }
         | RuntimeObjectKind::ChartTitle { workbook, .. }
         | RuntimeObjectKind::Legend { workbook, .. }
+        | RuntimeObjectKind::DataTable { workbook, .. }
         | RuntimeObjectKind::DataLabels { workbook, .. }
         | RuntimeObjectKind::DataLabel { workbook, .. }
         | RuntimeObjectKind::ChartGroups { workbook, .. }
@@ -85609,6 +85882,17 @@ mod tests {
                 .expect("Chart.HasDataTable loaded"),
             OmValue::Bool(true)
         );
+        let data_table = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "DataTable", &[])
+                .expect("Chart.DataTable loaded"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table, "HasBorderHorizontal", &[])
+                .expect("DataTable.HasBorderHorizontal loaded"),
+            OmValue::Bool(true)
+        );
         let chart_title = expect_object_handle(
             runtime
                 .dispatch_get(chart, "ChartTitle", &[])
@@ -86049,6 +86333,42 @@ mod tests {
                 .expect("Chart.HasDataTable after set true"),
             OmValue::Bool(true)
         );
+        let data_table = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "DataTable", &[])
+                .expect("Chart.DataTable after set true"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table, "HasBorderHorizontal", &[])
+                .expect("DataTable.HasBorderHorizontal default"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table, "ShowLegendKey", &[])
+                .expect("DataTable.ShowLegendKey default"),
+            OmValue::Bool(false)
+        );
+        runtime
+            .dispatch_set(data_table, "HasBorderHorizontal", OmValue::Bool(false), &[])
+            .expect("set DataTable.HasBorderHorizontal");
+        runtime
+            .dispatch_set(data_table, "HasBorderVertical", OmValue::Bool(false), &[])
+            .expect("set DataTable.HasBorderVertical");
+        runtime
+            .dispatch_set(data_table, "HasBorderOutline", OmValue::Bool(true), &[])
+            .expect("set DataTable.HasBorderOutline");
+        runtime
+            .dispatch_set(data_table, "ShowLegendKey", OmValue::Bool(true), &[])
+            .expect("set DataTable.ShowLegendKey");
+        assert_eq!(
+            runtime
+                .dispatch_set(data_table, "ShowLegendKey", OmValue::Number(1.0), &[])
+                .expect_err("DataTable.ShowLegendKey rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
 
         let with_table_saved = runtime
             .save_workbook(
@@ -86071,6 +86391,10 @@ mod tests {
         )
         .expect("with table chart xml utf8");
         assert!(with_table_chart_xml.contains("<c:dTable"));
+        assert!(with_table_chart_xml.contains(r#"<c:showHorzBorder val="0"/>"#));
+        assert!(with_table_chart_xml.contains(r#"<c:showVertBorder val="0"/>"#));
+        assert!(with_table_chart_xml.contains(r#"<c:showOutline val="1"/>"#));
+        assert!(with_table_chart_xml.contains(r#"<c:showKeys val="1"/>"#));
 
         let mut reopened_runtime = ExcelRuntime::new();
         let reopened_workbook = reopened_runtime
@@ -86107,15 +86431,58 @@ mod tests {
                 .expect("reopened Chart.HasDataTable"),
             OmValue::Bool(true)
         );
+        let reopened_data_table = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "DataTable", &[])
+                .expect("reopened Chart.DataTable"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_data_table, "HasBorderHorizontal", &[])
+                .expect("reopened DataTable.HasBorderHorizontal"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_data_table, "HasBorderVertical", &[])
+                .expect("reopened DataTable.HasBorderVertical"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_data_table, "HasBorderOutline", &[])
+                .expect("reopened DataTable.HasBorderOutline"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_data_table, "ShowLegendKey", &[])
+                .expect("reopened DataTable.ShowLegendKey"),
+            OmValue::Bool(true)
+        );
 
         reopened_runtime
-            .dispatch_set(reopened_chart, "HasDataTable", OmValue::Bool(false), &[])
-            .expect("set reopened Chart.HasDataTable false");
+            .dispatch_invoke(reopened_data_table, "Delete", &[])
+            .expect("DataTable.Delete");
         assert_eq!(
             reopened_runtime
                 .dispatch_get(reopened_chart, "HasDataTable", &[])
-                .expect("reopened Chart.HasDataTable after set false"),
+                .expect("reopened Chart.HasDataTable after DataTable.Delete"),
             OmValue::Bool(false)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "DataTable", &[])
+                .expect_err("Chart.DataTable after DataTable.Delete")
+                .code,
+            OmErrorCode::NotFound
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_data_table, "ShowLegendKey", &[])
+                .expect_err("stale DataTable handle after Delete")
+                .code,
+            OmErrorCode::InvalidState
         );
         let without_table_saved = reopened_runtime
             .save_workbook(

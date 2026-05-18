@@ -4,11 +4,11 @@ use std::io::{Cursor, Write};
 use excel_model::{
     AxisModel, CellData, ChartAxisCrosses, ChartAxisDisplayUnit, ChartAxisKind, ChartAxisScaleType,
     ChartAxisTimeUnit, ChartBuiltInDisplayUnit, ChartCacheKind, ChartCacheSnapshot,
-    ChartCellMarkerXmlAttrs, ChartDataLabelPosition, ChartDataLabelsModel, ChartDisplayBlanksAs,
-    ChartLegendPosition, ChartMarkerXmlAttrs, ChartModel, ChartObjectModel, ChartPointModel,
-    ChartProtectionModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartSplitType,
-    ChartText, ChartTickLabelPosition, ChartTickMark, ChartType, DefinedNameTable, DrawingModel,
-    DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
+    ChartCellMarkerXmlAttrs, ChartDataLabelPosition, ChartDataLabelsModel, ChartDataTableModel,
+    ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerXmlAttrs, ChartModel, ChartObjectModel,
+    ChartPointModel, ChartProtectionModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr,
+    ChartSplitType, ChartText, ChartTickLabelPosition, ChartTickMark, ChartType, DefinedNameTable,
+    DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
     resolve_chart_source_reference_with_names,
 };
 use office_common::{
@@ -687,7 +687,7 @@ pub struct ChartPartSummary {
     pub split_type: Option<ChartSplitType>,
     pub split_value: Option<f64>,
     pub data_labels: Option<ChartDataLabelsSummary>,
-    pub has_data_table: Option<bool>,
+    pub data_table: Option<ChartDataTableSummary>,
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,
     pub rounded_corners: Option<bool>,
@@ -713,6 +713,14 @@ pub struct ChartDataLabelsSummary {
     pub number_format_linked: Option<bool>,
     pub position: Option<ChartDataLabelPosition>,
     pub separator: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ChartDataTableSummary {
+    pub has_border_horizontal: Option<bool>,
+    pub has_border_vertical: Option<bool>,
+    pub has_border_outline: Option<bool>,
+    pub show_legend_key: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -3225,7 +3233,9 @@ fn build_chart_model_overlay(
                     data_labels: summary
                         .and_then(|summary| summary.data_labels.as_ref())
                         .map(chart_data_labels_model_from_summary),
-                    has_data_table: summary.and_then(|summary| summary.has_data_table),
+                    data_table: summary
+                        .and_then(|summary| summary.data_table.as_ref())
+                        .map(chart_data_table_model_from_summary),
                     data_table_dirty: false,
                     display_blanks_as: summary.and_then(|summary| summary.display_blanks_as),
                     plot_visible_only: summary.and_then(|summary| summary.plot_visible_only),
@@ -3687,6 +3697,16 @@ fn chart_data_labels_model_from_summary(
         number_format_linked: data_labels.number_format_linked,
         position: data_labels.position,
         separator: data_labels.separator.clone(),
+        dirty: false,
+    }
+}
+
+fn chart_data_table_model_from_summary(data_table: &ChartDataTableSummary) -> ChartDataTableModel {
+    ChartDataTableModel {
+        has_border_horizontal: data_table.has_border_horizontal,
+        has_border_vertical: data_table.has_border_vertical,
+        has_border_outline: data_table.has_border_outline,
+        show_legend_key: data_table.show_legend_key,
         dirty: false,
     }
 }
@@ -16148,7 +16168,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut split_type = None;
     let mut split_value = None;
     let mut data_labels = None::<ChartDataLabelsSummary>;
-    let mut has_data_table = None;
+    let mut data_table = None::<ChartDataTableSummary>;
     let mut display_blanks_as = None;
     let mut plot_visible_only = None;
     let mut rounded_corners = None;
@@ -16452,7 +16472,18 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 if local_name == b"dTable"
                     && element_path.last().is_some_and(|name| name == "plotArea")
                 {
-                    has_data_table = Some(true);
+                    data_table.get_or_insert_with(ChartDataTableSummary::default);
+                }
+                if element_path.last().is_some_and(|name| name == "dTable") {
+                    let value = parse_bool_val_attr(&element, &reader)?.unwrap_or(true);
+                    let data_table = data_table.get_or_insert_with(ChartDataTableSummary::default);
+                    match local_name {
+                        b"showHorzBorder" => data_table.has_border_horizontal = Some(value),
+                        b"showVertBorder" => data_table.has_border_vertical = Some(value),
+                        b"showOutline" => data_table.has_border_outline = Some(value),
+                        b"showKeys" => data_table.show_legend_key = Some(value),
+                        _ => {}
+                    }
                 }
                 if local_name == b"legendPos"
                     && element_path.last().is_some_and(|name| name == "legend")
@@ -17185,7 +17216,18 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 if local_name == b"dTable"
                     && element_path.last().is_some_and(|name| name == "plotArea")
                 {
-                    has_data_table = Some(true);
+                    data_table.get_or_insert_with(ChartDataTableSummary::default);
+                }
+                if element_path.last().is_some_and(|name| name == "dTable") {
+                    let value = parse_bool_val_attr(&element, &reader)?.unwrap_or(true);
+                    let data_table = data_table.get_or_insert_with(ChartDataTableSummary::default);
+                    match local_name {
+                        b"showHorzBorder" => data_table.has_border_horizontal = Some(value),
+                        b"showVertBorder" => data_table.has_border_vertical = Some(value),
+                        b"showOutline" => data_table.has_border_outline = Some(value),
+                        b"showKeys" => data_table.show_legend_key = Some(value),
+                        _ => {}
+                    }
                 }
                 if local_name == b"legendPos"
                     && element_path.last().is_some_and(|name| name == "legend")
@@ -18058,7 +18100,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         split_type,
         split_value,
         data_labels,
-        has_data_table,
+        data_table,
         display_blanks_as,
         plot_visible_only,
         rounded_corners,

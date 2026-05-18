@@ -39,7 +39,7 @@ pub struct ChartModel {
     pub split_type: Option<ChartSplitType>,
     pub split_value: Option<f64>,
     pub data_labels: Option<ChartDataLabelsModel>,
-    pub has_data_table: Option<bool>,
+    pub data_table: Option<ChartDataTableModel>,
     pub data_table_dirty: bool,
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,
@@ -204,6 +204,15 @@ pub struct ChartDataLabelsModel {
     pub number_format_linked: Option<bool>,
     pub position: Option<ChartDataLabelPosition>,
     pub separator: Option<String>,
+    pub dirty: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ChartDataTableModel {
+    pub has_border_horizontal: Option<bool>,
+    pub has_border_vertical: Option<bool>,
+    pub has_border_outline: Option<bool>,
+    pub show_legend_key: Option<bool>,
     pub dirty: bool,
 }
 
