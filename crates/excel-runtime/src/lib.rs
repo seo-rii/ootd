@@ -4843,6 +4843,31 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
+                    "ShowDataLabelsOverMaximum" => {
+                        let OmValue::Bool(show_data_labels) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Chart.ShowDataLabelsOverMaximum expects a boolean value",
+                            ));
+                        };
+                        {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            if chart.show_data_labels_over_maximum != Some(show_data_labels) {
+                                chart.show_data_labels_over_maximum = Some(show_data_labels);
+                                chart.dirty = true;
+                                runtime.dirty = true;
+                            }
+                        }
+                        Ok(())
+                    }
                     "HasTitle" => {
                         let OmValue::Bool(has_title) = value else {
                             return Err(OmError::type_mismatch(
@@ -11971,6 +11996,7 @@ impl ExcelRuntime {
                             | "Index"
                             | "DisplayBlanksAs"
                             | "PlotVisibleOnly"
+                            | "ShowDataLabelsOverMaximum"
                             | "ProtectContents"
                             | "ProtectDrawingObjects"
                             | "ProtectData"
@@ -14412,6 +14438,7 @@ impl ExcelRuntime {
                             data_labels: None,
                             data_table: None,
                             data_table_dirty: false,
+                            show_data_labels_over_maximum: None,
                             display_blanks_as: None,
                             plot_visible_only: None,
                             rounded_corners: None,
@@ -14740,6 +14767,18 @@ impl ExcelRuntime {
                     self.chart_model(workbook, chart_id)?
                         .plot_visible_only
                         .unwrap_or(true),
+                ))
+            }
+            "ShowDataLabelsOverMaximum" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Chart.ShowDataLabelsOverMaximum does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Bool(
+                    self.chart_model(workbook, chart_id)?
+                        .show_data_labels_over_maximum
+                        .unwrap_or(false),
                 ))
             }
             "ProtectContents"
@@ -18253,6 +18292,7 @@ impl ExcelRuntime {
                         data_labels: None,
                         data_table: None,
                         data_table_dirty: false,
+                        show_data_labels_over_maximum: None,
                         display_blanks_as: None,
                         plot_visible_only: None,
                         rounded_corners: None,
@@ -25021,6 +25061,9 @@ fn patch_loaded_chart_model_xml(
     let expected_plot_visible_only = chart
         .plot_visible_only
         .map(|value| if value { "1" } else { "0" });
+    let expected_show_data_labels_over_maximum = chart
+        .show_data_labels_over_maximum
+        .map(|value| if value { "1" } else { "0" });
     let expected_rounded_corners = chart
         .rounded_corners
         .map(|value| if value { "1" } else { "0" });
@@ -25170,6 +25213,9 @@ fn patch_loaded_chart_model_xml(
     let mut plot_visible_only_seen = false;
     let mut plot_visible_only_written = false;
     let mut plot_visible_only_inserted = false;
+    let mut show_data_labels_over_maximum_seen = false;
+    let mut show_data_labels_over_maximum_written = false;
+    let mut show_data_labels_over_maximum_inserted = false;
     let mut rounded_corners_seen = false;
     let mut rounded_corners_written = false;
     let mut rounded_corners_inserted = false;
@@ -26373,6 +26419,10 @@ fn patch_loaded_chart_model_xml(
                     && parent_name == Some(b"chart".as_slice())
                 {
                     plot_visible_only_seen = true;
+                } else if local_name.as_slice() == b"showDLblsOverMax"
+                    && parent_name == Some(b"chart".as_slice())
+                {
+                    show_data_labels_over_maximum_seen = true;
                 } else if local_name.as_slice() == b"dispBlanksAs"
                     && parent_name == Some(b"chart".as_slice())
                 {
@@ -26720,6 +26770,18 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     plot_visible_only_written = true;
+                } else if !wrote_start_element
+                    && local_name.as_slice() == b"showDLblsOverMax"
+                    && let Some(value) = expected_show_data_labels_over_maximum
+                {
+                    writer
+                        .write_event(Event::Start(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    show_data_labels_over_maximum_written = true;
                 } else if !wrote_start_element
                     && local_name.as_slice() == b"dispBlanksAs"
                     && let Some(value) = expected_display_blanks_as
@@ -27959,6 +28021,10 @@ fn patch_loaded_chart_model_xml(
                     && parent_name == Some(b"chart".as_slice())
                 {
                     plot_visible_only_seen = true;
+                } else if local_name.as_slice() == b"showDLblsOverMax"
+                    && parent_name == Some(b"chart".as_slice())
+                {
+                    show_data_labels_over_maximum_seen = true;
                 } else if local_name.as_slice() == b"dispBlanksAs"
                     && parent_name == Some(b"chart".as_slice())
                 {
@@ -28198,6 +28264,17 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     plot_visible_only_written = true;
+                } else if local_name.as_slice() == b"showDLblsOverMax"
+                    && let Some(value) = expected_show_data_labels_over_maximum
+                {
+                    writer
+                        .write_event(Event::Empty(rewrite_val_attribute_element(
+                            &element,
+                            reader.decoder(),
+                            value,
+                        )?))
+                        .map_err(runtime_xml_error)?;
+                    show_data_labels_over_maximum_written = true;
                 } else if local_name.as_slice() == b"dispBlanksAs"
                     && let Some(value) = expected_display_blanks_as
                 {
@@ -28792,6 +28869,17 @@ fn patch_loaded_chart_model_xml(
                             .map_err(runtime_xml_error)?;
                         display_blanks_as_inserted = true;
                         display_blanks_as_written = true;
+                    }
+                    if !show_data_labels_over_maximum_seen
+                        && let Some(value) = expected_show_data_labels_over_maximum
+                    {
+                        let mut show_data_labels = BytesStart::new("c:showDLblsOverMax");
+                        show_data_labels.push_attribute(("val", value));
+                        writer
+                            .write_event(Event::Empty(show_data_labels))
+                            .map_err(runtime_xml_error)?;
+                        show_data_labels_over_maximum_inserted = true;
+                        show_data_labels_over_maximum_written = true;
                     }
                 }
                 if chart_axis_kind_from_xml_name(local_name.as_slice()).is_some()
@@ -29677,6 +29765,14 @@ fn patch_loaded_chart_model_xml(
         (Some(_), false) => plot_visible_only_inserted,
         (None, _) => true,
     };
+    let show_data_labels_over_maximum_matches = match (
+        expected_show_data_labels_over_maximum,
+        show_data_labels_over_maximum_seen,
+    ) {
+        (Some(_), true) => show_data_labels_over_maximum_written,
+        (Some(_), false) => show_data_labels_over_maximum_inserted,
+        (None, _) => true,
+    };
     let rounded_corners_matches = match (expected_rounded_corners, rounded_corners_seen) {
         (Some(_), true) => rounded_corners_written,
         (Some(_), false) => rounded_corners_inserted,
@@ -30073,6 +30169,7 @@ fn patch_loaded_chart_model_xml(
         && legend_overlay_matches
         && display_blanks_as_matches
         && plot_visible_only_matches
+        && show_data_labels_over_maximum_matches
         && rounded_corners_matches
         && chart_style_matches
         && chart_protection_matches
@@ -30335,6 +30432,15 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             )
         })
         .unwrap_or_default();
+    let show_data_labels_over_maximum_xml = chart
+        .show_data_labels_over_maximum
+        .map(|value| {
+            format!(
+                r#"<c:showDLblsOverMax val="{}"/>"#,
+                if value { "1" } else { "0" }
+            )
+        })
+        .unwrap_or_default();
     let rounded_corners_xml = chart
         .rounded_corners
         .map(|value| {
@@ -30561,7 +30667,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  {rounded_corners_xml}{chart_style_xml}{chart_protection_xml}<c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{bar_shape_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{data_labels_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}{data_table_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}</c:chart>
+  {rounded_corners_xml}{chart_style_xml}{chart_protection_xml}<c:chart>{title_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{bar_shape_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{data_labels_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}{data_table_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}{show_data_labels_over_maximum_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -85789,6 +85895,10 @@ mod tests {
             r#"<c:dTable><c:showHorzBorder val="1"/></c:dTable></c:plotArea>"#,
         )
         .replace(
+            "</c:chart>",
+            r#"<c:showDLblsOverMax val="1"/></c:chart>"#,
+        )
+        .replace(
             "</c:chartSpace>",
             r#"<c:extLst><c:ext uri="urn:content-preserve"/></c:extLst></c:chartSpace>"#,
         );
@@ -85840,6 +85950,12 @@ mod tests {
             runtime
                 .dispatch_get(chart, "PlotVisibleOnly", &[])
                 .expect("Chart.PlotVisibleOnly default"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ShowDataLabelsOverMaximum", &[])
+                .expect("Chart.ShowDataLabelsOverMaximum loaded"),
             OmValue::Bool(true)
         );
         assert_eq!(
@@ -85932,6 +86048,14 @@ mod tests {
             .dispatch_set(chart, "PlotVisibleOnly", OmValue::Bool(false), &[])
             .expect("set loaded Chart.PlotVisibleOnly");
         runtime
+            .dispatch_set(
+                chart,
+                "ShowDataLabelsOverMaximum",
+                OmValue::Bool(false),
+                &[],
+            )
+            .expect("set loaded Chart.ShowDataLabelsOverMaximum");
+        runtime
             .dispatch_set(chart_object, "RoundedCorners", OmValue::Bool(true), &[])
             .expect("set loaded ChartObject.RoundedCorners");
         runtime
@@ -85949,6 +86073,18 @@ mod tests {
             runtime
                 .dispatch_set(chart, "PlotVisibleOnly", OmValue::Number(0.0), &[])
                 .expect_err("Chart.PlotVisibleOnly rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    chart,
+                    "ShowDataLabelsOverMaximum",
+                    OmValue::Number(0.0),
+                    &[]
+                )
+                .expect_err("Chart.ShowDataLabelsOverMaximum rejects non-bool")
                 .code,
             OmErrorCode::TypeMismatch
         );
@@ -86027,6 +86163,7 @@ mod tests {
         assert!(saved_chart_xml.contains(r#"<c:showHorzBorder val="1"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:plotVisOnly val="0"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:dispBlanksAs val="zero"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:showDLblsOverMax val="0"/>"#));
 
         let mut reopened_runtime = ExcelRuntime::new();
         let reopened_workbook = reopened_runtime
@@ -86102,6 +86239,12 @@ mod tests {
             reopened_runtime
                 .dispatch_get(reopened_chart, "PlotVisibleOnly", &[])
                 .expect("reopened Chart.PlotVisibleOnly"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "ShowDataLabelsOverMaximum", &[])
+                .expect("reopened Chart.ShowDataLabelsOverMaximum"),
             OmValue::Bool(false)
         );
         assert_eq!(
@@ -86277,6 +86420,153 @@ mod tests {
         assert_eq!(data_labels.show_bubble_size, Some(false));
         assert_eq!(data_labels.separator.as_deref(), Some(", "));
         assert!(!data_labels.dirty);
+    }
+
+    #[test]
+    fn chart_show_data_labels_over_maximum_roundtrips_chart_xml() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ShowDataLabelsOverMaximum", &[])
+                .expect("Chart.ShowDataLabelsOverMaximum default"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    chart,
+                    "ShowDataLabelsOverMaximum",
+                    OmValue::Number(1.0),
+                    &[]
+                )
+                .expect_err("Chart.ShowDataLabelsOverMaximum rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        runtime
+            .dispatch_set(chart, "ShowDataLabelsOverMaximum", OmValue::Bool(true), &[])
+            .expect("set Chart.ShowDataLabelsOverMaximum true");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ShowDataLabelsOverMaximum", &[])
+                .expect("Chart.ShowDataLabelsOverMaximum after true"),
+            OmValue::Bool(true)
+        );
+
+        let enabled_saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with show data labels over maximum");
+        let enabled_package = OpcPackage::from_bytes(&enabled_saved).expect("enabled package");
+        let enabled_chart_xml = String::from_utf8(
+            enabled_package
+                .part("xl/charts/chart1.xml")
+                .expect("enabled chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("enabled chart xml utf8");
+        assert!(enabled_chart_xml.contains(r#"<c:showDLblsOverMax val="1"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: enabled_saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook with show data labels over maximum");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "ShowDataLabelsOverMaximum", &[])
+                .expect("reopened Chart.ShowDataLabelsOverMaximum after true"),
+            OmValue::Bool(true)
+        );
+        reopened_runtime
+            .dispatch_set(
+                reopened_chart,
+                "ShowDataLabelsOverMaximum",
+                OmValue::Bool(false),
+                &[],
+            )
+            .expect("set Chart.ShowDataLabelsOverMaximum false");
+
+        let disabled_saved = reopened_runtime
+            .save_workbook(
+                reopened_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with show data labels over maximum disabled");
+        let disabled_package = OpcPackage::from_bytes(&disabled_saved).expect("disabled package");
+        let disabled_chart_xml = String::from_utf8(
+            disabled_package
+                .part("xl/charts/chart1.xml")
+                .expect("disabled chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("disabled chart xml utf8");
+        assert!(disabled_chart_xml.contains(r#"<c:showDLblsOverMax val="0"/>"#));
     }
 
     #[test]

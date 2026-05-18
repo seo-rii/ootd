@@ -688,6 +688,7 @@ pub struct ChartPartSummary {
     pub split_value: Option<f64>,
     pub data_labels: Option<ChartDataLabelsSummary>,
     pub data_table: Option<ChartDataTableSummary>,
+    pub show_data_labels_over_maximum: Option<bool>,
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,
     pub rounded_corners: Option<bool>,
@@ -3237,6 +3238,8 @@ fn build_chart_model_overlay(
                         .and_then(|summary| summary.data_table.as_ref())
                         .map(chart_data_table_model_from_summary),
                     data_table_dirty: false,
+                    show_data_labels_over_maximum: summary
+                        .and_then(|summary| summary.show_data_labels_over_maximum),
                     display_blanks_as: summary.and_then(|summary| summary.display_blanks_as),
                     plot_visible_only: summary.and_then(|summary| summary.plot_visible_only),
                     rounded_corners: summary.and_then(|summary| summary.rounded_corners),
@@ -16169,6 +16172,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut split_value = None;
     let mut data_labels = None::<ChartDataLabelsSummary>;
     let mut data_table = None::<ChartDataTableSummary>;
+    let mut show_data_labels_over_maximum = None;
     let mut display_blanks_as = None;
     let mut plot_visible_only = None;
     let mut rounded_corners = None;
@@ -16504,6 +16508,12 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 {
                     let overlay = parse_bool_val_attr(&element, &reader)?.unwrap_or(true);
                     legend_include_in_layout = Some(!overlay);
+                }
+                if local_name == b"showDLblsOverMax"
+                    && element_path.last().is_some_and(|name| name == "chart")
+                {
+                    show_data_labels_over_maximum =
+                        Some(parse_bool_val_attr(&element, &reader)?.unwrap_or(true));
                 }
                 if local_name == b"dLbls"
                     && element_path
@@ -17248,6 +17258,12 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 {
                     let overlay = parse_bool_val_attr(&element, &reader)?.unwrap_or(true);
                     legend_include_in_layout = Some(!overlay);
+                }
+                if local_name == b"showDLblsOverMax"
+                    && element_path.last().is_some_and(|name| name == "chart")
+                {
+                    show_data_labels_over_maximum =
+                        Some(parse_bool_val_attr(&element, &reader)?.unwrap_or(true));
                 }
                 if local_name == b"dLbls"
                     && element_path
@@ -18101,6 +18117,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         split_value,
         data_labels,
         data_table,
+        show_data_labels_over_maximum,
         display_blanks_as,
         plot_visible_only,
         rounded_corners,
@@ -22690,6 +22707,7 @@ mod tests {
     <c:legend><c:legendPos val="r"/><c:overlay val="1"/></c:legend>
     <c:plotVisOnly val="0"/>
     <c:dispBlanksAs val="span"/>
+    <c:showDLblsOverMax val="1"/>
   </c:chart>
   <c:extLst><c:ext uri="urn:test"/></c:extLst>
 </c:chartSpace>"##
@@ -22933,6 +22951,7 @@ mod tests {
             })
         );
         assert_eq!(chart_summary.plot_visible_only, Some(false));
+        assert_eq!(chart_summary.show_data_labels_over_maximum, Some(true));
         assert_eq!(chart_summary.rounded_corners, Some(true));
         assert_eq!(
             chart_summary.display_blanks_as,
@@ -23160,6 +23179,7 @@ mod tests {
         assert_eq!(series_data_labels.separator.as_deref(), Some("; "));
         assert!(!series_data_labels.dirty);
         assert_eq!(chart_model.plot_visible_only, Some(false));
+        assert_eq!(chart_model.show_data_labels_over_maximum, Some(true));
         assert_eq!(chart_model.rounded_corners, Some(true));
         assert_eq!(
             chart_model.display_blanks_as,
