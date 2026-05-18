@@ -769,6 +769,7 @@ pub struct ChartSeriesSummary {
     pub values_cache: Option<ChartCacheSummary>,
     pub bubble_size_ref: Option<String>,
     pub bubble_size_cache: Option<ChartCacheSummary>,
+    pub bar_shape: Option<ChartBarShape>,
     pub point_explosions: BTreeMap<u32, u16>,
     pub data_labels: Option<ChartDataLabelsSummary>,
     pub point_data_labels: BTreeMap<u32, ChartDataLabelsSummary>,
@@ -3702,6 +3703,7 @@ fn chart_series_from_summary(
                     .bubble_size_ref
                     .as_ref()
                     .map(|reference| source_from_ref(reference, series.bubble_size_cache.as_ref())),
+                bar_shape: series.bar_shape,
                 points: series
                     .point_explosions
                     .iter()
@@ -3741,6 +3743,7 @@ fn chart_series_from_summary(
             x_values: None,
             values: Some(source_from_ref(reference, None)),
             bubble_size: None,
+            bar_shape: None,
             points: BTreeMap::new(),
             data_labels: None,
             point_data_labels: BTreeMap::new(),
@@ -16847,6 +16850,22 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         _ => bar_shape,
                     };
                 }
+                if local_name == b"shape"
+                    && element_path.last().is_some_and(|name| name == "ser")
+                    && let Some(active_series) = active_series.as_mut()
+                    && active_series.bar_shape.is_none()
+                    && let Some(value) = parse_string_val_attr(&element, &reader)?
+                {
+                    active_series.bar_shape = match value.as_str() {
+                        "box" => Some(ChartBarShape::Box),
+                        "pyramid" => Some(ChartBarShape::PyramidToPoint),
+                        "pyramidToMax" => Some(ChartBarShape::PyramidToMax),
+                        "cylinder" => Some(ChartBarShape::Cylinder),
+                        "cone" => Some(ChartBarShape::ConeToPoint),
+                        "coneToMax" => Some(ChartBarShape::ConeToMax),
+                        _ => active_series.bar_shape,
+                    };
+                }
                 if local_name == b"marker"
                     && element_path.last().is_some_and(|name| name == "lineChart")
                 {
@@ -17763,6 +17782,22 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "cone" => Some(ChartBarShape::ConeToPoint),
                         "coneToMax" => Some(ChartBarShape::ConeToMax),
                         _ => bar_shape,
+                    };
+                }
+                if local_name == b"shape"
+                    && element_path.last().is_some_and(|name| name == "ser")
+                    && let Some(active_series) = active_series.as_mut()
+                    && active_series.bar_shape.is_none()
+                    && let Some(value) = parse_string_val_attr(&element, &reader)?
+                {
+                    active_series.bar_shape = match value.as_str() {
+                        "box" => Some(ChartBarShape::Box),
+                        "pyramid" => Some(ChartBarShape::PyramidToPoint),
+                        "pyramidToMax" => Some(ChartBarShape::PyramidToMax),
+                        "cylinder" => Some(ChartBarShape::Cylinder),
+                        "cone" => Some(ChartBarShape::ConeToPoint),
+                        "coneToMax" => Some(ChartBarShape::ConeToMax),
+                        _ => active_series.bar_shape,
                     };
                 }
                 if local_name == b"marker"
@@ -23221,6 +23256,7 @@ mod tests {
                 }),
                 bubble_size_ref: None,
                 bubble_size_cache: None,
+                bar_shape: None,
                 point_explosions: BTreeMap::new(),
                 data_labels: Some(ChartDataLabelsSummary {
                     show_legend_key: Some(false),

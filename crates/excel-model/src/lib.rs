@@ -1210,6 +1210,7 @@ mod tests {
                         dirty: false,
                     }),
                     bubble_size: None,
+                    bar_shape: None,
                     points: BTreeMap::new(),
                     data_labels: None,
                     point_data_labels: BTreeMap::new(),

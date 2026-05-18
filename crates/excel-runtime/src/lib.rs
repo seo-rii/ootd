@@ -3218,6 +3218,38 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
+                    "BarShape" => {
+                        let bar_shape = chart_bar_shape_from_excel_value(coerce_i32_arg(
+                            &value,
+                            "Series.BarShape",
+                        )?)?;
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        ensure_chart_supports_bar_shape(&chart.chart_type)?;
+                        let series = chart.series.get_mut(series_index).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "series not found")
+                        })?;
+                        if series.bar_shape != Some(bar_shape) {
+                            series.bar_shape = Some(bar_shape);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     "Name" | "Values" | "XValues" | "BubbleSizes" => {
                         let source = match value {
                             OmValue::Text(text) => {
@@ -11216,6 +11248,7 @@ impl ExcelRuntime {
                                         &worksheet_name,
                                     )?),
                                     bubble_size: None,
+                                    bar_shape: None,
                                     points: BTreeMap::new(),
                                     data_labels: None,
                                     point_data_labels: BTreeMap::new(),
@@ -11243,6 +11276,7 @@ impl ExcelRuntime {
                                         &worksheet_name,
                                     )?),
                                     bubble_size: None,
+                                    bar_shape: None,
                                     points: BTreeMap::new(),
                                     data_labels: None,
                                     point_data_labels: BTreeMap::new(),
@@ -11262,6 +11296,7 @@ impl ExcelRuntime {
                                     &worksheet_name,
                                 )?),
                                 bubble_size: None,
+                                bar_shape: None,
                                 points: BTreeMap::new(),
                                 data_labels: None,
                                 point_data_labels: BTreeMap::new(),
@@ -16427,6 +16462,7 @@ impl ExcelRuntime {
                         x_values: None,
                         values: None,
                         bubble_size: None,
+                        bar_shape: None,
                         points: BTreeMap::new(),
                         data_labels: None,
                         point_data_labels: BTreeMap::new(),
@@ -16497,6 +16533,21 @@ impl ExcelRuntime {
             )
             .map(OmValue::Text)
             .unwrap_or(OmValue::Empty)),
+            "BarShape" => {
+                let chart = self.chart_model(workbook, chart_id)?;
+                ensure_chart_supports_bar_shape(&chart.chart_type)?;
+                let series = chart
+                    .series
+                    .get(series_index)
+                    .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "series not found"))?;
+                Ok(OmValue::Number(f64::from(
+                    series
+                        .bar_shape
+                        .or_else(|| chart_effective_bar_shape(chart))
+                        .map(chart_bar_shape_to_excel_value)
+                        .unwrap_or(XL_BOX),
+                )))
+            }
             "Formula" => {
                 let series = self.series_model(workbook, chart_id, series_index)?;
                 Ok(OmValue::Text(series_formula_text(series, series_index)))
@@ -25648,6 +25699,16 @@ fn patch_loaded_chart_model_xml(
     let expected_bar_direction = chart_type_bar_direction_xml_value(&chart.chart_type);
     let expected_chart_grouping = chart_type_grouping_xml_value(&chart.chart_type);
     let expected_bar_shape = chart_effective_bar_shape(chart).map(chart_bar_shape_xml_value);
+    let expected_series_bar_shapes = chart
+        .series
+        .iter()
+        .map(|series| {
+            chart_type_supports_bar_shape(&chart.chart_type)
+                .then_some(series.bar_shape)
+                .flatten()
+                .map(chart_bar_shape_xml_value)
+        })
+        .collect::<Vec<_>>();
     let expected_line_marker = chart_type_line_marker_xml_value(&chart.chart_type);
     let expected_scatter_style = chart_type_scatter_style_xml_value(&chart.chart_type);
     let expected_radar_style = chart_type_radar_style_xml_value(&chart.chart_type);
@@ -25759,6 +25820,10 @@ fn patch_loaded_chart_model_xml(
     let mut series_explosion_inserted = vec![false; chart.series.len()];
     let mut series_explosion_removed = vec![false; chart.series.len()];
     let mut series_point_explosions_inserted = vec![BTreeSet::<u32>::new(); chart.series.len()];
+    let mut series_bar_shape_seen = vec![false; chart.series.len()];
+    let mut series_bar_shape_written = vec![false; chart.series.len()];
+    let mut series_bar_shape_inserted = vec![false; chart.series.len()];
+    let mut series_bar_shape_removed = vec![false; chart.series.len()];
     let mut series_emitted = vec![false; chart.series.len()];
     let mut patched_sources = 0usize;
     let mut chart_type = None::<ChartType>;
@@ -27301,6 +27366,39 @@ fn patch_loaded_chart_model_xml(
                         wrote_start_element = true;
                     } else {
                         if let Some(removed) = series_explosion_removed.get_mut(series_index) {
+                            *removed = true;
+                        }
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    }
+                }
+                if !wrote_start_element
+                    && local_name.as_slice() == b"shape"
+                    && parent_name == Some(b"ser".as_slice())
+                    && let Some(series_index) = current_series_index
+                {
+                    if let Some(seen) = series_bar_shape_seen.get_mut(series_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = expected_series_bar_shapes
+                        .get(series_index)
+                        .copied()
+                        .flatten()
+                    {
+                        writer
+                            .write_event(Event::Start(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value,
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = series_bar_shape_written.get_mut(series_index) {
+                            *written = true;
+                        }
+                        wrote_start_element = true;
+                    } else {
+                        if let Some(removed) = series_bar_shape_removed.get_mut(series_index) {
                             *removed = true;
                         }
                         skip_depth = 1;
@@ -28978,6 +29076,7 @@ fn patch_loaded_chart_model_xml(
                     chart_grouping_written = true;
                 } else if local_name.as_slice() == b"shape"
                     && let Some(value) = expected_bar_shape
+                    && parent_name != Some(b"ser".as_slice())
                 {
                     writer
                         .write_event(Event::Empty(rewrite_val_attribute_element(
@@ -28987,6 +29086,33 @@ fn patch_loaded_chart_model_xml(
                         )?))
                         .map_err(runtime_xml_error)?;
                     bar_shape_written = true;
+                } else if local_name.as_slice() == b"shape"
+                    && parent_name == Some(b"ser".as_slice())
+                    && let Some(series_index) = current_series_index
+                {
+                    if let Some(seen) = series_bar_shape_seen.get_mut(series_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = expected_series_bar_shapes
+                        .get(series_index)
+                        .copied()
+                        .flatten()
+                    {
+                        writer
+                            .write_event(Event::Empty(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value,
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = series_bar_shape_written.get_mut(series_index) {
+                            *written = true;
+                        }
+                    } else {
+                        if let Some(removed) = series_bar_shape_removed.get_mut(series_index) {
+                            *removed = true;
+                        }
+                    }
                 } else if local_name.as_slice() == b"marker"
                     && let Some(value) = expected_line_marker
                 {
@@ -30070,6 +30196,27 @@ fn patch_loaded_chart_model_xml(
                                 }
                             }
                         }
+                        if let Some(value) = expected_series_bar_shapes
+                            .get(series_index)
+                            .copied()
+                            .flatten()
+                        {
+                            let mut shape = BytesStart::new("c:shape");
+                            shape.push_attribute(("val", value));
+                            writer
+                                .write_event(Event::Empty(shape))
+                                .map_err(runtime_xml_error)?;
+                            if let Some(seen) = series_bar_shape_seen.get_mut(series_index) {
+                                *seen = true;
+                            }
+                            if let Some(inserted) = series_bar_shape_inserted.get_mut(series_index)
+                            {
+                                *inserted = true;
+                            }
+                            if let Some(written) = series_bar_shape_written.get_mut(series_index) {
+                                *written = true;
+                            }
+                        }
                         writer
                             .write_event(Event::End(BytesEnd::new("c:ser")))
                             .map_err(runtime_xml_error)?;
@@ -30275,6 +30422,29 @@ fn patch_loaded_chart_model_xml(
                         }
                     }
                 }
+                if local_name.as_slice() == b"ser"
+                    && let Some(series_index) = current_series_index
+                    && !series_bar_shape_seen
+                        .get(series_index)
+                        .copied()
+                        .unwrap_or(false)
+                    && let Some(value) = expected_series_bar_shapes
+                        .get(series_index)
+                        .copied()
+                        .flatten()
+                {
+                    let mut shape = BytesStart::new("c:shape");
+                    shape.push_attribute(("val", value));
+                    writer
+                        .write_event(Event::Empty(shape))
+                        .map_err(runtime_xml_error)?;
+                    if let Some(inserted) = series_bar_shape_inserted.get_mut(series_index) {
+                        *inserted = true;
+                    }
+                    if let Some(written) = series_bar_shape_written.get_mut(series_index) {
+                        *written = true;
+                    }
+                }
 
                 if chart_type_from_group_name(local_name.as_slice()).is_some()
                     && chart_type.as_ref() != Some(&chart.chart_type)
@@ -30398,6 +30568,33 @@ fn patch_loaded_chart_model_xml(
             })
         },
     );
+    let series_bar_shapes_match =
+        expected_series_bar_shapes
+            .iter()
+            .enumerate()
+            .all(|(series_index, expected)| {
+                match (
+                    expected,
+                    series_bar_shape_seen
+                        .get(series_index)
+                        .copied()
+                        .unwrap_or(false),
+                ) {
+                    (Some(_), true) => series_bar_shape_written
+                        .get(series_index)
+                        .copied()
+                        .unwrap_or(false),
+                    (Some(_), false) => series_bar_shape_inserted
+                        .get(series_index)
+                        .copied()
+                        .unwrap_or(false),
+                    (None, true) => series_bar_shape_removed
+                        .get(series_index)
+                        .copied()
+                        .unwrap_or(false),
+                    (None, false) => true,
+                }
+            });
     let title_matches = match (chart.title.as_ref(), chart_title_seen) {
         (Some(_), true) => chart_title_text_written,
         (Some(_), false) => chart_title_inserted,
@@ -30838,6 +31035,7 @@ fn patch_loaded_chart_model_xml(
         && series_orders_match
         && series_explosions_match
         && series_point_explosions_match
+        && series_bar_shapes_match
         && patched_sources == expected_dirty_sources
         && title_matches
         && legend_matches
@@ -30934,6 +31132,12 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             series_xml.push_str(&format!(
                 r#"<c:bubbleSize><c:numRef><c:f>{formula}</c:f></c:numRef></c:bubbleSize>"#
             ));
+        }
+        if chart_type_supports_bar_shape(&chart.chart_type)
+            && let Some(bar_shape) = series.bar_shape
+        {
+            let bar_shape = chart_bar_shape_xml_value(bar_shape);
+            series_xml.push_str(&format!(r#"<c:shape val="{bar_shape}"/>"#));
         }
         series_xml.push_str("</c:ser>");
     }
@@ -87733,6 +87937,176 @@ mod tests {
                     .expect("reopened Chart.BarShape")
             ),
             f64::from(super::XL_CONE_TO_MAX)
+        );
+    }
+
+    #[test]
+    fn series_bar_shape_roundtrips_explicit_series_override() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "BarShape", &[])
+                .expect_err("Series.BarShape rejects 2D charts")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_3D_COLUMN)),
+                &[],
+            )
+            .expect("set Chart.ChartType to 3D column");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series, "BarShape", &[])
+                    .expect("Series.BarShape inherited default")
+            ),
+            f64::from(super::XL_BOX)
+        );
+        runtime
+            .dispatch_set(
+                series,
+                "BarShape",
+                OmValue::Number(f64::from(super::XL_PYRAMID_TO_MAX)),
+                &[],
+            )
+            .expect("set Series.BarShape to xlPyramidToMax");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series, "BarShape", &[])
+                    .expect("Series.BarShape after set")
+            ),
+            f64::from(super::XL_PYRAMID_TO_MAX)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "BarShape", &[])
+                    .expect("Chart.BarShape remains group default")
+            ),
+            f64::from(super::XL_BOX)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with series bar shape");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:bar3DChart>"));
+        assert!(saved_chart_xml.contains(r#"<c:shape val="box"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:shape val="pyramidToMax"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook with series bar shape");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart, "BarShape", &[])
+                    .expect("reopened Chart.BarShape")
+            ),
+            f64::from(super::XL_BOX)
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_series, "BarShape", &[])
+                    .expect("reopened Series.BarShape")
+            ),
+            f64::from(super::XL_PYRAMID_TO_MAX)
         );
     }
 
