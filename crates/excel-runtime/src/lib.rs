@@ -3250,6 +3250,43 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
+                    "Smooth" => {
+                        let OmValue::Bool(smooth) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Series.Smooth expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        if !chart_type_supports_series_smooth(&chart.chart_type) {
+                            return Err(OmError::unsupported(
+                                "Series.Smooth is only supported for line and scatter chart types",
+                            ));
+                        }
+                        let series = chart.series.get_mut(series_index).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "series not found")
+                        })?;
+                        if series.smooth != Some(smooth) {
+                            series.smooth = Some(smooth);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     "Name" | "Values" | "XValues" | "BubbleSizes" => {
                         let source = match value {
                             OmValue::Text(text) => {
@@ -11249,6 +11286,7 @@ impl ExcelRuntime {
                                     )?),
                                     bubble_size: None,
                                     bar_shape: None,
+                                    smooth: None,
                                     points: BTreeMap::new(),
                                     data_labels: None,
                                     point_data_labels: BTreeMap::new(),
@@ -11277,6 +11315,7 @@ impl ExcelRuntime {
                                     )?),
                                     bubble_size: None,
                                     bar_shape: None,
+                                    smooth: None,
                                     points: BTreeMap::new(),
                                     data_labels: None,
                                     point_data_labels: BTreeMap::new(),
@@ -11297,6 +11336,7 @@ impl ExcelRuntime {
                                 )?),
                                 bubble_size: None,
                                 bar_shape: None,
+                                smooth: None,
                                 points: BTreeMap::new(),
                                 data_labels: None,
                                 point_data_labels: BTreeMap::new(),
@@ -16463,6 +16503,7 @@ impl ExcelRuntime {
                         values: None,
                         bubble_size: None,
                         bar_shape: None,
+                        smooth: None,
                         points: BTreeMap::new(),
                         data_labels: None,
                         point_data_labels: BTreeMap::new(),
@@ -16547,6 +16588,21 @@ impl ExcelRuntime {
                         .map(chart_bar_shape_to_excel_value)
                         .unwrap_or(XL_BOX),
                 )))
+            }
+            "Smooth" => {
+                let chart = self.chart_model(workbook, chart_id)?;
+                if !chart_type_supports_series_smooth(&chart.chart_type) {
+                    return Err(OmError::unsupported(
+                        "Series.Smooth is only supported for line and scatter chart types",
+                    ));
+                }
+                let series = chart
+                    .series
+                    .get(series_index)
+                    .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "series not found"))?;
+                Ok(OmValue::Bool(series.smooth.unwrap_or_else(|| {
+                    chart_type_default_series_smooth(&chart.chart_type)
+                })))
             }
             "Formula" => {
                 let series = self.series_model(workbook, chart_id, series_index)?;
@@ -24716,6 +24772,20 @@ fn chart_type_supports_bar_shape(chart_type: &ChartType) -> bool {
     matches!(chart_group_xml_name(chart_type), Some("bar3DChart"))
 }
 
+fn chart_type_supports_series_smooth(chart_type: &ChartType) -> bool {
+    matches!(
+        chart_group_xml_name(chart_type),
+        Some("lineChart" | "scatterChart")
+    )
+}
+
+fn chart_type_default_series_smooth(chart_type: &ChartType) -> bool {
+    matches!(
+        chart_type,
+        ChartType::ScatterSmooth | ChartType::ScatterSmoothNoMarkers
+    )
+}
+
 fn chart_type_supports_gap_depth(chart_type: &ChartType) -> bool {
     matches!(
         chart_group_xml_name(chart_type),
@@ -25709,6 +25779,16 @@ fn patch_loaded_chart_model_xml(
                 .map(chart_bar_shape_xml_value)
         })
         .collect::<Vec<_>>();
+    let expected_series_smooth_values = chart
+        .series
+        .iter()
+        .map(|series| {
+            chart_type_supports_series_smooth(&chart.chart_type)
+                .then_some(series.smooth)
+                .flatten()
+                .map(|value| if value { "1" } else { "0" })
+        })
+        .collect::<Vec<_>>();
     let expected_line_marker = chart_type_line_marker_xml_value(&chart.chart_type);
     let expected_scatter_style = chart_type_scatter_style_xml_value(&chart.chart_type);
     let expected_radar_style = chart_type_radar_style_xml_value(&chart.chart_type);
@@ -25824,6 +25904,10 @@ fn patch_loaded_chart_model_xml(
     let mut series_bar_shape_written = vec![false; chart.series.len()];
     let mut series_bar_shape_inserted = vec![false; chart.series.len()];
     let mut series_bar_shape_removed = vec![false; chart.series.len()];
+    let mut series_smooth_seen = vec![false; chart.series.len()];
+    let mut series_smooth_written = vec![false; chart.series.len()];
+    let mut series_smooth_inserted = vec![false; chart.series.len()];
+    let mut series_smooth_removed = vec![false; chart.series.len()];
     let mut series_emitted = vec![false; chart.series.len()];
     let mut patched_sources = 0usize;
     let mut chart_type = None::<ChartType>;
@@ -27399,6 +27483,39 @@ fn patch_loaded_chart_model_xml(
                         wrote_start_element = true;
                     } else {
                         if let Some(removed) = series_bar_shape_removed.get_mut(series_index) {
+                            *removed = true;
+                        }
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    }
+                }
+                if !wrote_start_element
+                    && local_name.as_slice() == b"smooth"
+                    && parent_name == Some(b"ser".as_slice())
+                    && let Some(series_index) = current_series_index
+                {
+                    if let Some(seen) = series_smooth_seen.get_mut(series_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = expected_series_smooth_values
+                        .get(series_index)
+                        .copied()
+                        .flatten()
+                    {
+                        writer
+                            .write_event(Event::Start(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value,
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = series_smooth_written.get_mut(series_index) {
+                            *written = true;
+                        }
+                        wrote_start_element = true;
+                    } else {
+                        if let Some(removed) = series_smooth_removed.get_mut(series_index) {
                             *removed = true;
                         }
                         skip_depth = 1;
@@ -29113,6 +29230,33 @@ fn patch_loaded_chart_model_xml(
                             *removed = true;
                         }
                     }
+                } else if local_name.as_slice() == b"smooth"
+                    && parent_name == Some(b"ser".as_slice())
+                    && let Some(series_index) = current_series_index
+                {
+                    if let Some(seen) = series_smooth_seen.get_mut(series_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = expected_series_smooth_values
+                        .get(series_index)
+                        .copied()
+                        .flatten()
+                    {
+                        writer
+                            .write_event(Event::Empty(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value,
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = series_smooth_written.get_mut(series_index) {
+                            *written = true;
+                        }
+                    } else {
+                        if let Some(removed) = series_smooth_removed.get_mut(series_index) {
+                            *removed = true;
+                        }
+                    }
                 } else if local_name.as_slice() == b"marker"
                     && let Some(value) = expected_line_marker
                 {
@@ -30217,6 +30361,26 @@ fn patch_loaded_chart_model_xml(
                                 *written = true;
                             }
                         }
+                        if let Some(value) = expected_series_smooth_values
+                            .get(series_index)
+                            .copied()
+                            .flatten()
+                        {
+                            let mut smooth = BytesStart::new("c:smooth");
+                            smooth.push_attribute(("val", value));
+                            writer
+                                .write_event(Event::Empty(smooth))
+                                .map_err(runtime_xml_error)?;
+                            if let Some(seen) = series_smooth_seen.get_mut(series_index) {
+                                *seen = true;
+                            }
+                            if let Some(inserted) = series_smooth_inserted.get_mut(series_index) {
+                                *inserted = true;
+                            }
+                            if let Some(written) = series_smooth_written.get_mut(series_index) {
+                                *written = true;
+                            }
+                        }
                         writer
                             .write_event(Event::End(BytesEnd::new("c:ser")))
                             .map_err(runtime_xml_error)?;
@@ -30445,6 +30609,29 @@ fn patch_loaded_chart_model_xml(
                         *written = true;
                     }
                 }
+                if local_name.as_slice() == b"ser"
+                    && let Some(series_index) = current_series_index
+                    && !series_smooth_seen
+                        .get(series_index)
+                        .copied()
+                        .unwrap_or(false)
+                    && let Some(value) = expected_series_smooth_values
+                        .get(series_index)
+                        .copied()
+                        .flatten()
+                {
+                    let mut smooth = BytesStart::new("c:smooth");
+                    smooth.push_attribute(("val", value));
+                    writer
+                        .write_event(Event::Empty(smooth))
+                        .map_err(runtime_xml_error)?;
+                    if let Some(inserted) = series_smooth_inserted.get_mut(series_index) {
+                        *inserted = true;
+                    }
+                    if let Some(written) = series_smooth_written.get_mut(series_index) {
+                        *written = true;
+                    }
+                }
 
                 if chart_type_from_group_name(local_name.as_slice()).is_some()
                     && chart_type.as_ref() != Some(&chart.chart_type)
@@ -30589,6 +30776,33 @@ fn patch_loaded_chart_model_xml(
                         .copied()
                         .unwrap_or(false),
                     (None, true) => series_bar_shape_removed
+                        .get(series_index)
+                        .copied()
+                        .unwrap_or(false),
+                    (None, false) => true,
+                }
+            });
+    let series_smooth_values_match =
+        expected_series_smooth_values
+            .iter()
+            .enumerate()
+            .all(|(series_index, expected)| {
+                match (
+                    expected,
+                    series_smooth_seen
+                        .get(series_index)
+                        .copied()
+                        .unwrap_or(false),
+                ) {
+                    (Some(_), true) => series_smooth_written
+                        .get(series_index)
+                        .copied()
+                        .unwrap_or(false),
+                    (Some(_), false) => series_smooth_inserted
+                        .get(series_index)
+                        .copied()
+                        .unwrap_or(false),
+                    (None, true) => series_smooth_removed
                         .get(series_index)
                         .copied()
                         .unwrap_or(false),
@@ -31036,6 +31250,7 @@ fn patch_loaded_chart_model_xml(
         && series_explosions_match
         && series_point_explosions_match
         && series_bar_shapes_match
+        && series_smooth_values_match
         && patched_sources == expected_dirty_sources
         && title_matches
         && legend_matches
@@ -31138,6 +31353,14 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
         {
             let bar_shape = chart_bar_shape_xml_value(bar_shape);
             series_xml.push_str(&format!(r#"<c:shape val="{bar_shape}"/>"#));
+        }
+        if chart_type_supports_series_smooth(&chart.chart_type)
+            && let Some(smooth) = series.smooth
+        {
+            series_xml.push_str(&format!(
+                r#"<c:smooth val="{}"/>"#,
+                if smooth { "1" } else { "0" }
+            ));
         }
         series_xml.push_str("</c:ser>");
     }
@@ -88107,6 +88330,156 @@ mod tests {
                     .expect("reopened Series.BarShape")
             ),
             f64::from(super::XL_PYRAMID_TO_MAX)
+        );
+    }
+
+    #[test]
+    fn series_smooth_roundtrips_explicit_series_override() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Smooth", &[])
+                .expect_err("Series.Smooth rejects bar charts")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_XY_SCATTER_SMOOTH_NO_MARKERS)),
+                &[],
+            )
+            .expect("set Chart.ChartType to smooth scatter");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Smooth", &[])
+                .expect("Series.Smooth inherited smooth scatter default"),
+            OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_set(series, "Smooth", OmValue::Bool(false), &[])
+            .expect("set Series.Smooth false");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Smooth", &[])
+                .expect("Series.Smooth after set"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(series, "Smooth", OmValue::Number(1.0), &[])
+                .expect_err("Series.Smooth rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with series smooth override");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:scatterChart>"));
+        assert!(saved_chart_xml.contains(r#"<c:scatterStyle val="smooth"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:smooth val="0"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook with series smooth override");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_series, "Smooth", &[])
+                .expect("reopened Series.Smooth"),
+            OmValue::Bool(false)
         );
     }
 

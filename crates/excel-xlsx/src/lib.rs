@@ -770,6 +770,7 @@ pub struct ChartSeriesSummary {
     pub bubble_size_ref: Option<String>,
     pub bubble_size_cache: Option<ChartCacheSummary>,
     pub bar_shape: Option<ChartBarShape>,
+    pub smooth: Option<bool>,
     pub point_explosions: BTreeMap<u32, u16>,
     pub data_labels: Option<ChartDataLabelsSummary>,
     pub point_data_labels: BTreeMap<u32, ChartDataLabelsSummary>,
@@ -3704,6 +3705,7 @@ fn chart_series_from_summary(
                     .as_ref()
                     .map(|reference| source_from_ref(reference, series.bubble_size_cache.as_ref())),
                 bar_shape: series.bar_shape,
+                smooth: series.smooth,
                 points: series
                     .point_explosions
                     .iter()
@@ -3744,6 +3746,7 @@ fn chart_series_from_summary(
             values: Some(source_from_ref(reference, None)),
             bubble_size: None,
             bar_shape: None,
+            smooth: None,
             points: BTreeMap::new(),
             data_labels: None,
             point_data_labels: BTreeMap::new(),
@@ -16866,6 +16869,12 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         _ => active_series.bar_shape,
                     };
                 }
+                if local_name == b"smooth"
+                    && element_path.last().is_some_and(|name| name == "ser")
+                    && let Some(active_series) = active_series.as_mut()
+                {
+                    active_series.smooth = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                }
                 if local_name == b"marker"
                     && element_path.last().is_some_and(|name| name == "lineChart")
                 {
@@ -17799,6 +17808,12 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "coneToMax" => Some(ChartBarShape::ConeToMax),
                         _ => active_series.bar_shape,
                     };
+                }
+                if local_name == b"smooth"
+                    && element_path.last().is_some_and(|name| name == "ser")
+                    && let Some(active_series) = active_series.as_mut()
+                {
+                    active_series.smooth = parse_bool_val_attr(&element, &reader)?.or(Some(true));
                 }
                 if local_name == b"marker"
                     && element_path.last().is_some_and(|name| name == "lineChart")
@@ -23257,6 +23272,7 @@ mod tests {
                 bubble_size_ref: None,
                 bubble_size_cache: None,
                 bar_shape: None,
+                smooth: None,
                 point_explosions: BTreeMap::new(),
                 data_labels: Some(ChartDataLabelsSummary {
                     show_legend_key: Some(false),

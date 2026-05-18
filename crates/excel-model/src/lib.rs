@@ -1211,6 +1211,7 @@ mod tests {
                     }),
                     bubble_size: None,
                     bar_shape: None,
+                    smooth: None,
                     points: BTreeMap::new(),
                     data_labels: None,
                     point_data_labels: BTreeMap::new(),
