@@ -527,6 +527,11 @@ enum ChartFormatParent {
         chart_id: ChartId,
         axis_index: usize,
     },
+    Gridlines {
+        chart_id: ChartId,
+        axis_index: usize,
+        major: bool,
+    },
     Series {
         chart_id: ChartId,
         series_index: usize,
@@ -12896,6 +12901,10 @@ impl ExcelRuntime {
                             | "BaseUnit"
                             | "BaseUnitIsAuto"
                             | "HasTitle"
+                            | "HasMajorGridlines"
+                            | "HasMinorGridlines"
+                            | "MajorGridlines"
+                            | "MinorGridlines"
                             | "AxisTitle"
                             | "ReversePlotOrder"
                             | "ScaleType"
@@ -12928,6 +12937,16 @@ impl ExcelRuntime {
                             | "Application"
                             | "Parent"
                             | "Select"
+                    )
+                    | (
+                        "Gridlines",
+                        "Name"
+                            | "Format"
+                            | "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Select"
+                            | "Delete"
                     )
                     | (
                         "DisplayUnitLabel",
@@ -16104,6 +16123,27 @@ impl ExcelRuntime {
                     axis_index,
                 })
             }
+            ChartFormatParent::Gridlines {
+                chart_id,
+                axis_index,
+                major,
+            } => {
+                let axis = self.axis_model(workbook, chart_id, axis_index)?;
+                let has_gridlines = if major {
+                    axis.has_major_gridlines
+                } else {
+                    axis.has_minor_gridlines
+                };
+                if has_gridlines != Some(true) {
+                    return Err(OmError::new(OmErrorCode::NotFound, "gridlines not found"));
+                }
+                Ok(RuntimeObjectKind::Gridlines {
+                    workbook,
+                    chart_id,
+                    axis_index,
+                    major,
+                })
+            }
             ChartFormatParent::Series {
                 chart_id,
                 series_index,
@@ -17010,6 +17050,16 @@ impl ExcelRuntime {
             } else {
                 "Minor Gridlines".to_string()
             })),
+            "Format" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::ChartFormat {
+                    workbook,
+                    parent: ChartFormatParent::Gridlines {
+                        chart_id,
+                        axis_index,
+                        major,
+                    },
+                },
+            ))),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(self.register_object(
@@ -22272,6 +22322,10 @@ impl ExcelRuntime {
                         | ChartFormatParent::TickLabels {
                             chart_id: object_chart_id,
                             ..
+                        }
+                        | ChartFormatParent::Gridlines {
+                            chart_id: object_chart_id,
+                            ..
                         },
                 }
                 | RuntimeObjectKind::Adjustments {
@@ -22284,6 +22338,10 @@ impl ExcelRuntime {
                         | ChartFormatParent::TickLabels {
                             chart_id: object_chart_id,
                             ..
+                        }
+                        | ChartFormatParent::Gridlines {
+                            chart_id: object_chart_id,
+                            ..
                         },
                 }
                 | RuntimeObjectKind::ChartFormatChild {
@@ -22294,6 +22352,10 @@ impl ExcelRuntime {
                             ..
                         }
                         | ChartFormatParent::TickLabels {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::Gridlines {
                             chart_id: object_chart_id,
                             ..
                         },
@@ -22403,6 +22465,10 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                             ..
                         }
+                        | ChartFormatParent::Gridlines {
+                            chart_id: object_chart_id,
+                            ..
+                        }
                         | ChartFormatParent::Series {
                             chart_id: object_chart_id,
                             ..
@@ -22446,6 +22512,10 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                             ..
                         }
+                        | ChartFormatParent::Gridlines {
+                            chart_id: object_chart_id,
+                            ..
+                        }
                         | ChartFormatParent::Series {
                             chart_id: object_chart_id,
                             ..
@@ -22486,6 +22556,10 @@ impl ExcelRuntime {
                             ..
                         }
                         | ChartFormatParent::TickLabels {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::Gridlines {
                             chart_id: object_chart_id,
                             ..
                         }
@@ -22659,6 +22733,34 @@ impl ExcelRuntime {
                     chart_id: object_chart_id,
                     axis_index: object_axis_index,
                     major: object_major,
+                }
+                | RuntimeObjectKind::ChartFormat {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::Gridlines {
+                            chart_id: object_chart_id,
+                            axis_index: object_axis_index,
+                            major: object_major,
+                        },
+                }
+                | RuntimeObjectKind::Adjustments {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::Gridlines {
+                            chart_id: object_chart_id,
+                            axis_index: object_axis_index,
+                            major: object_major,
+                        },
+                }
+                | RuntimeObjectKind::ChartFormatChild {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::Gridlines {
+                            chart_id: object_chart_id,
+                            axis_index: object_axis_index,
+                            major: object_major,
+                        },
+                    ..
                 } if *object_workbook == workbook
                     && *object_chart_id == chart_id
                     && *object_axis_index == axis_index
@@ -99201,6 +99303,41 @@ mod tests {
                 .expect("MajorGridlines.Name"),
             OmValue::Text("Major Gridlines".to_string())
         );
+        let major_gridlines_format = expect_object_handle(
+            runtime
+                .dispatch_get(major_gridlines, "Format", &[])
+                .expect("MajorGridlines.Format"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(major_gridlines, "Format", &[OmValue::Missing])
+                .expect_err("MajorGridlines.Format rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(major_gridlines_format, "Creator", &[])
+                .expect("MajorGridlines.Format.Creator"),
+            OmValue::Number(f64::from(super::XL_CREATOR_CODE))
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(major_gridlines_format, "AutoShapeType", &[])
+                .expect("MajorGridlines.Format.AutoShapeType"),
+            OmValue::Number(f64::from(super::MSO_SHAPE_MIXED))
+        );
+        let major_gridlines_format_parent = expect_object_handle(
+            runtime
+                .dispatch_get(major_gridlines_format, "Parent", &[])
+                .expect("MajorGridlines.Format.Parent"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(major_gridlines_format_parent, "Name", &[])
+                .expect("MajorGridlines.Format.Parent.Name"),
+            OmValue::Text("Major Gridlines".to_string())
+        );
         let major_gridlines_parent = expect_object_handle(
             runtime
                 .dispatch_get(major_gridlines, "Parent", &[])
@@ -99227,6 +99364,13 @@ mod tests {
         );
         assert_eq!(
             runtime
+                .dispatch_get(major_gridlines_format, "Creator", &[])
+                .expect_err("deleted MajorGridlines.Format handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
                 .dispatch_get(value_axis, "MajorGridlines", &[])
                 .expect_err("Axis.MajorGridlines after delete")
                 .code,
@@ -99244,6 +99388,22 @@ mod tests {
             runtime
                 .dispatch_get(minor_gridlines, "Name", &[])
                 .expect("MinorGridlines.Name"),
+            OmValue::Text("Minor Gridlines".to_string())
+        );
+        let minor_gridlines_format = expect_object_handle(
+            runtime
+                .dispatch_get(minor_gridlines, "Format", &[])
+                .expect("MinorGridlines.Format"),
+        );
+        let minor_gridlines_format_parent = expect_object_handle(
+            runtime
+                .dispatch_get(minor_gridlines_format, "Parent", &[])
+                .expect("MinorGridlines.Format.Parent"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(minor_gridlines_format_parent, "Name", &[])
+                .expect("MinorGridlines.Format.Parent.Name"),
             OmValue::Text("Minor Gridlines".to_string())
         );
         assert_eq!(
