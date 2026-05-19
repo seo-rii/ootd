@@ -503,7 +503,47 @@ impl RuntimeSheetCollectionKind {
 
 #[derive(Debug, Clone)]
 enum ChartFormatParent {
-    DataTable { chart_id: ChartId },
+    ChartArea {
+        chart_id: ChartId,
+    },
+    PlotArea {
+        chart_id: ChartId,
+    },
+    ChartTitle {
+        chart_id: ChartId,
+    },
+    Legend {
+        chart_id: ChartId,
+    },
+    DataTable {
+        chart_id: ChartId,
+    },
+    Axis {
+        chart_id: ChartId,
+        axis_index: usize,
+    },
+    TickLabels {
+        chart_id: ChartId,
+        axis_index: usize,
+    },
+    Series {
+        chart_id: ChartId,
+        series_index: usize,
+    },
+    DataLabels {
+        chart_id: ChartId,
+        series_index: usize,
+    },
+    DataLabel {
+        chart_id: ChartId,
+        series_index: usize,
+        point_index: usize,
+    },
+    Point {
+        chart_id: ChartId,
+        series_index: usize,
+        point_index: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -2021,6 +2061,73 @@ impl ExcelRuntime {
                     )));
                 }
                 match parent {
+                    ChartFormatParent::ChartArea { chart_id } => {
+                        self.chart_model(workbook, chart_id)?;
+                        match member {
+                            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+                            "Application" => Ok(OmValue::Object(self.root_application())),
+                            "Parent" => Ok(OmValue::Object(self.register_object(
+                                RuntimeObjectKind::ChartArea { workbook, chart_id },
+                            ))),
+                            _ => Err(OmError::unsupported(format!(
+                                "ChartFormat.{member} is not implemented"
+                            ))),
+                        }
+                    }
+                    ChartFormatParent::PlotArea { chart_id } => {
+                        self.chart_model(workbook, chart_id)?;
+                        match member {
+                            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+                            "Application" => Ok(OmValue::Object(self.root_application())),
+                            "Parent" => Ok(OmValue::Object(self.register_object(
+                                RuntimeObjectKind::PlotArea { workbook, chart_id },
+                            ))),
+                            _ => Err(OmError::unsupported(format!(
+                                "ChartFormat.{member} is not implemented"
+                            ))),
+                        }
+                    }
+                    ChartFormatParent::ChartTitle { chart_id } => {
+                        if self.chart_model(workbook, chart_id)?.title.is_none() {
+                            return Err(OmError::new(
+                                OmErrorCode::NotFound,
+                                "chart title not found",
+                            ));
+                        }
+                        match member {
+                            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+                            "Application" => Ok(OmValue::Object(self.root_application())),
+                            "Parent" => Ok(OmValue::Object(
+                                self.register_chart_title_handle(workbook, chart_id),
+                            )),
+                            _ => Err(OmError::unsupported(format!(
+                                "ChartFormat.{member} is not implemented"
+                            ))),
+                        }
+                    }
+                    ChartFormatParent::Legend { chart_id } => {
+                        if !self
+                            .chart_model(workbook, chart_id)?
+                            .legend
+                            .as_ref()
+                            .is_some_and(|legend| legend.visible)
+                        {
+                            return Err(OmError::new(
+                                OmErrorCode::NotFound,
+                                "chart legend not found",
+                            ));
+                        }
+                        match member {
+                            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+                            "Application" => Ok(OmValue::Object(self.root_application())),
+                            "Parent" => Ok(OmValue::Object(
+                                self.register_legend_handle(workbook, chart_id),
+                            )),
+                            _ => Err(OmError::unsupported(format!(
+                                "ChartFormat.{member} is not implemented"
+                            ))),
+                        }
+                    }
                     ChartFormatParent::DataTable { chart_id } => {
                         if self.chart_model(workbook, chart_id)?.data_table.is_none() {
                             return Err(OmError::new(
@@ -2034,6 +2141,127 @@ impl ExcelRuntime {
                             "Parent" => Ok(OmValue::Object(
                                 self.register_data_table_handle(workbook, chart_id),
                             )),
+                            _ => Err(OmError::unsupported(format!(
+                                "ChartFormat.{member} is not implemented"
+                            ))),
+                        }
+                    }
+                    ChartFormatParent::Axis {
+                        chart_id,
+                        axis_index,
+                    } => {
+                        self.axis_model(workbook, chart_id, axis_index)?;
+                        match member {
+                            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+                            "Application" => Ok(OmValue::Object(self.root_application())),
+                            "Parent" => Ok(OmValue::Object(self.register_object(
+                                RuntimeObjectKind::Axis {
+                                    workbook,
+                                    chart_id,
+                                    axis_index,
+                                },
+                            ))),
+                            _ => Err(OmError::unsupported(format!(
+                                "ChartFormat.{member} is not implemented"
+                            ))),
+                        }
+                    }
+                    ChartFormatParent::TickLabels {
+                        chart_id,
+                        axis_index,
+                    } => {
+                        self.axis_model(workbook, chart_id, axis_index)?;
+                        match member {
+                            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+                            "Application" => Ok(OmValue::Object(self.root_application())),
+                            "Parent" => Ok(OmValue::Object(self.register_object(
+                                RuntimeObjectKind::TickLabels {
+                                    workbook,
+                                    chart_id,
+                                    axis_index,
+                                },
+                            ))),
+                            _ => Err(OmError::unsupported(format!(
+                                "ChartFormat.{member} is not implemented"
+                            ))),
+                        }
+                    }
+                    ChartFormatParent::Series {
+                        chart_id,
+                        series_index,
+                    } => {
+                        self.series_model(workbook, chart_id, series_index)?;
+                        match member {
+                            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+                            "Application" => Ok(OmValue::Object(self.root_application())),
+                            "Parent" => Ok(OmValue::Object(self.register_series_handle(
+                                workbook,
+                                chart_id,
+                                series_index,
+                            ))),
+                            _ => Err(OmError::unsupported(format!(
+                                "ChartFormat.{member} is not implemented"
+                            ))),
+                        }
+                    }
+                    ChartFormatParent::DataLabels {
+                        chart_id,
+                        series_index,
+                    } => {
+                        self.series_model(workbook, chart_id, series_index)?;
+                        match member {
+                            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+                            "Application" => Ok(OmValue::Object(self.root_application())),
+                            "Parent" => Ok(OmValue::Object(self.register_data_labels_handle(
+                                workbook,
+                                chart_id,
+                                series_index,
+                            ))),
+                            _ => Err(OmError::unsupported(format!(
+                                "ChartFormat.{member} is not implemented"
+                            ))),
+                        }
+                    }
+                    ChartFormatParent::DataLabel {
+                        chart_id,
+                        series_index,
+                        point_index,
+                    } => {
+                        self.validate_data_label_index(
+                            workbook,
+                            chart_id,
+                            series_index,
+                            point_index,
+                        )?;
+                        match member {
+                            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+                            "Application" => Ok(OmValue::Object(self.root_application())),
+                            "Parent" => Ok(OmValue::Object(self.register_data_label_handle(
+                                workbook,
+                                chart_id,
+                                series_index,
+                                point_index,
+                            ))),
+                            _ => Err(OmError::unsupported(format!(
+                                "ChartFormat.{member} is not implemented"
+                            ))),
+                        }
+                    }
+                    ChartFormatParent::Point {
+                        chart_id,
+                        series_index,
+                        point_index,
+                    } => {
+                        self.validate_point_index(workbook, chart_id, series_index, point_index)?;
+                        match member {
+                            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+                            "Application" => Ok(OmValue::Object(self.root_application())),
+                            "Parent" => Ok(OmValue::Object(self.register_point_handle(
+                                workbook,
+                                chart_id,
+                                series_index,
+                                point_index,
+                            ))),
                             _ => Err(OmError::unsupported(format!(
                                 "ChartFormat.{member} is not implemented"
                             ))),
@@ -12583,6 +12811,7 @@ impl ExcelRuntime {
                     | (
                         "ChartArea",
                         "Name"
+                            | "Format"
                             | "Left"
                             | "Top"
                             | "Width"
@@ -12598,11 +12827,18 @@ impl ExcelRuntime {
                     )
                     | (
                         "PlotArea",
-                        "Name" | "Creator" | "Application" | "Parent" | "Select" | "ClearFormats"
+                        "Name"
+                            | "Format"
+                            | "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Select"
+                            | "ClearFormats"
                     )
                     | (
                         "ChartTitle",
                         "Name"
+                            | "Format"
                             | "Text"
                             | "Caption"
                             | "Creator"
@@ -12614,6 +12850,7 @@ impl ExcelRuntime {
                     | (
                         "Legend",
                         "Name"
+                            | "Format"
                             | "Position"
                             | "IncludeInLayout"
                             | "Creator"
@@ -12675,6 +12912,7 @@ impl ExcelRuntime {
                     | (
                         "Axis",
                         "Type"
+                            | "Format"
                             | "AxisGroup"
                             | "AxisBetweenCategories"
                             | "CategoryType"
@@ -12709,6 +12947,7 @@ impl ExcelRuntime {
                     | (
                         "TickLabels",
                         "Name"
+                            | "Format"
                             | "NumberFormat"
                             | "NumberFormatLocal"
                             | "NumberFormatLinked"
@@ -12746,6 +12985,7 @@ impl ExcelRuntime {
                     | (
                         "Series",
                         "Name"
+                            | "Format"
                             | "Values"
                             | "XValues"
                             | "BubbleSizes"
@@ -12767,6 +13007,7 @@ impl ExcelRuntime {
                     | (
                         "DataLabels",
                         "Name"
+                            | "Format"
                             | "Count"
                             | "Item"
                             | "Type"
@@ -12792,6 +13033,7 @@ impl ExcelRuntime {
                     | (
                         "DataLabel",
                         "Name"
+                            | "Format"
                             | "Index"
                             | "Type"
                             | "ShowLegendKey"
@@ -12820,6 +13062,7 @@ impl ExcelRuntime {
                     | (
                         "Point",
                         "Name"
+                            | "Format"
                             | "Index"
                             | "Explosion"
                             | "HasDataLabel"
@@ -15772,6 +16015,16 @@ impl ExcelRuntime {
         self.chart_model(workbook, chart_id)?;
 
         match member {
+            "Format" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::ChartFormat {
+                    workbook,
+                    parent: match surface {
+                        "ChartArea" => ChartFormatParent::ChartArea { chart_id },
+                        "PlotArea" => ChartFormatParent::PlotArea { chart_id },
+                        _ => unreachable!("chart child surface was provided by runtime dispatch"),
+                    },
+                },
+            ))),
             "Name" => Ok(OmValue::Text(match surface {
                 "ChartArea" => "Chart Area".to_string(),
                 "PlotArea" => "Plot Area".to_string(),
@@ -15834,6 +16087,12 @@ impl ExcelRuntime {
 
         match member {
             "Name" => Ok(OmValue::Text("Legend".to_string())),
+            "Format" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::ChartFormat {
+                    workbook,
+                    parent: ChartFormatParent::Legend { chart_id },
+                },
+            ))),
             "IncludeInLayout" => Ok(OmValue::Bool(legend.include_in_layout.unwrap_or(true))),
             "Position" => {
                 let position = legend.position.ok_or_else(|| {
@@ -16213,6 +16472,15 @@ impl ExcelRuntime {
         let axis = self.axis_model(workbook, chart_id, axis_index)?;
 
         match member {
+            "Format" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::ChartFormat {
+                    workbook,
+                    parent: ChartFormatParent::Axis {
+                        chart_id,
+                        axis_index,
+                    },
+                },
+            ))),
             "Type" => Ok(OmValue::Number(f64::from(match axis.kind {
                 ChartAxisKind::Category | ChartAxisKind::Date => XL_CATEGORY,
                 ChartAxisKind::Value => XL_VALUE,
@@ -16484,6 +16752,15 @@ impl ExcelRuntime {
 
         match member {
             "Name" => Ok(OmValue::Text("Tick Labels".to_string())),
+            "Format" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::ChartFormat {
+                    workbook,
+                    parent: ChartFormatParent::TickLabels {
+                        chart_id,
+                        axis_index,
+                    },
+                },
+            ))),
             "NumberFormat" | "NumberFormatLocal" => Ok(OmValue::Text(
                 axis.tick_label_number_format
                     .clone()
@@ -16653,6 +16930,12 @@ impl ExcelRuntime {
 
         match member {
             "Name" => Ok(OmValue::Text("Chart Title".to_string())),
+            "Format" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::ChartFormat {
+                    workbook,
+                    parent: ChartFormatParent::ChartTitle { chart_id },
+                },
+            ))),
             "Text" | "Caption" => Ok(OmValue::Text(title.text.clone())),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
@@ -16823,6 +17106,18 @@ impl ExcelRuntime {
             )
             .map(OmValue::Text)
             .unwrap_or(OmValue::Empty)),
+            "Format" => {
+                self.series_model(workbook, chart_id, series_index)?;
+                Ok(OmValue::Object(self.register_object(
+                    RuntimeObjectKind::ChartFormat {
+                        workbook,
+                        parent: ChartFormatParent::Series {
+                            chart_id,
+                            series_index,
+                        },
+                    },
+                )))
+            }
             "Values" => Ok(chart_source_expr_text(
                 self.series_model(workbook, chart_id, series_index)?
                     .values
@@ -16980,6 +17275,18 @@ impl ExcelRuntime {
                 self.dispatch_invoke_data_labels(workbook, chart_id, series_index, member, args)
             }
             "Name" => Ok(OmValue::Text("Data Labels".to_string())),
+            "Format" => {
+                self.series_model(workbook, chart_id, series_index)?;
+                Ok(OmValue::Object(self.register_object(
+                    RuntimeObjectKind::ChartFormat {
+                        workbook,
+                        parent: ChartFormatParent::DataLabels {
+                            chart_id,
+                            series_index,
+                        },
+                    },
+                )))
+            }
             "Count" => {
                 let chart = self.chart_model(workbook, chart_id)?;
                 if chart.series.get(series_index).is_none() {
@@ -17156,6 +17463,16 @@ impl ExcelRuntime {
 
         match member {
             "Name" => Ok(OmValue::Text(format!("Data Label {}", point_index + 1))),
+            "Format" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::ChartFormat {
+                    workbook,
+                    parent: ChartFormatParent::DataLabel {
+                        chart_id,
+                        series_index,
+                        point_index,
+                    },
+                },
+            ))),
             "Index" => Ok(OmValue::Number((point_index + 1) as f64)),
             "Type" => Ok(OmValue::Number(f64::from(
                 chart_data_labels_type_to_excel_value(data_labels.as_ref()),
@@ -17356,6 +17673,16 @@ impl ExcelRuntime {
 
         match member {
             "Name" => Ok(OmValue::Text(format!("Point {}", point_index + 1))),
+            "Format" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::ChartFormat {
+                    workbook,
+                    parent: ChartFormatParent::Point {
+                        chart_id,
+                        series_index,
+                        point_index,
+                    },
+                },
+            ))),
             "Index" => Ok(OmValue::Number((point_index + 1) as f64)),
             "Explosion" => {
                 let point_index = u32::try_from(point_index).map_err(|_| {
@@ -21819,6 +22146,18 @@ impl ExcelRuntime {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
                     ..
+                }
+                | RuntimeObjectKind::ChartFormat {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::Axis {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::TickLabels {
+                            chart_id: object_chart_id,
+                            ..
+                        },
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
                 }
@@ -21901,8 +22240,44 @@ impl ExcelRuntime {
                 | RuntimeObjectKind::ChartFormat {
                     workbook: object_workbook,
                     parent:
-                        ChartFormatParent::DataTable {
+                        ChartFormatParent::ChartArea {
                             chart_id: object_chart_id,
+                        }
+                        | ChartFormatParent::PlotArea {
+                            chart_id: object_chart_id,
+                        }
+                        | ChartFormatParent::ChartTitle {
+                            chart_id: object_chart_id,
+                        }
+                        | ChartFormatParent::Legend {
+                            chart_id: object_chart_id,
+                        }
+                        | ChartFormatParent::DataTable {
+                            chart_id: object_chart_id,
+                        }
+                        | ChartFormatParent::Axis {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::TickLabels {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::Series {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::DataLabels {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::DataLabel {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::Point {
+                            chart_id: object_chart_id,
+                            ..
                         },
                 }
                 | RuntimeObjectKind::DataLabels {
@@ -22081,6 +22456,13 @@ impl ExcelRuntime {
                 RuntimeObjectKind::ChartTitle {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
+                }
+                | RuntimeObjectKind::ChartFormat {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::ChartTitle {
+                            chart_id: object_chart_id,
+                        },
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
                 }
@@ -22101,6 +22483,13 @@ impl ExcelRuntime {
                 RuntimeObjectKind::Legend {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
+                }
+                | RuntimeObjectKind::ChartFormat {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::Legend {
+                            chart_id: object_chart_id,
+                        },
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
                 }
@@ -22171,6 +22560,26 @@ impl ExcelRuntime {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
                     ..
+                }
+                | RuntimeObjectKind::ChartFormat {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::Series {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::DataLabels {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::DataLabel {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::Point {
+                            chart_id: object_chart_id,
+                            ..
+                        },
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
                 }
@@ -92510,6 +92919,41 @@ mod tests {
                 .dispatch_get(chart, "PlotArea", &[])
                 .expect("Chart.PlotArea"),
         );
+        runtime
+            .dispatch_set(chart, "HasTitle", OmValue::Bool(true), &[])
+            .expect("enable chart title for format handles");
+        runtime
+            .dispatch_set(chart, "HasLegend", OmValue::Bool(true), &[])
+            .expect("enable legend for format handles");
+        let chart_title = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartTitle", &[])
+                .expect("Chart.ChartTitle"),
+        );
+        let legend = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Legend", &[])
+                .expect("Chart.Legend"),
+        );
+        let axes = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Axes", &[])
+                .expect("Chart.Axes"),
+        );
+        let axis = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    axes,
+                    "Item",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Axes.Item(xlCategory)"),
+        );
+        let tick_labels = expect_object_handle(
+            runtime
+                .dispatch_get(axis, "TickLabels", &[])
+                .expect("Axis.TickLabels"),
+        );
         let series_collection = expect_object_handle(
             runtime
                 .dispatch_get(chart, "SeriesCollection", &[])
@@ -92545,7 +92989,7 @@ mod tests {
         );
         runtime
             .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
-            .expect("reset workbook dirty state after data label setup");
+            .expect("reset workbook dirty state after chart child setup");
         assert_eq!(
             runtime
                 .dispatch_get(workbook.0, "Saved", &[])
@@ -92649,6 +93093,65 @@ mod tests {
                 runtime
                     .dispatch_get(workbook.0, "Saved", &[])
                     .expect("Workbook.Saved after chart cut method"),
+                OmValue::Bool(true)
+            );
+        }
+
+        for (handle, surface) in [
+            (chart_area, "ChartArea"),
+            (plot_area, "PlotArea"),
+            (chart_title, "ChartTitle"),
+            (legend, "Legend"),
+            (axis, "Axis"),
+            (tick_labels, "TickLabels"),
+            (series, "Series"),
+            (point, "Point"),
+            (data_labels, "DataLabels"),
+            (data_label, "DataLabel"),
+        ] {
+            let format = expect_object_handle(
+                runtime
+                    .dispatch_get(handle, "Format", &[])
+                    .unwrap_or_else(|error| panic!("{surface}.Format failed: {error:?}")),
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(handle, "Format", &[OmValue::Missing])
+                    .expect_err("Format getter rejects arguments")
+                    .code,
+                OmErrorCode::InvalidArgument
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(format, "Creator", &[])
+                    .unwrap_or_else(|error| panic!("{surface}.Format.Creator failed: {error:?}")),
+                OmValue::Number(f64::from(super::XL_CREATOR_CODE))
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(format, "Application", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("{surface}.Format.Application failed: {error:?}")
+                    }),
+                OmValue::Object(application)
+            );
+            let parent = expect_object_handle(
+                runtime
+                    .dispatch_get(format, "Parent", &[])
+                    .unwrap_or_else(|error| panic!("{surface}.Format.Parent failed: {error:?}")),
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(parent, "Creator", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("{surface}.Format.Parent.Creator failed: {error:?}")
+                    }),
+                OmValue::Number(f64::from(super::XL_CREATOR_CODE))
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(workbook.0, "Saved", &[])
+                    .expect("Workbook.Saved after Format getter"),
                 OmValue::Bool(true)
             );
         }
