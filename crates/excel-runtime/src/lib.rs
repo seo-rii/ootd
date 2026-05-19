@@ -249,6 +249,12 @@ const MSO_ELEMENT_LEGEND_BOTTOM: i32 = 104;
 const MSO_ELEMENT_LEGEND_RIGHT_OVERLAY: i32 = 105;
 const MSO_ELEMENT_LEGEND_LEFT_OVERLAY: i32 = 106;
 const MSO_SHAPE_MIXED: i32 = -2;
+const MSO_BRING_TO_FRONT: i32 = 0;
+const MSO_SEND_TO_BACK: i32 = 1;
+const MSO_BRING_FORWARD: i32 = 2;
+const MSO_SEND_BACKWARD: i32 = 3;
+const MSO_BRING_IN_FRONT_OF_TEXT: i32 = 4;
+const MSO_SEND_BEHIND_TEXT: i32 = 5;
 const XL_PASTE_ALL: i32 = -4104;
 const XL_PASTE_COMMENTS: i32 = -4144;
 const XL_PASTE_FORMATS: i32 = -4122;
@@ -15736,6 +15742,51 @@ impl ExcelRuntime {
                 let delegated = self.shape_range_delegate_handle(workbook, source, member)?;
                 self.dispatch_invoke(delegated, member, args)
             }
+            "ZOrder" => {
+                let [command] = args else {
+                    return Err(OmError::invalid_argument(
+                        "ShapeRange.ZOrder expects a single MsoZOrderCmd argument",
+                    ));
+                };
+                let OmValue::Number(command) = command else {
+                    return Err(OmError::type_mismatch(
+                        "ShapeRange.ZOrder expects a numeric MsoZOrderCmd argument",
+                    ));
+                };
+                if !command.is_finite()
+                    || command.fract() != 0.0
+                    || *command < i32::MIN as f64
+                    || *command > i32::MAX as f64
+                {
+                    return Err(OmError::invalid_argument(
+                        "ShapeRange.ZOrder expects an integral MsoZOrderCmd argument",
+                    ));
+                }
+                let operation = match *command as i32 {
+                    MSO_BRING_TO_FRONT => "BringToFront",
+                    MSO_SEND_TO_BACK => "SendToBack",
+                    MSO_BRING_FORWARD => "BringForward",
+                    MSO_SEND_BACKWARD => "SendBackward",
+                    MSO_BRING_IN_FRONT_OF_TEXT | MSO_SEND_BEHIND_TEXT => {
+                        return Err(OmError::unsupported(
+                            "ShapeRange.ZOrder text wrapping commands are not supported for chart objects",
+                        ));
+                    }
+                    _ => {
+                        return Err(OmError::invalid_argument(
+                            "ShapeRange.ZOrder expects a supported MsoZOrderCmd value",
+                        ));
+                    }
+                };
+                let entries = self.shape_range_chart_object_entries(workbook, source)?;
+                let [(chart_object_id, _)] = entries.as_slice() else {
+                    return Err(OmError::unsupported(
+                        "ShapeRange.ZOrder is only implemented for a single chart object",
+                    ));
+                };
+                self.move_chart_object_z_order(workbook, *chart_object_id, operation)?;
+                Ok(OmValue::Empty)
+            }
             _ => Err(OmError::unsupported(format!(
                 "ShapeRange.{member} is not implemented as a method"
             ))),
@@ -22768,6 +22819,14 @@ impl ExcelRuntime {
         match member {
             "BringToFront" => ordered_chart_object_ids.push(target),
             "SendToBack" => ordered_chart_object_ids.insert(0, target),
+            "BringForward" => {
+                let new_position = (position + 1).min(ordered_chart_object_ids.len());
+                ordered_chart_object_ids.insert(new_position, target);
+            }
+            "SendBackward" => {
+                let new_position = position.saturating_sub(1);
+                ordered_chart_object_ids.insert(new_position, target);
+            }
             _ => {
                 return Err(OmError::unsupported(format!(
                     "ChartObject.{member} is not implemented as a z-order method"
@@ -87261,6 +87320,186 @@ mod tests {
             runtime
                 .dispatch_get(shape_range, "Name", &[])
                 .expect_err("multi ShapeRange.Name is unsupported")
+                .code,
+            OmErrorCode::Unsupported
+        );
+    }
+
+    #[test]
+    fn shaperange_zorder_reorders_single_chart_object() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let first_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let first_shape_range = expect_object_handle(
+            runtime
+                .dispatch_get(first_chart_object, "ShapeRange", &[])
+                .expect("ChartObject.ShapeRange"),
+        );
+        let second_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(24.0),
+                        OmValue::Number(30.0),
+                        OmValue::Number(180.0),
+                        OmValue::Number(90.0),
+                    ],
+                )
+                .expect("ChartObjects.Add second chart"),
+        );
+        let third_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(48.0),
+                        OmValue::Number(60.0),
+                        OmValue::Number(120.0),
+                        OmValue::Number(80.0),
+                    ],
+                )
+                .expect("ChartObjects.Add third chart"),
+        );
+
+        runtime
+            .dispatch_invoke(
+                first_shape_range,
+                "ZOrder",
+                &[OmValue::Number(f64::from(super::MSO_BRING_FORWARD))],
+            )
+            .expect("ShapeRange.ZOrder msoBringForward");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_chart_object, "ZOrder", &[])
+                    .expect("first chart object z-order after bring forward")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_chart_object, "ZOrder", &[])
+                    .expect("second chart object z-order after bring forward")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(third_chart_object, "ZOrder", &[])
+                    .expect("third chart object z-order after bring forward")
+            ),
+            3.0
+        );
+
+        runtime
+            .dispatch_invoke(
+                first_shape_range,
+                "ZOrder",
+                &[OmValue::Number(f64::from(super::MSO_SEND_BACKWARD))],
+            )
+            .expect("ShapeRange.ZOrder msoSendBackward");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_chart_object, "ZOrder", &[])
+                    .expect("first chart object z-order after send backward")
+            ),
+            1.0
+        );
+
+        runtime
+            .dispatch_invoke(
+                first_shape_range,
+                "ZOrder",
+                &[OmValue::Number(f64::from(super::MSO_BRING_TO_FRONT))],
+            )
+            .expect("ShapeRange.ZOrder msoBringToFront");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_chart_object, "ZOrder", &[])
+                    .expect("first chart object z-order after bring to front")
+            ),
+            3.0
+        );
+
+        runtime
+            .dispatch_invoke(
+                first_shape_range,
+                "ZOrder",
+                &[OmValue::Number(f64::from(super::MSO_SEND_TO_BACK))],
+            )
+            .expect("ShapeRange.ZOrder msoSendToBack");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_chart_object, "ZOrder", &[])
+                    .expect("first chart object z-order after send to back")
+            ),
+            1.0
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    first_shape_range,
+                    "ZOrder",
+                    &[OmValue::Text("front".to_string())],
+                )
+                .expect_err("ShapeRange.ZOrder rejects non-number")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    first_shape_range,
+                    "ZOrder",
+                    &[OmValue::Number(f64::from(super::MSO_SEND_BEHIND_TEXT))],
+                )
+                .expect_err("ShapeRange.ZOrder rejects text wrapping command")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        let all_shapes = expect_object_handle(
+            runtime
+                .dispatch_get(chart_objects, "ShapeRange", &[])
+                .expect("ChartObjects.ShapeRange"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    all_shapes,
+                    "ZOrder",
+                    &[OmValue::Number(f64::from(super::MSO_BRING_TO_FRONT))],
+                )
+                .expect_err("multi ShapeRange.ZOrder is unsupported")
                 .code,
             OmErrorCode::Unsupported
         );
