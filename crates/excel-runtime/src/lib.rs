@@ -2,10 +2,10 @@ use excel_model::{
     AxisModel, ChartAxisCrosses, ChartAxisDisplayUnit, ChartAxisKind, ChartAxisScaleType,
     ChartAxisTimeUnit, ChartBarShape, ChartBuiltInDisplayUnit, ChartDataLabelPosition,
     ChartDataLabelsModel, ChartDataTableModel, ChartDisplayBlanksAs, ChartLegendPosition,
-    ChartModel, ChartObjectModel, ChartProtectionModel, ChartSheetBinding, ChartSizeRepresents,
-    ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition, ChartTickMark, ChartType,
-    ChartView3DModel, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState,
-    WorksheetData, resolve_chart_source_reference_with_names,
+    ChartMarkerStyle, ChartModel, ChartObjectModel, ChartProtectionModel, ChartSheetBinding,
+    ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition,
+    ChartTickMark, ChartType, ChartView3DModel, DrawingModel, DrawingObjectModel, LegendModel,
+    SeriesModel, WorkbookState, WorksheetData, resolve_chart_source_reference_with_names,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
@@ -131,6 +131,18 @@ const XL_PYRAMID_TO_MAX: i32 = 2;
 const XL_CYLINDER: i32 = 3;
 const XL_CONE_TO_POINT: i32 = 4;
 const XL_CONE_TO_MAX: i32 = 5;
+const XL_MARKER_STYLE_AUTOMATIC: i32 = -4105;
+const XL_MARKER_STYLE_CIRCLE: i32 = 8;
+const XL_MARKER_STYLE_DASH: i32 = -4115;
+const XL_MARKER_STYLE_DIAMOND: i32 = 2;
+const XL_MARKER_STYLE_DOT: i32 = -4118;
+const XL_MARKER_STYLE_NONE: i32 = -4142;
+const XL_MARKER_STYLE_PICTURE: i32 = -4147;
+const XL_MARKER_STYLE_PLUS: i32 = 9;
+const XL_MARKER_STYLE_SQUARE: i32 = 1;
+const XL_MARKER_STYLE_STAR: i32 = 5;
+const XL_MARKER_STYLE_TRIANGLE: i32 = 3;
+const XL_MARKER_STYLE_X: i32 = -4168;
 const XL_NOT_PLOTTED: i32 = 1;
 const XL_ZERO: i32 = 2;
 const XL_INTERPOLATED: i32 = 3;
@@ -3282,6 +3294,88 @@ impl ExcelRuntime {
                         })?;
                         if series.smooth != Some(smooth) {
                             series.smooth = Some(smooth);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "MarkerStyle" => {
+                        let marker_style = chart_marker_style_from_excel_value(coerce_i32_arg(
+                            &value,
+                            "Series.MarkerStyle",
+                        )?)?;
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        if !chart_type_supports_series_marker(&chart.chart_type) {
+                            return Err(OmError::unsupported(
+                                "Series.MarkerStyle is only supported for line, scatter, and radar chart types",
+                            ));
+                        }
+                        let series = chart.series.get_mut(series_index).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "series not found")
+                        })?;
+                        if series.marker_style != Some(marker_style) {
+                            series.marker_style = Some(marker_style);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    "MarkerSize" => {
+                        let OmValue::Number(number) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Series.MarkerSize expects a numeric marker size",
+                            ));
+                        };
+                        if !number.is_finite()
+                            || number.fract() != 0.0
+                            || !(2.0..=72.0).contains(&number)
+                        {
+                            return Err(OmError::invalid_argument(
+                                "Series.MarkerSize expects an integer between 2 and 72",
+                            ));
+                        }
+                        let marker_size = number as u8;
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        if !chart_type_supports_series_marker(&chart.chart_type) {
+                            return Err(OmError::unsupported(
+                                "Series.MarkerSize is only supported for line, scatter, and radar chart types",
+                            ));
+                        }
+                        let series = chart.series.get_mut(series_index).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "series not found")
+                        })?;
+                        if series.marker_size != Some(marker_size) {
+                            series.marker_size = Some(marker_size);
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -11287,6 +11381,8 @@ impl ExcelRuntime {
                                     bubble_size: None,
                                     bar_shape: None,
                                     smooth: None,
+                                    marker_style: None,
+                                    marker_size: None,
                                     points: BTreeMap::new(),
                                     data_labels: None,
                                     point_data_labels: BTreeMap::new(),
@@ -11316,6 +11412,8 @@ impl ExcelRuntime {
                                     bubble_size: None,
                                     bar_shape: None,
                                     smooth: None,
+                                    marker_style: None,
+                                    marker_size: None,
                                     points: BTreeMap::new(),
                                     data_labels: None,
                                     point_data_labels: BTreeMap::new(),
@@ -11337,6 +11435,8 @@ impl ExcelRuntime {
                                 bubble_size: None,
                                 bar_shape: None,
                                 smooth: None,
+                                marker_style: None,
+                                marker_size: None,
                                 points: BTreeMap::new(),
                                 data_labels: None,
                                 point_data_labels: BTreeMap::new(),
@@ -16504,6 +16604,8 @@ impl ExcelRuntime {
                         bubble_size: None,
                         bar_shape: None,
                         smooth: None,
+                        marker_style: None,
+                        marker_size: None,
                         points: BTreeMap::new(),
                         data_labels: None,
                         point_data_labels: BTreeMap::new(),
@@ -16603,6 +16705,37 @@ impl ExcelRuntime {
                 Ok(OmValue::Bool(series.smooth.unwrap_or_else(|| {
                     chart_type_default_series_smooth(&chart.chart_type)
                 })))
+            }
+            "MarkerStyle" => {
+                let chart = self.chart_model(workbook, chart_id)?;
+                if !chart_type_supports_series_marker(&chart.chart_type) {
+                    return Err(OmError::unsupported(
+                        "Series.MarkerStyle is only supported for line, scatter, and radar chart types",
+                    ));
+                }
+                let series = chart
+                    .series
+                    .get(series_index)
+                    .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "series not found"))?;
+                Ok(OmValue::Number(f64::from(
+                    series
+                        .marker_style
+                        .map(chart_marker_style_to_excel_value)
+                        .unwrap_or(XL_MARKER_STYLE_AUTOMATIC),
+                )))
+            }
+            "MarkerSize" => {
+                let chart = self.chart_model(workbook, chart_id)?;
+                if !chart_type_supports_series_marker(&chart.chart_type) {
+                    return Err(OmError::unsupported(
+                        "Series.MarkerSize is only supported for line, scatter, and radar chart types",
+                    ));
+                }
+                let series = chart
+                    .series
+                    .get(series_index)
+                    .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "series not found"))?;
+                Ok(OmValue::Number(f64::from(series.marker_size.unwrap_or(5))))
             }
             "Formula" => {
                 let series = self.series_model(workbook, chart_id, series_index)?;
@@ -24463,6 +24596,60 @@ fn chart_bar_shape_from_excel_value(value: i32) -> OmResult<ChartBarShape> {
     }
 }
 
+fn chart_marker_style_xml_value(style: ChartMarkerStyle) -> &'static str {
+    match style {
+        ChartMarkerStyle::Automatic => "auto",
+        ChartMarkerStyle::Circle => "circle",
+        ChartMarkerStyle::Dash => "dash",
+        ChartMarkerStyle::Diamond => "diamond",
+        ChartMarkerStyle::Dot => "dot",
+        ChartMarkerStyle::None => "none",
+        ChartMarkerStyle::Picture => "picture",
+        ChartMarkerStyle::Plus => "plus",
+        ChartMarkerStyle::Square => "square",
+        ChartMarkerStyle::Star => "star",
+        ChartMarkerStyle::Triangle => "triangle",
+        ChartMarkerStyle::X => "x",
+    }
+}
+
+fn chart_marker_style_to_excel_value(style: ChartMarkerStyle) -> i32 {
+    match style {
+        ChartMarkerStyle::Automatic => XL_MARKER_STYLE_AUTOMATIC,
+        ChartMarkerStyle::Circle => XL_MARKER_STYLE_CIRCLE,
+        ChartMarkerStyle::Dash => XL_MARKER_STYLE_DASH,
+        ChartMarkerStyle::Diamond => XL_MARKER_STYLE_DIAMOND,
+        ChartMarkerStyle::Dot => XL_MARKER_STYLE_DOT,
+        ChartMarkerStyle::None => XL_MARKER_STYLE_NONE,
+        ChartMarkerStyle::Picture => XL_MARKER_STYLE_PICTURE,
+        ChartMarkerStyle::Plus => XL_MARKER_STYLE_PLUS,
+        ChartMarkerStyle::Square => XL_MARKER_STYLE_SQUARE,
+        ChartMarkerStyle::Star => XL_MARKER_STYLE_STAR,
+        ChartMarkerStyle::Triangle => XL_MARKER_STYLE_TRIANGLE,
+        ChartMarkerStyle::X => XL_MARKER_STYLE_X,
+    }
+}
+
+fn chart_marker_style_from_excel_value(value: i32) -> OmResult<ChartMarkerStyle> {
+    match value {
+        XL_MARKER_STYLE_AUTOMATIC => Ok(ChartMarkerStyle::Automatic),
+        XL_MARKER_STYLE_CIRCLE => Ok(ChartMarkerStyle::Circle),
+        XL_MARKER_STYLE_DASH => Ok(ChartMarkerStyle::Dash),
+        XL_MARKER_STYLE_DIAMOND => Ok(ChartMarkerStyle::Diamond),
+        XL_MARKER_STYLE_DOT => Ok(ChartMarkerStyle::Dot),
+        XL_MARKER_STYLE_NONE => Ok(ChartMarkerStyle::None),
+        XL_MARKER_STYLE_PICTURE => Ok(ChartMarkerStyle::Picture),
+        XL_MARKER_STYLE_PLUS => Ok(ChartMarkerStyle::Plus),
+        XL_MARKER_STYLE_SQUARE => Ok(ChartMarkerStyle::Square),
+        XL_MARKER_STYLE_STAR => Ok(ChartMarkerStyle::Star),
+        XL_MARKER_STYLE_TRIANGLE => Ok(ChartMarkerStyle::Triangle),
+        XL_MARKER_STYLE_X => Ok(ChartMarkerStyle::X),
+        _ => Err(OmError::unsupported(
+            "Series.MarkerStyle supports Excel XlMarkerStyle constants",
+        )),
+    }
+}
+
 fn chart_bar_shape_from_chart_type(chart_type: &ChartType) -> Option<ChartBarShape> {
     match chart_type {
         ChartType::Bar3DClustered
@@ -24776,6 +24963,13 @@ fn chart_type_supports_series_smooth(chart_type: &ChartType) -> bool {
     matches!(
         chart_group_xml_name(chart_type),
         Some("lineChart" | "scatterChart")
+    )
+}
+
+fn chart_type_supports_series_marker(chart_type: &ChartType) -> bool {
+    matches!(
+        chart_group_xml_name(chart_type),
+        Some("lineChart" | "scatterChart" | "radarChart")
     )
 }
 
@@ -25789,6 +25983,26 @@ fn patch_loaded_chart_model_xml(
                 .map(|value| if value { "1" } else { "0" })
         })
         .collect::<Vec<_>>();
+    let expected_series_marker_styles = chart
+        .series
+        .iter()
+        .map(|series| {
+            chart_type_supports_series_marker(&chart.chart_type)
+                .then_some(series.marker_style)
+                .flatten()
+                .map(chart_marker_style_xml_value)
+        })
+        .collect::<Vec<_>>();
+    let expected_series_marker_sizes = chart
+        .series
+        .iter()
+        .map(|series| {
+            chart_type_supports_series_marker(&chart.chart_type)
+                .then_some(series.marker_size)
+                .flatten()
+                .map(|value| value.to_string())
+        })
+        .collect::<Vec<_>>();
     let expected_line_marker = chart_type_line_marker_xml_value(&chart.chart_type);
     let expected_scatter_style = chart_type_scatter_style_xml_value(&chart.chart_type);
     let expected_radar_style = chart_type_radar_style_xml_value(&chart.chart_type);
@@ -25908,6 +26122,15 @@ fn patch_loaded_chart_model_xml(
     let mut series_smooth_written = vec![false; chart.series.len()];
     let mut series_smooth_inserted = vec![false; chart.series.len()];
     let mut series_smooth_removed = vec![false; chart.series.len()];
+    let mut series_marker_seen = vec![false; chart.series.len()];
+    let mut series_marker_inserted = vec![false; chart.series.len()];
+    let mut series_marker_removed = vec![false; chart.series.len()];
+    let mut series_marker_style_seen = vec![false; chart.series.len()];
+    let mut series_marker_style_written = vec![false; chart.series.len()];
+    let mut series_marker_style_inserted = vec![false; chart.series.len()];
+    let mut series_marker_size_seen = vec![false; chart.series.len()];
+    let mut series_marker_size_written = vec![false; chart.series.len()];
+    let mut series_marker_size_inserted = vec![false; chart.series.len()];
     let mut series_emitted = vec![false; chart.series.len()];
     let mut patched_sources = 0usize;
     let mut chart_type = None::<ChartType>;
@@ -26095,6 +26318,7 @@ fn patch_loaded_chart_model_xml(
     let mut axis_minor_time_unit_removed = Vec::<bool>::new();
     let mut current_chart_group_depth = None::<usize>;
     let mut chart_group_axis_refs_seen = Vec::<String>::new();
+    let mut current_series_marker_index = None::<usize>;
     let mut skip_depth = 0usize;
 
     let slot_index = |slot: ChartSourceXmlSlot| -> usize {
@@ -26508,6 +26732,31 @@ fn patch_loaded_chart_model_xml(
                 .map_err(runtime_xml_error)?;
             Ok(())
         };
+    let write_chart_series_marker_children = |writer: &mut Writer<Cursor<Vec<u8>>>,
+                                              marker_style: Option<&str>,
+                                              marker_size: Option<&str>|
+     -> OmResult<()> {
+        if let Some(marker_style) = marker_style {
+            write_chart_string_val_element(writer, "c:symbol", marker_style)?;
+        }
+        if let Some(marker_size) = marker_size {
+            write_chart_string_val_element(writer, "c:size", marker_size)?;
+        }
+        Ok(())
+    };
+    let write_chart_series_marker_element = |writer: &mut Writer<Cursor<Vec<u8>>>,
+                                             marker_style: Option<&str>,
+                                             marker_size: Option<&str>|
+     -> OmResult<()> {
+        writer
+            .write_event(Event::Start(BytesStart::new("c:marker")))
+            .map_err(runtime_xml_error)?;
+        write_chart_series_marker_children(writer, marker_style, marker_size)?;
+        writer
+            .write_event(Event::End(BytesEnd::new("c:marker")))
+            .map_err(runtime_xml_error)?;
+        Ok(())
+    };
     let write_chart_axis_scaling_element =
         |writer: &mut Writer<Cursor<Vec<u8>>>, axis: &AxisModel| -> OmResult<()> {
             if !chart_axis_has_scaling_xml(axis) {
@@ -27521,6 +27770,79 @@ fn patch_loaded_chart_model_xml(
                         skip_depth = 1;
                         buffer.clear();
                         continue;
+                    }
+                }
+                if !wrote_start_element
+                    && local_name.as_slice() == b"marker"
+                    && parent_name == Some(b"ser".as_slice())
+                    && let Some(series_index) = current_series_index
+                {
+                    if let Some(seen) = series_marker_seen.get_mut(series_index) {
+                        *seen = true;
+                    }
+                    if !chart_type_supports_series_marker(&chart.chart_type) {
+                        if let Some(removed) = series_marker_removed.get_mut(series_index) {
+                            *removed = true;
+                        }
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    }
+                    current_series_marker_index = Some(series_index);
+                    writer
+                        .write_event(Event::Start(element.to_owned()))
+                        .map_err(runtime_xml_error)?;
+                    wrote_start_element = true;
+                }
+                if !wrote_start_element
+                    && local_name.as_slice() == b"symbol"
+                    && parent_name == Some(b"marker".as_slice())
+                    && let Some(series_index) = current_series_marker_index
+                {
+                    if let Some(seen) = series_marker_style_seen.get_mut(series_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = expected_series_marker_styles
+                        .get(series_index)
+                        .copied()
+                        .flatten()
+                    {
+                        writer
+                            .write_event(Event::Start(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value,
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = series_marker_style_written.get_mut(series_index) {
+                            *written = true;
+                        }
+                        wrote_start_element = true;
+                    }
+                }
+                if !wrote_start_element
+                    && local_name.as_slice() == b"size"
+                    && parent_name == Some(b"marker".as_slice())
+                    && let Some(series_index) = current_series_marker_index
+                {
+                    if let Some(seen) = series_marker_size_seen.get_mut(series_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = expected_series_marker_sizes
+                        .get(series_index)
+                        .and_then(Option::as_deref)
+                    {
+                        writer
+                            .write_event(Event::Start(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value,
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = series_marker_size_written.get_mut(series_index) {
+                            *written = true;
+                        }
+                        wrote_start_element = true;
                     }
                 }
                 if !wrote_start_element
@@ -29257,6 +29579,114 @@ fn patch_loaded_chart_model_xml(
                             *removed = true;
                         }
                     }
+                } else if local_name.as_slice() == b"symbol"
+                    && parent_name == Some(b"marker".as_slice())
+                    && let Some(series_index) = current_series_marker_index
+                {
+                    if let Some(seen) = series_marker_style_seen.get_mut(series_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = expected_series_marker_styles
+                        .get(series_index)
+                        .copied()
+                        .flatten()
+                    {
+                        writer
+                            .write_event(Event::Empty(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value,
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = series_marker_style_written.get_mut(series_index) {
+                            *written = true;
+                        }
+                    } else {
+                        writer
+                            .write_event(Event::Empty(element.into_owned()))
+                            .map_err(runtime_xml_error)?;
+                    }
+                } else if local_name.as_slice() == b"size"
+                    && parent_name == Some(b"marker".as_slice())
+                    && let Some(series_index) = current_series_marker_index
+                {
+                    if let Some(seen) = series_marker_size_seen.get_mut(series_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = expected_series_marker_sizes
+                        .get(series_index)
+                        .and_then(Option::as_deref)
+                    {
+                        writer
+                            .write_event(Event::Empty(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value,
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) = series_marker_size_written.get_mut(series_index) {
+                            *written = true;
+                        }
+                    } else {
+                        writer
+                            .write_event(Event::Empty(element.into_owned()))
+                            .map_err(runtime_xml_error)?;
+                    }
+                } else if local_name.as_slice() == b"marker"
+                    && parent_name == Some(b"ser".as_slice())
+                    && let Some(series_index) = current_series_index
+                {
+                    if let Some(seen) = series_marker_seen.get_mut(series_index) {
+                        *seen = true;
+                    }
+                    if !chart_type_supports_series_marker(&chart.chart_type) {
+                        if let Some(removed) = series_marker_removed.get_mut(series_index) {
+                            *removed = true;
+                        }
+                    } else {
+                        let marker_style = expected_series_marker_styles
+                            .get(series_index)
+                            .copied()
+                            .flatten();
+                        let marker_size = expected_series_marker_sizes
+                            .get(series_index)
+                            .and_then(Option::as_deref);
+                        if marker_style.is_some() || marker_size.is_some() {
+                            write_chart_series_marker_element(
+                                &mut writer,
+                                marker_style,
+                                marker_size,
+                            )?;
+                            if marker_style.is_some() {
+                                if let Some(inserted) =
+                                    series_marker_style_inserted.get_mut(series_index)
+                                {
+                                    *inserted = true;
+                                }
+                                if let Some(written) =
+                                    series_marker_style_written.get_mut(series_index)
+                                {
+                                    *written = true;
+                                }
+                            }
+                            if marker_size.is_some() {
+                                if let Some(inserted) =
+                                    series_marker_size_inserted.get_mut(series_index)
+                                {
+                                    *inserted = true;
+                                }
+                                if let Some(written) =
+                                    series_marker_size_written.get_mut(series_index)
+                                {
+                                    *written = true;
+                                }
+                            }
+                        } else {
+                            writer
+                                .write_event(Event::Empty(element.into_owned()))
+                                .map_err(runtime_xml_error)?;
+                        }
+                    }
                 } else if local_name.as_slice() == b"marker"
                     && let Some(value) = expected_line_marker
                 {
@@ -29552,6 +29982,45 @@ fn patch_loaded_chart_model_xml(
                         .map_err(runtime_xml_error)?;
                     patched_sources += 1;
                 }
+                if local_name.as_slice() == b"marker"
+                    && let Some(series_index) = current_series_marker_index
+                {
+                    let marker_style = expected_series_marker_styles
+                        .get(series_index)
+                        .copied()
+                        .flatten();
+                    let marker_size = expected_series_marker_sizes
+                        .get(series_index)
+                        .and_then(Option::as_deref);
+                    if let Some(marker_style) = marker_style
+                        && !series_marker_style_seen
+                            .get(series_index)
+                            .copied()
+                            .unwrap_or(false)
+                    {
+                        write_chart_string_val_element(&mut writer, "c:symbol", marker_style)?;
+                        if let Some(inserted) = series_marker_style_inserted.get_mut(series_index) {
+                            *inserted = true;
+                        }
+                        if let Some(written) = series_marker_style_written.get_mut(series_index) {
+                            *written = true;
+                        }
+                    }
+                    if let Some(marker_size) = marker_size
+                        && !series_marker_size_seen
+                            .get(series_index)
+                            .copied()
+                            .unwrap_or(false)
+                    {
+                        write_chart_string_val_element(&mut writer, "c:size", marker_size)?;
+                        if let Some(inserted) = series_marker_size_inserted.get_mut(series_index) {
+                            *inserted = true;
+                        }
+                        if let Some(written) = series_marker_size_written.get_mut(series_index) {
+                            *written = true;
+                        }
+                    }
+                }
                 if local_name.as_slice() == b"ser"
                     && let Some(series_index) = current_series_index
                 {
@@ -29632,6 +30101,53 @@ fn patch_loaded_chart_model_xml(
                             }
                             if source.dirty {
                                 patched_sources += 1;
+                            }
+                        }
+                    }
+                    if !series_marker_seen
+                        .get(series_index)
+                        .copied()
+                        .unwrap_or(false)
+                    {
+                        let marker_style = expected_series_marker_styles
+                            .get(series_index)
+                            .copied()
+                            .flatten();
+                        let marker_size = expected_series_marker_sizes
+                            .get(series_index)
+                            .and_then(Option::as_deref);
+                        if marker_style.is_some() || marker_size.is_some() {
+                            write_chart_series_marker_element(
+                                &mut writer,
+                                marker_style,
+                                marker_size,
+                            )?;
+                            if let Some(inserted) = series_marker_inserted.get_mut(series_index) {
+                                *inserted = true;
+                            }
+                            if marker_style.is_some() {
+                                if let Some(inserted) =
+                                    series_marker_style_inserted.get_mut(series_index)
+                                {
+                                    *inserted = true;
+                                }
+                                if let Some(written) =
+                                    series_marker_style_written.get_mut(series_index)
+                                {
+                                    *written = true;
+                                }
+                            }
+                            if marker_size.is_some() {
+                                if let Some(inserted) =
+                                    series_marker_size_inserted.get_mut(series_index)
+                                {
+                                    *inserted = true;
+                                }
+                                if let Some(written) =
+                                    series_marker_size_written.get_mut(series_index)
+                                {
+                                    *written = true;
+                                }
                             }
                         }
                     }
@@ -30331,6 +30847,50 @@ fn patch_loaded_chart_model_xml(
                                 *written = true;
                             }
                         }
+                        let marker_style = expected_series_marker_styles
+                            .get(series_index)
+                            .copied()
+                            .flatten();
+                        let marker_size = expected_series_marker_sizes
+                            .get(series_index)
+                            .and_then(Option::as_deref);
+                        if marker_style.is_some() || marker_size.is_some() {
+                            write_chart_series_marker_element(
+                                &mut writer,
+                                marker_style,
+                                marker_size,
+                            )?;
+                            if let Some(seen) = series_marker_seen.get_mut(series_index) {
+                                *seen = true;
+                            }
+                            if let Some(inserted) = series_marker_inserted.get_mut(series_index) {
+                                *inserted = true;
+                            }
+                            if marker_style.is_some() {
+                                if let Some(inserted) =
+                                    series_marker_style_inserted.get_mut(series_index)
+                                {
+                                    *inserted = true;
+                                }
+                                if let Some(written) =
+                                    series_marker_style_written.get_mut(series_index)
+                                {
+                                    *written = true;
+                                }
+                            }
+                            if marker_size.is_some() {
+                                if let Some(inserted) =
+                                    series_marker_size_inserted.get_mut(series_index)
+                                {
+                                    *inserted = true;
+                                }
+                                if let Some(written) =
+                                    series_marker_size_written.get_mut(series_index)
+                                {
+                                    *written = true;
+                                }
+                            }
+                        }
                         for slot in source_slots_in_order.iter().copied() {
                             if let Some(source) = source_for_slot(series_index, slot) {
                                 write_chart_source_container(&mut writer, slot, source)?;
@@ -30673,7 +31233,11 @@ fn patch_loaded_chart_model_xml(
                         b"ser" => {
                             current_series_index = None;
                             current_point_index = None;
+                            current_series_marker_index = None;
                             source_stack.clear();
+                        }
+                        b"marker" => {
+                            current_series_marker_index = None;
                         }
                         b"dPt" => {
                             current_point_index = None;
@@ -30809,6 +31373,60 @@ fn patch_loaded_chart_model_xml(
                     (None, false) => true,
                 }
             });
+    let series_markers_match = chart.series.iter().enumerate().all(|(series_index, _)| {
+        let marker_seen = series_marker_seen
+            .get(series_index)
+            .copied()
+            .unwrap_or(false);
+        if !chart_type_supports_series_marker(&chart.chart_type) {
+            return !marker_seen
+                || series_marker_removed
+                    .get(series_index)
+                    .copied()
+                    .unwrap_or(false);
+        }
+        let marker_inserted = series_marker_inserted
+            .get(series_index)
+            .copied()
+            .unwrap_or(false);
+        let marker_available = marker_seen || marker_inserted;
+        let style_matches = if expected_series_marker_styles
+            .get(series_index)
+            .copied()
+            .flatten()
+            .is_some()
+        {
+            marker_available
+                && (series_marker_style_written
+                    .get(series_index)
+                    .copied()
+                    .unwrap_or(false)
+                    || series_marker_style_inserted
+                        .get(series_index)
+                        .copied()
+                        .unwrap_or(false))
+        } else {
+            true
+        };
+        let size_matches = if expected_series_marker_sizes
+            .get(series_index)
+            .and_then(Option::as_ref)
+            .is_some()
+        {
+            marker_available
+                && (series_marker_size_written
+                    .get(series_index)
+                    .copied()
+                    .unwrap_or(false)
+                    || series_marker_size_inserted
+                        .get(series_index)
+                        .copied()
+                        .unwrap_or(false))
+        } else {
+            true
+        };
+        style_matches && size_matches
+    });
     let title_matches = match (chart.title.as_ref(), chart_title_seen) {
         (Some(_), true) => chart_title_text_written,
         (Some(_), false) => chart_title_inserted,
@@ -31251,6 +31869,7 @@ fn patch_loaded_chart_model_xml(
         && series_point_explosions_match
         && series_bar_shapes_match
         && series_smooth_values_match
+        && series_markers_match
         && patched_sources == expected_dirty_sources
         && title_matches
         && legend_matches
@@ -31312,6 +31931,19 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             }
         }
         series_xml.push_str(&chart_series_data_labels_xml_string(series));
+        if chart_type_supports_series_marker(&chart.chart_type)
+            && (series.marker_style.is_some() || series.marker_size.is_some())
+        {
+            series_xml.push_str("<c:marker>");
+            if let Some(marker_style) = series.marker_style {
+                let marker_style = chart_marker_style_xml_value(marker_style);
+                series_xml.push_str(&format!(r#"<c:symbol val="{marker_style}"/>"#));
+            }
+            if let Some(marker_size) = series.marker_size {
+                series_xml.push_str(&format!(r#"<c:size val="{marker_size}"/>"#));
+            }
+            series_xml.push_str("</c:marker>");
+        }
         if let Some(name) = series.name.as_ref() {
             let formula = partial_escape(name.raw.text.trim_start_matches('=')).to_string();
             series_xml.push_str(&format!(
@@ -88480,6 +89112,202 @@ mod tests {
                 .dispatch_get(reopened_series, "Smooth", &[])
                 .expect("reopened Series.Smooth"),
             OmValue::Bool(false)
+        );
+    }
+
+    #[test]
+    fn series_marker_style_and_size_roundtrip_marker_xml() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "MarkerStyle", &[])
+                .expect_err("Series.MarkerStyle rejects bar charts")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "MarkerSize", &[])
+                .expect_err("Series.MarkerSize rejects bar charts")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_LINE_MARKERS)),
+                &[],
+            )
+            .expect("set Chart.ChartType to line markers");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series, "MarkerStyle", &[])
+                    .expect("Series.MarkerStyle default")
+            ),
+            f64::from(super::XL_MARKER_STYLE_AUTOMATIC)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series, "MarkerSize", &[])
+                    .expect("Series.MarkerSize default")
+            ),
+            5.0
+        );
+        runtime
+            .dispatch_set(
+                series,
+                "MarkerStyle",
+                OmValue::Number(f64::from(super::XL_MARKER_STYLE_DIAMOND)),
+                &[],
+            )
+            .expect("set Series.MarkerStyle");
+        runtime
+            .dispatch_set(series, "MarkerSize", OmValue::Number(11.0), &[])
+            .expect("set Series.MarkerSize");
+        assert_eq!(
+            runtime
+                .dispatch_set(series, "MarkerStyle", OmValue::Number(999.0), &[])
+                .expect_err("Series.MarkerStyle rejects unknown constants")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(series, "MarkerSize", OmValue::Number(1.0), &[])
+                .expect_err("Series.MarkerSize rejects too-small sizes")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(series, "MarkerSize", OmValue::Number(11.5), &[])
+                .expect_err("Series.MarkerSize rejects fractional sizes")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with series marker override");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:lineChart>"));
+        assert!(saved_chart_xml.contains(r#"<c:marker val="1"/>"#));
+        assert!(
+            saved_chart_xml
+                .contains(r#"<c:marker><c:symbol val="diamond"/><c:size val="11"/></c:marker>"#)
+        );
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook with series marker override");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_series, "MarkerStyle", &[])
+                    .expect("reopened Series.MarkerStyle")
+            ),
+            f64::from(super::XL_MARKER_STYLE_DIAMOND)
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_series, "MarkerSize", &[])
+                    .expect("reopened Series.MarkerSize")
+            ),
+            11.0
         );
     }
 

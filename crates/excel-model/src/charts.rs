@@ -170,6 +170,22 @@ pub enum ChartBarShape {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartMarkerStyle {
+    Automatic,
+    Circle,
+    Dash,
+    Diamond,
+    Dot,
+    None,
+    Picture,
+    Plus,
+    Square,
+    Star,
+    Triangle,
+    X,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChartSizeRepresents {
     Area,
     Width,
@@ -204,6 +220,8 @@ pub struct SeriesModel {
     pub bubble_size: Option<ChartSourceExpr>,
     pub bar_shape: Option<ChartBarShape>,
     pub smooth: Option<bool>,
+    pub marker_style: Option<ChartMarkerStyle>,
+    pub marker_size: Option<u8>,
     pub points: BTreeMap<u32, ChartPointModel>,
     pub data_labels: Option<ChartDataLabelsModel>,
     pub point_data_labels: BTreeMap<u32, ChartDataLabelsModel>,

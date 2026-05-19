@@ -5,11 +5,12 @@ use excel_model::{
     AxisModel, CellData, ChartAxisCrosses, ChartAxisDisplayUnit, ChartAxisKind, ChartAxisScaleType,
     ChartAxisTimeUnit, ChartBarShape, ChartBuiltInDisplayUnit, ChartCacheKind, ChartCacheSnapshot,
     ChartCellMarkerXmlAttrs, ChartDataLabelPosition, ChartDataLabelsModel, ChartDataTableModel,
-    ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerXmlAttrs, ChartModel, ChartObjectModel,
-    ChartPointModel, ChartProtectionModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr,
-    ChartSplitType, ChartText, ChartTickLabelPosition, ChartTickMark, ChartType, ChartView3DModel,
-    DefinedNameTable, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState,
-    WorksheetData, resolve_chart_source_reference_with_names,
+    ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerStyle, ChartMarkerXmlAttrs, ChartModel,
+    ChartObjectModel, ChartPointModel, ChartProtectionModel, ChartSheetBinding,
+    ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition,
+    ChartTickMark, ChartType, ChartView3DModel, DefinedNameTable, DrawingModel, DrawingObjectModel,
+    LegendModel, SeriesModel, WorkbookState, WorksheetData,
+    resolve_chart_source_reference_with_names,
 };
 use office_common::{
     AbsoluteAnchor, CellError, CellMarker, CellValue, ChartId, ChartObjectId, DefinedName,
@@ -771,6 +772,8 @@ pub struct ChartSeriesSummary {
     pub bubble_size_cache: Option<ChartCacheSummary>,
     pub bar_shape: Option<ChartBarShape>,
     pub smooth: Option<bool>,
+    pub marker_style: Option<ChartMarkerStyle>,
+    pub marker_size: Option<u8>,
     pub point_explosions: BTreeMap<u32, u16>,
     pub data_labels: Option<ChartDataLabelsSummary>,
     pub point_data_labels: BTreeMap<u32, ChartDataLabelsSummary>,
@@ -3706,6 +3709,8 @@ fn chart_series_from_summary(
                     .map(|reference| source_from_ref(reference, series.bubble_size_cache.as_ref())),
                 bar_shape: series.bar_shape,
                 smooth: series.smooth,
+                marker_style: series.marker_style,
+                marker_size: series.marker_size,
                 points: series
                     .point_explosions
                     .iter()
@@ -3747,6 +3752,8 @@ fn chart_series_from_summary(
             bubble_size: None,
             bar_shape: None,
             smooth: None,
+            marker_style: None,
+            marker_size: None,
             points: BTreeMap::new(),
             data_labels: None,
             point_data_labels: BTreeMap::new(),
@@ -16455,6 +16462,25 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
             Some(_) | None => None,
         })
     };
+    let parse_marker_style = |element: &BytesStart<'_>,
+                              reader: &Reader<Cursor<&[u8]>>|
+     -> OmResult<Option<ChartMarkerStyle>> {
+        Ok(match parse_string_val_attr(element, reader)?.as_deref() {
+            Some("auto") => Some(ChartMarkerStyle::Automatic),
+            Some("circle") => Some(ChartMarkerStyle::Circle),
+            Some("dash") => Some(ChartMarkerStyle::Dash),
+            Some("diamond") => Some(ChartMarkerStyle::Diamond),
+            Some("dot") => Some(ChartMarkerStyle::Dot),
+            Some("none") => Some(ChartMarkerStyle::None),
+            Some("picture") => Some(ChartMarkerStyle::Picture),
+            Some("plus") => Some(ChartMarkerStyle::Plus),
+            Some("square") => Some(ChartMarkerStyle::Square),
+            Some("star") => Some(ChartMarkerStyle::Star),
+            Some("triangle") => Some(ChartMarkerStyle::Triangle),
+            Some("x") => Some(ChartMarkerStyle::X),
+            Some(_) | None => None,
+        })
+    };
     let parse_axis_crosses = |element: &BytesStart<'_>,
                               reader: &Reader<Cursor<&[u8]>>|
      -> OmResult<Option<ChartAxisCrosses>> {
@@ -16874,6 +16900,23 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(active_series) = active_series.as_mut()
                 {
                     active_series.smooth = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                }
+                if local_name == b"symbol"
+                    && element_path.last().is_some_and(|name| name == "marker")
+                    && element_path.iter().any(|name| name == "ser")
+                    && let Some(active_series) = active_series.as_mut()
+                    && let Some(marker_style) = parse_marker_style(&element, &reader)?
+                {
+                    active_series.marker_style = Some(marker_style);
+                }
+                if local_name == b"size"
+                    && element_path.last().is_some_and(|name| name == "marker")
+                    && element_path.iter().any(|name| name == "ser")
+                    && let Some(active_series) = active_series.as_mut()
+                    && let Some(size) = parse_u32_val_attr(&element, &reader, "series marker size")?
+                    && (2..=72).contains(&size)
+                {
+                    active_series.marker_size = Some(size as u8);
                 }
                 if local_name == b"marker"
                     && element_path.last().is_some_and(|name| name == "lineChart")
@@ -17814,6 +17857,23 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(active_series) = active_series.as_mut()
                 {
                     active_series.smooth = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                }
+                if local_name == b"symbol"
+                    && element_path.last().is_some_and(|name| name == "marker")
+                    && element_path.iter().any(|name| name == "ser")
+                    && let Some(active_series) = active_series.as_mut()
+                    && let Some(marker_style) = parse_marker_style(&element, &reader)?
+                {
+                    active_series.marker_style = Some(marker_style);
+                }
+                if local_name == b"size"
+                    && element_path.last().is_some_and(|name| name == "marker")
+                    && element_path.iter().any(|name| name == "ser")
+                    && let Some(active_series) = active_series.as_mut()
+                    && let Some(size) = parse_u32_val_attr(&element, &reader, "series marker size")?
+                    && (2..=72).contains(&size)
+                {
+                    active_series.marker_size = Some(size as u8);
                 }
                 if local_name == b"marker"
                     && element_path.last().is_some_and(|name| name == "lineChart")
@@ -23273,6 +23333,8 @@ mod tests {
                 bubble_size_cache: None,
                 bar_shape: None,
                 smooth: None,
+                marker_style: None,
+                marker_size: None,
                 point_explosions: BTreeMap::new(),
                 data_labels: Some(ChartDataLabelsSummary {
                     show_legend_key: Some(false),

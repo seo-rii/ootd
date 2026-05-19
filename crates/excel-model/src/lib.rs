@@ -14,11 +14,11 @@ pub use charts::{
     AxisModel, ChartAxisCrosses, ChartAxisDisplayUnit, ChartAxisKind, ChartAxisScaleType,
     ChartAxisTimeUnit, ChartBarShape, ChartBuiltInDisplayUnit, ChartCacheKind, ChartCacheSnapshot,
     ChartCellMarkerXmlAttrs, ChartDataLabelPosition, ChartDataLabelsModel, ChartDataTableModel,
-    ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerXmlAttrs, ChartModel, ChartObjectModel,
-    ChartPointModel, ChartProtectionModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr,
-    ChartSplitType, ChartText, ChartTickLabelPosition, ChartTickMark, ChartType, ChartView3DModel,
-    DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, resolve_chart_source_reference,
-    resolve_chart_source_reference_with_names,
+    ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerStyle, ChartMarkerXmlAttrs, ChartModel,
+    ChartObjectModel, ChartPointModel, ChartProtectionModel, ChartSheetBinding,
+    ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition,
+    ChartTickMark, ChartType, ChartView3DModel, DrawingModel, DrawingObjectModel, LegendModel,
+    SeriesModel, resolve_chart_source_reference, resolve_chart_source_reference_with_names,
 };
 pub use names::DefinedNameTable;
 
@@ -1212,6 +1212,8 @@ mod tests {
                     bubble_size: None,
                     bar_shape: None,
                     smooth: None,
+                    marker_style: None,
+                    marker_size: None,
                     points: BTreeMap::new(),
                     data_labels: None,
                     point_data_labels: BTreeMap::new(),
