@@ -1214,6 +1214,7 @@ mod tests {
                     smooth: None,
                     marker_style: None,
                     marker_size: None,
+                    invert_if_negative: None,
                     points: BTreeMap::new(),
                     data_labels: None,
                     point_data_labels: BTreeMap::new(),

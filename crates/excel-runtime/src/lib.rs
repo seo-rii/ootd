@@ -3381,6 +3381,38 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
+                    "InvertIfNegative" => {
+                        let OmValue::Bool(invert_if_negative) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Series.InvertIfNegative expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let series = chart.series.get_mut(series_index).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "series not found")
+                        })?;
+                        if series.invert_if_negative != Some(invert_if_negative) {
+                            series.invert_if_negative = Some(invert_if_negative);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     "Name" | "Values" | "XValues" | "BubbleSizes" => {
                         let source = match value {
                             OmValue::Text(text) => {
@@ -11383,6 +11415,7 @@ impl ExcelRuntime {
                                     smooth: None,
                                     marker_style: None,
                                     marker_size: None,
+                                    invert_if_negative: None,
                                     points: BTreeMap::new(),
                                     data_labels: None,
                                     point_data_labels: BTreeMap::new(),
@@ -11414,6 +11447,7 @@ impl ExcelRuntime {
                                     smooth: None,
                                     marker_style: None,
                                     marker_size: None,
+                                    invert_if_negative: None,
                                     points: BTreeMap::new(),
                                     data_labels: None,
                                     point_data_labels: BTreeMap::new(),
@@ -11437,6 +11471,7 @@ impl ExcelRuntime {
                                 smooth: None,
                                 marker_style: None,
                                 marker_size: None,
+                                invert_if_negative: None,
                                 points: BTreeMap::new(),
                                 data_labels: None,
                                 point_data_labels: BTreeMap::new(),
@@ -12600,6 +12635,7 @@ impl ExcelRuntime {
                             | "DataLabels"
                             | "Points"
                             | "PlotOrder"
+                            | "InvertIfNegative"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -16606,6 +16642,7 @@ impl ExcelRuntime {
                         smooth: None,
                         marker_style: None,
                         marker_size: None,
+                        invert_if_negative: None,
                         points: BTreeMap::new(),
                         data_labels: None,
                         point_data_labels: BTreeMap::new(),
@@ -16736,6 +16773,10 @@ impl ExcelRuntime {
                     .get(series_index)
                     .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "series not found"))?;
                 Ok(OmValue::Number(f64::from(series.marker_size.unwrap_or(5))))
+            }
+            "InvertIfNegative" => {
+                let series = self.series_model(workbook, chart_id, series_index)?;
+                Ok(OmValue::Bool(series.invert_if_negative.unwrap_or(false)))
             }
             "Formula" => {
                 let series = self.series_model(workbook, chart_id, series_index)?;
@@ -26003,6 +26044,15 @@ fn patch_loaded_chart_model_xml(
                 .map(|value| value.to_string())
         })
         .collect::<Vec<_>>();
+    let expected_series_invert_if_negative_values = chart
+        .series
+        .iter()
+        .map(|series| {
+            series
+                .invert_if_negative
+                .map(|value| if value { "1" } else { "0" })
+        })
+        .collect::<Vec<_>>();
     let expected_line_marker = chart_type_line_marker_xml_value(&chart.chart_type);
     let expected_scatter_style = chart_type_scatter_style_xml_value(&chart.chart_type);
     let expected_radar_style = chart_type_radar_style_xml_value(&chart.chart_type);
@@ -26131,6 +26181,9 @@ fn patch_loaded_chart_model_xml(
     let mut series_marker_size_seen = vec![false; chart.series.len()];
     let mut series_marker_size_written = vec![false; chart.series.len()];
     let mut series_marker_size_inserted = vec![false; chart.series.len()];
+    let mut series_invert_if_negative_seen = vec![false; chart.series.len()];
+    let mut series_invert_if_negative_written = vec![false; chart.series.len()];
+    let mut series_invert_if_negative_inserted = vec![false; chart.series.len()];
     let mut series_emitted = vec![false; chart.series.len()];
     let mut patched_sources = 0usize;
     let mut chart_type = None::<ChartType>;
@@ -27770,6 +27823,34 @@ fn patch_loaded_chart_model_xml(
                         skip_depth = 1;
                         buffer.clear();
                         continue;
+                    }
+                }
+                if !wrote_start_element
+                    && local_name.as_slice() == b"invertIfNegative"
+                    && parent_name == Some(b"ser".as_slice())
+                    && let Some(series_index) = current_series_index
+                {
+                    if let Some(seen) = series_invert_if_negative_seen.get_mut(series_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = expected_series_invert_if_negative_values
+                        .get(series_index)
+                        .copied()
+                        .flatten()
+                    {
+                        writer
+                            .write_event(Event::Start(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value,
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) =
+                            series_invert_if_negative_written.get_mut(series_index)
+                        {
+                            *written = true;
+                        }
+                        wrote_start_element = true;
                     }
                 }
                 if !wrote_start_element
@@ -29579,6 +29660,35 @@ fn patch_loaded_chart_model_xml(
                             *removed = true;
                         }
                     }
+                } else if local_name.as_slice() == b"invertIfNegative"
+                    && parent_name == Some(b"ser".as_slice())
+                    && let Some(series_index) = current_series_index
+                {
+                    if let Some(seen) = series_invert_if_negative_seen.get_mut(series_index) {
+                        *seen = true;
+                    }
+                    if let Some(value) = expected_series_invert_if_negative_values
+                        .get(series_index)
+                        .copied()
+                        .flatten()
+                    {
+                        writer
+                            .write_event(Event::Empty(rewrite_val_attribute_element(
+                                &element,
+                                reader.decoder(),
+                                value,
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(written) =
+                            series_invert_if_negative_written.get_mut(series_index)
+                        {
+                            *written = true;
+                        }
+                    } else {
+                        writer
+                            .write_event(Event::Empty(element.into_owned()))
+                            .map_err(runtime_xml_error)?;
+                    }
                 } else if local_name.as_slice() == b"symbol"
                     && parent_name == Some(b"marker".as_slice())
                     && let Some(series_index) = current_series_marker_index
@@ -30149,6 +30259,31 @@ fn patch_loaded_chart_model_xml(
                                     *written = true;
                                 }
                             }
+                        }
+                    }
+                    if !series_invert_if_negative_seen
+                        .get(series_index)
+                        .copied()
+                        .unwrap_or(false)
+                        && let Some(value) = expected_series_invert_if_negative_values
+                            .get(series_index)
+                            .copied()
+                            .flatten()
+                    {
+                        let mut invert_if_negative = BytesStart::new("c:invertIfNegative");
+                        invert_if_negative.push_attribute(("val", value));
+                        writer
+                            .write_event(Event::Empty(invert_if_negative))
+                            .map_err(runtime_xml_error)?;
+                        if let Some(inserted) =
+                            series_invert_if_negative_inserted.get_mut(series_index)
+                        {
+                            *inserted = true;
+                        }
+                        if let Some(written) =
+                            series_invert_if_negative_written.get_mut(series_index)
+                        {
+                            *written = true;
                         }
                     }
                 }
@@ -30891,6 +31026,31 @@ fn patch_loaded_chart_model_xml(
                                 }
                             }
                         }
+                        if let Some(value) = expected_series_invert_if_negative_values
+                            .get(series_index)
+                            .copied()
+                            .flatten()
+                        {
+                            let mut invert_if_negative = BytesStart::new("c:invertIfNegative");
+                            invert_if_negative.push_attribute(("val", value));
+                            writer
+                                .write_event(Event::Empty(invert_if_negative))
+                                .map_err(runtime_xml_error)?;
+                            if let Some(seen) = series_invert_if_negative_seen.get_mut(series_index)
+                            {
+                                *seen = true;
+                            }
+                            if let Some(inserted) =
+                                series_invert_if_negative_inserted.get_mut(series_index)
+                            {
+                                *inserted = true;
+                            }
+                            if let Some(written) =
+                                series_invert_if_negative_written.get_mut(series_index)
+                            {
+                                *written = true;
+                            }
+                        }
                         for slot in source_slots_in_order.iter().copied() {
                             if let Some(source) = source_for_slot(series_index, slot) {
                                 write_chart_source_container(&mut writer, slot, source)?;
@@ -31427,6 +31587,23 @@ fn patch_loaded_chart_model_xml(
         };
         style_matches && size_matches
     });
+    let series_invert_if_negative_values_match = expected_series_invert_if_negative_values
+        .iter()
+        .enumerate()
+        .all(|(series_index, expected)| {
+            if expected.is_some() {
+                series_invert_if_negative_written
+                    .get(series_index)
+                    .copied()
+                    .unwrap_or(false)
+                    || series_invert_if_negative_inserted
+                        .get(series_index)
+                        .copied()
+                        .unwrap_or(false)
+            } else {
+                true
+            }
+        });
     let title_matches = match (chart.title.as_ref(), chart_title_seen) {
         (Some(_), true) => chart_title_text_written,
         (Some(_), false) => chart_title_inserted,
@@ -31870,6 +32047,7 @@ fn patch_loaded_chart_model_xml(
         && series_bar_shapes_match
         && series_smooth_values_match
         && series_markers_match
+        && series_invert_if_negative_values_match
         && patched_sources == expected_dirty_sources
         && title_matches
         && legend_matches
@@ -31978,6 +32156,12 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             let formula = partial_escape(bubble_size.raw.text.trim_start_matches('=')).to_string();
             series_xml.push_str(&format!(
                 r#"<c:bubbleSize><c:numRef><c:f>{formula}</c:f></c:numRef></c:bubbleSize>"#
+            ));
+        }
+        if let Some(invert_if_negative) = series.invert_if_negative {
+            series_xml.push_str(&format!(
+                r#"<c:invertIfNegative val="{}"/>"#,
+                if invert_if_negative { "1" } else { "0" }
             ));
         }
         if chart_type_supports_bar_shape(&chart.chart_type)
@@ -89308,6 +89492,139 @@ mod tests {
                     .expect("reopened Series.MarkerSize")
             ),
             11.0
+        );
+    }
+
+    #[test]
+    fn series_invert_if_negative_roundtrips_chart_xml() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "InvertIfNegative", &[])
+                .expect("Series.InvertIfNegative default"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(series, "InvertIfNegative", OmValue::Number(1.0), &[])
+                .expect_err("Series.InvertIfNegative rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        runtime
+            .dispatch_set(series, "InvertIfNegative", OmValue::Bool(true), &[])
+            .expect("set Series.InvertIfNegative true");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "InvertIfNegative", &[])
+                .expect("Series.InvertIfNegative after set"),
+            OmValue::Bool(true)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with series invert-if-negative override");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:invertIfNegative val="1"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook with series invert-if-negative override");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_series, "InvertIfNegative", &[])
+                .expect("reopened Series.InvertIfNegative"),
+            OmValue::Bool(true)
         );
     }
 

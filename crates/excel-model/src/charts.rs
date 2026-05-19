@@ -222,6 +222,7 @@ pub struct SeriesModel {
     pub smooth: Option<bool>,
     pub marker_style: Option<ChartMarkerStyle>,
     pub marker_size: Option<u8>,
+    pub invert_if_negative: Option<bool>,
     pub points: BTreeMap<u32, ChartPointModel>,
     pub data_labels: Option<ChartDataLabelsModel>,
     pub point_data_labels: BTreeMap<u32, ChartDataLabelsModel>,

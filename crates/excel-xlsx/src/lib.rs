@@ -774,6 +774,7 @@ pub struct ChartSeriesSummary {
     pub smooth: Option<bool>,
     pub marker_style: Option<ChartMarkerStyle>,
     pub marker_size: Option<u8>,
+    pub invert_if_negative: Option<bool>,
     pub point_explosions: BTreeMap<u32, u16>,
     pub data_labels: Option<ChartDataLabelsSummary>,
     pub point_data_labels: BTreeMap<u32, ChartDataLabelsSummary>,
@@ -3711,6 +3712,7 @@ fn chart_series_from_summary(
                 smooth: series.smooth,
                 marker_style: series.marker_style,
                 marker_size: series.marker_size,
+                invert_if_negative: series.invert_if_negative,
                 points: series
                     .point_explosions
                     .iter()
@@ -3754,6 +3756,7 @@ fn chart_series_from_summary(
             smooth: None,
             marker_style: None,
             marker_size: None,
+            invert_if_negative: None,
             points: BTreeMap::new(),
             data_labels: None,
             point_data_labels: BTreeMap::new(),
@@ -16901,6 +16904,13 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 {
                     active_series.smooth = parse_bool_val_attr(&element, &reader)?.or(Some(true));
                 }
+                if local_name == b"invertIfNegative"
+                    && element_path.last().is_some_and(|name| name == "ser")
+                    && let Some(active_series) = active_series.as_mut()
+                {
+                    active_series.invert_if_negative =
+                        parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                }
                 if local_name == b"symbol"
                     && element_path.last().is_some_and(|name| name == "marker")
                     && element_path.iter().any(|name| name == "ser")
@@ -17857,6 +17867,13 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(active_series) = active_series.as_mut()
                 {
                     active_series.smooth = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                }
+                if local_name == b"invertIfNegative"
+                    && element_path.last().is_some_and(|name| name == "ser")
+                    && let Some(active_series) = active_series.as_mut()
+                {
+                    active_series.invert_if_negative =
+                        parse_bool_val_attr(&element, &reader)?.or(Some(true));
                 }
                 if local_name == b"symbol"
                     && element_path.last().is_some_and(|name| name == "marker")
@@ -23335,6 +23352,7 @@ mod tests {
                 smooth: None,
                 marker_style: None,
                 marker_size: None,
+                invert_if_negative: None,
                 point_explosions: BTreeMap::new(),
                 data_labels: Some(ChartDataLabelsSummary {
                     show_legend_key: Some(false),
