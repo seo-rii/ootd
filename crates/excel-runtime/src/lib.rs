@@ -523,6 +523,14 @@ enum ChartFormatParent {
         chart_id: ChartId,
         axis_index: usize,
     },
+    AxisTitle {
+        chart_id: ChartId,
+        axis_index: usize,
+    },
+    DisplayUnitLabel {
+        chart_id: ChartId,
+        axis_index: usize,
+    },
     TickLabels {
         chart_id: ChartId,
         axis_index: usize,
@@ -12951,6 +12959,7 @@ impl ExcelRuntime {
                     | (
                         "DisplayUnitLabel",
                         "Name"
+                            | "Format"
                             | "Text"
                             | "Caption"
                             | "Creator"
@@ -12962,6 +12971,7 @@ impl ExcelRuntime {
                     | (
                         "AxisTitle",
                         "Name"
+                            | "Format"
                             | "Text"
                             | "Caption"
                             | "Creator"
@@ -16112,6 +16122,45 @@ impl ExcelRuntime {
                     axis_index,
                 })
             }
+            ChartFormatParent::AxisTitle {
+                chart_id,
+                axis_index,
+            } => {
+                if self
+                    .axis_model(workbook, chart_id, axis_index)?
+                    .title
+                    .is_none()
+                {
+                    return Err(OmError::new(OmErrorCode::NotFound, "axis title not found"));
+                }
+                Ok(RuntimeObjectKind::AxisTitle {
+                    workbook,
+                    chart_id,
+                    axis_index,
+                })
+            }
+            ChartFormatParent::DisplayUnitLabel {
+                chart_id,
+                axis_index,
+            } => {
+                let axis = self.axis_model(workbook, chart_id, axis_index)?;
+                if axis.kind != ChartAxisKind::Value {
+                    return Err(OmError::unsupported(
+                        "DisplayUnitLabel applies only to value axes",
+                    ));
+                }
+                if axis.display_unit.is_none() || axis.has_display_unit_label != Some(true) {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        "display unit label not found",
+                    ));
+                }
+                Ok(RuntimeObjectKind::DisplayUnitLabel {
+                    workbook,
+                    chart_id,
+                    axis_index,
+                })
+            }
             ChartFormatParent::TickLabels {
                 chart_id,
                 axis_index,
@@ -16960,6 +17009,15 @@ impl ExcelRuntime {
 
         match member {
             "Name" => Ok(OmValue::Text("Axis Title".to_string())),
+            "Format" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::ChartFormat {
+                    workbook,
+                    parent: ChartFormatParent::AxisTitle {
+                        chart_id,
+                        axis_index,
+                    },
+                },
+            ))),
             "Text" | "Caption" => Ok(OmValue::Text(title.text.clone())),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
@@ -17004,6 +17062,15 @@ impl ExcelRuntime {
 
         match member {
             "Name" => Ok(OmValue::Text("Display Unit Label".to_string())),
+            "Format" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::ChartFormat {
+                    workbook,
+                    parent: ChartFormatParent::DisplayUnitLabel {
+                        chart_id,
+                        axis_index,
+                    },
+                },
+            ))),
             "Text" | "Caption" => Ok(OmValue::Text(chart_axis_display_unit_label_text(axis))),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
@@ -22319,6 +22386,14 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                             ..
                         }
+                        | ChartFormatParent::AxisTitle {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::DisplayUnitLabel {
+                            chart_id: object_chart_id,
+                            ..
+                        }
                         | ChartFormatParent::TickLabels {
                             chart_id: object_chart_id,
                             ..
@@ -22335,6 +22410,14 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                             ..
                         }
+                        | ChartFormatParent::AxisTitle {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::DisplayUnitLabel {
+                            chart_id: object_chart_id,
+                            ..
+                        }
                         | ChartFormatParent::TickLabels {
                             chart_id: object_chart_id,
                             ..
@@ -22348,6 +22431,14 @@ impl ExcelRuntime {
                     workbook: object_workbook,
                     parent:
                         ChartFormatParent::Axis {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::AxisTitle {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::DisplayUnitLabel {
                             chart_id: object_chart_id,
                             ..
                         }
@@ -22461,6 +22552,14 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                             ..
                         }
+                        | ChartFormatParent::AxisTitle {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::DisplayUnitLabel {
+                            chart_id: object_chart_id,
+                            ..
+                        }
                         | ChartFormatParent::TickLabels {
                             chart_id: object_chart_id,
                             ..
@@ -22508,6 +22607,14 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                             ..
                         }
+                        | ChartFormatParent::AxisTitle {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::DisplayUnitLabel {
+                            chart_id: object_chart_id,
+                            ..
+                        }
                         | ChartFormatParent::TickLabels {
                             chart_id: object_chart_id,
                             ..
@@ -22552,6 +22659,14 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                         }
                         | ChartFormatParent::Axis {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::AxisTitle {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::DisplayUnitLabel {
                             chart_id: object_chart_id,
                             ..
                         }
@@ -22673,6 +22788,31 @@ impl ExcelRuntime {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
                     axis_index: object_axis_index,
+                }
+                | RuntimeObjectKind::ChartFormat {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::AxisTitle {
+                            chart_id: object_chart_id,
+                            axis_index: object_axis_index,
+                        },
+                }
+                | RuntimeObjectKind::Adjustments {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::AxisTitle {
+                            chart_id: object_chart_id,
+                            axis_index: object_axis_index,
+                        },
+                }
+                | RuntimeObjectKind::ChartFormatChild {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::AxisTitle {
+                            chart_id: object_chart_id,
+                            axis_index: object_axis_index,
+                        },
+                    ..
                 } if *object_workbook == workbook
                     && *object_chart_id == chart_id
                     && *object_axis_index == axis_index =>
@@ -22702,6 +22842,31 @@ impl ExcelRuntime {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
                     axis_index: object_axis_index,
+                }
+                | RuntimeObjectKind::ChartFormat {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::DisplayUnitLabel {
+                            chart_id: object_chart_id,
+                            axis_index: object_axis_index,
+                        },
+                }
+                | RuntimeObjectKind::Adjustments {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::DisplayUnitLabel {
+                            chart_id: object_chart_id,
+                            axis_index: object_axis_index,
+                        },
+                }
+                | RuntimeObjectKind::ChartFormatChild {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::DisplayUnitLabel {
+                            chart_id: object_chart_id,
+                            axis_index: object_axis_index,
+                        },
+                    ..
                 } if *object_workbook == workbook
                     && *object_chart_id == chart_id
                     && *object_axis_index == axis_index =>
@@ -95579,6 +95744,41 @@ mod tests {
                 .dispatch_get(category_axis, "AxisTitle", &[])
                 .expect("Axis.AxisTitle"),
         );
+        let axis_title_format = expect_object_handle(
+            runtime
+                .dispatch_get(axis_title, "Format", &[])
+                .expect("AxisTitle.Format"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(axis_title, "Format", &[OmValue::Missing])
+                .expect_err("AxisTitle.Format rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(axis_title_format, "Creator", &[])
+                .expect("AxisTitle.Format.Creator"),
+            OmValue::Number(f64::from(super::XL_CREATOR_CODE))
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(axis_title_format, "AutoShapeType", &[])
+                .expect("AxisTitle.Format.AutoShapeType"),
+            OmValue::Number(f64::from(super::MSO_SHAPE_MIXED))
+        );
+        let axis_title_format_parent = expect_object_handle(
+            runtime
+                .dispatch_get(axis_title_format, "Parent", &[])
+                .expect("AxisTitle.Format.Parent"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(axis_title_format_parent, "Name", &[])
+                .expect("AxisTitle.Format.Parent.Name"),
+            OmValue::Text("Axis Title".to_string())
+        );
         runtime
             .dispatch_set(
                 axis_title,
@@ -102107,6 +102307,41 @@ mod tests {
                 .dispatch_get(value_axis, "DisplayUnitLabel", &[])
                 .expect("Axis.DisplayUnitLabel before set"),
         );
+        let display_unit_label_format = expect_object_handle(
+            runtime
+                .dispatch_get(display_unit_label, "Format", &[])
+                .expect("DisplayUnitLabel.Format before set"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(display_unit_label, "Format", &[OmValue::Missing])
+                .expect_err("DisplayUnitLabel.Format rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(display_unit_label_format, "Creator", &[])
+                .expect("DisplayUnitLabel.Format.Creator"),
+            OmValue::Number(f64::from(super::XL_CREATOR_CODE))
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(display_unit_label_format, "AutoShapeType", &[])
+                .expect("DisplayUnitLabel.Format.AutoShapeType"),
+            OmValue::Number(f64::from(super::MSO_SHAPE_MIXED))
+        );
+        let display_unit_label_format_parent = expect_object_handle(
+            runtime
+                .dispatch_get(display_unit_label_format, "Parent", &[])
+                .expect("DisplayUnitLabel.Format.Parent"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(display_unit_label_format_parent, "Name", &[])
+                .expect("DisplayUnitLabel.Format.Parent.Name"),
+            OmValue::Text("Display Unit Label".to_string())
+        );
         assert_eq!(
             expect_text(
                 runtime
@@ -102145,6 +102380,13 @@ mod tests {
             runtime
                 .dispatch_get(display_unit_label, "Text", &[])
                 .expect_err("DisplayUnitLabel handle is stale after hiding label")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(display_unit_label_format, "Creator", &[])
+                .expect_err("DisplayUnitLabel.Format handle is stale after hiding label")
                 .code,
             OmErrorCode::InvalidState
         );
@@ -102420,6 +102662,21 @@ mod tests {
                 .dispatch_get(final_value_axis, "DisplayUnitLabel", &[])
                 .expect("final Axis.DisplayUnitLabel"),
         );
+        let final_display_unit_label_format = expect_object_handle(
+            final_runtime
+                .dispatch_get(final_display_unit_label, "Format", &[])
+                .expect("final DisplayUnitLabel.Format"),
+        );
+        let final_display_unit_label_adjustments = expect_object_handle(
+            final_runtime
+                .dispatch_get(final_display_unit_label_format, "Adjustments", &[])
+                .expect("final DisplayUnitLabel.Format.Adjustments"),
+        );
+        let final_display_unit_label_line = expect_object_handle(
+            final_runtime
+                .dispatch_get(final_display_unit_label_format, "Line", &[])
+                .expect("final DisplayUnitLabel.Format.Line"),
+        );
         assert_eq!(
             expect_text(
                 final_runtime
@@ -102440,6 +102697,27 @@ mod tests {
             final_runtime
                 .dispatch_get(final_display_unit_label, "Text", &[])
                 .expect_err("DisplayUnitLabel handle is stale after delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            final_runtime
+                .dispatch_get(final_display_unit_label_format, "Creator", &[])
+                .expect_err("DisplayUnitLabel.Format handle is stale after delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            final_runtime
+                .dispatch_get(final_display_unit_label_adjustments, "Count", &[])
+                .expect_err("DisplayUnitLabel.Format.Adjustments handle is stale after delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            final_runtime
+                .dispatch_get(final_display_unit_label_line, "Creator", &[])
+                .expect_err("DisplayUnitLabel.Format.Line handle is stale after delete")
                 .code,
             OmErrorCode::InvalidState
         );
@@ -103370,6 +103648,21 @@ mod tests {
                 .dispatch_get(category_axis, "AxisTitle", &[])
                 .expect("Axis.AxisTitle"),
         );
+        let axis_title_format = expect_object_handle(
+            runtime
+                .dispatch_get(axis_title, "Format", &[])
+                .expect("AxisTitle.Format before HasTitle clear"),
+        );
+        let axis_title_adjustments = expect_object_handle(
+            runtime
+                .dispatch_get(axis_title_format, "Adjustments", &[])
+                .expect("AxisTitle.Format.Adjustments before HasTitle clear"),
+        );
+        let axis_title_line = expect_object_handle(
+            runtime
+                .dispatch_get(axis_title_format, "Line", &[])
+                .expect("AxisTitle.Format.Line before HasTitle clear"),
+        );
 
         runtime
             .dispatch_set(chart, "HasTitle", OmValue::Bool(false), &[])
@@ -103412,6 +103705,27 @@ mod tests {
             runtime
                 .dispatch_get(axis_title, "Text", &[])
                 .expect_err("AxisTitle handle removed through HasTitle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(axis_title_format, "Creator", &[])
+                .expect_err("AxisTitle.Format removed through HasTitle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(axis_title_adjustments, "Count", &[])
+                .expect_err("AxisTitle.Format.Adjustments removed through HasTitle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(axis_title_line, "Creator", &[])
+                .expect_err("AxisTitle.Format.Line removed through HasTitle should be stale")
                 .code,
             OmErrorCode::InvalidState
         );
