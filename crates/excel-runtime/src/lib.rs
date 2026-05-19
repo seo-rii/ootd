@@ -255,6 +255,11 @@ const MSO_BRING_FORWARD: i32 = 2;
 const MSO_SEND_BACKWARD: i32 = 3;
 const MSO_BRING_IN_FRONT_OF_TEXT: i32 = 4;
 const MSO_SEND_BEHIND_TEXT: i32 = 5;
+const MSO_FALSE: i32 = 0;
+const MSO_TRUE: i32 = -1;
+const MSO_SCALE_FROM_TOP_LEFT: i32 = 0;
+const MSO_SCALE_FROM_MIDDLE: i32 = 1;
+const MSO_SCALE_FROM_BOTTOM_RIGHT: i32 = 2;
 const XL_PASTE_ALL: i32 = -4104;
 const XL_PASTE_COMMENTS: i32 = -4144;
 const XL_PASTE_FORMATS: i32 = -4122;
@@ -13024,6 +13029,8 @@ impl ExcelRuntime {
                             | "CopyPicture"
                             | "Delete"
                             | "Select"
+                            | "ScaleWidth"
+                            | "ScaleHeight"
                     )
                     | (
                         "Chart",
@@ -15822,6 +15829,121 @@ impl ExcelRuntime {
                         OmValue::Number(current + *increment),
                         &[],
                     )?;
+                }
+                Ok(OmValue::Empty)
+            }
+            "ScaleWidth" | "ScaleHeight" => {
+                if args.len() < 2 || args.len() > 3 {
+                    return Err(OmError::invalid_argument(format!(
+                        "ShapeRange.{member} expects Factor, RelativeToOriginalSize, and optional Scale arguments"
+                    )));
+                }
+                let OmValue::Number(factor) = &args[0] else {
+                    return Err(OmError::type_mismatch(format!(
+                        "ShapeRange.{member} Factor must be numeric"
+                    )));
+                };
+                if !factor.is_finite() || *factor < 0.0 || *factor > i64::MAX as f64 / 12_700.0 {
+                    return Err(OmError::invalid_argument(format!(
+                        "ShapeRange.{member} Factor must be a finite non-negative value"
+                    )));
+                }
+                match &args[1] {
+                    OmValue::Missing | OmValue::Empty | OmValue::Null | OmValue::Bool(_) => {}
+                    OmValue::Number(value) => {
+                        if !value.is_finite()
+                            || value.fract() != 0.0
+                            || !matches!(*value as i32, MSO_TRUE | MSO_FALSE)
+                        {
+                            return Err(OmError::invalid_argument(format!(
+                                "ShapeRange.{member} RelativeToOriginalSize must be msoTrue or msoFalse"
+                            )));
+                        }
+                    }
+                    _ => {
+                        return Err(OmError::type_mismatch(format!(
+                            "ShapeRange.{member} RelativeToOriginalSize must be boolean or MsoTriState"
+                        )));
+                    }
+                }
+                let scale_from = match args.get(2) {
+                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => {
+                        MSO_SCALE_FROM_TOP_LEFT
+                    }
+                    Some(OmValue::Number(value)) => {
+                        if !value.is_finite()
+                            || value.fract() != 0.0
+                            || *value < i32::MIN as f64
+                            || *value > i32::MAX as f64
+                        {
+                            return Err(OmError::invalid_argument(format!(
+                                "ShapeRange.{member} Scale must be an integral MsoScaleFrom value"
+                            )));
+                        }
+                        match *value as i32 {
+                            MSO_SCALE_FROM_TOP_LEFT
+                            | MSO_SCALE_FROM_MIDDLE
+                            | MSO_SCALE_FROM_BOTTOM_RIGHT => *value as i32,
+                            _ => {
+                                return Err(OmError::invalid_argument(format!(
+                                    "ShapeRange.{member} Scale must be msoScaleFromTopLeft, msoScaleFromMiddle, or msoScaleFromBottomRight"
+                                )));
+                            }
+                        }
+                    }
+                    Some(_) => {
+                        return Err(OmError::type_mismatch(format!(
+                            "ShapeRange.{member} Scale must be numeric when provided"
+                        )));
+                    }
+                };
+
+                let (position_member, size_member) = match member {
+                    "ScaleWidth" => ("Left", "Width"),
+                    "ScaleHeight" => ("Top", "Height"),
+                    _ => unreachable!("ShapeRange scale member was matched"),
+                };
+                let shape_range = self.register_shape_range_handle(workbook, source);
+                let current_position = match self.dispatch_get(shape_range, position_member, &[])? {
+                    OmValue::Number(value) => value,
+                    _ => {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "ShapeRange position did not return a numeric value",
+                        ));
+                    }
+                };
+                let current_size = match self.dispatch_get(shape_range, size_member, &[])? {
+                    OmValue::Number(value) => value,
+                    _ => {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "ShapeRange size did not return a numeric value",
+                        ));
+                    }
+                };
+                let new_size = current_size * *factor;
+                if !new_size.is_finite() || new_size > i64::MAX as f64 / 12_700.0 {
+                    return Err(OmError::invalid_argument(format!(
+                        "ShapeRange.{member} scaled size is out of range"
+                    )));
+                }
+                let new_position = match scale_from {
+                    MSO_SCALE_FROM_TOP_LEFT => current_position,
+                    MSO_SCALE_FROM_MIDDLE => current_position + (current_size - new_size) / 2.0,
+                    MSO_SCALE_FROM_BOTTOM_RIGHT => current_position + current_size - new_size,
+                    _ => unreachable!("validated MsoScaleFrom value"),
+                };
+                if new_position != current_position {
+                    self.dispatch_set(
+                        shape_range,
+                        position_member,
+                        OmValue::Number(new_position),
+                        &[],
+                    )?;
+                }
+                if new_size != current_size {
+                    self.dispatch_set(shape_range, size_member, OmValue::Number(new_size), &[])?;
                 }
                 Ok(OmValue::Empty)
             }
@@ -87813,6 +87935,197 @@ mod tests {
             runtime
                 .dispatch_invoke(shape_range, "IncrementTop", &[OmValue::Number(f64::NAN)])
                 .expect_err("ShapeRange.IncrementTop rejects NaN")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn shaperange_scale_methods_resize_from_requested_anchor() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        runtime
+            .dispatch_invoke(
+                chart_objects,
+                "Add",
+                &[
+                    OmValue::Number(240.0),
+                    OmValue::Number(60.0),
+                    OmValue::Number(140.0),
+                    OmValue::Number(80.0),
+                ],
+            )
+            .expect("ChartObjects.Add second chart");
+        let shape_range = expect_object_handle(
+            runtime
+                .dispatch_get(chart_objects, "ShapeRange", &[])
+                .expect("ChartObjects.ShapeRange"),
+        );
+        let assert_close = |actual: f64, expected: f64| {
+            assert!(
+                (actual - expected).abs() < 1e-3,
+                "expected {actual} to be close to {expected}"
+            );
+        };
+
+        let original_left = expect_number(
+            runtime
+                .dispatch_get(shape_range, "Left", &[])
+                .expect("ShapeRange.Left before ScaleWidth"),
+        );
+        let original_width = expect_number(
+            runtime
+                .dispatch_get(shape_range, "Width", &[])
+                .expect("ShapeRange.Width before ScaleWidth"),
+        );
+        runtime
+            .dispatch_invoke(
+                shape_range,
+                "ScaleWidth",
+                &[
+                    OmValue::Number(1.5),
+                    OmValue::Number(f64::from(super::MSO_FALSE)),
+                    OmValue::Number(f64::from(super::MSO_SCALE_FROM_TOP_LEFT)),
+                ],
+            )
+            .expect("ShapeRange.ScaleWidth from top-left");
+        assert_close(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "Left", &[])
+                    .expect("ShapeRange.Left after top-left ScaleWidth"),
+            ),
+            original_left,
+        );
+        assert_close(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "Width", &[])
+                    .expect("ShapeRange.Width after top-left ScaleWidth"),
+            ),
+            original_width * 1.5,
+        );
+
+        let middle_top = expect_number(
+            runtime
+                .dispatch_get(shape_range, "Top", &[])
+                .expect("ShapeRange.Top before ScaleHeight"),
+        );
+        let middle_height = expect_number(
+            runtime
+                .dispatch_get(shape_range, "Height", &[])
+                .expect("ShapeRange.Height before ScaleHeight"),
+        );
+        runtime
+            .dispatch_invoke(
+                shape_range,
+                "ScaleHeight",
+                &[
+                    OmValue::Number(0.5),
+                    OmValue::Bool(false),
+                    OmValue::Number(f64::from(super::MSO_SCALE_FROM_MIDDLE)),
+                ],
+            )
+            .expect("ShapeRange.ScaleHeight from middle");
+        assert_close(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "Top", &[])
+                    .expect("ShapeRange.Top after middle ScaleHeight"),
+            ),
+            middle_top + middle_height * 0.25,
+        );
+        assert_close(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "Height", &[])
+                    .expect("ShapeRange.Height after middle ScaleHeight"),
+            ),
+            middle_height * 0.5,
+        );
+
+        let bottom_right_left = expect_number(
+            runtime
+                .dispatch_get(shape_range, "Left", &[])
+                .expect("ShapeRange.Left before bottom-right ScaleWidth"),
+        );
+        let bottom_right_width = expect_number(
+            runtime
+                .dispatch_get(shape_range, "Width", &[])
+                .expect("ShapeRange.Width before bottom-right ScaleWidth"),
+        );
+        runtime
+            .dispatch_invoke(
+                shape_range,
+                "ScaleWidth",
+                &[
+                    OmValue::Number(0.5),
+                    OmValue::Number(f64::from(super::MSO_TRUE)),
+                    OmValue::Number(f64::from(super::MSO_SCALE_FROM_BOTTOM_RIGHT)),
+                ],
+            )
+            .expect("ShapeRange.ScaleWidth from bottom-right");
+        assert_close(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "Left", &[])
+                    .expect("ShapeRange.Left after bottom-right ScaleWidth"),
+            ),
+            bottom_right_left + bottom_right_width * 0.5,
+        );
+        assert_close(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "Width", &[])
+                    .expect("ShapeRange.Width after bottom-right ScaleWidth"),
+            ),
+            bottom_right_width * 0.5,
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    shape_range,
+                    "ScaleWidth",
+                    &[
+                        OmValue::Text("wide".to_string()),
+                        OmValue::Bool(false),
+                        OmValue::Missing,
+                    ],
+                )
+                .expect_err("ShapeRange.ScaleWidth rejects non-number factor")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    shape_range,
+                    "ScaleHeight",
+                    &[
+                        OmValue::Number(1.0),
+                        OmValue::Bool(false),
+                        OmValue::Number(99.0),
+                    ],
+                )
+                .expect_err("ShapeRange.ScaleHeight rejects invalid scale")
                 .code,
             OmErrorCode::InvalidArgument
         );
