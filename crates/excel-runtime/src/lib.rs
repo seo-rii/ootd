@@ -502,6 +502,11 @@ impl RuntimeSheetCollectionKind {
 }
 
 #[derive(Debug, Clone)]
+enum ChartFormatParent {
+    DataTable { chart_id: ChartId },
+}
+
+#[derive(Debug, Clone)]
 enum RuntimeObjectKind {
     Application,
     WorkbooksCollection,
@@ -564,6 +569,10 @@ enum RuntimeObjectKind {
     DataTable {
         workbook: WorkbookHandle,
         chart_id: ChartId,
+    },
+    ChartFormat {
+        workbook: WorkbookHandle,
+        parent: ChartFormatParent,
     },
     DataLabels {
         workbook: WorkbookHandle,
@@ -2004,6 +2013,33 @@ impl ExcelRuntime {
             }
             RuntimeObjectKind::DataTable { workbook, chart_id } => {
                 self.dispatch_get_data_table(workbook, chart_id, member, args)
+            }
+            RuntimeObjectKind::ChartFormat { workbook, parent } => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "ChartFormat.{member} does not accept arguments"
+                    )));
+                }
+                match parent {
+                    ChartFormatParent::DataTable { chart_id } => {
+                        if self.chart_model(workbook, chart_id)?.data_table.is_none() {
+                            return Err(OmError::new(
+                                OmErrorCode::NotFound,
+                                "chart data table not found",
+                            ));
+                        }
+                        match member {
+                            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+                            "Application" => Ok(OmValue::Object(self.root_application())),
+                            "Parent" => Ok(OmValue::Object(
+                                self.register_data_table_handle(workbook, chart_id),
+                            )),
+                            _ => Err(OmError::unsupported(format!(
+                                "ChartFormat.{member} is not implemented"
+                            ))),
+                        }
+                    }
+                }
             }
             RuntimeObjectKind::DataLabels {
                 workbook,
@@ -3892,6 +3928,7 @@ impl ExcelRuntime {
                 }
             }
             RuntimeObjectKind::PlotArea { .. }
+            | RuntimeObjectKind::ChartFormat { .. }
             | RuntimeObjectKind::Gridlines { .. }
             | RuntimeObjectKind::ChartGroups { .. }
             | RuntimeObjectKind::Axes { .. }
@@ -12018,6 +12055,9 @@ impl ExcelRuntime {
                     ))),
                 }
             }
+            RuntimeObjectKind::ChartFormat { .. } => Err(OmError::unsupported(format!(
+                "ChartFormat.{member} is not implemented as a method"
+            ))),
             RuntimeObjectKind::DataLabels {
                 workbook,
                 chart_id,
@@ -12589,12 +12629,14 @@ impl ExcelRuntime {
                             | "HasBorderVertical"
                             | "HasBorderOutline"
                             | "ShowLegendKey"
+                            | "Format"
                             | "Creator"
                             | "Application"
                             | "Parent"
                             | "Select"
                             | "Delete"
                     )
+                    | ("ChartFormat", "Creator" | "Application" | "Parent")
                     | (
                         "ChartGroups",
                         "Count" | "Item" | "Creator" | "Application" | "Parent"
@@ -15834,16 +15876,22 @@ impl ExcelRuntime {
             .data_table
             .as_ref()
             .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart data table not found"))?;
+        let has_border_horizontal = data_table.has_border_horizontal;
+        let has_border_vertical = data_table.has_border_vertical;
+        let has_border_outline = data_table.has_border_outline;
+        let show_legend_key = data_table.show_legend_key;
 
         match member {
-            "HasBorderHorizontal" => Ok(OmValue::Bool(
-                data_table.has_border_horizontal.unwrap_or(true),
-            )),
-            "HasBorderVertical" => Ok(OmValue::Bool(
-                data_table.has_border_vertical.unwrap_or(true),
-            )),
-            "HasBorderOutline" => Ok(OmValue::Bool(data_table.has_border_outline.unwrap_or(true))),
-            "ShowLegendKey" => Ok(OmValue::Bool(data_table.show_legend_key.unwrap_or(false))),
+            "Format" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::ChartFormat {
+                    workbook,
+                    parent: ChartFormatParent::DataTable { chart_id },
+                },
+            ))),
+            "HasBorderHorizontal" => Ok(OmValue::Bool(has_border_horizontal.unwrap_or(true))),
+            "HasBorderVertical" => Ok(OmValue::Bool(has_border_vertical.unwrap_or(true))),
+            "HasBorderOutline" => Ok(OmValue::Bool(has_border_outline.unwrap_or(true))),
+            "ShowLegendKey" => Ok(OmValue::Bool(show_legend_key.unwrap_or(false))),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(
@@ -21850,6 +21898,13 @@ impl ExcelRuntime {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
                 }
+                | RuntimeObjectKind::ChartFormat {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::DataTable {
+                            chart_id: object_chart_id,
+                        },
+                }
                 | RuntimeObjectKind::DataLabels {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
@@ -22066,6 +22121,15 @@ impl ExcelRuntime {
                 RuntimeObjectKind::DataTable {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
+                } if *object_workbook == workbook && *object_chart_id == chart_id => {
+                    Some(object_id)
+                }
+                RuntimeObjectKind::ChartFormat {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::DataTable {
+                            chart_id: object_chart_id,
+                        },
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
                 }
@@ -32962,6 +33026,7 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         | RuntimeObjectKind::ChartTitle { workbook, .. }
         | RuntimeObjectKind::Legend { workbook, .. }
         | RuntimeObjectKind::DataTable { workbook, .. }
+        | RuntimeObjectKind::ChartFormat { workbook, .. }
         | RuntimeObjectKind::DataLabels { workbook, .. }
         | RuntimeObjectKind::DataLabel { workbook, .. }
         | RuntimeObjectKind::ChartGroups { workbook, .. }
@@ -89934,6 +89999,41 @@ mod tests {
                 .expect("DataTable.ShowLegendKey default"),
             OmValue::Bool(false)
         );
+        let data_table_format = expect_object_handle(
+            runtime
+                .dispatch_get(data_table, "Format", &[])
+                .expect("DataTable.Format default"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table, "Format", &[OmValue::Missing])
+                .expect_err("DataTable.Format rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table_format, "Creator", &[])
+                .expect("ChartFormat.Creator"),
+            OmValue::Number(f64::from(super::XL_CREATOR_CODE))
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table_format, "Application", &[])
+                .expect("ChartFormat.Application"),
+            OmValue::Object(runtime.root_application())
+        );
+        let data_table_format_parent = expect_object_handle(
+            runtime
+                .dispatch_get(data_table_format, "Parent", &[])
+                .expect("ChartFormat.Parent"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table_format_parent, "ShowLegendKey", &[])
+                .expect("ChartFormat.Parent returns DataTable"),
+            OmValue::Bool(false)
+        );
         runtime
             .dispatch_set(data_table, "HasBorderHorizontal", OmValue::Bool(false), &[])
             .expect("set DataTable.HasBorderHorizontal");
@@ -90044,6 +90144,28 @@ mod tests {
                 .expect("reopened DataTable.ShowLegendKey"),
             OmValue::Bool(true)
         );
+        let reopened_data_table_format = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_data_table, "Format", &[])
+                .expect("reopened DataTable.Format"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_data_table_format, "Creator", &[])
+                .expect("reopened ChartFormat.Creator"),
+            OmValue::Number(f64::from(super::XL_CREATOR_CODE))
+        );
+        let reopened_data_table_format_parent = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_data_table_format, "Parent", &[])
+                .expect("reopened ChartFormat.Parent"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_data_table_format_parent, "ShowLegendKey", &[])
+                .expect("reopened ChartFormat.Parent returns DataTable"),
+            OmValue::Bool(true)
+        );
 
         reopened_runtime
             .dispatch_invoke(reopened_data_table, "Delete", &[])
@@ -90065,6 +90187,13 @@ mod tests {
             reopened_runtime
                 .dispatch_get(reopened_data_table, "ShowLegendKey", &[])
                 .expect_err("stale DataTable handle after Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_data_table_format, "Creator", &[])
+                .expect_err("stale ChartFormat handle after DataTable.Delete")
                 .code,
             OmErrorCode::InvalidState
         );
