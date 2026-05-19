@@ -655,6 +655,10 @@ enum RuntimeObjectKind {
         workbook: WorkbookHandle,
         parent: ChartFormatParent,
     },
+    Adjustments {
+        workbook: WorkbookHandle,
+        parent: ChartFormatParent,
+    },
     ChartFormatChild {
         workbook: WorkbookHandle,
         parent: ChartFormatParent,
@@ -2111,6 +2115,9 @@ impl ExcelRuntime {
                     "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
                     "Application" => Ok(OmValue::Object(self.root_application())),
                     "Parent" => Ok(OmValue::Object(self.register_object(parent_object))),
+                    "Adjustments" => Ok(OmValue::Object(
+                        self.register_object(RuntimeObjectKind::Adjustments { workbook, parent }),
+                    )),
                     _ => {
                         if let Some(kind) = ChartFormatChildKind::from_chart_format_member(member) {
                             Ok(OmValue::Object(self.register_object(
@@ -2126,6 +2133,54 @@ impl ExcelRuntime {
                             )))
                         }
                     }
+                }
+            }
+            RuntimeObjectKind::Adjustments { workbook, parent } => {
+                if !args.is_empty() && member != "Item" {
+                    return Err(OmError::invalid_argument(format!(
+                        "Adjustments.{member} does not accept arguments"
+                    )));
+                }
+                self.chart_format_parent_object_kind(workbook, parent)?;
+                match member {
+                    "Count" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "Adjustments.Count does not accept arguments",
+                            ));
+                        }
+                        Ok(OmValue::Number(0.0))
+                    }
+                    "Item" => self.dispatch_invoke_adjustments(workbook, parent, member, args),
+                    "Creator" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "Adjustments.Creator does not accept arguments",
+                            ));
+                        }
+                        Ok(OmValue::Number(f64::from(XL_CREATOR_CODE)))
+                    }
+                    "Application" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "Adjustments.Application does not accept arguments",
+                            ));
+                        }
+                        Ok(OmValue::Object(self.root_application()))
+                    }
+                    "Parent" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "Adjustments.Parent does not accept arguments",
+                            ));
+                        }
+                        Ok(OmValue::Object(self.register_object(
+                            RuntimeObjectKind::ChartFormat { workbook, parent },
+                        )))
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "Adjustments.{member} is not implemented"
+                    ))),
                 }
             }
             RuntimeObjectKind::ChartFormatChild {
@@ -4039,6 +4094,7 @@ impl ExcelRuntime {
             }
             RuntimeObjectKind::PlotArea { .. }
             | RuntimeObjectKind::ChartFormat { .. }
+            | RuntimeObjectKind::Adjustments { .. }
             | RuntimeObjectKind::ChartFormatChild { .. }
             | RuntimeObjectKind::Gridlines { .. }
             | RuntimeObjectKind::ChartGroups { .. }
@@ -12171,6 +12227,9 @@ impl ExcelRuntime {
                     "member {member} is not implemented as a method for this format handle"
                 )))
             }
+            RuntimeObjectKind::Adjustments { workbook, parent } => {
+                self.dispatch_invoke_adjustments(workbook, parent, member, args)
+            }
             RuntimeObjectKind::DataLabels {
                 workbook,
                 chart_id,
@@ -12762,6 +12821,7 @@ impl ExcelRuntime {
                         "ChartFormat",
                         "Creator"
                             | "Application"
+                            | "Adjustments"
                             | "Parent"
                             | "Fill"
                             | "Glow"
@@ -12771,6 +12831,10 @@ impl ExcelRuntime {
                             | "SoftEdge"
                             | "TextFrame2"
                             | "ThreeD"
+                    )
+                    | (
+                        "Adjustments",
+                        "Application" | "Count" | "Creator" | "Item" | "Parent"
                     )
                     | ("FillFormat", "Creator" | "Application" | "Parent")
                     | ("GlowFormat", "Creator" | "Application" | "Parent")
@@ -16474,6 +16538,32 @@ impl ExcelRuntime {
             }
             _ => Err(OmError::unsupported(format!(
                 "Axes.{member} is not implemented as a method"
+            ))),
+        }
+    }
+
+    fn dispatch_invoke_adjustments(
+        &mut self,
+        workbook: WorkbookHandle,
+        parent: ChartFormatParent,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        match member {
+            "Item" => {
+                let [index] = args else {
+                    return Err(OmError::invalid_argument(
+                        "Adjustments.Item expects a single index",
+                    ));
+                };
+                self.chart_format_parent_object_kind(workbook, parent)?;
+                let _ = coerce_u32_arg(index, "Adjustments.Item index")?;
+                Err(OmError::invalid_argument(
+                    "Adjustments.Item index is out of bounds",
+                ))
+            }
+            _ => Err(OmError::unsupported(format!(
+                "Adjustments.{member} is not implemented as a method"
             ))),
         }
     }
@@ -22181,6 +22271,18 @@ impl ExcelRuntime {
                             ..
                         },
                 }
+                | RuntimeObjectKind::Adjustments {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::Axis {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::TickLabels {
+                            chart_id: object_chart_id,
+                            ..
+                        },
+                }
                 | RuntimeObjectKind::ChartFormatChild {
                     workbook: object_workbook,
                     parent:
@@ -22273,6 +22375,49 @@ impl ExcelRuntime {
                     chart_id: object_chart_id,
                 }
                 | RuntimeObjectKind::ChartFormat {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::ChartArea {
+                            chart_id: object_chart_id,
+                        }
+                        | ChartFormatParent::PlotArea {
+                            chart_id: object_chart_id,
+                        }
+                        | ChartFormatParent::ChartTitle {
+                            chart_id: object_chart_id,
+                        }
+                        | ChartFormatParent::Legend {
+                            chart_id: object_chart_id,
+                        }
+                        | ChartFormatParent::DataTable {
+                            chart_id: object_chart_id,
+                        }
+                        | ChartFormatParent::Axis {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::TickLabels {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::Series {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::DataLabels {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::DataLabel {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::Point {
+                            chart_id: object_chart_id,
+                            ..
+                        },
+                }
+                | RuntimeObjectKind::Adjustments {
                     workbook: object_workbook,
                     parent:
                         ChartFormatParent::ChartArea {
@@ -22543,6 +22688,13 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                         },
                 }
+                | RuntimeObjectKind::Adjustments {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::ChartTitle {
+                            chart_id: object_chart_id,
+                        },
+                }
                 | RuntimeObjectKind::ChartFormatChild {
                     workbook: object_workbook,
                     parent:
@@ -22572,6 +22724,13 @@ impl ExcelRuntime {
                     chart_id: object_chart_id,
                 }
                 | RuntimeObjectKind::ChartFormat {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::Legend {
+                            chart_id: object_chart_id,
+                        },
+                }
+                | RuntimeObjectKind::Adjustments {
                     workbook: object_workbook,
                     parent:
                         ChartFormatParent::Legend {
@@ -22609,6 +22768,15 @@ impl ExcelRuntime {
                     Some(object_id)
                 }
                 RuntimeObjectKind::ChartFormat {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::DataTable {
+                            chart_id: object_chart_id,
+                        },
+                } if *object_workbook == workbook && *object_chart_id == chart_id => {
+                    Some(object_id)
+                }
+                RuntimeObjectKind::Adjustments {
                     workbook: object_workbook,
                     parent:
                         ChartFormatParent::DataTable {
@@ -22667,6 +22835,26 @@ impl ExcelRuntime {
                     ..
                 }
                 | RuntimeObjectKind::ChartFormat {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::Series {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::DataLabels {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::DataLabel {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::Point {
+                            chart_id: object_chart_id,
+                            ..
+                        },
+                }
+                | RuntimeObjectKind::Adjustments {
                     workbook: object_workbook,
                     parent:
                         ChartFormatParent::Series {
@@ -33562,6 +33750,7 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         | RuntimeObjectKind::Legend { workbook, .. }
         | RuntimeObjectKind::DataTable { workbook, .. }
         | RuntimeObjectKind::ChartFormat { workbook, .. }
+        | RuntimeObjectKind::Adjustments { workbook, .. }
         | RuntimeObjectKind::ChartFormatChild { workbook, .. }
         | RuntimeObjectKind::DataLabels { workbook, .. }
         | RuntimeObjectKind::DataLabel { workbook, .. }
@@ -90570,6 +90759,77 @@ mod tests {
                 .expect("ChartFormat.Parent returns DataTable"),
             OmValue::Bool(false)
         );
+        let data_table_adjustments = expect_object_handle(
+            runtime
+                .dispatch_get(data_table_format, "Adjustments", &[])
+                .expect("ChartFormat.Adjustments"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table_format, "Adjustments", &[OmValue::Missing])
+                .expect_err("ChartFormat.Adjustments rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table_adjustments, "Count", &[])
+                .expect("Adjustments.Count"),
+            OmValue::Number(0.0)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table_adjustments, "Creator", &[])
+                .expect("Adjustments.Creator"),
+            OmValue::Number(f64::from(super::XL_CREATOR_CODE))
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table_adjustments, "Application", &[])
+                .expect("Adjustments.Application"),
+            OmValue::Object(runtime.root_application())
+        );
+        let data_table_adjustments_parent = expect_object_handle(
+            runtime
+                .dispatch_get(data_table_adjustments, "Parent", &[])
+                .expect("Adjustments.Parent"),
+        );
+        let data_table_adjustments_parent_parent = expect_object_handle(
+            runtime
+                .dispatch_get(data_table_adjustments_parent, "Parent", &[])
+                .expect("Adjustments.Parent.Parent"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table_adjustments_parent_parent, "ShowLegendKey", &[])
+                .expect("Adjustments.Parent.Parent returns DataTable"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table_adjustments, "Item", &[])
+                .expect_err("Adjustments.Item rejects missing index")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    data_table_adjustments,
+                    "Item",
+                    &[OmValue::Text("bad".to_string())]
+                )
+                .expect_err("Adjustments.Item rejects non-numeric index")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table_adjustments, "Item", &[OmValue::Number(1.0)])
+                .expect_err("Adjustments.Item rejects empty collection index")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
         runtime
             .dispatch_set(data_table, "HasBorderHorizontal", OmValue::Bool(false), &[])
             .expect("set DataTable.HasBorderHorizontal");
@@ -90685,6 +90945,11 @@ mod tests {
                 .dispatch_get(reopened_data_table, "Format", &[])
                 .expect("reopened DataTable.Format"),
         );
+        let reopened_data_table_adjustments = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_data_table_format, "Adjustments", &[])
+                .expect("reopened DataTable.Format.Adjustments"),
+        );
         let mut reopened_data_table_format_children = Vec::new();
         for member in [
             "Fill",
@@ -90724,6 +90989,12 @@ mod tests {
                 .expect("reopened ChartFormat.Parent returns DataTable"),
             OmValue::Bool(true)
         );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_data_table_adjustments, "Count", &[])
+                .expect("reopened Adjustments.Count"),
+            OmValue::Number(0.0)
+        );
 
         reopened_runtime
             .dispatch_invoke(reopened_data_table, "Delete", &[])
@@ -90752,6 +91023,13 @@ mod tests {
             reopened_runtime
                 .dispatch_get(reopened_data_table_format, "Creator", &[])
                 .expect_err("stale ChartFormat handle after DataTable.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_data_table_adjustments, "Count", &[])
+                .expect_err("stale Adjustments handle after DataTable.Delete")
                 .code,
             OmErrorCode::InvalidState
         );
@@ -93309,6 +93587,73 @@ mod tests {
                     .dispatch_get(workbook.0, "Saved", &[])
                     .expect("Workbook.Saved after Format getter"),
                 OmValue::Bool(true)
+            );
+            let adjustments = expect_object_handle(
+                runtime
+                    .dispatch_get(format, "Adjustments", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("{surface}.Format.Adjustments failed: {error:?}")
+                    }),
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(format, "Adjustments", &[OmValue::Missing])
+                    .expect_err("ChartFormat.Adjustments rejects arguments")
+                    .code,
+                OmErrorCode::InvalidArgument
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(adjustments, "Count", &[])
+                    .unwrap_or_else(|error| panic!(
+                        "{surface}.Adjustments.Count failed: {error:?}"
+                    )),
+                OmValue::Number(0.0)
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(adjustments, "Creator", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("{surface}.Adjustments.Creator failed: {error:?}")
+                    }),
+                OmValue::Number(f64::from(super::XL_CREATOR_CODE))
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(adjustments, "Application", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("{surface}.Adjustments.Application failed: {error:?}")
+                    }),
+                OmValue::Object(application)
+            );
+            let adjustments_parent = expect_object_handle(
+                runtime
+                    .dispatch_get(adjustments, "Parent", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("{surface}.Adjustments.Parent failed: {error:?}")
+                    }),
+            );
+            let adjustments_grandparent = expect_object_handle(
+                runtime
+                    .dispatch_get(adjustments_parent, "Parent", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("{surface}.Adjustments.Parent.Parent failed: {error:?}")
+                    }),
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(adjustments_grandparent, "Creator", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("{surface}.Adjustments.Parent.Parent.Creator failed: {error:?}")
+                    }),
+                OmValue::Number(f64::from(super::XL_CREATOR_CODE))
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(adjustments, "Item", &[OmValue::Number(1.0)])
+                    .expect_err("Adjustments.Item rejects empty collection index")
+                    .code,
+                OmErrorCode::InvalidArgument
             );
             for (format_member, child_surface) in [
                 ("Fill", "FillFormat"),
