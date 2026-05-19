@@ -15738,9 +15738,45 @@ impl ExcelRuntime {
                     ShapeRangeSource::ChartObject { chart_object_id },
                 )))
             }
-            "Copy" | "Cut" | "CopyPicture" | "Delete" | "Duplicate" | "Select" => {
+            "Copy" | "Cut" | "CopyPicture" | "Select" => {
                 let delegated = self.shape_range_delegate_handle(workbook, source, member)?;
                 self.dispatch_invoke(delegated, member, args)
+            }
+            "Delete" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ShapeRange.Delete does not accept arguments",
+                    ));
+                }
+                let chart_object_ids = self
+                    .shape_range_chart_object_entries(workbook, source)?
+                    .into_iter()
+                    .map(|(chart_object_id, _)| chart_object_id)
+                    .collect::<Vec<_>>();
+                for chart_object_id in chart_object_ids {
+                    self.delete_chart_object(workbook, chart_object_id)?;
+                }
+                Ok(OmValue::Empty)
+            }
+            "Duplicate" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ShapeRange.Duplicate does not accept arguments",
+                    ));
+                }
+                let entries = self.shape_range_chart_object_entries(workbook, source)?;
+                let [(chart_object_id, _)] = entries.as_slice() else {
+                    let delegated =
+                        self.shape_range_delegate_handle(workbook, source, "Duplicate")?;
+                    return self.dispatch_invoke(delegated, member, args);
+                };
+                let duplicated_id = self.duplicate_chart_object(workbook, *chart_object_id)?;
+                Ok(OmValue::Object(self.register_shape_range_handle(
+                    workbook,
+                    ShapeRangeSource::ChartObject {
+                        chart_object_id: duplicated_id,
+                    },
+                )))
             }
             "IncrementLeft" | "IncrementTop" => {
                 let [increment] = args else {
@@ -87708,6 +87744,156 @@ mod tests {
             runtime
                 .dispatch_invoke(shape_range, "IncrementTop", &[OmValue::Number(f64::NAN)])
                 .expect_err("ShapeRange.IncrementTop rejects NaN")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn shaperange_action_methods_use_shape_semantics() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let application = runtime.root_application();
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let shape_range = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "ShapeRange", &[])
+                .expect("ChartObject.ShapeRange"),
+        );
+
+        for (member, args, expected_mode) in [
+            ("Copy", Vec::new(), super::XL_COPY),
+            (
+                "CopyPicture",
+                vec![
+                    OmValue::Missing,
+                    OmValue::Number(f64::from(super::XL_PICTURE)),
+                ],
+                super::XL_COPY,
+            ),
+            ("Cut", Vec::new(), super::XL_CUT),
+        ] {
+            runtime
+                .dispatch_set(application, "CutCopyMode", OmValue::Bool(false), &[])
+                .expect("reset Application.CutCopyMode");
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(shape_range, member, &args)
+                    .unwrap_or_else(|error| {
+                        panic!("ShapeRange.{member} should set headless cut/copy mode: {error:?}")
+                    }),
+                OmValue::Empty
+            );
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(application, "CutCopyMode", &[])
+                        .expect("Application.CutCopyMode after ShapeRange method")
+                ),
+                f64::from(expected_mode)
+            );
+        }
+
+        runtime
+            .dispatch_invoke(shape_range, "Select", &[])
+            .expect("ShapeRange.Select");
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveChart", &[])
+                .expect("ActiveChart after ShapeRange.Select"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_chart, "Name", &[])
+                    .expect("ActiveChart.Name after ShapeRange.Select")
+            ),
+            "Embedded Revenue Chart"
+        );
+
+        let duplicated_shape = expect_object_handle(
+            runtime
+                .dispatch_invoke(shape_range, "Duplicate", &[])
+                .expect("ShapeRange.Duplicate"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(duplicated_shape, "Count", &[])
+                    .expect("duplicated ShapeRange.Count")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count after ShapeRange.Duplicate")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(duplicated_shape, "Name", &[])
+                    .expect("duplicated ShapeRange.Name")
+            ),
+            "Chart 2"
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(duplicated_shape, "Delete", &[])
+                .expect("ShapeRange.Delete"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count after ShapeRange.Delete")
+            ),
+            1.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(duplicated_shape, "Count", &[])
+                .expect_err("deleted ShapeRange handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(shape_range, "Delete", &[OmValue::Missing])
+                .expect_err("ShapeRange.Delete rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(shape_range, "Duplicate", &[OmValue::Missing])
+                .expect_err("ShapeRange.Duplicate rejects arguments")
                 .code,
             OmErrorCode::InvalidArgument
         );
