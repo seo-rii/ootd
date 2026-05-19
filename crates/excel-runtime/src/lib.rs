@@ -4049,6 +4049,149 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
+                    "Left" | "Top" | "Width" | "Height" => {
+                        let OmValue::Number(number) = value else {
+                            return Err(OmError::type_mismatch(format!(
+                                "ChartObjects.{member} expects a numeric points value"
+                            )));
+                        };
+                        if !number.is_finite()
+                            || number < i64::MIN as f64 / 12_700.0
+                            || number > i64::MAX as f64 / 12_700.0
+                            || matches!(member, "Width" | "Height") && number < 0.0
+                        {
+                            return Err(OmError::invalid_argument(format!(
+                                "ChartObjects.{member} expects a finite points value{}",
+                                if matches!(member, "Width" | "Height") {
+                                    " greater than or equal to zero"
+                                } else {
+                                    ""
+                                }
+                            )));
+                        }
+                        if self.runtime_workbook(workbook)?.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart_object_ids = self
+                            .chart_object_entries_for_sheet(workbook, sheet_id)?
+                            .into_iter()
+                            .map(|(chart_object_id, _)| chart_object_id)
+                            .collect::<Vec<_>>();
+                        if chart_object_ids.is_empty() {
+                            return Ok(());
+                        }
+
+                        let mut geometries = Vec::with_capacity(chart_object_ids.len());
+                        let mut bounds: Option<(f64, f64, f64, f64)> = None;
+                        for chart_object_id in chart_object_ids {
+                            let chart_object =
+                                self.chart_object_model(workbook, chart_object_id)?;
+                            let left = Self::chart_object_geometry_value(chart_object, "Left")?;
+                            let top = Self::chart_object_geometry_value(chart_object, "Top")?;
+                            let width = Self::chart_object_geometry_value(chart_object, "Width")?;
+                            let height = Self::chart_object_geometry_value(chart_object, "Height")?;
+                            let right = left + width;
+                            let bottom = top + height;
+                            bounds = Some(match bounds {
+                                Some((
+                                    current_left,
+                                    current_top,
+                                    current_right,
+                                    current_bottom,
+                                )) => (
+                                    current_left.min(left),
+                                    current_top.min(top),
+                                    current_right.max(right),
+                                    current_bottom.max(bottom),
+                                ),
+                                None => (left, top, right, bottom),
+                            });
+                            geometries.push((chart_object_id, left, top, width, height));
+                        }
+                        let Some((bounds_left, bounds_top, bounds_right, bounds_bottom)) = bounds
+                        else {
+                            return Ok(());
+                        };
+                        let mut updates = Vec::new();
+                        match member {
+                            "Left" => {
+                                let delta = number - bounds_left;
+                                for (chart_object_id, left, _, _, _) in &geometries {
+                                    updates.push((*chart_object_id, vec![("Left", left + delta)]));
+                                }
+                            }
+                            "Top" => {
+                                let delta = number - bounds_top;
+                                for (chart_object_id, _, top, _, _) in &geometries {
+                                    updates.push((*chart_object_id, vec![("Top", top + delta)]));
+                                }
+                            }
+                            "Width" => {
+                                let current_width = bounds_right - bounds_left;
+                                if current_width == 0.0 {
+                                    for (chart_object_id, left, _, _, _) in &geometries {
+                                        updates.push((
+                                            *chart_object_id,
+                                            vec![("Left", *left), ("Width", number)],
+                                        ));
+                                    }
+                                } else {
+                                    let scale = number / current_width;
+                                    for (chart_object_id, left, _, width, _) in &geometries {
+                                        updates.push((
+                                            *chart_object_id,
+                                            vec![
+                                                (
+                                                    "Left",
+                                                    bounds_left + (left - bounds_left) * scale,
+                                                ),
+                                                ("Width", width * scale),
+                                            ],
+                                        ));
+                                    }
+                                }
+                            }
+                            "Height" => {
+                                let current_height = bounds_bottom - bounds_top;
+                                if current_height == 0.0 {
+                                    for (chart_object_id, _, top, _, _) in &geometries {
+                                        updates.push((
+                                            *chart_object_id,
+                                            vec![("Top", *top), ("Height", number)],
+                                        ));
+                                    }
+                                } else {
+                                    let scale = number / current_height;
+                                    for (chart_object_id, _, top, _, height) in &geometries {
+                                        updates.push((
+                                            *chart_object_id,
+                                            vec![
+                                                ("Top", bounds_top + (top - bounds_top) * scale),
+                                                ("Height", height * scale),
+                                            ],
+                                        ));
+                                    }
+                                }
+                            }
+                            _ => unreachable!("ChartObjects geometry member was matched"),
+                        }
+                        for (chart_object_id, member_updates) in updates {
+                            let chart_object =
+                                self.register_chart_object_handle(workbook, chart_object_id);
+                            for (geometry_member, geometry_value) in member_updates {
+                                self.dispatch_set(
+                                    chart_object,
+                                    geometry_member,
+                                    OmValue::Number(geometry_value),
+                                    &[],
+                                )?;
+                            }
+                        }
+                        Ok(())
+                    }
                     "Visible" | "PrintObject" | "Locked" | "ProtectChartObject" => {
                         let OmValue::Bool(enabled) = value else {
                             return Err(OmError::type_mismatch(format!(
@@ -86451,6 +86594,223 @@ mod tests {
             .dispatch_set(chart_objects, "Visible", OmValue::Number(1.0), &[])
             .expect_err("ChartObjects.Visible should reject non-bool");
         assert_eq!(invalid_visible.code, OmErrorCode::TypeMismatch);
+    }
+
+    #[test]
+    fn chartobjects_geometry_setters_transform_collection_bounds() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let first_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let second_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(24.0),
+                        OmValue::Number(30.0),
+                        OmValue::Number(180.0),
+                        OmValue::Number(90.0),
+                    ],
+                )
+                .expect("ChartObjects.Add second chart"),
+        );
+
+        runtime
+            .dispatch_set(chart_objects, "Left", OmValue::Number(12.0), &[])
+            .expect("set ChartObjects.Left");
+        runtime
+            .dispatch_set(chart_objects, "Top", OmValue::Number(23.0), &[])
+            .expect("set ChartObjects.Top");
+        runtime
+            .dispatch_set(chart_objects, "Width", OmValue::Number(404.0), &[])
+            .expect("set ChartObjects.Width");
+        runtime
+            .dispatch_set(chart_objects, "Height", OmValue::Number(234.0), &[])
+            .expect("set ChartObjects.Height");
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Left", &[])
+                    .expect("ChartObjects.Left after set")
+            ),
+            12.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Top", &[])
+                    .expect("ChartObjects.Top after set")
+            ),
+            23.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Width", &[])
+                    .expect("ChartObjects.Width after set")
+            ),
+            404.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Height", &[])
+                    .expect("ChartObjects.Height after set")
+            ),
+            234.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_chart_object, "Left", &[])
+                    .expect("first ChartObject.Left after collection set")
+            ),
+            12.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_chart_object, "Top", &[])
+                    .expect("first ChartObject.Top after collection set")
+            ),
+            23.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_chart_object, "Width", &[])
+                    .expect("first ChartObject.Width after collection set")
+            ),
+            200.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_chart_object, "Height", &[])
+                    .expect("first ChartObject.Height after collection set")
+            ),
+            100.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_chart_object, "Left", &[])
+                    .expect("second ChartObject.Left after collection set")
+            ),
+            56.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_chart_object, "Top", &[])
+                    .expect("second ChartObject.Top after collection set")
+            ),
+            77.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_chart_object, "Width", &[])
+                    .expect("second ChartObject.Width after collection set")
+            ),
+            360.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_chart_object, "Height", &[])
+                    .expect("second ChartObject.Height after collection set")
+            ),
+            180.0
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after ChartObjects geometry set")
+        ));
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save chart objects geometry");
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen chart objects geometry");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_objects, "Width", &[])
+                    .expect("reopened ChartObjects.Width")
+            ),
+            404.0
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_objects, "Height", &[])
+                    .expect("reopened ChartObjects.Height")
+            ),
+            234.0
+        );
+
+        let invalid_width = reopened_runtime
+            .dispatch_set(reopened_chart_objects, "Width", OmValue::Number(-1.0), &[])
+            .expect_err("ChartObjects.Width should reject negative values");
+        assert_eq!(invalid_width.code, OmErrorCode::InvalidArgument);
+        let invalid_left = reopened_runtime
+            .dispatch_set(
+                reopened_chart_objects,
+                "Left",
+                OmValue::Text("12".to_string()),
+                &[],
+            )
+            .expect_err("ChartObjects.Left should reject non-number");
+        assert_eq!(invalid_left.code, OmErrorCode::TypeMismatch);
     }
 
     #[test]
