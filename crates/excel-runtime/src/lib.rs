@@ -248,6 +248,7 @@ const MSO_ELEMENT_LEGEND_LEFT: i32 = 103;
 const MSO_ELEMENT_LEGEND_BOTTOM: i32 = 104;
 const MSO_ELEMENT_LEGEND_RIGHT_OVERLAY: i32 = 105;
 const MSO_ELEMENT_LEGEND_LEFT_OVERLAY: i32 = 106;
+const MSO_SHAPE_MIXED: i32 = -2;
 const XL_PASTE_ALL: i32 = -4104;
 const XL_PASTE_COMMENTS: i32 = -4144;
 const XL_PASTE_FORMATS: i32 = -4122;
@@ -2114,6 +2115,7 @@ impl ExcelRuntime {
                 match member {
                     "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
                     "Application" => Ok(OmValue::Object(self.root_application())),
+                    "AutoShapeType" => Ok(OmValue::Number(f64::from(MSO_SHAPE_MIXED))),
                     "Parent" => Ok(OmValue::Object(self.register_object(parent_object))),
                     "Adjustments" => Ok(OmValue::Object(
                         self.register_object(RuntimeObjectKind::Adjustments { workbook, parent }),
@@ -12822,6 +12824,7 @@ impl ExcelRuntime {
                         "Creator"
                             | "Application"
                             | "Adjustments"
+                            | "AutoShapeType"
                             | "Parent"
                             | "Fill"
                             | "Glow"
@@ -90744,6 +90747,19 @@ mod tests {
         );
         assert_eq!(
             runtime
+                .dispatch_get(data_table_format, "AutoShapeType", &[])
+                .expect("ChartFormat.AutoShapeType"),
+            OmValue::Number(f64::from(super::MSO_SHAPE_MIXED))
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table_format, "AutoShapeType", &[OmValue::Missing])
+                .expect_err("ChartFormat.AutoShapeType rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
                 .dispatch_get(data_table_format, "Application", &[])
                 .expect("ChartFormat.Application"),
             OmValue::Object(runtime.root_application())
@@ -93560,6 +93576,21 @@ mod tests {
                     .dispatch_get(format, "Creator", &[])
                     .unwrap_or_else(|error| panic!("{surface}.Format.Creator failed: {error:?}")),
                 OmValue::Number(f64::from(super::XL_CREATOR_CODE))
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(format, "AutoShapeType", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("{surface}.Format.AutoShapeType failed: {error:?}")
+                    }),
+                OmValue::Number(f64::from(super::MSO_SHAPE_MIXED))
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(format, "AutoShapeType", &[OmValue::Missing])
+                    .expect_err("ChartFormat.AutoShapeType rejects arguments")
+                    .code,
+                OmErrorCode::InvalidArgument
             );
             assert_eq!(
                 runtime
