@@ -11603,6 +11603,15 @@ impl ExcelRuntime {
                 "Points" => {
                     self.dispatch_get_series(workbook, chart_id, series_index, member, args)
                 }
+                "ClearFormats" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "Series.ClearFormats does not accept arguments",
+                        ));
+                    }
+                    self.series_model(workbook, chart_id, series_index)?;
+                    Ok(OmValue::Empty)
+                }
                 "Select" => {
                     if !args.is_empty() {
                         return Err(OmError::invalid_argument(
@@ -12684,6 +12693,7 @@ impl ExcelRuntime {
                             | "Parent"
                             | "Select"
                             | "ApplyDataLabels"
+                            | "ClearFormats"
                     )
                     | (
                         "DataLabels",
@@ -92341,6 +92351,16 @@ mod tests {
                 .dispatch_get(chart, "PlotArea", &[])
                 .expect("Chart.PlotArea"),
         );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
         assert_eq!(
             runtime
                 .dispatch_get(workbook.0, "Saved", &[])
@@ -92448,7 +92468,11 @@ mod tests {
             );
         }
 
-        for (handle, member) in [(chart_area, "ClearFormats"), (plot_area, "ClearFormats")] {
+        for (handle, member) in [
+            (chart_area, "ClearFormats"),
+            (plot_area, "ClearFormats"),
+            (series, "ClearFormats"),
+        ] {
             assert_eq!(
                 runtime
                     .dispatch_invoke(handle, member, &[])
