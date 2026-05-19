@@ -15742,6 +15742,52 @@ impl ExcelRuntime {
                 let delegated = self.shape_range_delegate_handle(workbook, source, member)?;
                 self.dispatch_invoke(delegated, member, args)
             }
+            "IncrementLeft" | "IncrementTop" => {
+                let [increment] = args else {
+                    return Err(OmError::invalid_argument(format!(
+                        "ShapeRange.{member} expects a single increment argument"
+                    )));
+                };
+                let OmValue::Number(increment) = increment else {
+                    return Err(OmError::type_mismatch(format!(
+                        "ShapeRange.{member} expects a numeric points value"
+                    )));
+                };
+                if !increment.is_finite()
+                    || *increment < i64::MIN as f64 / 12_700.0
+                    || *increment > i64::MAX as f64 / 12_700.0
+                {
+                    return Err(OmError::invalid_argument(format!(
+                        "ShapeRange.{member} expects a finite points value"
+                    )));
+                }
+
+                let geometry_member = match member {
+                    "IncrementLeft" => "Left",
+                    "IncrementTop" => "Top",
+                    _ => unreachable!("ShapeRange increment member was matched"),
+                };
+                let entries = self.shape_range_chart_object_entries(workbook, source)?;
+                for (chart_object_id, _) in entries {
+                    let delegated = self.register_chart_object_handle(workbook, chart_object_id);
+                    let current = match self.dispatch_get(delegated, geometry_member, &[])? {
+                        OmValue::Number(current) => current,
+                        _ => {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "ChartObject geometry did not return a numeric value",
+                            ));
+                        }
+                    };
+                    self.dispatch_set(
+                        delegated,
+                        geometry_member,
+                        OmValue::Number(current + *increment),
+                        &[],
+                    )?;
+                }
+                Ok(OmValue::Empty)
+            }
             "ZOrder" => {
                 let [command] = args else {
                     return Err(OmError::invalid_argument(
@@ -87502,6 +87548,168 @@ mod tests {
                 .expect_err("multi ShapeRange.ZOrder is unsupported")
                 .code,
             OmErrorCode::Unsupported
+        );
+    }
+
+    #[test]
+    fn shaperange_increment_moves_chart_objects() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let first_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let second_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(24.0),
+                        OmValue::Number(30.0),
+                        OmValue::Number(180.0),
+                        OmValue::Number(90.0),
+                    ],
+                )
+                .expect("ChartObjects.Add second chart"),
+        );
+        let shape_range = expect_object_handle(
+            runtime
+                .dispatch_get(chart_objects, "ShapeRange", &[])
+                .expect("ChartObjects.ShapeRange"),
+        );
+        let first_left = expect_number(
+            runtime
+                .dispatch_get(first_chart_object, "Left", &[])
+                .expect("first ChartObject.Left before increment"),
+        );
+        let first_top = expect_number(
+            runtime
+                .dispatch_get(first_chart_object, "Top", &[])
+                .expect("first ChartObject.Top before increment"),
+        );
+        let second_left = expect_number(
+            runtime
+                .dispatch_get(second_chart_object, "Left", &[])
+                .expect("second ChartObject.Left before increment"),
+        );
+        let second_top = expect_number(
+            runtime
+                .dispatch_get(second_chart_object, "Top", &[])
+                .expect("second ChartObject.Top before increment"),
+        );
+
+        runtime
+            .dispatch_invoke(shape_range, "IncrementLeft", &[OmValue::Number(12.5)])
+            .expect("ShapeRange.IncrementLeft");
+        runtime
+            .dispatch_invoke(shape_range, "IncrementTop", &[OmValue::Number(-5.0)])
+            .expect("ShapeRange.IncrementTop");
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_chart_object, "Left", &[])
+                    .expect("first ChartObject.Left after range increment")
+            ),
+            first_left + 12.5
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_chart_object, "Top", &[])
+                    .expect("first ChartObject.Top after range increment")
+            ),
+            first_top - 5.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_chart_object, "Left", &[])
+                    .expect("second ChartObject.Left after range increment")
+            ),
+            second_left + 12.5
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_chart_object, "Top", &[])
+                    .expect("second ChartObject.Top after range increment")
+            ),
+            second_top - 5.0
+        );
+
+        let second_shape = expect_object_handle(
+            runtime
+                .dispatch_get(second_chart_object, "ShapeRange", &[])
+                .expect("second ChartObject.ShapeRange"),
+        );
+        runtime
+            .dispatch_invoke(second_shape, "IncrementLeft", &[OmValue::Number(-4.0)])
+            .expect("single ShapeRange.IncrementLeft");
+        runtime
+            .dispatch_invoke(second_shape, "IncrementTop", &[OmValue::Number(2.0)])
+            .expect("single ShapeRange.IncrementTop");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_chart_object, "Left", &[])
+                    .expect("first ChartObject.Left after single increment")
+            ),
+            first_left + 12.5
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_chart_object, "Left", &[])
+                    .expect("second ChartObject.Left after single increment")
+            ),
+            second_left + 8.5
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_chart_object, "Top", &[])
+                    .expect("second ChartObject.Top after single increment")
+            ),
+            second_top - 3.0
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    shape_range,
+                    "IncrementLeft",
+                    &[OmValue::Text("wide".to_string())],
+                )
+                .expect_err("ShapeRange.IncrementLeft rejects non-number")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(shape_range, "IncrementTop", &[OmValue::Number(f64::NAN)])
+                .expect_err("ShapeRange.IncrementTop rejects NaN")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 
