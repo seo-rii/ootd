@@ -3230,6 +3230,48 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
+                    "HasLeaderLines" => {
+                        let OmValue::Bool(has_leader_lines) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Series.HasLeaderLines expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let inherited = chart
+                            .data_labels
+                            .clone()
+                            .unwrap_or_else(chart_data_labels_disabled_model);
+                        let series = chart.series.get_mut(series_index).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "series not found")
+                        })?;
+                        let data_labels = series.data_labels.get_or_insert(inherited);
+                        if data_labels.has_leader_lines != Some(has_leader_lines) {
+                            data_labels.has_leader_lines = Some(has_leader_lines);
+                            chart_data_labels_refresh_type_after_flag_change(
+                                data_labels,
+                                "HasLeaderLines",
+                            );
+                            data_labels.dirty = true;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     "BarShape" => {
                         let bar_shape = chart_bar_shape_from_excel_value(coerce_i32_arg(
                             &value,
@@ -12632,6 +12674,7 @@ impl ExcelRuntime {
                             | "Formula"
                             | "AxisGroup"
                             | "HasDataLabels"
+                            | "HasLeaderLines"
                             | "DataLabels"
                             | "Points"
                             | "PlotOrder"
@@ -16789,6 +16832,14 @@ impl ExcelRuntime {
                     series_index,
                 ),
             ))),
+            "HasLeaderLines" => Ok(OmValue::Bool(
+                chart_series_effective_data_labels(
+                    self.chart_model(workbook, chart_id)?,
+                    series_index,
+                )
+                .and_then(|labels| labels.has_leader_lines)
+                .unwrap_or(false),
+            )),
             "DataLabels" => {
                 self.series_model(workbook, chart_id, series_index)?;
                 let handle = self.register_data_labels_handle(workbook, chart_id, series_index);
@@ -89624,6 +89675,150 @@ mod tests {
             reopened_runtime
                 .dispatch_get(reopened_series, "InvertIfNegative", &[])
                 .expect("reopened Series.InvertIfNegative"),
+            OmValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn series_has_leader_lines_roundtrips_chart_xml() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "HasLeaderLines", &[])
+                .expect("Series.HasLeaderLines default"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(series, "HasLeaderLines", OmValue::Number(1.0), &[])
+                .expect_err("Series.HasLeaderLines rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        runtime
+            .dispatch_set(series, "HasLeaderLines", OmValue::Bool(true), &[])
+            .expect("set Series.HasLeaderLines true");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "HasLeaderLines", &[])
+                .expect("Series.HasLeaderLines after set"),
+            OmValue::Bool(true)
+        );
+        let data_labels = expect_object_handle(
+            runtime
+                .dispatch_get(series, "DataLabels", &[])
+                .expect("Series.DataLabels after leader-lines set"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_labels, "HasLeaderLines", &[])
+                .expect("DataLabels.HasLeaderLines reflects Series"),
+            OmValue::Bool(true)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with series leader-lines override");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:showLeaderLines val="1"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook with series leader-lines override");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_series, "HasLeaderLines", &[])
+                .expect("reopened Series.HasLeaderLines"),
             OmValue::Bool(true)
         );
     }
