@@ -546,6 +546,47 @@ enum ChartFormatParent {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChartFormatChildKind {
+    Fill,
+    Glow,
+    Line,
+    PictureFormat,
+    Shadow,
+    SoftEdge,
+    TextFrame2,
+    ThreeD,
+}
+
+impl ChartFormatChildKind {
+    fn surface_name(self) -> &'static str {
+        match self {
+            Self::Fill => "FillFormat",
+            Self::Glow => "GlowFormat",
+            Self::Line => "LineFormat",
+            Self::PictureFormat => "PictureFormat",
+            Self::Shadow => "ShadowFormat",
+            Self::SoftEdge => "SoftEdgeFormat",
+            Self::TextFrame2 => "TextFrame2",
+            Self::ThreeD => "ThreeDFormat",
+        }
+    }
+
+    fn from_chart_format_member(member: &str) -> Option<Self> {
+        match member {
+            "Fill" => Some(Self::Fill),
+            "Glow" => Some(Self::Glow),
+            "Line" => Some(Self::Line),
+            "PictureFormat" => Some(Self::PictureFormat),
+            "Shadow" => Some(Self::Shadow),
+            "SoftEdge" => Some(Self::SoftEdge),
+            "TextFrame2" => Some(Self::TextFrame2),
+            "ThreeD" => Some(Self::ThreeD),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 enum RuntimeObjectKind {
     Application,
@@ -614,13 +655,10 @@ enum RuntimeObjectKind {
         workbook: WorkbookHandle,
         parent: ChartFormatParent,
     },
-    FillFormat {
+    ChartFormatChild {
         workbook: WorkbookHandle,
         parent: ChartFormatParent,
-    },
-    LineFormat {
-        workbook: WorkbookHandle,
-        parent: ChartFormatParent,
+        kind: ChartFormatChildKind,
     },
     DataLabels {
         workbook: WorkbookHandle,
@@ -2073,21 +2111,32 @@ impl ExcelRuntime {
                     "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
                     "Application" => Ok(OmValue::Object(self.root_application())),
                     "Parent" => Ok(OmValue::Object(self.register_object(parent_object))),
-                    "Fill" => Ok(OmValue::Object(
-                        self.register_object(RuntimeObjectKind::FillFormat { workbook, parent }),
-                    )),
-                    "Line" => Ok(OmValue::Object(
-                        self.register_object(RuntimeObjectKind::LineFormat { workbook, parent }),
-                    )),
-                    _ => Err(OmError::unsupported(format!(
-                        "ChartFormat.{member} is not implemented"
-                    ))),
+                    _ => {
+                        if let Some(kind) = ChartFormatChildKind::from_chart_format_member(member) {
+                            Ok(OmValue::Object(self.register_object(
+                                RuntimeObjectKind::ChartFormatChild {
+                                    workbook,
+                                    parent,
+                                    kind,
+                                },
+                            )))
+                        } else {
+                            Err(OmError::unsupported(format!(
+                                "ChartFormat.{member} is not implemented"
+                            )))
+                        }
+                    }
                 }
             }
-            RuntimeObjectKind::FillFormat { workbook, parent } => {
+            RuntimeObjectKind::ChartFormatChild {
+                workbook,
+                parent,
+                kind,
+            } => {
+                let surface = kind.surface_name();
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(format!(
-                        "FillFormat.{member} does not accept arguments"
+                        "{surface}.{member} does not accept arguments"
                     )));
                 }
                 self.chart_format_parent_object_kind(workbook, parent)?;
@@ -2098,25 +2147,7 @@ impl ExcelRuntime {
                         self.register_object(RuntimeObjectKind::ChartFormat { workbook, parent }),
                     )),
                     _ => Err(OmError::unsupported(format!(
-                        "FillFormat.{member} is not implemented"
-                    ))),
-                }
-            }
-            RuntimeObjectKind::LineFormat { workbook, parent } => {
-                if !args.is_empty() {
-                    return Err(OmError::invalid_argument(format!(
-                        "LineFormat.{member} does not accept arguments"
-                    )));
-                }
-                self.chart_format_parent_object_kind(workbook, parent)?;
-                match member {
-                    "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
-                    "Application" => Ok(OmValue::Object(self.root_application())),
-                    "Parent" => Ok(OmValue::Object(
-                        self.register_object(RuntimeObjectKind::ChartFormat { workbook, parent }),
-                    )),
-                    _ => Err(OmError::unsupported(format!(
-                        "LineFormat.{member} is not implemented"
+                        "{surface}.{member} is not implemented"
                     ))),
                 }
             }
@@ -4008,8 +4039,7 @@ impl ExcelRuntime {
             }
             RuntimeObjectKind::PlotArea { .. }
             | RuntimeObjectKind::ChartFormat { .. }
-            | RuntimeObjectKind::FillFormat { .. }
-            | RuntimeObjectKind::LineFormat { .. }
+            | RuntimeObjectKind::ChartFormatChild { .. }
             | RuntimeObjectKind::Gridlines { .. }
             | RuntimeObjectKind::ChartGroups { .. }
             | RuntimeObjectKind::Axes { .. }
@@ -12136,11 +12166,11 @@ impl ExcelRuntime {
                     ))),
                 }
             }
-            RuntimeObjectKind::ChartFormat { .. }
-            | RuntimeObjectKind::FillFormat { .. }
-            | RuntimeObjectKind::LineFormat { .. } => Err(OmError::unsupported(format!(
-                "member {member} is not implemented as a method for this format handle"
-            ))),
+            RuntimeObjectKind::ChartFormat { .. } | RuntimeObjectKind::ChartFormatChild { .. } => {
+                Err(OmError::unsupported(format!(
+                    "member {member} is not implemented as a method for this format handle"
+                )))
+            }
             RuntimeObjectKind::DataLabels {
                 workbook,
                 chart_id,
@@ -12730,10 +12760,26 @@ impl ExcelRuntime {
                     )
                     | (
                         "ChartFormat",
-                        "Creator" | "Application" | "Parent" | "Fill" | "Line"
+                        "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Fill"
+                            | "Glow"
+                            | "Line"
+                            | "PictureFormat"
+                            | "Shadow"
+                            | "SoftEdge"
+                            | "TextFrame2"
+                            | "ThreeD"
                     )
                     | ("FillFormat", "Creator" | "Application" | "Parent")
+                    | ("GlowFormat", "Creator" | "Application" | "Parent")
                     | ("LineFormat", "Creator" | "Application" | "Parent")
+                    | ("PictureFormat", "Creator" | "Application" | "Parent")
+                    | ("ShadowFormat", "Creator" | "Application" | "Parent")
+                    | ("SoftEdgeFormat", "Creator" | "Application" | "Parent")
+                    | ("TextFrame2", "Creator" | "Application" | "Parent")
+                    | ("ThreeDFormat", "Creator" | "Application" | "Parent")
                     | (
                         "ChartGroups",
                         "Count" | "Item" | "Creator" | "Application" | "Parent"
@@ -22135,7 +22181,7 @@ impl ExcelRuntime {
                             ..
                         },
                 }
-                | RuntimeObjectKind::FillFormat {
+                | RuntimeObjectKind::ChartFormatChild {
                     workbook: object_workbook,
                     parent:
                         ChartFormatParent::Axis {
@@ -22146,18 +22192,7 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                             ..
                         },
-                }
-                | RuntimeObjectKind::LineFormat {
-                    workbook: object_workbook,
-                    parent:
-                        ChartFormatParent::Axis {
-                            chart_id: object_chart_id,
-                            ..
-                        }
-                        | ChartFormatParent::TickLabels {
-                            chart_id: object_chart_id,
-                            ..
-                        },
+                    ..
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
                 }
@@ -22280,7 +22315,7 @@ impl ExcelRuntime {
                             ..
                         },
                 }
-                | RuntimeObjectKind::FillFormat {
+                | RuntimeObjectKind::ChartFormatChild {
                     workbook: object_workbook,
                     parent:
                         ChartFormatParent::ChartArea {
@@ -22322,49 +22357,7 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                             ..
                         },
-                }
-                | RuntimeObjectKind::LineFormat {
-                    workbook: object_workbook,
-                    parent:
-                        ChartFormatParent::ChartArea {
-                            chart_id: object_chart_id,
-                        }
-                        | ChartFormatParent::PlotArea {
-                            chart_id: object_chart_id,
-                        }
-                        | ChartFormatParent::ChartTitle {
-                            chart_id: object_chart_id,
-                        }
-                        | ChartFormatParent::Legend {
-                            chart_id: object_chart_id,
-                        }
-                        | ChartFormatParent::DataTable {
-                            chart_id: object_chart_id,
-                        }
-                        | ChartFormatParent::Axis {
-                            chart_id: object_chart_id,
-                            ..
-                        }
-                        | ChartFormatParent::TickLabels {
-                            chart_id: object_chart_id,
-                            ..
-                        }
-                        | ChartFormatParent::Series {
-                            chart_id: object_chart_id,
-                            ..
-                        }
-                        | ChartFormatParent::DataLabels {
-                            chart_id: object_chart_id,
-                            ..
-                        }
-                        | ChartFormatParent::DataLabel {
-                            chart_id: object_chart_id,
-                            ..
-                        }
-                        | ChartFormatParent::Point {
-                            chart_id: object_chart_id,
-                            ..
-                        },
+                    ..
                 }
                 | RuntimeObjectKind::DataLabels {
                     workbook: object_workbook,
@@ -22550,19 +22543,13 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                         },
                 }
-                | RuntimeObjectKind::FillFormat {
+                | RuntimeObjectKind::ChartFormatChild {
                     workbook: object_workbook,
                     parent:
                         ChartFormatParent::ChartTitle {
                             chart_id: object_chart_id,
                         },
-                }
-                | RuntimeObjectKind::LineFormat {
-                    workbook: object_workbook,
-                    parent:
-                        ChartFormatParent::ChartTitle {
-                            chart_id: object_chart_id,
-                        },
+                    ..
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
                 }
@@ -22591,19 +22578,13 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                         },
                 }
-                | RuntimeObjectKind::FillFormat {
+                | RuntimeObjectKind::ChartFormatChild {
                     workbook: object_workbook,
                     parent:
                         ChartFormatParent::Legend {
                             chart_id: object_chart_id,
                         },
-                }
-                | RuntimeObjectKind::LineFormat {
-                    workbook: object_workbook,
-                    parent:
-                        ChartFormatParent::Legend {
-                            chart_id: object_chart_id,
-                        },
+                    ..
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
                 }
@@ -22636,21 +22617,13 @@ impl ExcelRuntime {
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
                 }
-                RuntimeObjectKind::FillFormat {
+                RuntimeObjectKind::ChartFormatChild {
                     workbook: object_workbook,
                     parent:
                         ChartFormatParent::DataTable {
                             chart_id: object_chart_id,
                         },
-                } if *object_workbook == workbook && *object_chart_id == chart_id => {
-                    Some(object_id)
-                }
-                RuntimeObjectKind::LineFormat {
-                    workbook: object_workbook,
-                    parent:
-                        ChartFormatParent::DataTable {
-                            chart_id: object_chart_id,
-                        },
+                    ..
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
                 }
@@ -22713,7 +22686,7 @@ impl ExcelRuntime {
                             ..
                         },
                 }
-                | RuntimeObjectKind::FillFormat {
+                | RuntimeObjectKind::ChartFormatChild {
                     workbook: object_workbook,
                     parent:
                         ChartFormatParent::Series {
@@ -22732,26 +22705,7 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                             ..
                         },
-                }
-                | RuntimeObjectKind::LineFormat {
-                    workbook: object_workbook,
-                    parent:
-                        ChartFormatParent::Series {
-                            chart_id: object_chart_id,
-                            ..
-                        }
-                        | ChartFormatParent::DataLabels {
-                            chart_id: object_chart_id,
-                            ..
-                        }
-                        | ChartFormatParent::DataLabel {
-                            chart_id: object_chart_id,
-                            ..
-                        }
-                        | ChartFormatParent::Point {
-                            chart_id: object_chart_id,
-                            ..
-                        },
+                    ..
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
                 }
@@ -33608,8 +33562,7 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         | RuntimeObjectKind::Legend { workbook, .. }
         | RuntimeObjectKind::DataTable { workbook, .. }
         | RuntimeObjectKind::ChartFormat { workbook, .. }
-        | RuntimeObjectKind::FillFormat { workbook, .. }
-        | RuntimeObjectKind::LineFormat { workbook, .. }
+        | RuntimeObjectKind::ChartFormatChild { workbook, .. }
         | RuntimeObjectKind::DataLabels { workbook, .. }
         | RuntimeObjectKind::DataLabel { workbook, .. }
         | RuntimeObjectKind::ChartGroups { workbook, .. }
@@ -90732,16 +90685,28 @@ mod tests {
                 .dispatch_get(reopened_data_table, "Format", &[])
                 .expect("reopened DataTable.Format"),
         );
-        let reopened_data_table_fill = expect_object_handle(
-            reopened_runtime
-                .dispatch_get(reopened_data_table_format, "Fill", &[])
-                .expect("reopened DataTable.Format.Fill"),
-        );
-        let reopened_data_table_line = expect_object_handle(
-            reopened_runtime
-                .dispatch_get(reopened_data_table_format, "Line", &[])
-                .expect("reopened DataTable.Format.Line"),
-        );
+        let mut reopened_data_table_format_children = Vec::new();
+        for member in [
+            "Fill",
+            "Glow",
+            "Line",
+            "PictureFormat",
+            "Shadow",
+            "SoftEdge",
+            "TextFrame2",
+            "ThreeD",
+        ] {
+            reopened_data_table_format_children.push((
+                member,
+                expect_object_handle(
+                    reopened_runtime
+                        .dispatch_get(reopened_data_table_format, member, &[])
+                        .unwrap_or_else(|error| {
+                            panic!("reopened DataTable.Format.{member} failed: {error:?}")
+                        }),
+                ),
+            ));
+        }
         assert_eq!(
             reopened_runtime
                 .dispatch_get(reopened_data_table_format, "Creator", &[])
@@ -90790,20 +90755,13 @@ mod tests {
                 .code,
             OmErrorCode::InvalidState
         );
-        assert_eq!(
-            reopened_runtime
-                .dispatch_get(reopened_data_table_fill, "Creator", &[])
-                .expect_err("stale FillFormat handle after DataTable.Delete")
-                .code,
-            OmErrorCode::InvalidState
-        );
-        assert_eq!(
-            reopened_runtime
-                .dispatch_get(reopened_data_table_line, "Creator", &[])
-                .expect_err("stale LineFormat handle after DataTable.Delete")
-                .code,
-            OmErrorCode::InvalidState
-        );
+        for (member, handle) in reopened_data_table_format_children {
+            let error = match reopened_runtime.dispatch_get(handle, "Creator", &[]) {
+                Ok(value) => panic!("stale {member} format child returned {value:?}"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code, OmErrorCode::InvalidState);
+        }
         let without_table_saved = reopened_runtime
             .save_workbook(
                 reopened_workbook,
@@ -93352,7 +93310,16 @@ mod tests {
                     .expect("Workbook.Saved after Format getter"),
                 OmValue::Bool(true)
             );
-            for (format_member, child_surface) in [("Fill", "FillFormat"), ("Line", "LineFormat")] {
+            for (format_member, child_surface) in [
+                ("Fill", "FillFormat"),
+                ("Glow", "GlowFormat"),
+                ("Line", "LineFormat"),
+                ("PictureFormat", "PictureFormat"),
+                ("Shadow", "ShadowFormat"),
+                ("SoftEdge", "SoftEdgeFormat"),
+                ("TextFrame2", "TextFrame2"),
+                ("ThreeD", "ThreeDFormat"),
+            ] {
                 let format_child = expect_object_handle(
                     runtime
                         .dispatch_get(format, format_member, &[])
