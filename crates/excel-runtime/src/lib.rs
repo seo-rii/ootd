@@ -3987,6 +3987,68 @@ impl ExcelRuntime {
                     )));
                 }
                 match member {
+                    "Placement" => {
+                        let OmValue::Number(number) = value else {
+                            return Err(OmError::type_mismatch(
+                                "ChartObjects.Placement expects an XlPlacement numeric value",
+                            ));
+                        };
+                        if !number.is_finite()
+                            || number.fract() != 0.0
+                            || number < i32::MIN as f64
+                            || number > i32::MAX as f64
+                        {
+                            return Err(OmError::invalid_argument(
+                                "ChartObjects.Placement expects an integral XlPlacement value",
+                            ));
+                        }
+                        let new_placement = match number as i32 {
+                            XL_MOVE_AND_SIZE => ObjectPlacement::MoveAndSize,
+                            XL_MOVE => ObjectPlacement::MoveOnly,
+                            XL_FREE_FLOATING => ObjectPlacement::FreeFloating,
+                            _ => {
+                                return Err(OmError::invalid_argument(
+                                    "ChartObjects.Placement supports xlMoveAndSize, xlMove, and xlFreeFloating",
+                                ));
+                            }
+                        };
+                        let chart_object_ids = self
+                            .chart_object_entries_for_sheet(workbook, sheet_id)?
+                            .into_iter()
+                            .map(|(chart_object_id, _)| chart_object_id)
+                            .collect::<Vec<_>>();
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let mut workbook_dirty = false;
+                        for drawing in runtime.loaded.state.drawings.values_mut() {
+                            if drawing.host_sheet_id != sheet_id {
+                                continue;
+                            }
+                            for object in &mut drawing.objects {
+                                let DrawingObjectModel::ChartFrame(chart_object) = object else {
+                                    continue;
+                                };
+                                if !chart_object_ids.contains(&chart_object.id) {
+                                    continue;
+                                }
+                                if chart_object.placement != new_placement {
+                                    chart_object.placement = new_placement;
+                                    chart_object.dirty = true;
+                                    drawing.dirty = true;
+                                    workbook_dirty = true;
+                                }
+                            }
+                        }
+                        if workbook_dirty {
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     "Visible" | "PrintObject" | "Locked" | "ProtectChartObject" => {
                         let OmValue::Bool(enabled) = value else {
                             return Err(OmError::type_mismatch(format!(
@@ -12715,6 +12777,7 @@ impl ExcelRuntime {
                             | "Top"
                             | "Width"
                             | "Height"
+                            | "Placement"
                             | "Visible"
                             | "ProtectChartObject"
                             | "PrintObject"
@@ -14918,6 +14981,27 @@ impl ExcelRuntime {
                     }
                 }
                 Ok(OmValue::Bool(visible))
+            }
+            "Placement" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ChartObjects.Placement does not accept arguments",
+                    ));
+                }
+                let placement = self
+                    .chart_object_entries_for_sheet(workbook, sheet_id)?
+                    .into_iter()
+                    .next()
+                    .map(|(chart_object_id, _)| {
+                        chart_object_placement_value(
+                            &self
+                                .chart_object_model(workbook, chart_object_id)?
+                                .placement,
+                        )
+                    })
+                    .transpose()?
+                    .unwrap_or(XL_FREE_FLOATING);
+                Ok(OmValue::Number(f64::from(placement)))
             }
             "PrintObject" | "Locked" | "ProtectChartObject" => {
                 if !args.is_empty() {
@@ -86499,6 +86583,140 @@ mod tests {
             .dispatch_set(chart_objects, "RoundedCorners", OmValue::Number(1.0), &[])
             .expect_err("ChartObjects.RoundedCorners should reject non-bool");
         assert_eq!(invalid_rounded.code, OmErrorCode::TypeMismatch);
+    }
+
+    #[test]
+    fn chartobjects_placement_sets_each_chart_object() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let first_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let second_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(24.0),
+                        OmValue::Number(30.0),
+                        OmValue::Number(180.0),
+                        OmValue::Number(90.0),
+                    ],
+                )
+                .expect("ChartObjects.Add second chart"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Placement", &[])
+                    .expect("default ChartObjects.Placement")
+            ),
+            f64::from(super::XL_FREE_FLOATING)
+        );
+
+        runtime
+            .dispatch_set(
+                chart_objects,
+                "Placement",
+                OmValue::Number(f64::from(super::XL_MOVE)),
+                &[],
+            )
+            .expect("set ChartObjects.Placement");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_chart_object, "Placement", &[])
+                    .expect("first ChartObject.Placement after collection set")
+            ),
+            f64::from(super::XL_MOVE)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_chart_object, "Placement", &[])
+                    .expect("second ChartObject.Placement after collection set")
+            ),
+            f64::from(super::XL_MOVE)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save chart object placements");
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook with chart object placements");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        for index in [1.0, 2.0] {
+            let reopened_chart_object = expect_object_handle(
+                reopened_runtime
+                    .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(index)])
+                    .expect("reopened ChartObjects.Item"),
+            );
+            assert_eq!(
+                expect_number(
+                    reopened_runtime
+                        .dispatch_get(reopened_chart_object, "Placement", &[])
+                        .expect("reopened ChartObject.Placement")
+                ),
+                f64::from(super::XL_MOVE)
+            );
+        }
+
+        let invalid_type = runtime
+            .dispatch_set(
+                chart_objects,
+                "Placement",
+                OmValue::Text("bad".to_string()),
+                &[],
+            )
+            .expect_err("ChartObjects.Placement should reject non-number");
+        assert_eq!(invalid_type.code, OmErrorCode::TypeMismatch);
+        let invalid_value = runtime
+            .dispatch_set(chart_objects, "Placement", OmValue::Number(99.0), &[])
+            .expect_err("ChartObjects.Placement should reject unsupported constants");
+        assert_eq!(invalid_value.code, OmErrorCode::InvalidArgument);
     }
 
     #[test]
