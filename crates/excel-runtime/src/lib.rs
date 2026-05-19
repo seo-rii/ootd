@@ -13001,6 +13001,7 @@ impl ExcelRuntime {
                             | "Chart"
                             | "Index"
                             | "ZOrder"
+                            | "ZOrderPosition"
                             | "Placement"
                             | "Left"
                             | "Top"
@@ -16086,6 +16087,27 @@ impl ExcelRuntime {
                 Ok(OmValue::Object(
                     self.register_worksheet_handle(workbook, sheet_id).0,
                 ))
+            }
+            "ZOrderPosition" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ShapeRange.ZOrderPosition does not accept arguments",
+                    ));
+                }
+                let entries = self.shape_range_chart_object_entries(workbook, source)?;
+                let [(chart_object_id, _)] = entries.as_slice() else {
+                    return Ok(OmValue::Number(f64::from(MSO_SHAPE_MIXED)));
+                };
+                let sheet_id = self
+                    .chart_object_model(workbook, *chart_object_id)?
+                    .host_sheet_id;
+                let position = self
+                    .chart_object_entries_for_sheet(workbook, sheet_id)?
+                    .iter()
+                    .position(|(candidate_id, _)| candidate_id == chart_object_id)
+                    .map(|index| index + 1)
+                    .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart object not found"))?;
+                Ok(OmValue::Number(position as f64))
             }
             _ => {
                 let delegated = self.shape_range_delegate_handle(workbook, source, member)?;
@@ -87485,6 +87507,14 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
+                    .dispatch_get(first_shape_range, "ZOrderPosition", &[])
+                    .expect("ShapeRange.ZOrderPosition after bring forward")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
                     .dispatch_get(second_chart_object, "ZOrder", &[])
                     .expect("second chart object z-order after bring forward")
             ),
@@ -87514,6 +87544,14 @@ mod tests {
             ),
             1.0
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_shape_range, "ZOrderPosition", &[])
+                    .expect("ShapeRange.ZOrderPosition after send backward")
+            ),
+            1.0
+        );
 
         runtime
             .dispatch_invoke(
@@ -87530,6 +87568,14 @@ mod tests {
             ),
             3.0
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_shape_range, "ZOrderPosition", &[])
+                    .expect("ShapeRange.ZOrderPosition after bring to front")
+            ),
+            3.0
+        );
 
         runtime
             .dispatch_invoke(
@@ -87543,6 +87589,14 @@ mod tests {
                 runtime
                     .dispatch_get(first_chart_object, "ZOrder", &[])
                     .expect("first chart object z-order after send to back")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_shape_range, "ZOrderPosition", &[])
+                    .expect("ShapeRange.ZOrderPosition after send to back")
             ),
             1.0
         );
@@ -87573,6 +87627,21 @@ mod tests {
             runtime
                 .dispatch_get(chart_objects, "ShapeRange", &[])
                 .expect("ChartObjects.ShapeRange"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(all_shapes, "ZOrderPosition", &[])
+                    .expect("multi ShapeRange.ZOrderPosition")
+            ),
+            f64::from(super::MSO_SHAPE_MIXED)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(all_shapes, "ZOrderPosition", &[OmValue::Missing])
+                .expect_err("ShapeRange.ZOrderPosition rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
         );
         assert_eq!(
             runtime
