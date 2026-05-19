@@ -11713,6 +11713,15 @@ impl ExcelRuntime {
                     let chart = self.register_chart_handle(workbook, chart_id);
                     self.dispatch_invoke(chart, "Select", &[])
                 }
+                "ClearFormats" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "Point.ClearFormats does not accept arguments",
+                        ));
+                    }
+                    self.validate_point_index(workbook, chart_id, series_index, point_index)?;
+                    Ok(OmValue::Empty)
+                }
                 _ => Err(OmError::unsupported(format!(
                     "Point.{member} is not implemented as a method"
                 ))),
@@ -12758,6 +12767,7 @@ impl ExcelRuntime {
                             | "Parent"
                             | "ApplyDataLabels"
                             | "Select"
+                            | "ClearFormats"
                     )
             )
         {
@@ -92361,6 +92371,16 @@ mod tests {
                 .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
                 .expect("SeriesCollection.Item(1)"),
         );
+        let points = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Points", &[])
+                .expect("Series.Points"),
+        );
+        let point = expect_object_handle(
+            runtime
+                .dispatch_invoke(points, "Item", &[OmValue::Number(1.0)])
+                .expect("Points.Item(1)"),
+        );
         assert_eq!(
             runtime
                 .dispatch_get(workbook.0, "Saved", &[])
@@ -92472,6 +92492,7 @@ mod tests {
             (chart_area, "ClearFormats"),
             (plot_area, "ClearFormats"),
             (series, "ClearFormats"),
+            (point, "ClearFormats"),
         ] {
             assert_eq!(
                 runtime
