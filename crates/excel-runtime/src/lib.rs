@@ -249,6 +249,7 @@ const MSO_ELEMENT_LEGEND_BOTTOM: i32 = 104;
 const MSO_ELEMENT_LEGEND_RIGHT_OVERLAY: i32 = 105;
 const MSO_ELEMENT_LEGEND_LEFT_OVERLAY: i32 = 106;
 const MSO_SHAPE_MIXED: i32 = -2;
+const MSO_SHAPE_CHART: i32 = 3;
 const MSO_BRING_TO_FRONT: i32 = 0;
 const MSO_SEND_TO_BACK: i32 = 1;
 const MSO_BRING_FORWARD: i32 = 2;
@@ -13005,6 +13006,7 @@ impl ExcelRuntime {
                             | "Name"
                             | "Chart"
                             | "Index"
+                            | "Type"
                             | "ZOrder"
                             | "ZOrderPosition"
                             | "Placement"
@@ -16211,6 +16213,23 @@ impl ExcelRuntime {
                     self.shape_range_chart_object_entries(workbook, source)?
                         .len() as f64,
                 ))
+            }
+            "Type" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ShapeRange.Type does not accept arguments",
+                    ));
+                }
+                if self
+                    .shape_range_chart_object_entries(workbook, source)?
+                    .is_empty()
+                {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        "chart object not found",
+                    ));
+                }
+                Ok(OmValue::Number(f64::from(MSO_SHAPE_CHART)))
             }
             "Item" => self.dispatch_invoke_shape_range(workbook, source, member, args),
             "Application" => {
@@ -87450,6 +87469,21 @@ mod tests {
             ),
             f64::from(super::XL_CREATOR_CODE)
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "Type", &[])
+                    .expect("ShapeRange.Type")
+            ),
+            f64::from(super::MSO_SHAPE_CHART)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(shape_range, "Type", &[OmValue::Missing])
+                .expect_err("ShapeRange.Type rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
 
         let single_shape = expect_object_handle(
             runtime
@@ -87463,6 +87497,14 @@ mod tests {
                     .expect("single ShapeRange.Name")
             ),
             "Embedded Revenue Chart"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(single_shape, "Type", &[])
+                    .expect("single ShapeRange.Type")
+            ),
+            f64::from(super::MSO_SHAPE_CHART)
         );
         let single_chart = expect_object_handle(
             runtime
@@ -87530,6 +87572,14 @@ mod tests {
                     .expect("ShapeRange.Count after add")
             ),
             2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "Type", &[])
+                    .expect("multi ShapeRange.Type")
+            ),
+            f64::from(super::MSO_SHAPE_CHART)
         );
         let second_shape = expect_object_handle(
             runtime
