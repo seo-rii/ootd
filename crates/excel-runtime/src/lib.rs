@@ -4080,6 +4080,45 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
+                    "RoundedCorners" => {
+                        let OmValue::Bool(rounded_corners) = value else {
+                            return Err(OmError::type_mismatch(
+                                "ChartObjects.RoundedCorners expects a boolean value",
+                            ));
+                        };
+                        let mut chart_ids = Vec::new();
+                        for (chart_object_id, _) in
+                            self.chart_object_entries_for_sheet(workbook, sheet_id)?
+                        {
+                            chart_ids
+                                .push(self.chart_object_model(workbook, chart_object_id)?.chart_id);
+                        }
+                        chart_ids.sort_unstable();
+                        chart_ids.dedup();
+
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let mut workbook_dirty = false;
+                        for chart_id in chart_ids {
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            if chart.rounded_corners != Some(rounded_corners) {
+                                chart.rounded_corners = Some(rounded_corners);
+                                chart.dirty = true;
+                                workbook_dirty = true;
+                            }
+                        }
+                        if workbook_dirty {
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     _ => Err(OmError::unsupported(format!(
                         "ChartObjects.{member} is not writable"
                     ))),
@@ -12680,6 +12719,7 @@ impl ExcelRuntime {
                             | "ProtectChartObject"
                             | "PrintObject"
                             | "Locked"
+                            | "RoundedCorners"
                             | "Select"
                             | "Copy"
                             | "Cut"
@@ -14909,6 +14949,30 @@ impl ExcelRuntime {
                     }
                 }
                 Ok(OmValue::Bool(enabled))
+            }
+            "RoundedCorners" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ChartObjects.RoundedCorners does not accept arguments",
+                    ));
+                }
+                let mut saw_chart_object = false;
+                let mut rounded_corners = true;
+                for (chart_object_id, _) in
+                    self.chart_object_entries_for_sheet(workbook, sheet_id)?
+                {
+                    saw_chart_object = true;
+                    let chart_id = self.chart_object_model(workbook, chart_object_id)?.chart_id;
+                    if !self
+                        .chart_model(workbook, chart_id)?
+                        .rounded_corners
+                        .unwrap_or(false)
+                    {
+                        rounded_corners = false;
+                        break;
+                    }
+                }
+                Ok(OmValue::Bool(saw_chart_object && rounded_corners))
             }
             _ => Err(OmError::unsupported(format!(
                 "ChartObjects.{member} is not implemented"
@@ -86303,6 +86367,138 @@ mod tests {
             .dispatch_set(chart_objects, "Visible", OmValue::Number(1.0), &[])
             .expect_err("ChartObjects.Visible should reject non-bool");
         assert_eq!(invalid_visible.code, OmErrorCode::TypeMismatch);
+    }
+
+    #[test]
+    fn chartobjects_rounded_corners_sets_each_chart() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let first_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let second_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(24.0),
+                        OmValue::Number(30.0),
+                        OmValue::Number(180.0),
+                        OmValue::Number(90.0),
+                    ],
+                )
+                .expect("ChartObjects.Add second chart"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_objects, "RoundedCorners", &[])
+                .expect("default ChartObjects.RoundedCorners"),
+            OmValue::Bool(false)
+        );
+        runtime
+            .dispatch_set(
+                first_chart_object,
+                "RoundedCorners",
+                OmValue::Bool(true),
+                &[],
+            )
+            .expect("set first ChartObject.RoundedCorners");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_objects, "RoundedCorners", &[])
+                .expect("mixed ChartObjects.RoundedCorners"),
+            OmValue::Bool(false)
+        );
+
+        runtime
+            .dispatch_set(chart_objects, "RoundedCorners", OmValue::Bool(true), &[])
+            .expect("set ChartObjects.RoundedCorners true");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_objects, "RoundedCorners", &[])
+                .expect("ChartObjects.RoundedCorners after true"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_chart_object, "RoundedCorners", &[])
+                .expect("first ChartObject.RoundedCorners after true"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_chart_object, "RoundedCorners", &[])
+                .expect("second ChartObject.RoundedCorners after true"),
+            OmValue::Bool(true)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save rounded chart objects");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        for chart_part in ["xl/charts/chart1.xml", "xl/charts/chart2.xml"] {
+            let chart_xml = String::from_utf8(
+                saved_package
+                    .part(chart_part)
+                    .expect("saved chart part")
+                    .bytes
+                    .clone(),
+            )
+            .expect("saved chart xml utf8");
+            assert!(
+                chart_xml.contains(r#"<c:roundedCorners val="1"/>"#),
+                "{chart_part} should persist rounded corners"
+            );
+        }
+
+        runtime
+            .dispatch_set(chart_objects, "RoundedCorners", OmValue::Bool(false), &[])
+            .expect("set ChartObjects.RoundedCorners false");
+        assert_eq!(
+            runtime
+                .dispatch_get(first_chart_object, "RoundedCorners", &[])
+                .expect("first ChartObject.RoundedCorners after false"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_chart_object, "RoundedCorners", &[])
+                .expect("second ChartObject.RoundedCorners after false"),
+            OmValue::Bool(false)
+        );
+
+        let invalid_rounded = runtime
+            .dispatch_set(chart_objects, "RoundedCorners", OmValue::Number(1.0), &[])
+            .expect_err("ChartObjects.RoundedCorners should reject non-bool");
+        assert_eq!(invalid_rounded.code, OmErrorCode::TypeMismatch);
     }
 
     #[test]
