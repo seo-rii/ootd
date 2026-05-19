@@ -15746,9 +15746,45 @@ impl ExcelRuntime {
                     ShapeRangeSource::ChartObject { chart_object_id },
                 )))
             }
-            "Copy" | "Cut" | "CopyPicture" | "Select" => {
+            "Copy" | "Cut" | "CopyPicture" => {
                 let delegated = self.shape_range_delegate_handle(workbook, source, member)?;
                 self.dispatch_invoke(delegated, member, args)
+            }
+            "Select" => {
+                if args.len() > 1 {
+                    return Err(OmError::invalid_argument(
+                        "ShapeRange.Select accepts at most a Replace argument",
+                    ));
+                }
+                if let Some(value) = args.first()
+                    && !om_value_is_omitted(value)
+                {
+                    coerce_optional_bool_arg(value, true, "ShapeRange.Select Replace")?;
+                }
+                let Some((chart_object_id, _)) = self
+                    .shape_range_chart_object_entries(workbook, source)?
+                    .into_iter()
+                    .next()
+                else {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        "chart object not found",
+                    ));
+                };
+                let chart_object = self.chart_object_model(workbook, chart_object_id)?.clone();
+                self.chart_model(workbook, chart_object.chart_id)?;
+                self.ensure_worksheet_visible(
+                    workbook,
+                    chart_object.host_sheet_id,
+                    "ShapeRange.Select",
+                )?;
+                self.set_selection(
+                    workbook,
+                    chart_object.host_sheet_id,
+                    Rect::single_cell(1, 1),
+                );
+                self.active_chart = Some((workbook, chart_object.chart_id));
+                Ok(OmValue::Empty)
             }
             "Delete" => {
                 if !args.is_empty() {
@@ -88212,6 +88248,39 @@ mod tests {
                     .expect("ActiveChart.Name after ShapeRange.Select")
             ),
             "Embedded Revenue Chart"
+        );
+        runtime
+            .dispatch_invoke(shape_range, "Select", &[OmValue::Bool(false)])
+            .expect("ShapeRange.Select with Replace");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_chart, "Name", &[])
+                    .expect("ActiveChart.Name after ShapeRange.Select Replace")
+            ),
+            "Embedded Revenue Chart"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    shape_range,
+                    "Select",
+                    &[OmValue::Text("replace".to_string())],
+                )
+                .expect_err("ShapeRange.Select rejects non-boolean Replace")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    shape_range,
+                    "Select",
+                    &[OmValue::Bool(true), OmValue::Missing],
+                )
+                .expect_err("ShapeRange.Select rejects extra arguments")
+                .code,
+            OmErrorCode::InvalidArgument
         );
 
         let duplicated_shape = expect_object_handle(
