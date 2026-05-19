@@ -12065,6 +12065,15 @@ impl ExcelRuntime {
                     let chart = self.register_chart_handle(workbook, chart_id);
                     self.dispatch_invoke(chart, "Select", &[])
                 }
+                "ClearFormats" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "DataLabels.ClearFormats does not accept arguments",
+                        ));
+                    }
+                    self.series_model(workbook, chart_id, series_index)?;
+                    Ok(OmValue::Empty)
+                }
                 _ => Err(OmError::unsupported(format!(
                     "DataLabels.{member} is not implemented as a method"
                 ))),
@@ -12119,6 +12128,15 @@ impl ExcelRuntime {
                     self.validate_data_label_index(workbook, chart_id, series_index, point_index)?;
                     let chart = self.register_chart_handle(workbook, chart_id);
                     self.dispatch_invoke(chart, "Select", &[])
+                }
+                "ClearFormats" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "DataLabel.ClearFormats does not accept arguments",
+                        ));
+                    }
+                    self.validate_data_label_index(workbook, chart_id, series_index, point_index)?;
+                    Ok(OmValue::Empty)
                 }
                 _ => Err(OmError::unsupported(format!(
                     "DataLabel.{member} is not implemented as a method"
@@ -12727,6 +12745,7 @@ impl ExcelRuntime {
                             | "Parent"
                             | "Delete"
                             | "Select"
+                            | "ClearFormats"
                     )
                     | (
                         "DataLabel",
@@ -12750,6 +12769,7 @@ impl ExcelRuntime {
                             | "Parent"
                             | "Delete"
                             | "Select"
+                            | "ClearFormats"
                     )
                     | (
                         "Points",
@@ -92381,6 +92401,22 @@ mod tests {
                 .dispatch_invoke(points, "Item", &[OmValue::Number(1.0)])
                 .expect("Points.Item(1)"),
         );
+        runtime
+            .dispatch_set(series, "HasDataLabels", OmValue::Bool(true), &[])
+            .expect("enable data labels for headless format no-ops");
+        let data_labels = expect_object_handle(
+            runtime
+                .dispatch_get(series, "DataLabels", &[])
+                .expect("Series.DataLabels"),
+        );
+        let data_label = expect_object_handle(
+            runtime
+                .dispatch_invoke(data_labels, "Item", &[OmValue::Number(1.0)])
+                .expect("DataLabels.Item(1)"),
+        );
+        runtime
+            .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
+            .expect("reset workbook dirty state after data label setup");
         assert_eq!(
             runtime
                 .dispatch_get(workbook.0, "Saved", &[])
@@ -92493,6 +92529,8 @@ mod tests {
             (plot_area, "ClearFormats"),
             (series, "ClearFormats"),
             (point, "ClearFormats"),
+            (data_labels, "ClearFormats"),
+            (data_label, "ClearFormats"),
         ] {
             assert_eq!(
                 runtime
