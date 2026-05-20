@@ -14017,6 +14017,7 @@ impl ExcelRuntime {
                         "ChartType"
                             | "Index"
                             | "AxisGroup"
+                            | "RadarAxisLabels"
                             | "VaryByCategories"
                             | "GapWidth"
                             | "Overlap"
@@ -18578,6 +18579,17 @@ impl ExcelRuntime {
                     )?))),
                     "Index" => Ok(OmValue::Number((group_index + 1) as f64)),
                     "AxisGroup" => Ok(OmValue::Number(f64::from(XL_PRIMARY))),
+                    "RadarAxisLabels" => {
+                        let axis_index =
+                            self.chart_group_radar_axis_index(workbook, chart_id, group_index)?;
+                        Ok(OmValue::Object(self.register_object(
+                            RuntimeObjectKind::TickLabels {
+                                workbook,
+                                chart_id,
+                                axis_index,
+                            },
+                        )))
+                    }
                     "HasRadarAxisLabels" => {
                         if !chart_type_supports_radar_axis_labels(&chart.chart_type) {
                             return Err(OmError::unsupported(
@@ -24639,6 +24651,25 @@ impl ExcelRuntime {
         } else {
             Err(OmError::new(OmErrorCode::NotFound, "chart group not found"))
         }
+    }
+
+    fn chart_group_radar_axis_index(
+        &self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        group_index: usize,
+    ) -> OmResult<usize> {
+        let chart = self.chart_group_model(workbook, chart_id, group_index)?;
+        if !chart_type_supports_radar_axis_labels(&chart.chart_type) {
+            return Err(OmError::unsupported(
+                "ChartGroup.RadarAxisLabels is only supported for radar chart groups",
+            ));
+        }
+        chart
+            .axes
+            .iter()
+            .position(|axis| matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date))
+            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "radar axis labels not found"))
     }
 
     fn apply_chart_data_labels(
@@ -94034,6 +94065,13 @@ mod tests {
                 .code,
             OmErrorCode::Unsupported
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "RadarAxisLabels", &[])
+                .expect_err("non-radar ChartGroup.RadarAxisLabels should fail")
+                .code,
+            OmErrorCode::Unsupported
+        );
 
         runtime
             .dispatch_set(
@@ -94048,6 +94086,48 @@ mod tests {
                 .dispatch_get(chart_group, "HasRadarAxisLabels", &[])
                 .expect("ChartGroup.HasRadarAxisLabels default")
         ));
+        let radar_axis_labels = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "RadarAxisLabels", &[])
+                .expect("ChartGroup.RadarAxisLabels"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(radar_axis_labels, "Name", &[])
+                    .expect("ChartGroup.RadarAxisLabels.Name")
+            ),
+            "Tick Labels"
+        );
+        let radar_axis_labels_parent = expect_object_handle(
+            runtime
+                .dispatch_get(radar_axis_labels, "Parent", &[])
+                .expect("ChartGroup.RadarAxisLabels.Parent"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(radar_axis_labels_parent, "Type", &[])
+                    .expect("ChartGroup.RadarAxisLabels.Parent.Type")
+            ),
+            f64::from(super::XL_CATEGORY)
+        );
+        runtime
+            .dispatch_set(
+                radar_axis_labels,
+                "NumberFormat",
+                OmValue::Text("0.0".to_string()),
+                &[],
+            )
+            .expect("set ChartGroup.RadarAxisLabels.NumberFormat");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(radar_axis_labels, "NumberFormat", &[])
+                    .expect("ChartGroup.RadarAxisLabels.NumberFormat after set")
+            ),
+            "0.0"
+        );
         assert_eq!(
             runtime
                 .dispatch_set(
@@ -94108,6 +94188,7 @@ mod tests {
         .expect("saved chart xml utf8");
         assert!(saved_chart_xml.contains("<c:radarChart>"));
         assert!(saved_chart_xml.contains(r#"<c:tickLblPos val="none"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:numFmt formatCode="0.0" sourceLinked="0"/>"#));
 
         let mut reopened_runtime = ExcelRuntime::new();
         let reopened_workbook = reopened_runtime
@@ -94148,6 +94229,19 @@ mod tests {
                 .dispatch_get(reopened_chart_group, "HasRadarAxisLabels", &[])
                 .expect("reopened ChartGroup.HasRadarAxisLabels")
         ));
+        let reopened_radar_axis_labels = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_group, "RadarAxisLabels", &[])
+                .expect("reopened ChartGroup.RadarAxisLabels"),
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(reopened_radar_axis_labels, "NumberFormat", &[])
+                    .expect("reopened ChartGroup.RadarAxisLabels.NumberFormat")
+            ),
+            "0.0"
+        );
     }
 
     #[test]
