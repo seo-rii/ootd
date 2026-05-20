@@ -13074,6 +13074,7 @@ impl ExcelRuntime {
                             | "Type"
                             | "AlternativeText"
                             | "Title"
+                            | "HasChart"
                             | "ZOrder"
                             | "ZOrderPosition"
                             | "Placement"
@@ -16332,6 +16333,21 @@ impl ExcelRuntime {
                 Ok(OmValue::Text(
                     shared_alternative_text.flatten().unwrap_or_default(),
                 ))
+            }
+            "HasChart" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ShapeRange.HasChart does not accept arguments",
+                    ));
+                }
+                let has_chart = !self
+                    .shape_range_chart_object_entries(workbook, source)?
+                    .is_empty();
+                Ok(OmValue::Number(f64::from(if has_chart {
+                    MSO_TRUE
+                } else {
+                    MSO_FALSE
+                })))
             }
             "Item" => self.dispatch_invoke_shape_range(workbook, source, member, args),
             "Application" => {
@@ -87580,6 +87596,21 @@ mod tests {
             f64::from(super::MSO_SHAPE_CHART)
         );
         assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "HasChart", &[])
+                    .expect("ShapeRange.HasChart")
+            ),
+            f64::from(super::MSO_TRUE)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(shape_range, "HasChart", &[OmValue::Missing])
+                .expect_err("ShapeRange.HasChart rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
             runtime
                 .dispatch_get(shape_range, "Type", &[OmValue::Missing])
                 .expect_err("ShapeRange.Type rejects arguments")
@@ -87698,6 +87729,14 @@ mod tests {
                     .expect("multi ShapeRange.Type")
             ),
             f64::from(super::MSO_SHAPE_CHART)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "HasChart", &[])
+                    .expect("multi ShapeRange.HasChart")
+            ),
+            f64::from(super::MSO_TRUE)
         );
         let second_shape = expect_object_handle(
             runtime
