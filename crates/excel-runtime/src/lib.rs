@@ -4676,6 +4676,35 @@ impl ExcelRuntime {
                             self.register_chart_object_handle(workbook, chart_object_id);
                         self.dispatch_set(chart_object, member, value, &[])
                     }
+                    "RoundedCorners" => {
+                        let OmValue::Bool(rounded_corners) = value else {
+                            return Err(OmError::type_mismatch(
+                                "ChartArea.RoundedCorners expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        if chart.rounded_corners != Some(rounded_corners) {
+                            chart.rounded_corners = Some(rounded_corners);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     _ => Err(OmError::unsupported(format!(
                         "ChartArea.{member} is not writable"
                     ))),
@@ -17694,6 +17723,11 @@ impl ExcelRuntime {
                     member,
                 )?))
             }
+            "RoundedCorners" if surface == "ChartArea" => Ok(OmValue::Bool(
+                self.chart_model(workbook, chart_id)?
+                    .rounded_corners
+                    .unwrap_or(false),
+            )),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(
@@ -93925,6 +93959,17 @@ mod tests {
                 .expect("ChartObject.RoundedCorners default"),
             OmValue::Bool(false)
         );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("Chart.ChartArea"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_area, "RoundedCorners", &[])
+                .expect("ChartArea.RoundedCorners default"),
+            OmValue::Bool(false)
+        );
         assert_eq!(
             runtime
                 .dispatch_get(chart, "PlotVisibleOnly", &[])
@@ -94035,8 +94080,14 @@ mod tests {
             )
             .expect("set loaded Chart.ShowDataLabelsOverMaximum");
         runtime
-            .dispatch_set(chart_object, "RoundedCorners", OmValue::Bool(true), &[])
-            .expect("set loaded ChartObject.RoundedCorners");
+            .dispatch_set(chart_area, "RoundedCorners", OmValue::Bool(true), &[])
+            .expect("set loaded ChartArea.RoundedCorners");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "RoundedCorners", &[])
+                .expect("ChartObject.RoundedCorners after ChartArea set"),
+            OmValue::Bool(true)
+        );
         runtime
             .dispatch_set(
                 chart,
@@ -94069,8 +94120,8 @@ mod tests {
         );
         assert_eq!(
             runtime
-                .dispatch_set(chart_object, "RoundedCorners", OmValue::Number(1.0), &[])
-                .expect_err("ChartObject.RoundedCorners rejects non-bool")
+                .dispatch_set(chart_area, "RoundedCorners", OmValue::Number(1.0), &[])
+                .expect_err("ChartArea.RoundedCorners rejects non-bool")
                 .code,
             OmErrorCode::TypeMismatch
         );
@@ -94183,6 +94234,17 @@ mod tests {
             reopened_runtime
                 .dispatch_get(reopened_chart_object, "RoundedCorners", &[])
                 .expect("reopened ChartObject.RoundedCorners"),
+            OmValue::Bool(true)
+        );
+        let reopened_chart_area = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "ChartArea", &[])
+                .expect("reopened Chart.ChartArea"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart_area, "RoundedCorners", &[])
+                .expect("reopened ChartArea.RoundedCorners"),
             OmValue::Bool(true)
         );
         let reopened_chart_title = expect_object_handle(
