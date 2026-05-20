@@ -846,6 +846,19 @@ enum RuntimeObjectKind {
         group_index: usize,
         kind: ChartGroupLineKind,
     },
+    CategoryCollection {
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        group_index: usize,
+        full: bool,
+    },
+    ChartCategory {
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        group_index: usize,
+        category_index: usize,
+        full: bool,
+    },
     Axes {
         workbook: WorkbookHandle,
         chart_id: ChartId,
@@ -2416,6 +2429,34 @@ impl ExcelRuntime {
                 chart_id,
                 group_index,
                 kind,
+                member,
+                args,
+            ),
+            RuntimeObjectKind::CategoryCollection {
+                workbook,
+                chart_id,
+                group_index,
+                full,
+            } => self.dispatch_get_category_collection(
+                workbook,
+                chart_id,
+                group_index,
+                full,
+                member,
+                args,
+            ),
+            RuntimeObjectKind::ChartCategory {
+                workbook,
+                chart_id,
+                group_index,
+                category_index,
+                full,
+            } => self.dispatch_get_chart_category(
+                workbook,
+                chart_id,
+                group_index,
+                category_index,
+                full,
                 member,
                 args,
             ),
@@ -4847,6 +4888,8 @@ impl ExcelRuntime {
             | RuntimeObjectKind::ChartFormatChild { .. }
             | RuntimeObjectKind::Gridlines { .. }
             | RuntimeObjectKind::ChartGroups { .. }
+            | RuntimeObjectKind::CategoryCollection { .. }
+            | RuntimeObjectKind::ChartCategory { .. }
             | RuntimeObjectKind::Axes { .. }
             | RuntimeObjectKind::SeriesCollection { .. }
             | RuntimeObjectKind::Points { .. } => Err(OmError::unsupported(format!(
@@ -12961,6 +13004,22 @@ impl ExcelRuntime {
                 member,
                 args,
             ),
+            RuntimeObjectKind::CategoryCollection {
+                workbook,
+                chart_id,
+                group_index,
+                full,
+            } => self.dispatch_invoke_category_collection(
+                workbook,
+                chart_id,
+                group_index,
+                full,
+                member,
+                args,
+            ),
+            RuntimeObjectKind::ChartCategory { .. } => Err(OmError::unsupported(format!(
+                "ChartCategory.{member} is not implemented as a method"
+            ))),
             RuntimeObjectKind::SeriesCollection { workbook, chart_id } => {
                 self.dispatch_invoke_series_collection(workbook, chart_id, member, args)
             }
@@ -14137,9 +14196,19 @@ impl ExcelRuntime {
                             | "SplitType"
                             | "SplitValue"
                             | "SeriesCollection"
+                            | "CategoryCollection"
+                            | "FullCategoryCollection"
                             | "Creator"
                             | "Application"
                             | "Parent"
+                    )
+                    | (
+                        "CategoryCollection",
+                        "Count" | "Item" | "Creator" | "Application" | "Parent"
+                    )
+                    | (
+                        "ChartCategory",
+                        "Name" | "Index" | "IsFiltered" | "Creator" | "Application" | "Parent"
                     )
                     | (
                         "SeriesLines",
@@ -18849,6 +18918,17 @@ impl ExcelRuntime {
                     self.dispatch_invoke(handle, "Item", args)
                 }
             }
+            "CategoryCollection" | "FullCategoryCollection" => {
+                self.chart_group_model(workbook, chart_id, group_index)?;
+                let full = member == "FullCategoryCollection";
+                let handle =
+                    self.register_category_collection_handle(workbook, chart_id, group_index, full);
+                if args.is_empty() {
+                    Ok(OmValue::Object(handle))
+                } else {
+                    self.dispatch_invoke(handle, "Item", args)
+                }
+            }
             _ => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(format!(
@@ -18964,7 +19044,7 @@ impl ExcelRuntime {
         args: &[OmValue],
     ) -> OmResult<OmValue> {
         match member {
-            "SeriesCollection" => {
+            "SeriesCollection" | "CategoryCollection" | "FullCategoryCollection" => {
                 self.dispatch_get_chart_group(workbook, chart_id, group_index, member, args)
             }
             _ => Err(OmError::unsupported(format!(
@@ -19074,6 +19154,191 @@ impl ExcelRuntime {
             }
             _ => Err(OmError::unsupported(format!(
                 "{surface}.{member} is not implemented as a method"
+            ))),
+        }
+    }
+
+    fn dispatch_get_category_collection(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        group_index: usize,
+        full: bool,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        match member {
+            "Count" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "CategoryCollection.Count does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Number(self.chart_category_count_for_group(
+                    workbook,
+                    chart_id,
+                    group_index,
+                )? as f64))
+            }
+            "Item" => self.dispatch_invoke_category_collection(
+                workbook,
+                chart_id,
+                group_index,
+                full,
+                member,
+                args,
+            ),
+            "Creator" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "CategoryCollection.Creator does not accept arguments",
+                    ));
+                }
+                self.chart_group_model(workbook, chart_id, group_index)?;
+                Ok(OmValue::Number(f64::from(XL_CREATOR_CODE)))
+            }
+            "Application" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "CategoryCollection.Application does not accept arguments",
+                    ));
+                }
+                self.chart_group_model(workbook, chart_id, group_index)?;
+                Ok(OmValue::Object(self.root_application()))
+            }
+            "Parent" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "CategoryCollection.Parent does not accept arguments",
+                    ));
+                }
+                self.chart_group_model(workbook, chart_id, group_index)?;
+                Ok(OmValue::Object(self.register_chart_group_handle(
+                    workbook,
+                    chart_id,
+                    group_index,
+                )))
+            }
+            _ => Err(OmError::unsupported(format!(
+                "CategoryCollection.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_invoke_category_collection(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        group_index: usize,
+        full: bool,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        match member {
+            "Item" => {
+                let [selector] = args else {
+                    return Err(OmError::invalid_argument(
+                        "CategoryCollection.Item expects a single 1-based index or category name",
+                    ));
+                };
+                let category_count =
+                    self.chart_category_count_for_group(workbook, chart_id, group_index)?;
+                let category_index = match selector {
+                    OmValue::Number(index) => {
+                        let index = coerce_positive_index(*index, "CategoryCollection.Item index")?
+                            as usize;
+                        if index > category_count {
+                            return Err(OmError::invalid_argument(
+                                "CategoryCollection.Item index is out of bounds",
+                            ));
+                        }
+                        index - 1
+                    }
+                    OmValue::Text(name) => {
+                        let mut matched_index = None;
+                        for index in 0..category_count {
+                            if self
+                                .chart_category_name_for_index(
+                                    workbook,
+                                    chart_id,
+                                    group_index,
+                                    index,
+                                )?
+                                .eq_ignore_ascii_case(name)
+                            {
+                                matched_index = Some(index);
+                                break;
+                            }
+                        }
+                        matched_index.ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::NotFound,
+                                "CategoryCollection.Item category not found",
+                            )
+                        })?
+                    }
+                    _ => {
+                        return Err(OmError::type_mismatch(
+                            "CategoryCollection.Item expects a numeric index or category name",
+                        ));
+                    }
+                };
+                Ok(OmValue::Object(self.register_chart_category_handle(
+                    workbook,
+                    chart_id,
+                    group_index,
+                    category_index,
+                    full,
+                )))
+            }
+            _ => Err(OmError::unsupported(format!(
+                "CategoryCollection.{member} is not implemented as a method"
+            ))),
+        }
+    }
+
+    fn dispatch_get_chart_category(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        group_index: usize,
+        category_index: usize,
+        full: bool,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        if !args.is_empty() {
+            return Err(OmError::invalid_argument(format!(
+                "ChartCategory.{member} does not accept arguments"
+            )));
+        }
+        let category_count =
+            self.chart_category_count_for_group(workbook, chart_id, group_index)?;
+        if category_index >= category_count {
+            return Err(OmError::new(
+                OmErrorCode::NotFound,
+                "chart category not found",
+            ));
+        }
+        match member {
+            "Name" => Ok(OmValue::Text(self.chart_category_name_for_index(
+                workbook,
+                chart_id,
+                group_index,
+                category_index,
+            )?)),
+            "Index" => Ok(OmValue::Number((category_index + 1) as f64)),
+            "IsFiltered" => Ok(OmValue::Bool(false)),
+            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+            "Application" => Ok(OmValue::Object(self.root_application())),
+            "Parent" => Ok(OmValue::Object(self.register_category_collection_handle(
+                workbook,
+                chart_id,
+                group_index,
+                full,
+            ))),
+            _ => Err(OmError::unsupported(format!(
+                "ChartCategory.{member} is not implemented"
             ))),
         }
     }
@@ -23868,6 +24133,38 @@ impl ExcelRuntime {
         })
     }
 
+    fn register_category_collection_handle(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        group_index: usize,
+        full: bool,
+    ) -> ObjectHandle {
+        self.register_object(RuntimeObjectKind::CategoryCollection {
+            workbook,
+            chart_id,
+            group_index,
+            full,
+        })
+    }
+
+    fn register_chart_category_handle(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        group_index: usize,
+        category_index: usize,
+        full: bool,
+    ) -> ObjectHandle {
+        self.register_object(RuntimeObjectKind::ChartCategory {
+            workbook,
+            chart_id,
+            group_index,
+            category_index,
+            full,
+        })
+    }
+
     fn register_axes_handle(
         &mut self,
         workbook: WorkbookHandle,
@@ -25051,6 +25348,55 @@ impl ExcelRuntime {
         } else {
             Err(OmError::new(OmErrorCode::NotFound, "chart group not found"))
         }
+    }
+
+    fn chart_category_count_for_group(
+        &self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        group_index: usize,
+    ) -> OmResult<usize> {
+        let chart = self.chart_group_model(workbook, chart_id, group_index)?;
+        Ok(chart
+            .series
+            .first()
+            .map(chart_series_category_count)
+            .unwrap_or(0))
+    }
+
+    fn chart_category_name_for_index(
+        &self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        group_index: usize,
+        category_index: usize,
+    ) -> OmResult<String> {
+        let state = &self.runtime_workbook(workbook)?.loaded.state;
+        let chart = state
+            .charts
+            .get(&chart_id)
+            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+        if group_index != 0 {
+            return Err(OmError::new(OmErrorCode::NotFound, "chart group not found"));
+        }
+        let Some(series) = chart.series.first() else {
+            return Err(OmError::new(
+                OmErrorCode::NotFound,
+                "chart category not found",
+            ));
+        };
+        let category_count = chart_series_category_count(series);
+        if category_index >= category_count {
+            return Err(OmError::new(
+                OmErrorCode::NotFound,
+                "chart category not found",
+            ));
+        }
+        Ok(series
+            .x_values
+            .as_ref()
+            .and_then(|source| chart_source_value_text_for_index(state, source, category_index))
+            .unwrap_or_else(|| (category_index + 1).to_string()))
     }
 
     fn chart_group_radar_axis_index(
@@ -30225,28 +30571,79 @@ fn chart_data_labels_count_for_chart_series(chart: &ChartModel, series_index: us
 }
 
 fn chart_series_point_count(series: &SeriesModel) -> usize {
-    let Some(ReferenceTarget::Range(range)) = series
+    series
         .values
         .as_ref()
-        .and_then(|source| source.resolved.as_ref())
-    else {
-        return match series
-            .values
-            .as_ref()
-            .and_then(|source| source.resolved.as_ref())
-        {
-            Some(ReferenceTarget::Array(array)) => array.rows.saturating_mul(array.cols),
-            Some(ReferenceTarget::Value(_)) => 1,
-            Some(_) => 1,
-            None if series.values.is_some() => 1,
-            None => 0,
-        };
-    };
-    range
-        .areas()
-        .iter()
-        .map(|area| area.rect.width() as usize * area.rect.height() as usize)
-        .sum()
+        .map(chart_source_point_count)
+        .unwrap_or(0)
+}
+
+fn chart_series_category_count(series: &SeriesModel) -> usize {
+    series
+        .x_values
+        .as_ref()
+        .map(chart_source_point_count)
+        .unwrap_or_else(|| chart_series_point_count(series))
+}
+
+fn chart_source_point_count(source: &ChartSourceExpr) -> usize {
+    match source.resolved.as_ref() {
+        Some(ReferenceTarget::Range(range)) => range
+            .areas()
+            .iter()
+            .map(|area| area.rect.width() as usize * area.rect.height() as usize)
+            .sum(),
+        Some(ReferenceTarget::Array(array)) => array.rows.saturating_mul(array.cols),
+        Some(ReferenceTarget::Value(_)) => 1,
+        Some(_) | None => 1,
+    }
+}
+
+fn chart_source_value_text_for_index(
+    state: &WorkbookState,
+    source: &ChartSourceExpr,
+    mut index: usize,
+) -> Option<String> {
+    match source.resolved.as_ref() {
+        Some(ReferenceTarget::Range(range)) => {
+            for area in range.areas() {
+                let cell_count = area.rect.width() as usize * area.rect.height() as usize;
+                if index >= cell_count {
+                    index -= cell_count;
+                    continue;
+                }
+                let SheetScope::Single(sheet_id) = area.scope else {
+                    return None;
+                };
+                let row_offset = index / area.rect.width() as usize;
+                let col_offset = index % area.rect.width() as usize;
+                let row = area.rect.row_first + row_offset as u32;
+                let col = area.rect.col_first + col_offset as u32;
+                return Some(
+                    state
+                        .cell(sheet_id, row, col)
+                        .map(|cell| find_cell_value_text(&cell.value))
+                        .unwrap_or_default(),
+                );
+            }
+            None
+        }
+        Some(ReferenceTarget::Array(array)) => array.values.get(index).and_then(om_value_text),
+        Some(ReferenceTarget::Value(value)) if index == 0 => Some(find_cell_value_text(value)),
+        _ => None,
+    }
+}
+
+fn om_value_text(value: &OmValue) -> Option<String> {
+    match value {
+        OmValue::Missing | OmValue::Empty | OmValue::Null => Some(String::new()),
+        OmValue::Bool(true) => Some("TRUE".to_string()),
+        OmValue::Bool(false) => Some("FALSE".to_string()),
+        OmValue::Number(number) => Some(format_find_number(*number)),
+        OmValue::Text(text) => Some(text.clone()),
+        OmValue::Error(error) => Some(formula_cell_error_text(*error).to_string()),
+        OmValue::Object(_) | OmValue::Array(_) => None,
+    }
 }
 
 fn chart_number_xml_value(value: f64) -> String {
@@ -37320,6 +37717,8 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         | RuntimeObjectKind::ChartGroups { workbook, .. }
         | RuntimeObjectKind::ChartGroup { workbook, .. }
         | RuntimeObjectKind::ChartGroupLines { workbook, .. }
+        | RuntimeObjectKind::CategoryCollection { workbook, .. }
+        | RuntimeObjectKind::ChartCategory { workbook, .. }
         | RuntimeObjectKind::Axes { workbook, .. }
         | RuntimeObjectKind::Axis { workbook, .. }
         | RuntimeObjectKind::TickLabels { workbook, .. }
@@ -95019,6 +95418,143 @@ mod tests {
                 OmErrorCode::InvalidArgument
             );
         }
+    }
+
+    #[test]
+    fn chart_group_category_collections_return_categories() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_group = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("Chart.ChartGroups(1)"),
+        );
+        let categories = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "CategoryCollection", &[])
+                .expect("ChartGroup.CategoryCollection"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(categories, "Count", &[])
+                    .expect("CategoryCollection.Count")
+            ),
+            2.0
+        );
+        let parent_group = expect_object_handle(
+            runtime
+                .dispatch_get(categories, "Parent", &[])
+                .expect("CategoryCollection.Parent"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(parent_group, "Index", &[])
+                    .expect("CategoryCollection.Parent.Index")
+            ),
+            1.0
+        );
+
+        let first_category = expect_object_handle(
+            runtime
+                .dispatch_invoke(categories, "Item", &[OmValue::Number(1.0)])
+                .expect("CategoryCollection.Item(1)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(first_category, "Name", &[])
+                    .expect("ChartCategory.Name")
+            ),
+            "42"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_category, "Index", &[])
+                    .expect("ChartCategory.Index")
+            ),
+            1.0
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(first_category, "IsFiltered", &[])
+                .expect("ChartCategory.IsFiltered")
+        ));
+        let second_category = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "CategoryCollection", &[OmValue::Number(2.0)])
+                .expect("ChartGroup.CategoryCollection(2)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(second_category, "Name", &[])
+                    .expect("second ChartCategory.Name")
+            ),
+            "SHARED"
+        );
+        let second_by_name = expect_object_handle(
+            runtime
+                .dispatch_invoke(categories, "Item", &[OmValue::Text("shared".to_string())])
+                .expect("CategoryCollection.Item(\"shared\")"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_by_name, "Index", &[])
+                    .expect("named ChartCategory.Index")
+            ),
+            2.0
+        );
+        let full_categories = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "FullCategoryCollection", &[])
+                .expect("ChartGroup.FullCategoryCollection"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(full_categories, "Count", &[])
+                    .expect("FullCategoryCollection.Count")
+            ),
+            2.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(full_categories, "Item", &[OmValue::Number(3.0)])
+                .expect_err("CategoryCollection.Item rejects out-of-range index")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
     }
 
     #[test]
