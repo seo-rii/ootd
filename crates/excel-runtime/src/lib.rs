@@ -13144,6 +13144,7 @@ impl ExcelRuntime {
                             | "Name"
                             | "Chart"
                             | "Index"
+                            | "ID"
                             | "Type"
                             | "AutoShapeType"
                             | "AlternativeText"
@@ -16374,6 +16375,23 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Number(f64::from(MSO_SHAPE_CHART)))
+            }
+            "ID" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ShapeRange.ID does not accept arguments",
+                    ));
+                }
+                let entries = self.shape_range_chart_object_entries(workbook, source)?;
+                let [(chart_object_id, _)] = entries.as_slice() else {
+                    return Ok(OmValue::Number(f64::from(MSO_SHAPE_MIXED)));
+                };
+                let chart_object = self.chart_object_model(workbook, *chart_object_id)?;
+                let id = chart_object
+                    .non_visual_id
+                    .map(f64::from)
+                    .unwrap_or(chart_object.id.0 as f64);
+                Ok(OmValue::Number(id))
             }
             "AlternativeText" | "Title" => {
                 let (attr_name, property_name) = match member {
@@ -87912,6 +87930,21 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
+                    .dispatch_get(shape_range, "ID", &[])
+                    .expect("ShapeRange.ID")
+            ),
+            2.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(shape_range, "ID", &[OmValue::Missing])
+                .expect_err("ShapeRange.ID rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            expect_number(
+                runtime
                     .dispatch_get(shape_range, "AutoShapeType", &[])
                     .expect("ShapeRange.AutoShapeType")
             ),
@@ -88014,6 +88047,14 @@ mod tests {
             ),
             f64::from(super::MSO_SHAPE_CHART)
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(single_shape, "ID", &[])
+                    .expect("single ShapeRange.ID")
+            ),
+            2.0
+        );
         let single_chart = expect_object_handle(
             runtime
                 .dispatch_get(single_shape, "Chart", &[])
@@ -88088,6 +88129,14 @@ mod tests {
                     .expect("multi ShapeRange.Type")
             ),
             f64::from(super::MSO_SHAPE_CHART)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "ID", &[])
+                    .expect("multi ShapeRange.ID")
+            ),
+            f64::from(super::MSO_SHAPE_MIXED)
         );
         assert_eq!(
             expect_number(
