@@ -3565,6 +3565,59 @@ impl ExcelRuntime {
                     }
                     return Ok(());
                 }
+                if member == "OnAction" {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "ShapeRange.OnAction does not accept index arguments",
+                        ));
+                    }
+                    let OmValue::Text(on_action) = value else {
+                        return Err(OmError::type_mismatch(
+                            "ShapeRange.OnAction expects a string value",
+                        ));
+                    };
+                    let chart_object_ids = self
+                        .shape_range_chart_object_entries(workbook, source)?
+                        .into_iter()
+                        .map(|(chart_object_id, _)| chart_object_id)
+                        .collect::<Vec<_>>();
+                    if chart_object_ids.is_empty() {
+                        return Err(OmError::new(
+                            OmErrorCode::NotFound,
+                            "chart object not found",
+                        ));
+                    }
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    let mut workbook_dirty = false;
+                    for drawing in runtime.loaded.state.drawings.values_mut() {
+                        for object in &mut drawing.objects {
+                            let DrawingObjectModel::ChartFrame(chart_object) = object else {
+                                continue;
+                            };
+                            if !chart_object_ids.contains(&chart_object.id) {
+                                continue;
+                            }
+                            if chart_object.graphic_frame_attrs.get("macro") != Some(&on_action) {
+                                chart_object
+                                    .graphic_frame_attrs
+                                    .insert("macro".to_string(), on_action.clone());
+                                chart_object.dirty = true;
+                                drawing.dirty = true;
+                                workbook_dirty = true;
+                            }
+                        }
+                    }
+                    if workbook_dirty {
+                        runtime.dirty = true;
+                    }
+                    return Ok(());
+                }
                 let delegated = self.shape_range_delegate_handle(workbook, source, member)?;
                 self.dispatch_set(delegated, member, value, args)
             }
@@ -16781,6 +16834,35 @@ impl ExcelRuntime {
                 Ok(OmValue::Number(f64::from(
                     shared_value.unwrap_or(MSO_FALSE),
                 )))
+            }
+            "OnAction" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ShapeRange.OnAction does not accept arguments",
+                    ));
+                }
+                let entries = self.shape_range_chart_object_entries(workbook, source)?;
+                if entries.is_empty() {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        "chart object not found",
+                    ));
+                }
+                let mut shared_on_action: Option<String> = None;
+                for (chart_object_id, _) in entries {
+                    let on_action = self
+                        .chart_object_model(workbook, chart_object_id)?
+                        .graphic_frame_attrs
+                        .get("macro")
+                        .cloned()
+                        .unwrap_or_default();
+                    match &shared_on_action {
+                        None => shared_on_action = Some(on_action),
+                        Some(shared) if *shared == on_action => {}
+                        Some(_) => return Ok(OmValue::Text(String::new())),
+                    }
+                }
+                Ok(OmValue::Text(shared_on_action.unwrap_or_default()))
             }
             "Item" => self.dispatch_invoke_shape_range(workbook, source, member, args),
             "Application" => {
@@ -89071,6 +89153,68 @@ mod tests {
                 .code,
             OmErrorCode::TypeMismatch
         );
+        runtime
+            .dispatch_set(
+                second_shape,
+                "OnAction",
+                OmValue::Text("Book1.xlsm!RefreshSecondChart".to_string()),
+                &[],
+            )
+            .expect("set second ShapeRange.OnAction");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(shape_range, "OnAction", &[])
+                    .expect("mixed ShapeRange.OnAction")
+            ),
+            ""
+        );
+        runtime
+            .dispatch_set(
+                shape_range,
+                "OnAction",
+                OmValue::Text("Book1.xlsm!RefreshAllCharts".to_string()),
+                &[],
+            )
+            .expect("set ShapeRange.OnAction");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(single_shape, "OnAction", &[])
+                    .expect("first ShapeRange.OnAction after set")
+            ),
+            "Book1.xlsm!RefreshAllCharts"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(second_shape, "OnAction", &[])
+                    .expect("second ShapeRange.OnAction after set")
+            ),
+            "Book1.xlsm!RefreshAllCharts"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(shape_range, "OnAction", &[])
+                    .expect("ShapeRange.OnAction after set")
+            ),
+            "Book1.xlsm!RefreshAllCharts"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(shape_range, "OnAction", &[OmValue::Missing])
+                .expect_err("ShapeRange.OnAction rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(shape_range, "OnAction", OmValue::Bool(true), &[])
+                .expect_err("ShapeRange.OnAction rejects non-text")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
         let saved_with_non_visual_text = runtime
             .save_workbook(
                 workbook,
@@ -89097,6 +89241,7 @@ mod tests {
         assert!(saved_non_visual_text_drawing.contains(r#"rot="2715000""#));
         assert!(saved_non_visual_text_drawing.contains(r#"flipH="1""#));
         assert!(saved_non_visual_text_drawing.contains(r#"flipV="1""#));
+        assert!(saved_non_visual_text_drawing.contains(r#"macro="Book1.xlsm!RefreshAllCharts""#));
 
         runtime
             .dispatch_set(shape_range, "Visible", OmValue::Bool(false), &[])
