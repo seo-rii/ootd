@@ -615,10 +615,15 @@ impl ChartFormatChildKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ShapeRangeSource {
-    ChartObjects { sheet_id: SheetId },
-    ChartObject { chart_object_id: ChartObjectId },
+    ChartObjects {
+        sheet_id: SheetId,
+        chart_object_ids: Option<Vec<ChartObjectId>>,
+    },
+    ChartObject {
+        chart_object_id: ChartObjectId,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -656,6 +661,7 @@ enum RuntimeObjectKind {
     ChartObjects {
         workbook: WorkbookHandle,
         sheet_id: SheetId,
+        chart_object_ids: Option<Vec<ChartObjectId>>,
     },
     ChartObject {
         workbook: WorkbookHandle,
@@ -2119,9 +2125,17 @@ impl ExcelRuntime {
             RuntimeObjectKind::Name { workbook, name_id } => {
                 self.dispatch_get_name(workbook, name_id, member, args)
             }
-            RuntimeObjectKind::ChartObjects { workbook, sheet_id } => {
-                self.dispatch_get_chart_objects(workbook, sheet_id, member, args)
-            }
+            RuntimeObjectKind::ChartObjects {
+                workbook,
+                sheet_id,
+                chart_object_ids,
+            } => self.dispatch_get_chart_objects(
+                workbook,
+                sheet_id,
+                chart_object_ids.as_deref(),
+                member,
+                args,
+            ),
             RuntimeObjectKind::ChartObject {
                 workbook,
                 chart_object_id,
@@ -3384,7 +3398,7 @@ impl ExcelRuntime {
                         }
                     };
                     let chart_object_ids = self
-                        .shape_range_chart_object_entries(workbook, source)?
+                        .shape_range_chart_object_entries(workbook, &source)?
                         .into_iter()
                         .map(|(chart_object_id, _)| chart_object_id)
                         .collect::<Vec<_>>();
@@ -3454,7 +3468,7 @@ impl ExcelRuntime {
                         }
                     };
                     let chart_object_ids = self
-                        .shape_range_chart_object_entries(workbook, source)?
+                        .shape_range_chart_object_entries(workbook, &source)?
                         .into_iter()
                         .map(|(chart_object_id, _)| chart_object_id)
                         .collect::<Vec<_>>();
@@ -3517,7 +3531,7 @@ impl ExcelRuntime {
                         )));
                     };
                     let chart_object_ids = self
-                        .shape_range_chart_object_entries(workbook, source)?
+                        .shape_range_chart_object_entries(workbook, &source)?
                         .into_iter()
                         .map(|(chart_object_id, _)| chart_object_id)
                         .collect::<Vec<_>>();
@@ -3577,7 +3591,7 @@ impl ExcelRuntime {
                         ));
                     };
                     let chart_object_ids = self
-                        .shape_range_chart_object_entries(workbook, source)?
+                        .shape_range_chart_object_entries(workbook, &source)?
                         .into_iter()
                         .map(|(chart_object_id, _)| chart_object_id)
                         .collect::<Vec<_>>();
@@ -3618,7 +3632,7 @@ impl ExcelRuntime {
                     }
                     return Ok(());
                 }
-                let delegated = self.shape_range_delegate_handle(workbook, source, member)?;
+                let delegated = self.shape_range_delegate_handle(workbook, &source, member)?;
                 self.dispatch_set(delegated, member, value, args)
             }
             RuntimeObjectKind::Series {
@@ -4262,7 +4276,11 @@ impl ExcelRuntime {
                     ))),
                 }
             }
-            RuntimeObjectKind::ChartObjects { workbook, sheet_id } => {
+            RuntimeObjectKind::ChartObjects {
+                workbook,
+                sheet_id,
+                chart_object_ids,
+            } => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(format!(
                         "ChartObjects.{member} does not accept index arguments"
@@ -4295,7 +4313,11 @@ impl ExcelRuntime {
                             }
                         };
                         let chart_object_ids = self
-                            .chart_object_entries_for_sheet(workbook, sheet_id)?
+                            .chart_object_entries_for_selection(
+                                workbook,
+                                sheet_id,
+                                chart_object_ids.as_deref(),
+                            )?
                             .into_iter()
                             .map(|(chart_object_id, _)| chart_object_id)
                             .collect::<Vec<_>>();
@@ -4358,7 +4380,11 @@ impl ExcelRuntime {
                             ));
                         }
                         let chart_object_ids = self
-                            .chart_object_entries_for_sheet(workbook, sheet_id)?
+                            .chart_object_entries_for_selection(
+                                workbook,
+                                sheet_id,
+                                chart_object_ids.as_deref(),
+                            )?
                             .into_iter()
                             .map(|(chart_object_id, _)| chart_object_id)
                             .collect::<Vec<_>>();
@@ -4481,7 +4507,11 @@ impl ExcelRuntime {
                             )));
                         };
                         let chart_object_ids = self
-                            .chart_object_entries_for_sheet(workbook, sheet_id)?
+                            .chart_object_entries_for_selection(
+                                workbook,
+                                sheet_id,
+                                chart_object_ids.as_deref(),
+                            )?
                             .into_iter()
                             .map(|(chart_object_id, _)| chart_object_id)
                             .collect::<Vec<_>>();
@@ -4574,9 +4604,11 @@ impl ExcelRuntime {
                             ));
                         };
                         let mut chart_ids = Vec::new();
-                        for (chart_object_id, _) in
-                            self.chart_object_entries_for_sheet(workbook, sheet_id)?
-                        {
+                        for (chart_object_id, _) in self.chart_object_entries_for_selection(
+                            workbook,
+                            sheet_id,
+                            chart_object_ids.as_deref(),
+                        )? {
                             chart_ids
                                 .push(self.chart_object_model(workbook, chart_object_id)?.chart_id);
                         }
@@ -11022,9 +11054,17 @@ impl ExcelRuntime {
             RuntimeObjectKind::Name { workbook, name_id } => {
                 self.dispatch_invoke_name(workbook, name_id, member, args)
             }
-            RuntimeObjectKind::ChartObjects { workbook, sheet_id } => {
-                self.dispatch_invoke_chart_objects(workbook, sheet_id, member, args)
-            }
+            RuntimeObjectKind::ChartObjects {
+                workbook,
+                sheet_id,
+                chart_object_ids,
+            } => self.dispatch_invoke_chart_objects(
+                workbook,
+                sheet_id,
+                chart_object_ids.as_deref(),
+                member,
+                args,
+            ),
             RuntimeObjectKind::ChartObject {
                 workbook,
                 chart_object_id,
@@ -15358,6 +15398,7 @@ impl ExcelRuntime {
         &mut self,
         workbook: WorkbookHandle,
         sheet_id: SheetId,
+        chart_object_ids: Option<&[ChartObjectId]>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -15369,11 +15410,17 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Number(
-                    self.chart_object_entries_for_sheet(workbook, sheet_id)?
+                    self.chart_object_entries_for_selection(workbook, sheet_id, chart_object_ids)?
                         .len() as f64,
                 ))
             }
-            "Item" => self.dispatch_invoke_chart_objects(workbook, sheet_id, member, args),
+            "Item" => self.dispatch_invoke_chart_objects(
+                workbook,
+                sheet_id,
+                chart_object_ids,
+                member,
+                args,
+            ),
             "Application" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(
@@ -15408,7 +15455,10 @@ impl ExcelRuntime {
                 }
                 Ok(OmValue::Object(self.register_shape_range_handle(
                     workbook,
-                    ShapeRangeSource::ChartObjects { sheet_id },
+                    ShapeRangeSource::ChartObjects {
+                        sheet_id,
+                        chart_object_ids: chart_object_ids.map(|ids| ids.to_vec()),
+                    },
                 )))
             }
             "Left" | "Top" | "Width" | "Height" => {
@@ -15419,7 +15469,7 @@ impl ExcelRuntime {
                 }
                 let mut bounds: Option<(f64, f64, f64, f64)> = None;
                 for (chart_object_id, _) in
-                    self.chart_object_entries_for_sheet(workbook, sheet_id)?
+                    self.chart_object_entries_for_selection(workbook, sheet_id, chart_object_ids)?
                 {
                     let chart_object = self.chart_object_model(workbook, chart_object_id)?;
                     let left = Self::chart_object_geometry_value(chart_object, "Left")?;
@@ -15454,7 +15504,7 @@ impl ExcelRuntime {
                 }
                 let mut visible = true;
                 for (chart_object_id, _) in
-                    self.chart_object_entries_for_sheet(workbook, sheet_id)?
+                    self.chart_object_entries_for_selection(workbook, sheet_id, chart_object_ids)?
                 {
                     if self
                         .chart_object_model(workbook, chart_object_id)?
@@ -15479,7 +15529,7 @@ impl ExcelRuntime {
                     ));
                 }
                 let placement = self
-                    .chart_object_entries_for_sheet(workbook, sheet_id)?
+                    .chart_object_entries_for_selection(workbook, sheet_id, chart_object_ids)?
                     .into_iter()
                     .next()
                     .map(|(chart_object_id, _)| {
@@ -15506,7 +15556,7 @@ impl ExcelRuntime {
                 };
                 let mut enabled = true;
                 for (chart_object_id, _) in
-                    self.chart_object_entries_for_sheet(workbook, sheet_id)?
+                    self.chart_object_entries_for_selection(workbook, sheet_id, chart_object_ids)?
                 {
                     if self
                         .chart_object_model(workbook, chart_object_id)?
@@ -15533,7 +15583,7 @@ impl ExcelRuntime {
                 let mut saw_chart_object = false;
                 let mut rounded_corners = true;
                 for (chart_object_id, _) in
-                    self.chart_object_entries_for_sheet(workbook, sheet_id)?
+                    self.chart_object_entries_for_selection(workbook, sheet_id, chart_object_ids)?
                 {
                     saw_chart_object = true;
                     let chart_id = self.chart_object_model(workbook, chart_object_id)?.chart_id;
@@ -15558,6 +15608,7 @@ impl ExcelRuntime {
         &mut self,
         workbook: WorkbookHandle,
         sheet_id: SheetId,
+        chart_object_ids: Option<&[ChartObjectId]>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -15568,35 +15619,58 @@ impl ExcelRuntime {
                         "ChartObjects.Item expects a single chart object index or name",
                     ));
                 };
-                let chart_object_id = match index {
-                    OmValue::Number(_) => {
-                        let index = coerce_u32_arg(index, "ChartObjects.Item index")? as usize;
-                        self.chart_object_entries_for_sheet(workbook, sheet_id)?
-                            .get(index - 1)
+                let entries =
+                    self.chart_object_entries_for_selection(workbook, sheet_id, chart_object_ids)?;
+                let resolve_chart_object = |selector: &OmValue| -> OmResult<ChartObjectId> {
+                    match selector {
+                        OmValue::Number(_) => {
+                            let index =
+                                coerce_u32_arg(selector, "ChartObjects.Item index")? as usize;
+                            entries
+                                .get(index - 1)
+                                .map(|(chart_object_id, _)| *chart_object_id)
+                                .ok_or_else(|| {
+                                    OmError::invalid_argument(
+                                        "ChartObjects.Item index is out of bounds",
+                                    )
+                                })
+                        }
+                        OmValue::Text(name) => entries
+                            .iter()
+                            .find(|(_, chart_object_name)| {
+                                chart_object_name.eq_ignore_ascii_case(name)
+                            })
                             .map(|(chart_object_id, _)| *chart_object_id)
                             .ok_or_else(|| {
-                                OmError::invalid_argument(
-                                    "ChartObjects.Item index is out of bounds",
+                                OmError::new(
+                                    OmErrorCode::NotFound,
+                                    format!("chart object '{name}' was not found"),
                                 )
-                            })?
-                    }
-                    OmValue::Text(name) => self
-                        .chart_object_entries_for_sheet(workbook, sheet_id)?
-                        .into_iter()
-                        .find(|(_, chart_object_name)| chart_object_name.eq_ignore_ascii_case(name))
-                        .map(|(chart_object_id, _)| chart_object_id)
-                        .ok_or_else(|| {
-                            OmError::new(
-                                OmErrorCode::NotFound,
-                                format!("chart object '{name}' was not found"),
-                            )
-                        })?,
-                    _ => {
-                        return Err(OmError::type_mismatch(
-                            "ChartObjects.Item expects a numeric index or chart object name",
-                        ));
+                            }),
+                        _ => Err(OmError::type_mismatch(
+                            "ChartObjects.Item expects a numeric index, chart object name, or array of indexes and names",
+                        )),
                     }
                 };
+                if let OmValue::Array(array) = index {
+                    if array.values.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "ChartObjects.Item array must not be empty",
+                        ));
+                    }
+                    let mut selected_chart_object_ids = Vec::with_capacity(array.values.len());
+                    for selector in &array.values {
+                        selected_chart_object_ids.push(resolve_chart_object(selector)?);
+                    }
+                    return Ok(OmValue::Object(self.register_shape_range_handle(
+                        workbook,
+                        ShapeRangeSource::ChartObjects {
+                            sheet_id,
+                            chart_object_ids: Some(selected_chart_object_ids),
+                        },
+                    )));
+                }
+                let chart_object_id = resolve_chart_object(index)?;
                 Ok(OmValue::Object(
                     self.register_chart_object_handle(workbook, chart_object_id),
                 ))
@@ -15608,7 +15682,7 @@ impl ExcelRuntime {
                     ));
                 }
                 let chart_object_ids = self
-                    .chart_object_entries_for_sheet(workbook, sheet_id)?
+                    .chart_object_entries_for_selection(workbook, sheet_id, chart_object_ids)?
                     .into_iter()
                     .map(|(chart_object_id, _)| chart_object_id)
                     .collect::<Vec<_>>();
@@ -15629,7 +15703,7 @@ impl ExcelRuntime {
                         "ChartObjects.Copy does not accept arguments",
                     ));
                 }
-                self.chart_object_entries_for_sheet(workbook, sheet_id)?;
+                self.chart_object_entries_for_selection(workbook, sheet_id, chart_object_ids)?;
                 self.set_headless_copy_mode();
                 Ok(OmValue::Empty)
             }
@@ -15639,7 +15713,7 @@ impl ExcelRuntime {
                         "ChartObjects.Cut does not accept arguments",
                     ));
                 }
-                self.chart_object_entries_for_sheet(workbook, sheet_id)?;
+                self.chart_object_entries_for_selection(workbook, sheet_id, chart_object_ids)?;
                 self.set_headless_cut_mode();
                 Ok(OmValue::Empty)
             }
@@ -15650,7 +15724,7 @@ impl ExcelRuntime {
                     ));
                 }
                 let chart_object_ids = self
-                    .chart_object_entries_for_sheet(workbook, sheet_id)?
+                    .chart_object_entries_for_selection(workbook, sheet_id, chart_object_ids)?
                     .into_iter()
                     .map(|(chart_object_id, _)| chart_object_id)
                     .collect::<Vec<_>>();
@@ -15667,14 +15741,18 @@ impl ExcelRuntime {
                     [chart_object_id] => Ok(OmValue::Object(
                         self.register_chart_object_handle(workbook, *chart_object_id),
                     )),
-                    _ => Ok(OmValue::Object(
-                        self.register_chart_objects_handle(workbook, sheet_id),
-                    )),
+                    _ => Ok(OmValue::Object(self.register_shape_range_handle(
+                        workbook,
+                        ShapeRangeSource::ChartObjects {
+                            sheet_id,
+                            chart_object_ids: Some(duplicated_chart_object_ids),
+                        },
+                    ))),
                 }
             }
             "CopyPicture" => {
                 validate_copy_picture_args(args, 2, "ChartObjects.CopyPicture")?;
-                self.chart_object_entries_for_sheet(workbook, sheet_id)?;
+                self.chart_object_entries_for_selection(workbook, sheet_id, chart_object_ids)?;
                 self.set_headless_copy_mode();
                 Ok(OmValue::Empty)
             }
@@ -15690,7 +15768,7 @@ impl ExcelRuntime {
                     coerce_optional_bool_arg(value, true, "ChartObjects.Select Replace")?;
                 }
                 let Some((chart_object_id, _)) = self
-                    .chart_object_entries_for_sheet(workbook, sheet_id)?
+                    .chart_object_entries_for_selection(workbook, sheet_id, chart_object_ids)?
                     .into_iter()
                     .next()
                 else {
@@ -15987,7 +16065,7 @@ impl ExcelRuntime {
                         "ShapeRange.Item expects a single shape index or name",
                     ));
                 };
-                let entries = self.shape_range_chart_object_entries(workbook, source)?;
+                let entries = self.shape_range_chart_object_entries(workbook, &source)?;
                 let chart_object_id = match index {
                     OmValue::Number(_) => {
                         let index = coerce_u32_arg(index, "ShapeRange.Item index")? as usize;
@@ -16014,7 +16092,7 @@ impl ExcelRuntime {
                 )))
             }
             "Copy" | "Cut" | "CopyPicture" => {
-                let delegated = self.shape_range_delegate_handle(workbook, source, member)?;
+                let delegated = self.shape_range_delegate_handle(workbook, &source, member)?;
                 self.dispatch_invoke(delegated, member, args)
             }
             "Select" => {
@@ -16029,7 +16107,7 @@ impl ExcelRuntime {
                     coerce_optional_bool_arg(value, true, "ShapeRange.Select Replace")?;
                 }
                 let Some((chart_object_id, _)) = self
-                    .shape_range_chart_object_entries(workbook, source)?
+                    .shape_range_chart_object_entries(workbook, &source)?
                     .into_iter()
                     .next()
                 else {
@@ -16060,7 +16138,7 @@ impl ExcelRuntime {
                     ));
                 }
                 let chart_object_ids = self
-                    .shape_range_chart_object_entries(workbook, source)?
+                    .shape_range_chart_object_entries(workbook, &source)?
                     .into_iter()
                     .map(|(chart_object_id, _)| chart_object_id)
                     .collect::<Vec<_>>();
@@ -16075,10 +16153,10 @@ impl ExcelRuntime {
                         "ShapeRange.Duplicate does not accept arguments",
                     ));
                 }
-                let entries = self.shape_range_chart_object_entries(workbook, source)?;
+                let entries = self.shape_range_chart_object_entries(workbook, &source)?;
                 let [(chart_object_id, _)] = entries.as_slice() else {
                     let delegated =
-                        self.shape_range_delegate_handle(workbook, source, "Duplicate")?;
+                        self.shape_range_delegate_handle(workbook, &source, "Duplicate")?;
                     return self.dispatch_invoke(delegated, member, args);
                 };
                 let duplicated_id = self.duplicate_chart_object(workbook, *chart_object_id)?;
@@ -16114,7 +16192,7 @@ impl ExcelRuntime {
                     "IncrementTop" => "Top",
                     _ => unreachable!("ShapeRange increment member was matched"),
                 };
-                let entries = self.shape_range_chart_object_entries(workbook, source)?;
+                let entries = self.shape_range_chart_object_entries(workbook, &source)?;
                 for (chart_object_id, _) in entries {
                     let delegated = self.register_chart_object_handle(workbook, chart_object_id);
                     let current = match self.dispatch_get(delegated, geometry_member, &[])? {
@@ -16149,7 +16227,7 @@ impl ExcelRuntime {
                 let increment_units =
                     rotation_units_from_degrees(*increment, "ShapeRange.IncrementRotation")?;
                 let chart_object_ids = self
-                    .shape_range_chart_object_entries(workbook, source)?
+                    .shape_range_chart_object_entries(workbook, &source)?
                     .into_iter()
                     .map(|(chart_object_id, _)| chart_object_id)
                     .collect::<Vec<_>>();
@@ -16346,7 +16424,7 @@ impl ExcelRuntime {
                     }
                 };
                 let chart_object_ids = self
-                    .shape_range_chart_object_entries(workbook, source)?
+                    .shape_range_chart_object_entries(workbook, &source)?
                     .into_iter()
                     .map(|(chart_object_id, _)| chart_object_id)
                     .collect::<Vec<_>>();
@@ -16431,7 +16509,7 @@ impl ExcelRuntime {
                         ));
                     }
                 };
-                let entries = self.shape_range_chart_object_entries(workbook, source)?;
+                let entries = self.shape_range_chart_object_entries(workbook, &source)?;
                 let [(chart_object_id, _)] = entries.as_slice() else {
                     return Err(OmError::unsupported(
                         "ShapeRange.ZOrder is only implemented for a single chart object",
@@ -16620,7 +16698,7 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Number(
-                    self.shape_range_chart_object_entries(workbook, source)?
+                    self.shape_range_chart_object_entries(workbook, &source)?
                         .len() as f64,
                 ))
             }
@@ -16631,7 +16709,7 @@ impl ExcelRuntime {
                     ));
                 }
                 if self
-                    .shape_range_chart_object_entries(workbook, source)?
+                    .shape_range_chart_object_entries(workbook, &source)?
                     .is_empty()
                 {
                     return Err(OmError::new(
@@ -16647,7 +16725,7 @@ impl ExcelRuntime {
                         "ShapeRange.ID does not accept arguments",
                     ));
                 }
-                let entries = self.shape_range_chart_object_entries(workbook, source)?;
+                let entries = self.shape_range_chart_object_entries(workbook, &source)?;
                 let [(chart_object_id, _)] = entries.as_slice() else {
                     return Ok(OmValue::Number(f64::from(MSO_SHAPE_MIXED)));
                 };
@@ -16669,7 +16747,7 @@ impl ExcelRuntime {
                         "ShapeRange.{property_name} does not accept arguments"
                     )));
                 }
-                let entries = self.shape_range_chart_object_entries(workbook, source)?;
+                let entries = self.shape_range_chart_object_entries(workbook, &source)?;
                 if entries.is_empty() {
                     return Err(OmError::new(
                         OmErrorCode::NotFound,
@@ -16700,7 +16778,7 @@ impl ExcelRuntime {
                     ));
                 }
                 let has_chart = !self
-                    .shape_range_chart_object_entries(workbook, source)?
+                    .shape_range_chart_object_entries(workbook, &source)?
                     .is_empty();
                 Ok(OmValue::Number(f64::from(if has_chart {
                     MSO_TRUE
@@ -16714,7 +16792,7 @@ impl ExcelRuntime {
                         "ShapeRange.HasSmartArt does not accept arguments",
                     ));
                 }
-                self.shape_range_chart_object_entries(workbook, source)?;
+                self.shape_range_chart_object_entries(workbook, &source)?;
                 Ok(OmValue::Number(f64::from(MSO_FALSE)))
             }
             "AutoShapeType" => {
@@ -16724,7 +16802,7 @@ impl ExcelRuntime {
                     ));
                 }
                 if self
-                    .shape_range_chart_object_entries(workbook, source)?
+                    .shape_range_chart_object_entries(workbook, &source)?
                     .is_empty()
                 {
                     return Err(OmError::new(
@@ -16740,7 +16818,7 @@ impl ExcelRuntime {
                         "ShapeRange.LockAspectRatio does not accept arguments",
                     ));
                 }
-                let entries = self.shape_range_chart_object_entries(workbook, source)?;
+                let entries = self.shape_range_chart_object_entries(workbook, &source)?;
                 if entries.is_empty() {
                     return Err(OmError::new(
                         OmErrorCode::NotFound,
@@ -16773,7 +16851,7 @@ impl ExcelRuntime {
                         "ShapeRange.Rotation does not accept arguments",
                     ));
                 }
-                let entries = self.shape_range_chart_object_entries(workbook, source)?;
+                let entries = self.shape_range_chart_object_entries(workbook, &source)?;
                 if entries.is_empty() {
                     return Err(OmError::new(
                         OmErrorCode::NotFound,
@@ -16807,7 +16885,7 @@ impl ExcelRuntime {
                         "ShapeRange.{property_name} does not accept arguments"
                     )));
                 }
-                let entries = self.shape_range_chart_object_entries(workbook, source)?;
+                let entries = self.shape_range_chart_object_entries(workbook, &source)?;
                 if entries.is_empty() {
                     return Err(OmError::new(
                         OmErrorCode::NotFound,
@@ -16841,7 +16919,7 @@ impl ExcelRuntime {
                         "ShapeRange.OnAction does not accept arguments",
                     ));
                 }
-                let entries = self.shape_range_chart_object_entries(workbook, source)?;
+                let entries = self.shape_range_chart_object_entries(workbook, &source)?;
                 if entries.is_empty() {
                     return Err(OmError::new(
                         OmErrorCode::NotFound,
@@ -16870,7 +16948,7 @@ impl ExcelRuntime {
                         "ShapeRange.{member} does not accept arguments"
                     )));
                 }
-                let entries = self.shape_range_chart_object_entries(workbook, source)?;
+                let entries = self.shape_range_chart_object_entries(workbook, &source)?;
                 if entries.is_empty() {
                     return Err(OmError::new(
                         OmErrorCode::NotFound,
@@ -16986,7 +17064,7 @@ impl ExcelRuntime {
                     ));
                 }
                 let sheet_id = match source {
-                    ShapeRangeSource::ChartObjects { sheet_id } => sheet_id,
+                    ShapeRangeSource::ChartObjects { sheet_id, .. } => sheet_id,
                     ShapeRangeSource::ChartObject { chart_object_id } => {
                         self.chart_object_model(workbook, chart_object_id)?
                             .host_sheet_id
@@ -17002,7 +17080,7 @@ impl ExcelRuntime {
                         "ShapeRange.ZOrderPosition does not accept arguments",
                     ));
                 }
-                let entries = self.shape_range_chart_object_entries(workbook, source)?;
+                let entries = self.shape_range_chart_object_entries(workbook, &source)?;
                 let [(chart_object_id, _)] = entries.as_slice() else {
                     return Ok(OmValue::Number(f64::from(MSO_SHAPE_MIXED)));
                 };
@@ -17018,7 +17096,7 @@ impl ExcelRuntime {
                 Ok(OmValue::Number(position as f64))
             }
             _ => {
-                let delegated = self.shape_range_delegate_handle(workbook, source, member)?;
+                let delegated = self.shape_range_delegate_handle(workbook, &source, member)?;
                 self.dispatch_get(delegated, member, args)
             }
         }
@@ -22755,7 +22833,24 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         sheet_id: SheetId,
     ) -> ObjectHandle {
-        self.register_object(RuntimeObjectKind::ChartObjects { workbook, sheet_id })
+        self.register_object(RuntimeObjectKind::ChartObjects {
+            workbook,
+            sheet_id,
+            chart_object_ids: None,
+        })
+    }
+
+    fn register_chart_objects_selection_handle(
+        &mut self,
+        workbook: WorkbookHandle,
+        sheet_id: SheetId,
+        chart_object_ids: Vec<ChartObjectId>,
+    ) -> ObjectHandle {
+        self.register_object(RuntimeObjectKind::ChartObjects {
+            workbook,
+            sheet_id,
+            chart_object_ids: Some(chart_object_ids),
+        })
     }
 
     fn register_chart_object_handle(
@@ -22966,17 +23061,49 @@ impl ExcelRuntime {
             .collect())
     }
 
+    fn chart_object_entries_for_selection(
+        &self,
+        workbook: WorkbookHandle,
+        sheet_id: SheetId,
+        chart_object_ids: Option<&[ChartObjectId]>,
+    ) -> OmResult<Vec<(ChartObjectId, String)>> {
+        let entries = self.chart_object_entries_for_sheet(workbook, sheet_id)?;
+        let Some(chart_object_ids) = chart_object_ids else {
+            return Ok(entries);
+        };
+
+        let mut selected = Vec::with_capacity(chart_object_ids.len());
+        for chart_object_id in chart_object_ids {
+            let Some((_, name)) = entries
+                .iter()
+                .find(|(candidate_id, _)| candidate_id == chart_object_id)
+            else {
+                return Err(OmError::new(
+                    OmErrorCode::NotFound,
+                    "chart object not found",
+                ));
+            };
+            selected.push((*chart_object_id, name.clone()));
+        }
+        Ok(selected)
+    }
+
     fn shape_range_chart_object_entries(
         &self,
         workbook: WorkbookHandle,
-        source: ShapeRangeSource,
+        source: &ShapeRangeSource,
     ) -> OmResult<Vec<(ChartObjectId, String)>> {
         match source {
-            ShapeRangeSource::ChartObjects { sheet_id } => {
-                self.chart_object_entries_for_sheet(workbook, sheet_id)
-            }
+            ShapeRangeSource::ChartObjects {
+                sheet_id,
+                chart_object_ids,
+            } => self.chart_object_entries_for_selection(
+                workbook,
+                *sheet_id,
+                chart_object_ids.as_deref(),
+            ),
             ShapeRangeSource::ChartObject { chart_object_id } => {
-                let chart_object = self.chart_object_model(workbook, chart_object_id)?;
+                let chart_object = self.chart_object_model(workbook, *chart_object_id)?;
                 Ok(vec![(chart_object.id, chart_object.name.clone())])
             }
         }
@@ -22985,19 +23112,26 @@ impl ExcelRuntime {
     fn shape_range_delegate_handle(
         &mut self,
         workbook: WorkbookHandle,
-        source: ShapeRangeSource,
+        source: &ShapeRangeSource,
         member: &str,
     ) -> OmResult<ObjectHandle> {
         match source {
             ShapeRangeSource::ChartObject { chart_object_id } => {
-                self.chart_object_model(workbook, chart_object_id)?;
-                Ok(self.register_chart_object_handle(workbook, chart_object_id))
+                self.chart_object_model(workbook, *chart_object_id)?;
+                Ok(self.register_chart_object_handle(workbook, *chart_object_id))
             }
-            ShapeRangeSource::ChartObjects { sheet_id } => {
+            ShapeRangeSource::ChartObjects {
+                sheet_id,
+                chart_object_ids,
+            } => {
                 let single_shape_member =
                     matches!(member, "Name" | "Chart" | "Index" | "ZOrder" | "OnAction");
                 if single_shape_member {
-                    let entries = self.chart_object_entries_for_sheet(workbook, sheet_id)?;
+                    let entries = self.chart_object_entries_for_selection(
+                        workbook,
+                        *sheet_id,
+                        chart_object_ids.as_deref(),
+                    )?;
                     let [(chart_object_id, _)] = entries.as_slice() else {
                         return Err(OmError::unsupported(format!(
                             "ShapeRange.{member} is only available for a single chart object"
@@ -23005,7 +23139,14 @@ impl ExcelRuntime {
                     };
                     return Ok(self.register_chart_object_handle(workbook, *chart_object_id));
                 }
-                Ok(self.register_chart_objects_handle(workbook, sheet_id))
+                match chart_object_ids {
+                    Some(chart_object_ids) => Ok(self.register_chart_objects_selection_handle(
+                        workbook,
+                        *sheet_id,
+                        chart_object_ids.clone(),
+                    )),
+                    None => Ok(self.register_chart_objects_handle(workbook, *sheet_id)),
+                }
             }
         }
     }
@@ -25635,6 +25776,7 @@ impl ExcelRuntime {
                 RuntimeObjectKind::ChartObjects {
                     workbook: object_workbook,
                     sheet_id: object_sheet_id,
+                    ..
                 } if *object_workbook == workbook && *object_sheet_id == sheet_id => {
                     Some(object_id)
                 }
@@ -25653,6 +25795,7 @@ impl ExcelRuntime {
                     source:
                         ShapeRangeSource::ChartObjects {
                             sheet_id: object_sheet_id,
+                            ..
                         },
                 } if *object_workbook == workbook && *object_sheet_id == sheet_id => {
                     Some(object_id)
@@ -109821,6 +109964,20 @@ mod tests {
                 )
                 .expect("lower z-order ChartObjects.Add"),
         );
+        let later_z_chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(50.0),
+                        OmValue::Number(60.0),
+                        OmValue::Number(200.0),
+                        OmValue::Number(120.0),
+                    ],
+                )
+                .expect("later z-order ChartObjects.Add"),
+        );
         runtime
             .dispatch_set(
                 higher_z_chart,
@@ -109837,6 +109994,14 @@ mod tests {
                 &[],
             )
             .expect("set lower z-order ChartObject.Name");
+        runtime
+            .dispatch_set(
+                later_z_chart,
+                "Name",
+                OmValue::Text("Z Later Chart".to_string()),
+                &[],
+            )
+            .expect("set later z-order ChartObject.Name");
 
         let mut updated_chart_objects = 0usize;
         for drawing in runtime
@@ -109860,11 +110025,15 @@ mod tests {
                         chart_object.z_order = Some(1);
                         updated_chart_objects += 1;
                     }
+                    "Z Later Chart" => {
+                        chart_object.z_order = Some(20);
+                        updated_chart_objects += 1;
+                    }
                     _ => {}
                 }
             }
         }
-        assert_eq!(updated_chart_objects, 2);
+        assert_eq!(updated_chart_objects, 3);
 
         let first_chart_object = expect_object_handle(
             runtime
@@ -109907,6 +110076,117 @@ mod tests {
                     .expect("higher z-order ChartObject.Index")
             ),
             2.0
+        );
+
+        let selection_array = OmArray::new(
+            1,
+            2,
+            vec![
+                OmValue::Number(2.0),
+                OmValue::Text("Z Later Chart".to_string()),
+            ],
+        )
+        .expect("selection array");
+        let selected_shape_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Item",
+                    &[OmValue::Array(selection_array.clone())],
+                )
+                .expect("ChartObjects.Item(array)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(selected_shape_range, "Count", &[])
+                    .expect("selected ShapeRange.Count")
+            ),
+            2.0
+        );
+        let selected_first = expect_object_handle(
+            runtime
+                .dispatch_invoke(selected_shape_range, "Item", &[OmValue::Number(1.0)])
+                .expect("selected ShapeRange.Item(1)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selected_first, "Name", &[])
+                    .expect("selected first ShapeRange.Name")
+            ),
+            "Z Ten Chart"
+        );
+        let selected_second = expect_object_handle(
+            runtime
+                .dispatch_invoke(selected_shape_range, "Item", &[OmValue::Number(2.0)])
+                .expect("selected ShapeRange.Item(2)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selected_second, "Name", &[])
+                    .expect("selected second ShapeRange.Name")
+            ),
+            "Z Later Chart"
+        );
+
+        runtime
+            .dispatch_set(selected_shape_range, "Visible", OmValue::Bool(false), &[])
+            .expect("selected ShapeRange.Visible = False");
+        assert_eq!(
+            runtime
+                .dispatch_get(lower_z_chart, "Visible", &[])
+                .expect("unselected lower z-order ChartObject.Visible"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(higher_z_chart, "Visible", &[])
+                .expect("selected higher z-order ChartObject.Visible"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(later_z_chart, "Visible", &[])
+                .expect("selected later z-order ChartObject.Visible"),
+            OmValue::Bool(false)
+        );
+
+        let worksheet_selected_shape_range = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    worksheet,
+                    "ChartObjects",
+                    &[OmValue::Array(selection_array)],
+                )
+                .expect("Worksheet.ChartObjects(array)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(worksheet_selected_shape_range, "Count", &[])
+                    .expect("Worksheet.ChartObjects(array).Count")
+            ),
+            2.0
+        );
+
+        let empty_selection = OmArray::new(0, 0, vec![]).expect("empty selection array");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Array(empty_selection)],)
+                .expect_err("ChartObjects.Item rejects empty array")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        let bad_selection =
+            OmArray::new(1, 1, vec![OmValue::Bool(true)]).expect("bad selection array");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Array(bad_selection)])
+                .expect_err("ChartObjects.Item rejects invalid array entries")
+                .code,
+            OmErrorCode::TypeMismatch
         );
     }
 
