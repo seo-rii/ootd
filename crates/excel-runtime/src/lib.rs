@@ -16864,6 +16864,104 @@ impl ExcelRuntime {
                 }
                 Ok(OmValue::Text(shared_on_action.unwrap_or_default()))
             }
+            "TopLeftCell" | "BottomRightCell" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "ShapeRange.{member} does not accept arguments"
+                    )));
+                }
+                let entries = self.shape_range_chart_object_entries(workbook, source)?;
+                if entries.is_empty() {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        "chart object not found",
+                    ));
+                }
+                let mut host_sheet_id = None;
+                let mut marker_row_zero_based = None;
+                let mut marker_col_zero_based = None;
+                for (chart_object_id, _) in entries {
+                    let chart_object = self.chart_object_model(workbook, chart_object_id)?;
+                    match host_sheet_id {
+                        None => host_sheet_id = Some(chart_object.host_sheet_id),
+                        Some(sheet_id) if sheet_id == chart_object.host_sheet_id => {}
+                        Some(_) => {
+                            return Err(OmError::unsupported(format!(
+                                "ShapeRange.{member} is unavailable for mixed-sheet ranges"
+                            )));
+                        }
+                    }
+                    let Some(anchor) = chart_object.anchor.as_ref() else {
+                        return Err(OmError::unsupported(format!(
+                            "ShapeRange.{member} is unavailable for unsupported drawing anchors"
+                        )));
+                    };
+                    let marker = match (member, anchor) {
+                        ("TopLeftCell", DrawingAnchor::OneCell(anchor)) => anchor.from,
+                        ("TopLeftCell", DrawingAnchor::TwoCell(anchor)) => anchor.from,
+                        ("BottomRightCell", DrawingAnchor::TwoCell(anchor)) => anchor.to,
+                        (_, DrawingAnchor::Absolute(_) | DrawingAnchor::UnsupportedRaw)
+                        | ("BottomRightCell", DrawingAnchor::OneCell(_)) => {
+                            return Err(OmError::unsupported(format!(
+                                "ShapeRange.{member} is unavailable for this drawing anchor"
+                            )));
+                        }
+                        _ => {
+                            return Err(OmError::unsupported(format!(
+                                "ShapeRange.{member} is not supported"
+                            )));
+                        }
+                    };
+                    match member {
+                        "TopLeftCell" => {
+                            marker_row_zero_based = Some(
+                                marker_row_zero_based.map_or(marker.row_zero_based, |row: u32| {
+                                    row.min(marker.row_zero_based)
+                                }),
+                            );
+                            marker_col_zero_based = Some(
+                                marker_col_zero_based.map_or(marker.col_zero_based, |col: u32| {
+                                    col.min(marker.col_zero_based)
+                                }),
+                            );
+                        }
+                        "BottomRightCell" => {
+                            marker_row_zero_based = Some(
+                                marker_row_zero_based.map_or(marker.row_zero_based, |row: u32| {
+                                    row.max(marker.row_zero_based)
+                                }),
+                            );
+                            marker_col_zero_based = Some(
+                                marker_col_zero_based.map_or(marker.col_zero_based, |col: u32| {
+                                    col.max(marker.col_zero_based)
+                                }),
+                            );
+                        }
+                        _ => unreachable!("ShapeRange anchor cell member was matched"),
+                    }
+                }
+                let row = marker_row_zero_based
+                    .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart object not found"))?
+                    .checked_add(1)
+                    .ok_or_else(|| OmError::invalid_argument("chart marker row is out of range"))?;
+                let col = marker_col_zero_based
+                    .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart object not found"))?
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        OmError::invalid_argument("chart marker column is out of range")
+                    })?;
+                let workbook_id = self.workbook_model(workbook)?.id;
+                let range = RangeSet::single_rect(
+                    workbook_id,
+                    host_sheet_id.ok_or_else(|| {
+                        OmError::new(OmErrorCode::NotFound, "chart object not found")
+                    })?,
+                    Rect::single_cell(row, col),
+                )?;
+                Ok(OmValue::Object(
+                    self.register_range_set_handle(workbook, range).0,
+                ))
+            }
             "Item" => self.dispatch_invoke_shape_range(workbook, source, member, args),
             "Application" => {
                 if !args.is_empty() {
@@ -22896,16 +22994,8 @@ impl ExcelRuntime {
                 Ok(self.register_chart_object_handle(workbook, chart_object_id))
             }
             ShapeRangeSource::ChartObjects { sheet_id } => {
-                let single_shape_member = matches!(
-                    member,
-                    "Name"
-                        | "Chart"
-                        | "Index"
-                        | "ZOrder"
-                        | "OnAction"
-                        | "TopLeftCell"
-                        | "BottomRightCell"
-                );
+                let single_shape_member =
+                    matches!(member, "Name" | "Chart" | "Index" | "ZOrder" | "OnAction");
                 if single_shape_member {
                     let entries = self.chart_object_entries_for_sheet(workbook, sheet_id)?;
                     let [(chart_object_id, _)] = entries.as_slice() else {
@@ -92907,11 +92997,53 @@ mod tests {
     <xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
     <xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>6</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>"#,
         )
-        .replace("</xdr:absoluteAnchor>", "</xdr:twoCellAnchor>");
+        .replace("</xdr:absoluteAnchor>", "</xdr:twoCellAnchor>")
+        .replace(
+            "</xdr:wsDr>",
+            r#"  <xdr:twoCellAnchor editAs="twoCell" ar:tag="second" xmlns:ar="urn:anchor-root">
+    <xdr:from><xdr:col>7</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>8</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:to><xdr:col>9</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>10</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+    <xdr:graphicFrame macro="" fPublished="0"><xdr:nvGraphicFramePr><xdr:cNvPr id="3" name="Second Embedded Revenue Chart"/><xdr:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1" noChangeAspect="1"/></xdr:cNvGraphicFramePr></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart2"/></a:graphicData></a:graphic></xdr:graphicFrame>
+    <xdr:clientData/>
+  </xdr:twoCellAnchor>
+</xdr:wsDr>"#,
+        );
         assert!(drawing_xml.contains("<xdr:twoCellAnchor"));
         package
             .replace_part_bytes("xl/drawings/drawing1.xml", drawing_xml.into_bytes())
             .expect("replace drawing xml");
+        let drawing_rels_xml = String::from_utf8(
+            package
+                .part("xl/drawings/_rels/drawing1.xml.rels")
+                .expect("drawing rels part")
+                .bytes
+                .clone(),
+        )
+        .expect("drawing rels utf8")
+        .replace(
+            "</Relationships>",
+            r#"  <Relationship Id="rIdChart2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart2.xml"/>
+</Relationships>"#,
+        );
+        package
+            .replace_part_bytes(
+                "xl/drawings/_rels/drawing1.xml.rels",
+                drawing_rels_xml.into_bytes(),
+            )
+            .expect("replace drawing rels");
+        let chart1_xml = package
+            .part("xl/charts/chart1.xml")
+            .expect("chart1 part")
+            .bytes
+            .clone();
+        package
+            .add_part(OpcPart {
+                name: "xl/charts/chart2.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: chart1_xml,
+            })
+            .expect("add chart2 part");
 
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -92931,6 +93063,12 @@ mod tests {
             runtime
                 .dispatch_get(worksheet, "ChartObjects", &[])
                 .expect("Worksheet.ChartObjects"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_objects, "Count", &[])
+                .expect("ChartObjects.Count"),
+            OmValue::Number(2.0)
         );
         let chart_object = expect_object_handle(
             runtime
@@ -92963,6 +93101,38 @@ mod tests {
                     .expect("BottomRightCell.Address")
             ),
             "$E$7"
+        );
+
+        let shape_range = expect_object_handle(
+            runtime
+                .dispatch_get(chart_objects, "ShapeRange", &[])
+                .expect("ChartObjects.ShapeRange"),
+        );
+        let shape_top_left_cell = expect_object_handle(
+            runtime
+                .dispatch_get(shape_range, "TopLeftCell", &[])
+                .expect("ShapeRange.TopLeftCell"),
+        );
+        let shape_bottom_right_cell = expect_object_handle(
+            runtime
+                .dispatch_get(shape_range, "BottomRightCell", &[])
+                .expect("ShapeRange.BottomRightCell"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(shape_top_left_cell, "Address", &[])
+                    .expect("ShapeRange.TopLeftCell.Address")
+            ),
+            "$B$3"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(shape_bottom_right_cell, "Address", &[])
+                    .expect("ShapeRange.BottomRightCell.Address")
+            ),
+            "$J$11"
         );
     }
 
@@ -93029,6 +93199,35 @@ mod tests {
                     .expect("TopLeftCell.Address")
             ),
             "$C$4"
+        );
+
+        let shape_range = expect_object_handle(
+            runtime
+                .dispatch_get(chart_objects, "ShapeRange", &[])
+                .expect("ChartObjects.ShapeRange"),
+        );
+        let shape_top_left_cell = expect_object_handle(
+            runtime
+                .dispatch_get(shape_range, "TopLeftCell", &[])
+                .expect("ShapeRange.TopLeftCell"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(shape_top_left_cell, "Address", &[])
+                    .expect("ShapeRange.TopLeftCell.Address")
+            ),
+            "$C$4"
+        );
+        assert!(
+            runtime
+                .dispatch_get(shape_range, "BottomRightCell", &[])
+                .is_err()
+        );
+        assert!(
+            runtime
+                .dispatch_get(shape_range, "TopLeftCell", &[OmValue::Number(1.0)])
+                .is_err()
         );
     }
 
