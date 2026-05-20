@@ -13219,6 +13219,16 @@ impl ExcelRuntime {
                     let chart = self.register_chart_handle(workbook, chart_id);
                     self.dispatch_invoke(chart, "Select", &[])
                 }
+                "Copy" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "Point.Copy does not accept arguments",
+                        ));
+                    }
+                    self.validate_point_index(workbook, chart_id, series_index, point_index)?;
+                    self.set_headless_copy_mode();
+                    Ok(OmValue::Empty)
+                }
                 "ClearFormats" => {
                     if !args.is_empty() {
                         return Err(OmError::invalid_argument(
@@ -14496,6 +14506,7 @@ impl ExcelRuntime {
                             | "Application"
                             | "Parent"
                             | "ApplyDataLabels"
+                            | "Copy"
                             | "Select"
                             | "ClearFormats"
                     )
@@ -101154,6 +101165,7 @@ mod tests {
                 ],
             ),
             (series, "Copy", Vec::new()),
+            (point, "Copy", Vec::new()),
         ] {
             runtime
                 .dispatch_set(application, "CutCopyMode", OmValue::Bool(false), &[])
