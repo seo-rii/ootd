@@ -11382,7 +11382,12 @@ impl ExcelRuntime {
                             "Chart.ApplyLayout Layout expects a value from 1 to 10",
                         ));
                     }
-                    validate_optional_integer_arg(args, 1, "Chart.ApplyLayout ChartType")?;
+                    if let Some(chart_type) = args.get(1)
+                        && !om_value_is_omitted(chart_type)
+                    {
+                        let chart = self.register_chart_handle(workbook, chart_id);
+                        self.dispatch_set(chart, "ChartType", chart_type.clone(), &[])?;
+                    }
                     Ok(OmValue::Empty)
                 }
                 "ChartWizard" => {
@@ -100102,6 +100107,14 @@ mod tests {
                 )
                 .expect("Chart.ApplyLayout"),
             OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "ChartType", &[])
+                    .expect("Chart.ChartType after ApplyLayout ChartType")
+            ),
+            f64::from(super::XL_LINE)
         );
         assert_eq!(
             runtime
