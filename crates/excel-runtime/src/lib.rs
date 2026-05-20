@@ -5220,6 +5220,17 @@ impl ExcelRuntime {
                     )));
                 }
                 match member {
+                    "ChartType" => {
+                        self.chart_group_model(workbook, chart_id, group_index)?;
+                        if group_index != 0 {
+                            return Err(OmError::new(
+                                OmErrorCode::NotFound,
+                                "chart group not found",
+                            ));
+                        }
+                        let chart = self.register_chart_handle(workbook, chart_id);
+                        self.dispatch_set(chart, "ChartType", value, &[])
+                    }
                     "AxisGroup" => {
                         let OmValue::Number(number) = value else {
                             return Err(OmError::type_mismatch(
@@ -93432,6 +93443,146 @@ mod tests {
                 .dispatch_get(reopened_chart_group, "VaryByCategories", &[])
                 .expect("reopened ChartGroup.VaryByCategories"),
             OmValue::Bool(false)
+        );
+    }
+
+    #[test]
+    fn chart_group_chart_type_setter_uses_chart_type_rewrite_path() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_group = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("Chart.ChartGroups(1)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    chart_group,
+                    "ChartType",
+                    OmValue::Text("bad".to_string()),
+                    &[],
+                )
+                .expect_err("ChartGroup.ChartType rejects non-numeric chart type")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        runtime
+            .dispatch_set(
+                chart_group,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_LINE_MARKERS)),
+                &[],
+            )
+            .expect("set ChartGroup.ChartType to line markers");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_group, "ChartType", &[])
+                    .expect("ChartGroup.ChartType after set")
+            ),
+            f64::from(super::XL_LINE_MARKERS)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "ChartType", &[])
+                    .expect("Chart.ChartType after ChartGroup set")
+            ),
+            f64::from(super::XL_LINE_MARKERS)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save chart group chart type");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:lineChart>"));
+        assert!(!saved_chart_xml.contains("<c:barChart>"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen saved chart group chart type workbook");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_chart_group = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("reopened Chart.ChartGroups(1)"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_group, "ChartType", &[])
+                    .expect("reopened ChartGroup.ChartType")
+            ),
+            f64::from(super::XL_LINE_MARKERS)
         );
     }
 
