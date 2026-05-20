@@ -11388,7 +11388,7 @@ impl ExcelRuntime {
                         self.register_chart_object_handle(workbook, duplicate_id),
                     ))
                 }
-                "BringToFront" | "SendToBack" => {
+                "BringToFront" | "SendToBack" | "BringForward" | "SendBackward" => {
                     if !args.is_empty() {
                         return Err(OmError::invalid_argument(format!(
                             "ChartObject.{member} does not accept arguments"
@@ -113177,6 +113177,60 @@ mod tests {
                     .expect("second ChartObject.Name")
             ),
             "Chart 2"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(first_chart_object, "BringForward", &[])
+                .expect("ChartObject.BringForward"),
+            OmValue::Empty
+        );
+        let stepped_forward_first = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1) after BringForward"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(stepped_forward_first, "Name", &[])
+                    .expect("first ordered ChartObject.Name after BringForward")
+            ),
+            "Chart 2"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_chart_object, "ZOrder", &[])
+                    .expect("first ChartObject.ZOrder after BringForward")
+            ),
+            2.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(first_chart_object, "SendBackward", &[])
+                .expect("ChartObject.SendBackward"),
+            OmValue::Empty
+        );
+        let stepped_backward_first = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1) after SendBackward"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(stepped_backward_first, "Name", &[])
+                    .expect("first ordered ChartObject.Name after SendBackward")
+            ),
+            "Embedded Revenue Chart"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_chart_object, "ZOrder", &[])
+                    .expect("first ChartObject.ZOrder after SendBackward")
+            ),
+            1.0
         );
         assert_eq!(
             runtime
