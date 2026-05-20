@@ -12927,6 +12927,9 @@ impl ExcelRuntime {
                     Ok(OmValue::Empty)
                 }
                 "Axes" | "ChartGroups" => self.dispatch_get_chart(workbook, chart_id, member, args),
+                member if is_chart_group_shortcut_member(member) => {
+                    self.dispatch_get_chart_group_shortcut(workbook, chart_id, member, args)
+                }
                 "SeriesCollection" | "FullSeriesCollection" => {
                     self.dispatch_get_chart(workbook, chart_id, member, args)
                 }
@@ -13960,6 +13963,15 @@ impl ExcelRuntime {
                             | "HasLegend"
                             | "Legend"
                             | "ChartGroups"
+                            | "AreaGroups"
+                            | "BarGroups"
+                            | "ColumnGroups"
+                            | "DoughnutGroups"
+                            | "LineGroups"
+                            | "PieGroups"
+                            | "RadarGroups"
+                            | "SurfaceGroups"
+                            | "XYGroups"
                             | "Axes"
                             | "SeriesCollection"
                             | "FullSeriesCollection"
@@ -18191,6 +18203,9 @@ impl ExcelRuntime {
                     self.dispatch_invoke(handle, "Item", args)
                 }
             }
+            member if is_chart_group_shortcut_member(member) => {
+                self.dispatch_get_chart_group_shortcut(workbook, chart_id, member, args)
+            }
             "Axes" => {
                 let handle = self.register_axes_handle(workbook, chart_id);
                 if args.is_empty() {
@@ -18611,6 +18626,123 @@ impl ExcelRuntime {
             _ => Err(OmError::unsupported(format!(
                 "DataTable.{member} is not implemented"
             ))),
+        }
+    }
+
+    fn dispatch_get_chart_group_shortcut(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        let chart = self.chart_model(workbook, chart_id)?;
+        let matches_chart_type = match member {
+            "AreaGroups" => matches!(
+                chart.chart_type,
+                ChartType::Area
+                    | ChartType::Area3D
+                    | ChartType::AreaStacked
+                    | ChartType::Area3DStacked
+                    | ChartType::AreaStacked100
+                    | ChartType::Area3DStacked100
+            ),
+            "BarGroups" => matches!(
+                chart.chart_type,
+                ChartType::Bar
+                    | ChartType::Bar3DClustered
+                    | ChartType::BarStacked
+                    | ChartType::Bar3DStacked
+                    | ChartType::BarStacked100
+                    | ChartType::Bar3DStacked100
+                    | ChartType::CylinderBarClustered
+                    | ChartType::CylinderBarStacked
+                    | ChartType::CylinderBarStacked100
+                    | ChartType::ConeBarClustered
+                    | ChartType::ConeBarStacked
+                    | ChartType::ConeBarStacked100
+                    | ChartType::PyramidBarClustered
+                    | ChartType::PyramidBarStacked
+                    | ChartType::PyramidBarStacked100
+            ),
+            "ColumnGroups" => matches!(
+                chart.chart_type,
+                ChartType::Column
+                    | ChartType::Column3D
+                    | ChartType::Column3DClustered
+                    | ChartType::ColumnStacked
+                    | ChartType::Column3DStacked
+                    | ChartType::ColumnStacked100
+                    | ChartType::Column3DStacked100
+                    | ChartType::CylinderColumn
+                    | ChartType::CylinderColumnClustered
+                    | ChartType::CylinderColumnStacked
+                    | ChartType::CylinderColumnStacked100
+                    | ChartType::ConeColumn
+                    | ChartType::ConeColumnClustered
+                    | ChartType::ConeColumnStacked
+                    | ChartType::ConeColumnStacked100
+                    | ChartType::PyramidColumn
+                    | ChartType::PyramidColumnClustered
+                    | ChartType::PyramidColumnStacked
+                    | ChartType::PyramidColumnStacked100
+            ),
+            "DoughnutGroups" => matches!(
+                chart.chart_type,
+                ChartType::Doughnut | ChartType::DoughnutExploded
+            ),
+            "LineGroups" => matches!(
+                chart.chart_type,
+                ChartType::Line
+                    | ChartType::Line3D
+                    | ChartType::LineMarkers
+                    | ChartType::LineMarkersStacked
+                    | ChartType::LineMarkersStacked100
+                    | ChartType::LineStacked
+                    | ChartType::LineStacked100
+            ),
+            "PieGroups" => matches!(
+                chart.chart_type,
+                ChartType::Pie
+                    | ChartType::Pie3D
+                    | ChartType::PieExploded
+                    | ChartType::Pie3DExploded
+                    | ChartType::PieOfPie
+                    | ChartType::BarOfPie
+            ),
+            "RadarGroups" => matches!(
+                chart.chart_type,
+                ChartType::Radar | ChartType::RadarMarkers | ChartType::RadarFilled
+            ),
+            "SurfaceGroups" => matches!(
+                chart.chart_type,
+                ChartType::Surface
+                    | ChartType::SurfaceWireframe
+                    | ChartType::SurfaceTopView
+                    | ChartType::SurfaceTopViewWireframe
+            ),
+            "XYGroups" => matches!(
+                chart.chart_type,
+                ChartType::Scatter
+                    | ChartType::ScatterLines
+                    | ChartType::ScatterLinesNoMarkers
+                    | ChartType::ScatterSmooth
+                    | ChartType::ScatterSmoothNoMarkers
+            ),
+            _ => false,
+        };
+        if !matches_chart_type {
+            return Err(OmError::new(
+                OmErrorCode::NotFound,
+                format!("{member} is not available for this chart type"),
+            ));
+        }
+
+        let handle = self.register_chart_groups_handle(workbook, chart_id);
+        if args.is_empty() {
+            Ok(OmValue::Object(handle))
+        } else {
+            self.dispatch_invoke(handle, "Item", args)
         }
     }
 
@@ -29304,6 +29436,21 @@ fn chart_type_supports_radar_axis_labels(chart_type: &ChartType) -> bool {
     matches!(
         chart_type,
         ChartType::Radar | ChartType::RadarMarkers | ChartType::RadarFilled
+    )
+}
+
+fn is_chart_group_shortcut_member(member: &str) -> bool {
+    matches!(
+        member,
+        "AreaGroups"
+            | "BarGroups"
+            | "ColumnGroups"
+            | "DoughnutGroups"
+            | "LineGroups"
+            | "PieGroups"
+            | "RadarGroups"
+            | "SurfaceGroups"
+            | "XYGroups"
     )
 }
 
@@ -94762,6 +94909,114 @@ mod tests {
                     .dispatch_get(reopened_chart_group, member, &[])
                     .expect("reopened ChartGroup line flag"),
                 OmValue::Bool(false)
+            );
+        }
+    }
+
+    #[test]
+    fn chart_group_shortcut_methods_return_matching_groups() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "LineGroups", &[])
+                .expect_err("LineGroups is unavailable for a bar chart")
+                .code,
+            OmErrorCode::NotFound
+        );
+
+        for (member, chart_type) in [
+            ("AreaGroups", super::XL_AREA),
+            ("BarGroups", super::XL_BAR_CLUSTERED),
+            ("ColumnGroups", super::XL_COLUMN_CLUSTERED),
+            ("DoughnutGroups", super::XL_DOUGHNUT),
+            ("LineGroups", super::XL_LINE_MARKERS),
+            ("PieGroups", super::XL_PIE),
+            ("RadarGroups", super::XL_RADAR),
+            ("SurfaceGroups", super::XL_SURFACE),
+            ("XYGroups", super::XL_XY_SCATTER),
+        ] {
+            runtime
+                .dispatch_set(
+                    chart,
+                    "ChartType",
+                    OmValue::Number(f64::from(chart_type)),
+                    &[],
+                )
+                .expect("set Chart.ChartType before group shortcut");
+            let groups = expect_object_handle(
+                runtime
+                    .dispatch_get(chart, member, &[])
+                    .expect("Chart group shortcut collection"),
+            );
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(groups, "Count", &[])
+                        .expect("Chart group shortcut Count")
+                ),
+                1.0
+            );
+            let group_from_property = expect_object_handle(
+                runtime
+                    .dispatch_get(chart, member, &[OmValue::Number(1.0)])
+                    .expect("Chart group shortcut indexed property"),
+            );
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(group_from_property, "ChartType", &[])
+                        .expect("Chart group shortcut ChartType")
+                ),
+                f64::from(chart_type)
+            );
+            let group_from_method = expect_object_handle(
+                runtime
+                    .dispatch_invoke(chart, member, &[OmValue::Number(1.0)])
+                    .expect("Chart group shortcut method"),
+            );
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(group_from_method, "Index", &[])
+                        .expect("Chart group shortcut method Index")
+                ),
+                1.0
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(chart, member, &[OmValue::Number(2.0)])
+                    .expect_err("Chart group shortcut rejects invalid index")
+                    .code,
+                OmErrorCode::InvalidArgument
             );
         }
     }
