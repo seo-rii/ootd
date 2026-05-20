@@ -3365,6 +3365,64 @@ impl ExcelRuntime {
                 }
             }
             RuntimeObjectKind::ShapeRange { workbook, source } => {
+                if member == "Rotation" {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "ShapeRange.Rotation does not accept index arguments",
+                        ));
+                    }
+                    let rotation_units = match value {
+                        OmValue::Number(number) => rotation_units_from_degrees(number)?,
+                        _ => {
+                            return Err(OmError::type_mismatch(
+                                "ShapeRange.Rotation expects a numeric degrees value",
+                            ));
+                        }
+                    };
+                    let chart_object_ids = self
+                        .shape_range_chart_object_entries(workbook, source)?
+                        .into_iter()
+                        .map(|(chart_object_id, _)| chart_object_id)
+                        .collect::<Vec<_>>();
+                    if chart_object_ids.is_empty() {
+                        return Err(OmError::new(
+                            OmErrorCode::NotFound,
+                            "chart object not found",
+                        ));
+                    }
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    let mut workbook_dirty = false;
+                    for drawing in runtime.loaded.state.drawings.values_mut() {
+                        for object in &mut drawing.objects {
+                            let DrawingObjectModel::ChartFrame(chart_object) = object else {
+                                continue;
+                            };
+                            if !chart_object_ids.contains(&chart_object.id) {
+                                continue;
+                            }
+                            let updated_transform = set_graphic_frame_rotation_xml(
+                                chart_object.graphic_frame_transform_xml.as_deref(),
+                                rotation_units,
+                            )?;
+                            if chart_object.graphic_frame_transform_xml != updated_transform {
+                                chart_object.graphic_frame_transform_xml = updated_transform;
+                                chart_object.dirty = true;
+                                drawing.dirty = true;
+                                workbook_dirty = true;
+                            }
+                        }
+                    }
+                    if workbook_dirty {
+                        runtime.dirty = true;
+                    }
+                    return Ok(());
+                }
                 if member == "LockAspectRatio" {
                     if !args.is_empty() {
                         return Err(OmError::invalid_argument(
@@ -13152,6 +13210,7 @@ impl ExcelRuntime {
                             | "HasChart"
                             | "HasSmartArt"
                             | "LockAspectRatio"
+                            | "Rotation"
                             | "ZOrder"
                             | "ZOrderPosition"
                             | "Placement"
@@ -16501,6 +16560,35 @@ impl ExcelRuntime {
                 Ok(OmValue::Number(f64::from(
                     shared_value.unwrap_or(MSO_FALSE),
                 )))
+            }
+            "Rotation" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ShapeRange.Rotation does not accept arguments",
+                    ));
+                }
+                let entries = self.shape_range_chart_object_entries(workbook, source)?;
+                if entries.is_empty() {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        "chart object not found",
+                    ));
+                }
+                let mut shared_units: Option<i64> = None;
+                for (chart_object_id, _) in entries {
+                    let chart_object = self.chart_object_model(workbook, chart_object_id)?;
+                    let units = graphic_frame_rotation_units(
+                        chart_object.graphic_frame_transform_xml.as_deref(),
+                    )?;
+                    match shared_units {
+                        None => shared_units = Some(units),
+                        Some(shared) if shared == units => {}
+                        Some(_) => return Ok(OmValue::Number(f64::from(MSO_SHAPE_MIXED))),
+                    }
+                }
+                Ok(OmValue::Number(
+                    shared_units.unwrap_or_default() as f64 / 60_000.0,
+                ))
             }
             "Item" => self.dispatch_invoke_shape_range(workbook, source, member, args),
             "Application" => {
@@ -25231,6 +25319,146 @@ fn xml_local_name(name: &[u8]) -> &[u8] {
 
 fn xml_bool_attr_value_is_true(value: &str) -> bool {
     value == "1" || value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("on")
+}
+
+fn rotation_units_from_degrees(degrees: f64) -> OmResult<i64> {
+    if !degrees.is_finite() || degrees.abs() > i64::MAX as f64 / 60_000.0 {
+        return Err(OmError::invalid_argument(
+            "ShapeRange.Rotation expects a finite degrees value",
+        ));
+    }
+    Ok((degrees * 60_000.0).round() as i64)
+}
+
+fn graphic_frame_rotation_units(raw_xml: Option<&str>) -> OmResult<i64> {
+    let Some(raw_xml) = raw_xml else {
+        return Ok(0);
+    };
+    let mut reader = Reader::from_reader(Cursor::new(raw_xml.as_bytes()));
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) | Ok(Event::Empty(element))
+                if xml_local_name(element.name().as_ref()) == b"xfrm" =>
+            {
+                for attr in element.attributes() {
+                    let attr = attr.map_err(runtime_xml_error)?;
+                    if xml_local_name(attr.key.as_ref()) != b"rot" {
+                        continue;
+                    }
+                    let value = attr
+                        .decode_and_unescape_value(reader.decoder())
+                        .map_err(runtime_xml_error)?
+                        .into_owned();
+                    return value.parse::<i64>().map_err(runtime_xml_error);
+                }
+                return Ok(0);
+            }
+            Ok(Event::Eof) => return Ok(0),
+            Ok(_) => {}
+            Err(error) => return Err(runtime_xml_error(error)),
+        }
+        buffer.clear();
+    }
+}
+
+fn rewrite_graphic_frame_transform_rotation(
+    element: &BytesStart<'_>,
+    decoder: quick_xml::encoding::Decoder,
+    rotation_units: i64,
+) -> OmResult<BytesStart<'static>> {
+    let mut rewritten =
+        BytesStart::new(String::from_utf8_lossy(element.name().as_ref()).into_owned());
+    for attr in element.attributes() {
+        let attr = attr.map_err(runtime_xml_error)?;
+        if xml_local_name(attr.key.as_ref()) == b"rot" {
+            continue;
+        }
+        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+        let value = attr
+            .decode_and_unescape_value(decoder)
+            .map_err(runtime_xml_error)?
+            .into_owned();
+        rewritten.push_attribute((key.as_str(), value.as_str()));
+    }
+    if rotation_units != 0 {
+        let rotation_units = rotation_units.to_string();
+        rewritten.push_attribute(("rot", rotation_units.as_str()));
+    }
+    Ok(rewritten)
+}
+
+fn default_graphic_frame_transform_xml(rotation_units: i64) -> Option<String> {
+    (rotation_units != 0).then(|| {
+        format!(
+            r#"<xdr:xfrm rot="{rotation_units}"><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm>"#
+        )
+    })
+}
+
+fn set_graphic_frame_rotation_xml(
+    raw_xml: Option<&str>,
+    rotation_units: i64,
+) -> OmResult<Option<String>> {
+    let Some(raw_xml) = raw_xml else {
+        return Ok(default_graphic_frame_transform_xml(rotation_units));
+    };
+    let mut reader = Reader::from_reader(Cursor::new(raw_xml.as_bytes()));
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut buffer = Vec::new();
+    let mut saw_transform = false;
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) => {
+                if xml_local_name(element.name().as_ref()) == b"xfrm" {
+                    saw_transform = true;
+                    let rewritten = rewrite_graphic_frame_transform_rotation(
+                        &element,
+                        reader.decoder(),
+                        rotation_units,
+                    )?;
+                    writer
+                        .write_event(Event::Start(rewritten))
+                        .map_err(runtime_xml_error)?;
+                } else {
+                    writer
+                        .write_event(Event::Start(element.into_owned()))
+                        .map_err(runtime_xml_error)?;
+                }
+            }
+            Ok(Event::Empty(element)) => {
+                if xml_local_name(element.name().as_ref()) == b"xfrm" {
+                    saw_transform = true;
+                    let rewritten = rewrite_graphic_frame_transform_rotation(
+                        &element,
+                        reader.decoder(),
+                        rotation_units,
+                    )?;
+                    writer
+                        .write_event(Event::Empty(rewritten))
+                        .map_err(runtime_xml_error)?;
+                } else {
+                    writer
+                        .write_event(Event::Empty(element.into_owned()))
+                        .map_err(runtime_xml_error)?;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Ok(event) => writer
+                .write_event(event.into_owned())
+                .map_err(runtime_xml_error)?,
+            Err(error) => return Err(runtime_xml_error(error)),
+        }
+        buffer.clear();
+    }
+    if !saw_transform {
+        return Ok(default_graphic_frame_transform_xml(rotation_units));
+    }
+    String::from_utf8(writer.into_inner().into_inner())
+        .map(Some)
+        .map_err(runtime_xml_error)
 }
 
 fn graphic_frame_lock_aspect_ratio(raw_xml: Option<&str>) -> OmResult<bool> {
@@ -88003,6 +88231,32 @@ mod tests {
             OmErrorCode::InvalidArgument
         );
         assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "Rotation", &[])
+                    .expect("ShapeRange.Rotation")
+            ),
+            0.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(shape_range, "Rotation", &[OmValue::Missing])
+                .expect_err("ShapeRange.Rotation rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        runtime
+            .dispatch_set(shape_range, "Rotation", OmValue::Number(12.5), &[])
+            .expect("set single ShapeRange.Rotation");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "Rotation", &[])
+                    .expect("single ShapeRange.Rotation after set")
+            ),
+            12.5
+        );
+        assert_eq!(
             runtime
                 .dispatch_get(shape_range, "Type", &[OmValue::Missing])
                 .expect_err("ShapeRange.Type rejects arguments")
@@ -88054,6 +88308,14 @@ mod tests {
                     .expect("single ShapeRange.ID")
             ),
             2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(single_shape, "Rotation", &[])
+                    .expect("single ShapeRange.Rotation")
+            ),
+            12.5
         );
         let single_chart = expect_object_handle(
             runtime
@@ -88170,6 +88432,14 @@ mod tests {
             ),
             f64::from(super::MSO_SHAPE_MIXED)
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "Rotation", &[])
+                    .expect("mixed ShapeRange.Rotation")
+            ),
+            f64::from(super::MSO_SHAPE_MIXED)
+        );
         let second_shape = expect_object_handle(
             runtime
                 .dispatch_invoke(shape_range, "Item", &[OmValue::Text("chart 2".to_string())])
@@ -88251,6 +88521,37 @@ mod tests {
                     &[],
                 )
                 .expect_err("ShapeRange.LockAspectRatio rejects text")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        runtime
+            .dispatch_set(shape_range, "Rotation", OmValue::Number(45.25), &[])
+            .expect("set ShapeRange.Rotation");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(single_shape, "Rotation", &[])
+                    .expect("first ShapeRange.Rotation after set")
+            ),
+            45.25
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_shape, "Rotation", &[])
+                    .expect("second ShapeRange.Rotation after set")
+            ),
+            45.25
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    shape_range,
+                    "Rotation",
+                    OmValue::Text("45".to_string()),
+                    &[],
+                )
+                .expect_err("ShapeRange.Rotation rejects text")
                 .code,
             OmErrorCode::TypeMismatch
         );
@@ -88347,6 +88648,7 @@ mod tests {
         assert!(saved_non_visual_text_drawing.contains(r#"descr="Revenue charts""#));
         assert!(saved_non_visual_text_drawing.contains(r#"title="Revenue chart title""#));
         assert!(saved_non_visual_text_drawing.contains(r#"noChangeAspect="1""#));
+        assert!(saved_non_visual_text_drawing.contains(r#"rot="2715000""#));
 
         runtime
             .dispatch_set(shape_range, "Visible", OmValue::Bool(false), &[])
