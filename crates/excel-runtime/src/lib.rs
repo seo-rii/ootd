@@ -15845,9 +15845,9 @@ impl ExcelRuntime {
                     else {
                         return Err(OmError::new(OmErrorCode::NotFound, "unknown worksheet"));
                     };
-                    if worksheet.kind != SheetKind::Worksheet {
+                    if !matches!(worksheet.kind, SheetKind::Worksheet | SheetKind::ChartSheet) {
                         return Err(OmError::unsupported(
-                            "ChartObjects.Add is only available on worksheets",
+                            "ChartObjects.Add is only available on worksheets and chart sheets",
                         ));
                     }
 
@@ -87479,6 +87479,189 @@ mod tests {
         assert_unsupported!(
             runtime.dispatch_invoke(application, "Goto", &[OmValue::Text("A1".to_string())]),
             "Application.Goto should be unsupported on an active chart sheet"
+        );
+    }
+
+    #[test]
+    fn chartobjects_add_supports_chart_sheets_and_persists_embedded_chart() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(charts, "Add", &[])
+                .expect("Charts.Add"),
+        );
+        let chart_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after Charts.Add"),
+        );
+        let chart_sheet_chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(chart_sheet, "ChartObjects", &[])
+                .expect("chart sheet ChartObjects"),
+        );
+
+        let embedded_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_sheet_chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("chart sheet ChartObjects.Add"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_sheet_chart_objects, "Count", &[])
+                    .expect("chart sheet ChartObjects.Count after Add")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(embedded_chart_object, "Name", &[])
+                    .expect("embedded chart object name")
+            ),
+            "Chart 2"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(embedded_chart_object, "Index", &[])
+                    .expect("embedded chart object index")
+            ),
+            1.0
+        );
+        let chart_handle_chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartObjects", &[])
+                .expect("Chart.ChartObjects on chart sheet"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_handle_chart_objects, "Count", &[])
+                    .expect("Chart.ChartObjects.Count after Add")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Count", &[])
+                    .expect("Charts.Count excludes embedded chart")
+            ),
+            1.0
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after chart sheet ChartObjects.Add");
+        let saved_package =
+            OpcPackage::from_bytes(&saved).expect("saved chart sheet ChartObjects.Add package");
+        assert!(saved_package.contains("xl/charts/chart1.xml"));
+        assert!(saved_package.contains("xl/charts/chart2.xml"));
+        let drawing_xml = String::from_utf8(
+            saved_package
+                .part("xl/drawings/drawing1.xml")
+                .expect("drawing part")
+                .bytes
+                .clone(),
+        )
+        .expect("drawing xml utf8");
+        assert!(drawing_xml.contains(r#"name="Chart 1""#));
+        assert!(drawing_xml.contains(r#"name="Chart 2""#));
+        let drawing_rels_xml = String::from_utf8(
+            saved_package
+                .part("xl/drawings/_rels/drawing1.xml.rels")
+                .expect("drawing rels")
+                .bytes
+                .clone(),
+        )
+        .expect("drawing rels utf8");
+        assert!(drawing_rels_xml.contains("charts/chart1.xml"));
+        assert!(drawing_rels_xml.contains("charts/chart2.xml"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after chart sheet ChartObjects.Add");
+        let reopened_charts = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Charts", &[])
+                .expect("reopened Workbook.Charts"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_charts, "Count", &[])
+                    .expect("reopened Charts.Count")
+            ),
+            1.0
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_charts, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened Charts.Item(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "ChartObjects", &[])
+                .expect("reopened Chart.ChartObjects"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_objects, "Count", &[])
+                    .expect("reopened Chart.ChartObjects.Count")
+            ),
+            1.0
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_object, "Name", &[])
+                    .expect("reopened embedded ChartObject.Name")
+            ),
+            "Chart 2"
         );
     }
 
