@@ -13083,6 +13083,41 @@ impl ExcelRuntime {
                     self.set_headless_copy_mode();
                     Ok(OmValue::Empty)
                 }
+                "Paste" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "Series.Paste does not accept arguments",
+                        ));
+                    }
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    let chart = runtime
+                        .loaded
+                        .state
+                        .charts
+                        .get_mut(&chart_id)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    if !chart_type_supports_series_marker(&chart.chart_type) {
+                        return Err(OmError::unsupported(
+                            "Series.Paste is only supported for line, scatter, and radar chart types",
+                        ));
+                    }
+                    let series = chart
+                        .series
+                        .get_mut(series_index)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "series not found"))?;
+                    if series.marker_style != Some(ChartMarkerStyle::Picture) {
+                        series.marker_style = Some(ChartMarkerStyle::Picture);
+                        chart.dirty = true;
+                        runtime.dirty = true;
+                    }
+                    Ok(OmValue::Empty)
+                }
                 "Select" => {
                     if !args.is_empty() {
                         return Err(OmError::invalid_argument(
@@ -14391,6 +14426,7 @@ impl ExcelRuntime {
                             | "ApplyDataLabels"
                             | "ClearFormats"
                             | "Copy"
+                            | "Paste"
                             | "Delete"
                     )
                     | (
@@ -97859,6 +97895,148 @@ mod tests {
                     .expect("reopened Series.MarkerSize")
             ),
             11.0
+        );
+    }
+
+    #[test]
+    fn series_paste_sets_picture_marker_style_and_persists() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_LINE_MARKERS)),
+                &[],
+            )
+            .expect("set Chart.ChartType to line markers");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(series, "Paste", &[OmValue::Bool(true)])
+                .expect_err("Series.Paste rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(series, "Paste", &[])
+                .expect("Series.Paste"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series, "MarkerStyle", &[])
+                    .expect("Series.MarkerStyle after Paste")
+            ),
+            f64::from(super::XL_MARKER_STYLE_PICTURE)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with pasted series marker");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:symbol val="picture"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook with pasted series marker");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_series, "MarkerStyle", &[])
+                    .expect("reopened Series.MarkerStyle")
+            ),
+            f64::from(super::XL_MARKER_STYLE_PICTURE)
         );
     }
 
