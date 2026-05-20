@@ -637,6 +637,53 @@ enum ChartFormatParent {
         series_index: usize,
         point_index: usize,
     },
+    ChartGroupLines {
+        chart_id: ChartId,
+        group_index: usize,
+        kind: ChartGroupLineKind,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChartGroupLineKind {
+    SeriesLines,
+    DropLines,
+    HiLoLines,
+    UpBars,
+    DownBars,
+}
+
+impl ChartGroupLineKind {
+    fn from_chart_group_member(member: &str) -> Option<Self> {
+        match member {
+            "SeriesLines" => Some(Self::SeriesLines),
+            "DropLines" => Some(Self::DropLines),
+            "HiLoLines" => Some(Self::HiLoLines),
+            "UpBars" => Some(Self::UpBars),
+            "DownBars" => Some(Self::DownBars),
+            _ => None,
+        }
+    }
+
+    fn surface_name(self) -> &'static str {
+        match self {
+            Self::SeriesLines => "SeriesLines",
+            Self::DropLines => "DropLines",
+            Self::HiLoLines => "HiLoLines",
+            Self::UpBars => "UpBars",
+            Self::DownBars => "DownBars",
+        }
+    }
+
+    fn display_name(self) -> &'static str {
+        match self {
+            Self::SeriesLines => "Series Lines",
+            Self::DropLines => "Drop Lines",
+            Self::HiLoLines => "High-Low Lines",
+            Self::UpBars => "Up Bars",
+            Self::DownBars => "Down Bars",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -792,6 +839,12 @@ enum RuntimeObjectKind {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         group_index: usize,
+    },
+    ChartGroupLines {
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        group_index: usize,
+        kind: ChartGroupLineKind,
     },
     Axes {
         workbook: WorkbookHandle,
@@ -2353,6 +2406,19 @@ impl ExcelRuntime {
                 chart_id,
                 group_index,
             } => self.dispatch_get_chart_group(workbook, chart_id, group_index, member, args),
+            RuntimeObjectKind::ChartGroupLines {
+                workbook,
+                chart_id,
+                group_index,
+                kind,
+            } => self.dispatch_get_chart_group_lines(
+                workbook,
+                chart_id,
+                group_index,
+                kind,
+                member,
+                args,
+            ),
             RuntimeObjectKind::Axes { workbook, chart_id } => {
                 self.dispatch_get_axes(workbook, chart_id, member, args)
             }
@@ -5670,6 +5736,10 @@ impl ExcelRuntime {
                     ))),
                 }
             }
+            RuntimeObjectKind::ChartGroupLines { kind, .. } => Err(OmError::unsupported(format!(
+                "{}.{member} is not writable",
+                kind.surface_name()
+            ))),
             RuntimeObjectKind::Chart { workbook, chart_id } => {
                 if member != "HasAxis" && !args.is_empty() {
                     return Err(OmError::invalid_argument(format!(
@@ -12875,6 +12945,19 @@ impl ExcelRuntime {
                 chart_id,
                 group_index,
             } => self.dispatch_invoke_chart_group(workbook, chart_id, group_index, member, args),
+            RuntimeObjectKind::ChartGroupLines {
+                workbook,
+                chart_id,
+                group_index,
+                kind,
+            } => self.dispatch_invoke_chart_group_lines(
+                workbook,
+                chart_id,
+                group_index,
+                kind,
+                member,
+                args,
+            ),
             RuntimeObjectKind::SeriesCollection { workbook, chart_id } => {
                 self.dispatch_invoke_series_collection(workbook, chart_id, member, args)
             }
@@ -14017,6 +14100,11 @@ impl ExcelRuntime {
                         "ChartType"
                             | "Index"
                             | "AxisGroup"
+                            | "SeriesLines"
+                            | "DropLines"
+                            | "HiLoLines"
+                            | "UpBars"
+                            | "DownBars"
                             | "RadarAxisLabels"
                             | "VaryByCategories"
                             | "GapWidth"
@@ -14040,6 +14128,56 @@ impl ExcelRuntime {
                             | "Creator"
                             | "Application"
                             | "Parent"
+                    )
+                    | (
+                        "SeriesLines",
+                        "Name"
+                            | "Format"
+                            | "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Select"
+                            | "Delete"
+                    )
+                    | (
+                        "DropLines",
+                        "Name"
+                            | "Format"
+                            | "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Select"
+                            | "Delete"
+                    )
+                    | (
+                        "HiLoLines",
+                        "Name"
+                            | "Format"
+                            | "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Select"
+                            | "Delete"
+                    )
+                    | (
+                        "UpBars",
+                        "Name"
+                            | "Format"
+                            | "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Select"
+                            | "Delete"
+                    )
+                    | (
+                        "DownBars",
+                        "Name"
+                            | "Format"
+                            | "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Select"
+                            | "Delete"
                     )
                     | (
                         "Axes",
@@ -18364,6 +18502,19 @@ impl ExcelRuntime {
                     point_index,
                 })
             }
+            ChartFormatParent::ChartGroupLines {
+                chart_id,
+                group_index,
+                kind,
+            } => {
+                self.chart_group_model(workbook, chart_id, group_index)?;
+                Ok(RuntimeObjectKind::ChartGroupLines {
+                    workbook,
+                    chart_id,
+                    group_index,
+                    kind,
+                })
+            }
         }
     }
 
@@ -18579,6 +18730,18 @@ impl ExcelRuntime {
                     )?))),
                     "Index" => Ok(OmValue::Number((group_index + 1) as f64)),
                     "AxisGroup" => Ok(OmValue::Number(f64::from(XL_PRIMARY))),
+                    "SeriesLines" | "DropLines" | "HiLoLines" | "UpBars" | "DownBars" => {
+                        let kind = ChartGroupLineKind::from_chart_group_member(member)
+                            .expect("matched ChartGroup line object member");
+                        Ok(OmValue::Object(self.register_object(
+                            RuntimeObjectKind::ChartGroupLines {
+                                workbook,
+                                chart_id,
+                                group_index,
+                                kind,
+                            },
+                        )))
+                    }
                     "RadarAxisLabels" => {
                         let axis_index =
                             self.chart_group_radar_axis_index(workbook, chart_id, group_index)?;
@@ -18674,6 +18837,111 @@ impl ExcelRuntime {
             }
             _ => Err(OmError::unsupported(format!(
                 "ChartGroup.{member} is not implemented as a method"
+            ))),
+        }
+    }
+
+    fn dispatch_get_chart_group_lines(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        group_index: usize,
+        kind: ChartGroupLineKind,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        let surface = kind.surface_name();
+        if !args.is_empty() {
+            return Err(OmError::invalid_argument(format!(
+                "{surface}.{member} does not accept arguments"
+            )));
+        }
+        self.chart_group_model(workbook, chart_id, group_index)?;
+        match member {
+            "Name" => Ok(OmValue::Text(kind.display_name().to_string())),
+            "Format" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::ChartFormat {
+                    workbook,
+                    parent: ChartFormatParent::ChartGroupLines {
+                        chart_id,
+                        group_index,
+                        kind,
+                    },
+                },
+            ))),
+            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+            "Application" => Ok(OmValue::Object(self.root_application())),
+            "Parent" => Ok(OmValue::Object(self.register_chart_group_handle(
+                workbook,
+                chart_id,
+                group_index,
+            ))),
+            _ => Err(OmError::unsupported(format!(
+                "{surface}.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_invoke_chart_group_lines(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        group_index: usize,
+        kind: ChartGroupLineKind,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        let surface = kind.surface_name();
+        match member {
+            "Select" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "{surface}.Select does not accept arguments"
+                    )));
+                }
+                self.chart_group_model(workbook, chart_id, group_index)?;
+                let chart = self.register_chart_handle(workbook, chart_id);
+                self.dispatch_invoke(chart, "Select", &[])
+            }
+            "Delete" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "{surface}.Delete does not accept arguments"
+                    )));
+                }
+                let runtime = self.runtime_workbook_mut(workbook)?;
+                if runtime.read_only {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        "cannot modify a read-only workbook",
+                    ));
+                }
+                let chart = runtime
+                    .loaded
+                    .state
+                    .charts
+                    .get_mut(&chart_id)
+                    .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                if group_index != 0 {
+                    return Err(OmError::new(OmErrorCode::NotFound, "chart group not found"));
+                }
+                let target = match kind {
+                    ChartGroupLineKind::SeriesLines => &mut chart.has_series_lines,
+                    ChartGroupLineKind::DropLines => &mut chart.has_drop_lines,
+                    ChartGroupLineKind::HiLoLines => &mut chart.has_hi_lo_lines,
+                    ChartGroupLineKind::UpBars | ChartGroupLineKind::DownBars => {
+                        &mut chart.has_up_down_bars
+                    }
+                };
+                if *target != Some(false) {
+                    *target = Some(false);
+                    chart.dirty = true;
+                    runtime.dirty = true;
+                }
+                Ok(OmValue::Empty)
+            }
+            _ => Err(OmError::unsupported(format!(
+                "{surface}.{member} is not implemented as a method"
             ))),
         }
     }
@@ -24952,6 +25220,10 @@ impl ExcelRuntime {
                         | ChartFormatParent::Point {
                             chart_id: object_chart_id,
                             ..
+                        }
+                        | ChartFormatParent::ChartGroupLines {
+                            chart_id: object_chart_id,
+                            ..
                         },
                 }
                 | RuntimeObjectKind::Adjustments {
@@ -25005,6 +25277,10 @@ impl ExcelRuntime {
                             ..
                         }
                         | ChartFormatParent::Point {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::ChartGroupLines {
                             chart_id: object_chart_id,
                             ..
                         },
@@ -25062,6 +25338,10 @@ impl ExcelRuntime {
                         | ChartFormatParent::Point {
                             chart_id: object_chart_id,
                             ..
+                        }
+                        | ChartFormatParent::ChartGroupLines {
+                            chart_id: object_chart_id,
+                            ..
                         },
                     ..
                 }
@@ -25080,6 +25360,11 @@ impl ExcelRuntime {
                     chart_id: object_chart_id,
                 }
                 | RuntimeObjectKind::ChartGroup {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    ..
+                }
+                | RuntimeObjectKind::ChartGroupLines {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
                     ..
@@ -36887,6 +37172,7 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         | RuntimeObjectKind::DataLabel { workbook, .. }
         | RuntimeObjectKind::ChartGroups { workbook, .. }
         | RuntimeObjectKind::ChartGroup { workbook, .. }
+        | RuntimeObjectKind::ChartGroupLines { workbook, .. }
         | RuntimeObjectKind::Axes { workbook, .. }
         | RuntimeObjectKind::Axis { workbook, .. }
         | RuntimeObjectKind::TickLabels { workbook, .. }
@@ -94293,9 +94579,119 @@ mod tests {
                     .expect("ChartGroup line flag before set"),
                 OmValue::Bool(true)
             );
+        }
+        let mut line_objects = Vec::new();
+        for (member, display_name, flag_member) in [
+            ("SeriesLines", "Series Lines", "HasSeriesLines"),
+            ("DropLines", "Drop Lines", "HasDropLines"),
+            ("HiLoLines", "High-Low Lines", "HasHiLoLines"),
+            ("UpBars", "Up Bars", "HasUpDownBars"),
+            ("DownBars", "Down Bars", "HasUpDownBars"),
+        ] {
+            let line_object = expect_object_handle(
+                runtime
+                    .dispatch_get(chart_group, member, &[])
+                    .expect("ChartGroup line object"),
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(line_object, "Name", &[])
+                        .expect("ChartGroup line object Name")
+                ),
+                display_name
+            );
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(line_object, "Creator", &[])
+                        .expect("ChartGroup line object Creator")
+                ),
+                f64::from(super::XL_CREATOR_CODE)
+            );
+            let parent = expect_object_handle(
+                runtime
+                    .dispatch_get(line_object, "Parent", &[])
+                    .expect("ChartGroup line object Parent"),
+            );
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(parent, "Index", &[])
+                        .expect("ChartGroup line object Parent.Index")
+                ),
+                1.0
+            );
+            let format = expect_object_handle(
+                runtime
+                    .dispatch_get(line_object, "Format", &[])
+                    .expect("ChartGroup line object Format"),
+            );
+            let format_parent = expect_object_handle(
+                runtime
+                    .dispatch_get(format, "Parent", &[])
+                    .expect("ChartGroup line object Format.Parent"),
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(format_parent, "Name", &[])
+                        .expect("ChartGroup line object Format.Parent.Name")
+                ),
+                display_name
+            );
+            let line_format = expect_object_handle(
+                runtime
+                    .dispatch_get(format, "Line", &[])
+                    .expect("ChartGroup line object Format.Line"),
+            );
+            let line_format_parent = expect_object_handle(
+                runtime
+                    .dispatch_get(line_format, "Parent", &[])
+                    .expect("ChartGroup line object Line.Parent"),
+            );
+            let line_format_owner = expect_object_handle(
+                runtime
+                    .dispatch_get(line_format_parent, "Parent", &[])
+                    .expect("ChartGroup line object Line.Parent.Parent"),
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(line_format_owner, "Name", &[])
+                        .expect("ChartGroup line object Line.Parent.Parent.Name")
+                ),
+                display_name
+            );
             runtime
-                .dispatch_set(chart_group, member, OmValue::Bool(false), &[])
-                .expect("set ChartGroup line flag false");
+                .dispatch_invoke(line_object, "Select", &[])
+                .expect("ChartGroup line object Select");
+            assert_eq!(
+                runtime
+                    .dispatch_set(
+                        line_object,
+                        "Name",
+                        OmValue::Text("Renamed".to_string()),
+                        &[],
+                    )
+                    .expect_err("ChartGroup line object Name is read-only")
+                    .code,
+                OmErrorCode::Unsupported
+            );
+            line_objects.push((line_object, member, flag_member));
+        }
+
+        for (line_object, member, flag_member) in line_objects {
+            runtime
+                .dispatch_invoke(line_object, "Delete", &[])
+                .expect("ChartGroup line object Delete");
+            assert_eq!(
+                runtime
+                    .dispatch_get(chart_group, flag_member, &[])
+                    .expect("ChartGroup line flag after object Delete"),
+                OmValue::Bool(false),
+                "{member}.Delete should clear {flag_member}"
+            );
         }
 
         let saved = runtime
