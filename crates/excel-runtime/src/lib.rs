@@ -256,6 +256,8 @@ const MSO_BRING_FORWARD: i32 = 2;
 const MSO_SEND_BACKWARD: i32 = 3;
 const MSO_BRING_IN_FRONT_OF_TEXT: i32 = 4;
 const MSO_SEND_BEHIND_TEXT: i32 = 5;
+const MSO_FLIP_HORIZONTAL: i32 = 0;
+const MSO_FLIP_VERTICAL: i32 = 1;
 const MSO_FALSE: i32 = 0;
 const MSO_TRUE: i32 = -1;
 const MSO_SCALE_FROM_TOP_LEFT: i32 = 0;
@@ -13211,6 +13213,8 @@ impl ExcelRuntime {
                             | "HasSmartArt"
                             | "LockAspectRatio"
                             | "Rotation"
+                            | "HorizontalFlip"
+                            | "VerticalFlip"
                             | "ZOrder"
                             | "ZOrderPosition"
                             | "Placement"
@@ -13234,6 +13238,7 @@ impl ExcelRuntime {
                             | "Duplicate"
                             | "CopyPicture"
                             | "Delete"
+                            | "Flip"
                             | "Select"
                             | "ScaleWidth"
                             | "ScaleHeight"
@@ -16189,6 +16194,85 @@ impl ExcelRuntime {
                 }
                 Ok(OmValue::Empty)
             }
+            "Flip" => {
+                let [command] = args else {
+                    return Err(OmError::invalid_argument(
+                        "ShapeRange.Flip expects a single MsoFlipCmd argument",
+                    ));
+                };
+                let OmValue::Number(command) = command else {
+                    return Err(OmError::type_mismatch(
+                        "ShapeRange.Flip expects a numeric MsoFlipCmd argument",
+                    ));
+                };
+                if !command.is_finite()
+                    || command.fract() != 0.0
+                    || *command < i32::MIN as f64
+                    || *command > i32::MAX as f64
+                {
+                    return Err(OmError::invalid_argument(
+                        "ShapeRange.Flip expects an integral MsoFlipCmd argument",
+                    ));
+                }
+                let (attr_name, attr_name_text) = match *command as i32 {
+                    MSO_FLIP_HORIZONTAL => (b"flipH".as_slice(), "flipH"),
+                    MSO_FLIP_VERTICAL => (b"flipV".as_slice(), "flipV"),
+                    _ => {
+                        return Err(OmError::invalid_argument(
+                            "ShapeRange.Flip expects msoFlipHorizontal or msoFlipVertical",
+                        ));
+                    }
+                };
+                let chart_object_ids = self
+                    .shape_range_chart_object_entries(workbook, source)?
+                    .into_iter()
+                    .map(|(chart_object_id, _)| chart_object_id)
+                    .collect::<Vec<_>>();
+                if chart_object_ids.is_empty() {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        "chart object not found",
+                    ));
+                }
+                let runtime = self.runtime_workbook_mut(workbook)?;
+                if runtime.read_only {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        "cannot modify a read-only workbook",
+                    ));
+                }
+                let mut workbook_dirty = false;
+                for drawing in runtime.loaded.state.drawings.values_mut() {
+                    for object in &mut drawing.objects {
+                        let DrawingObjectModel::ChartFrame(chart_object) = object else {
+                            continue;
+                        };
+                        if !chart_object_ids.contains(&chart_object.id) {
+                            continue;
+                        }
+                        let current = graphic_frame_transform_bool_attr(
+                            chart_object.graphic_frame_transform_xml.as_deref(),
+                            attr_name,
+                        )?;
+                        let updated_transform = set_graphic_frame_transform_bool_attr_xml(
+                            chart_object.graphic_frame_transform_xml.as_deref(),
+                            attr_name,
+                            attr_name_text,
+                            !current,
+                        )?;
+                        if chart_object.graphic_frame_transform_xml != updated_transform {
+                            chart_object.graphic_frame_transform_xml = updated_transform;
+                            chart_object.dirty = true;
+                            drawing.dirty = true;
+                            workbook_dirty = true;
+                        }
+                    }
+                }
+                if workbook_dirty {
+                    runtime.dirty = true;
+                }
+                Ok(OmValue::Empty)
+            }
             "ZOrder" => {
                 let [command] = args else {
                     return Err(OmError::invalid_argument(
@@ -16589,6 +16673,45 @@ impl ExcelRuntime {
                 Ok(OmValue::Number(
                     shared_units.unwrap_or_default() as f64 / 60_000.0,
                 ))
+            }
+            "HorizontalFlip" | "VerticalFlip" => {
+                let (attr_name, property_name) = match member {
+                    "HorizontalFlip" => (b"flipH".as_slice(), "HorizontalFlip"),
+                    "VerticalFlip" => (b"flipV".as_slice(), "VerticalFlip"),
+                    _ => unreachable!("ShapeRange flip member was matched"),
+                };
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "ShapeRange.{property_name} does not accept arguments"
+                    )));
+                }
+                let entries = self.shape_range_chart_object_entries(workbook, source)?;
+                if entries.is_empty() {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        "chart object not found",
+                    ));
+                }
+                let mut shared_value: Option<i32> = None;
+                for (chart_object_id, _) in entries {
+                    let chart_object = self.chart_object_model(workbook, chart_object_id)?;
+                    let value = if graphic_frame_transform_bool_attr(
+                        chart_object.graphic_frame_transform_xml.as_deref(),
+                        attr_name,
+                    )? {
+                        MSO_TRUE
+                    } else {
+                        MSO_FALSE
+                    };
+                    match shared_value {
+                        None => shared_value = Some(value),
+                        Some(shared) if shared == value => {}
+                        Some(_) => return Ok(OmValue::Number(f64::from(MSO_SHAPE_MIXED))),
+                    }
+                }
+                Ok(OmValue::Number(f64::from(
+                    shared_value.unwrap_or(MSO_FALSE),
+                )))
             }
             "Item" => self.dispatch_invoke_shape_range(workbook, source, member, args),
             "Application" => {
@@ -25455,6 +25578,150 @@ fn set_graphic_frame_rotation_xml(
     }
     if !saw_transform {
         return Ok(default_graphic_frame_transform_xml(rotation_units));
+    }
+    String::from_utf8(writer.into_inner().into_inner())
+        .map(Some)
+        .map_err(runtime_xml_error)
+}
+
+fn graphic_frame_transform_bool_attr(raw_xml: Option<&str>, attr_name: &[u8]) -> OmResult<bool> {
+    let Some(raw_xml) = raw_xml else {
+        return Ok(false);
+    };
+    let mut reader = Reader::from_reader(Cursor::new(raw_xml.as_bytes()));
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) | Ok(Event::Empty(element))
+                if xml_local_name(element.name().as_ref()) == b"xfrm" =>
+            {
+                for attr in element.attributes() {
+                    let attr = attr.map_err(runtime_xml_error)?;
+                    if xml_local_name(attr.key.as_ref()) != attr_name {
+                        continue;
+                    }
+                    let value = attr
+                        .decode_and_unescape_value(reader.decoder())
+                        .map_err(runtime_xml_error)?
+                        .into_owned();
+                    return Ok(xml_bool_attr_value_is_true(value.as_str()));
+                }
+                return Ok(false);
+            }
+            Ok(Event::Eof) => return Ok(false),
+            Ok(_) => {}
+            Err(error) => return Err(runtime_xml_error(error)),
+        }
+        buffer.clear();
+    }
+}
+
+fn rewrite_graphic_frame_transform_bool_attr(
+    element: &BytesStart<'_>,
+    decoder: quick_xml::encoding::Decoder,
+    attr_name: &[u8],
+    attr_name_text: &str,
+    enabled: bool,
+) -> OmResult<BytesStart<'static>> {
+    let mut rewritten =
+        BytesStart::new(String::from_utf8_lossy(element.name().as_ref()).into_owned());
+    for attr in element.attributes() {
+        let attr = attr.map_err(runtime_xml_error)?;
+        if xml_local_name(attr.key.as_ref()) == attr_name {
+            continue;
+        }
+        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+        let value = attr
+            .decode_and_unescape_value(decoder)
+            .map_err(runtime_xml_error)?
+            .into_owned();
+        rewritten.push_attribute((key.as_str(), value.as_str()));
+    }
+    if enabled {
+        rewritten.push_attribute((attr_name_text, "1"));
+    }
+    Ok(rewritten)
+}
+
+fn default_graphic_frame_transform_bool_xml(attr_name_text: &str, enabled: bool) -> Option<String> {
+    enabled.then(|| {
+        format!(
+            r#"<xdr:xfrm {attr_name_text}="1"><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm>"#
+        )
+    })
+}
+
+fn set_graphic_frame_transform_bool_attr_xml(
+    raw_xml: Option<&str>,
+    attr_name: &[u8],
+    attr_name_text: &str,
+    enabled: bool,
+) -> OmResult<Option<String>> {
+    let Some(raw_xml) = raw_xml else {
+        return Ok(default_graphic_frame_transform_bool_xml(
+            attr_name_text,
+            enabled,
+        ));
+    };
+    let mut reader = Reader::from_reader(Cursor::new(raw_xml.as_bytes()));
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut buffer = Vec::new();
+    let mut saw_transform = false;
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) => {
+                if xml_local_name(element.name().as_ref()) == b"xfrm" {
+                    saw_transform = true;
+                    let rewritten = rewrite_graphic_frame_transform_bool_attr(
+                        &element,
+                        reader.decoder(),
+                        attr_name,
+                        attr_name_text,
+                        enabled,
+                    )?;
+                    writer
+                        .write_event(Event::Start(rewritten))
+                        .map_err(runtime_xml_error)?;
+                } else {
+                    writer
+                        .write_event(Event::Start(element.into_owned()))
+                        .map_err(runtime_xml_error)?;
+                }
+            }
+            Ok(Event::Empty(element)) => {
+                if xml_local_name(element.name().as_ref()) == b"xfrm" {
+                    saw_transform = true;
+                    let rewritten = rewrite_graphic_frame_transform_bool_attr(
+                        &element,
+                        reader.decoder(),
+                        attr_name,
+                        attr_name_text,
+                        enabled,
+                    )?;
+                    writer
+                        .write_event(Event::Empty(rewritten))
+                        .map_err(runtime_xml_error)?;
+                } else {
+                    writer
+                        .write_event(Event::Empty(element.into_owned()))
+                        .map_err(runtime_xml_error)?;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Ok(event) => writer
+                .write_event(event.into_owned())
+                .map_err(runtime_xml_error)?,
+            Err(error) => return Err(runtime_xml_error(error)),
+        }
+        buffer.clear();
+    }
+    if !saw_transform {
+        return Ok(default_graphic_frame_transform_bool_xml(
+            attr_name_text,
+            enabled,
+        ));
     }
     String::from_utf8(writer.into_inner().into_inner())
         .map(Some)
@@ -88239,9 +88506,32 @@ mod tests {
             0.0
         );
         assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "HorizontalFlip", &[])
+                    .expect("ShapeRange.HorizontalFlip")
+            ),
+            f64::from(super::MSO_FALSE)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "VerticalFlip", &[])
+                    .expect("ShapeRange.VerticalFlip")
+            ),
+            f64::from(super::MSO_FALSE)
+        );
+        assert_eq!(
             runtime
                 .dispatch_get(shape_range, "Rotation", &[OmValue::Missing])
                 .expect_err("ShapeRange.Rotation rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(shape_range, "HorizontalFlip", &[OmValue::Missing])
+                .expect_err("ShapeRange.HorizontalFlip rejects arguments")
                 .code,
             OmErrorCode::InvalidArgument
         );
@@ -88255,6 +88545,39 @@ mod tests {
                     .expect("single ShapeRange.Rotation after set")
             ),
             12.5
+        );
+        runtime
+            .dispatch_invoke(
+                shape_range,
+                "Flip",
+                &[OmValue::Number(f64::from(super::MSO_FLIP_HORIZONTAL))],
+            )
+            .expect("ShapeRange.Flip horizontal");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "HorizontalFlip", &[])
+                    .expect("ShapeRange.HorizontalFlip after flip")
+            ),
+            f64::from(super::MSO_TRUE)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(shape_range, "Flip", &[OmValue::Number(42.0)])
+                .expect_err("ShapeRange.Flip rejects unsupported command")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    shape_range,
+                    "Flip",
+                    &[OmValue::Text("horizontal".to_string())]
+                )
+                .expect_err("ShapeRange.Flip rejects text")
+                .code,
+            OmErrorCode::TypeMismatch
         );
         assert_eq!(
             runtime
@@ -88316,6 +88639,14 @@ mod tests {
                     .expect("single ShapeRange.Rotation")
             ),
             12.5
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(single_shape, "HorizontalFlip", &[])
+                    .expect("single ShapeRange.HorizontalFlip")
+            ),
+            f64::from(super::MSO_TRUE)
         );
         let single_chart = expect_object_handle(
             runtime
@@ -88440,6 +88771,22 @@ mod tests {
             ),
             f64::from(super::MSO_SHAPE_MIXED)
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "HorizontalFlip", &[])
+                    .expect("mixed ShapeRange.HorizontalFlip")
+            ),
+            f64::from(super::MSO_SHAPE_MIXED)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "VerticalFlip", &[])
+                    .expect("multi ShapeRange.VerticalFlip")
+            ),
+            f64::from(super::MSO_FALSE)
+        );
         let second_shape = expect_object_handle(
             runtime
                 .dispatch_invoke(shape_range, "Item", &[OmValue::Text("chart 2".to_string())])
@@ -88468,6 +88815,36 @@ mod tests {
                     .expect("mixed ShapeRange.Title")
             ),
             ""
+        );
+        runtime
+            .dispatch_invoke(
+                second_shape,
+                "Flip",
+                &[OmValue::Number(f64::from(super::MSO_FLIP_HORIZONTAL))],
+            )
+            .expect("second ShapeRange.Flip horizontal");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "HorizontalFlip", &[])
+                    .expect("ShapeRange.HorizontalFlip after second flip")
+            ),
+            f64::from(super::MSO_TRUE)
+        );
+        runtime
+            .dispatch_invoke(
+                shape_range,
+                "Flip",
+                &[OmValue::Number(f64::from(super::MSO_FLIP_VERTICAL))],
+            )
+            .expect("ShapeRange.Flip vertical");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "VerticalFlip", &[])
+                    .expect("ShapeRange.VerticalFlip after flip")
+            ),
+            f64::from(super::MSO_TRUE)
         );
 
         runtime
@@ -88649,6 +89026,8 @@ mod tests {
         assert!(saved_non_visual_text_drawing.contains(r#"title="Revenue chart title""#));
         assert!(saved_non_visual_text_drawing.contains(r#"noChangeAspect="1""#));
         assert!(saved_non_visual_text_drawing.contains(r#"rot="2715000""#));
+        assert!(saved_non_visual_text_drawing.contains(r#"flipH="1""#));
+        assert!(saved_non_visual_text_drawing.contains(r#"flipV="1""#));
 
         runtime
             .dispatch_set(shape_range, "Visible", OmValue::Bool(false), &[])
