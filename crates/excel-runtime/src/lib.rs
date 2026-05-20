@@ -11530,14 +11530,34 @@ impl ExcelRuntime {
                     if let Some(value) = args.get(10)
                         && !om_value_is_omitted(value)
                     {
-                        let OmValue::Text(_) = value else {
+                        let OmValue::Text(title) = value else {
                             return Err(OmError::type_mismatch(
                                 "Chart.ChartWizard ExtraTitle expects a text value when provided",
                             ));
                         };
-                        return Err(OmError::unsupported(
-                            "Chart.ChartWizard ExtraTitle is not supported",
-                        ));
+                        match self.dispatch_get(
+                            chart,
+                            "Axes",
+                            &[OmValue::Number(f64::from(XL_SERIES_AXIS))],
+                        ) {
+                            Ok(OmValue::Object(axis)) => {
+                                self.dispatch_set(axis, "HasTitle", OmValue::Bool(true), &[])?;
+                                let OmValue::Object(axis_title) =
+                                    self.dispatch_get(axis, "AxisTitle", &[])?
+                                else {
+                                    unreachable!("Axis.AxisTitle returned a non-object value")
+                                };
+                                self.dispatch_set(
+                                    axis_title,
+                                    "Text",
+                                    OmValue::Text(title.clone()),
+                                    &[],
+                                )?;
+                            }
+                            Err(error) if error.code == OmErrorCode::NotFound => {}
+                            Err(error) => return Err(error),
+                            Ok(_) => unreachable!("Chart.Axes returned a non-object value"),
+                        }
                     }
                     Ok(OmValue::Empty)
                 }
@@ -99888,6 +99908,14 @@ mod tests {
                 .code,
             OmErrorCode::InvalidArgument
         );
+        runtime
+            .dispatch_set(
+                chart,
+                "HasAxis",
+                OmValue::Bool(true),
+                &[OmValue::Number(f64::from(super::XL_SERIES_AXIS))],
+            )
+            .expect("Chart.HasAxis(xlSeriesAxis) = true");
         assert_eq!(
             runtime
                 .dispatch_invoke(
@@ -99907,9 +99935,53 @@ mod tests {
                         OmValue::Text("Depth".to_string()),
                     ],
                 )
-                .expect_err("Chart.ChartWizard ExtraTitle should be unsupported")
+                .expect("Chart.ChartWizard ExtraTitle"),
+            OmValue::Empty
+        );
+        let series_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_SERIES_AXIS))],
+                )
+                .expect("Chart.Axes series after ChartWizard ExtraTitle"),
+        );
+        let series_axis_title = expect_object_handle(
+            runtime
+                .dispatch_get(series_axis, "AxisTitle", &[])
+                .expect("series AxisTitle after ChartWizard ExtraTitle"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series_axis_title, "Text", &[])
+                    .expect("series AxisTitle.Text after ChartWizard ExtraTitle")
+            ),
+            "Depth"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "ChartWizard",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                    ],
+                )
+                .expect_err("Chart.ChartWizard ExtraTitle rejects non-text")
                 .code,
-            OmErrorCode::Unsupported
+            OmErrorCode::TypeMismatch
         );
         assert_eq!(
             runtime
