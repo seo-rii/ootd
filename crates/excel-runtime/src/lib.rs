@@ -248,6 +248,18 @@ const MSO_ELEMENT_LEGEND_LEFT: i32 = 103;
 const MSO_ELEMENT_LEGEND_BOTTOM: i32 = 104;
 const MSO_ELEMENT_LEGEND_RIGHT_OVERLAY: i32 = 105;
 const MSO_ELEMENT_LEGEND_LEFT_OVERLAY: i32 = 106;
+const MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_NONE: i32 = 300;
+const MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_ADJACENT_TO_AXIS: i32 = 301;
+const MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_BELOW_AXIS: i32 = 302;
+const MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_ROTATED: i32 = 303;
+const MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_VERTICAL: i32 = 304;
+const MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_HORIZONTAL: i32 = 305;
+const MSO_ELEMENT_PRIMARY_VALUE_AXIS_TITLE_NONE: i32 = 306;
+const MSO_ELEMENT_PRIMARY_VALUE_AXIS_TITLE_ADJACENT_TO_AXIS: i32 = 307;
+const MSO_ELEMENT_PRIMARY_VALUE_AXIS_TITLE_BELOW_AXIS: i32 = 308;
+const MSO_ELEMENT_PRIMARY_VALUE_AXIS_TITLE_ROTATED: i32 = 309;
+const MSO_ELEMENT_PRIMARY_VALUE_AXIS_TITLE_VERTICAL: i32 = 310;
+const MSO_ELEMENT_PRIMARY_VALUE_AXIS_TITLE_HORIZONTAL: i32 = 311;
 const MSO_SHAPE_MIXED: i32 = -2;
 const MSO_SHAPE_CHART: i32 = 3;
 const MSO_BRING_TO_FRONT: i32 = 0;
@@ -11838,6 +11850,36 @@ impl ExcelRuntime {
                         ));
                     }
                     let element = *number as i32;
+                    let axis_title = match element {
+                        MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_NONE => Some((XL_CATEGORY, false)),
+                        MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_ADJACENT_TO_AXIS
+                        | MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_BELOW_AXIS
+                        | MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_ROTATED
+                        | MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_VERTICAL
+                        | MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_HORIZONTAL => {
+                            Some((XL_CATEGORY, true))
+                        }
+                        MSO_ELEMENT_PRIMARY_VALUE_AXIS_TITLE_NONE => Some((XL_VALUE, false)),
+                        MSO_ELEMENT_PRIMARY_VALUE_AXIS_TITLE_ADJACENT_TO_AXIS
+                        | MSO_ELEMENT_PRIMARY_VALUE_AXIS_TITLE_BELOW_AXIS
+                        | MSO_ELEMENT_PRIMARY_VALUE_AXIS_TITLE_ROTATED
+                        | MSO_ELEMENT_PRIMARY_VALUE_AXIS_TITLE_VERTICAL
+                        | MSO_ELEMENT_PRIMARY_VALUE_AXIS_TITLE_HORIZONTAL => Some((XL_VALUE, true)),
+                        _ => None,
+                    };
+                    if let Some((axis_type, has_title)) = axis_title {
+                        let chart = self.register_chart_handle(workbook, chart_id);
+                        let OmValue::Object(axis) = self.dispatch_get(
+                            chart,
+                            "Axes",
+                            &[OmValue::Number(f64::from(axis_type))],
+                        )?
+                        else {
+                            unreachable!("Chart.Axes returned a non-object value")
+                        };
+                        self.dispatch_set(axis, "HasTitle", OmValue::Bool(has_title), &[])?;
+                        return Ok(OmValue::Empty);
+                    }
                     let changed_title_or_legend = matches!(
                         element,
                         MSO_ELEMENT_CHART_TITLE_NONE
@@ -100327,6 +100369,98 @@ mod tests {
                 .dispatch_get(chart, "HasTitle", &[])
                 .expect("Chart.HasTitle after title above chart"),
             OmValue::Bool(true)
+        );
+
+        let category_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.Axes(xlCategory) before SetElement"),
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_ADJACENT_TO_AXIS,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementPrimaryCategoryAxisTitleAdjacentToAxis");
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis, "HasTitle", &[])
+                .expect("Category Axis.HasTitle after SetElement"),
+            OmValue::Bool(true)
+        );
+        let category_axis_title = expect_object_handle(
+            runtime
+                .dispatch_get(category_axis, "AxisTitle", &[])
+                .expect("Category Axis.AxisTitle after SetElement"),
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_NONE,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementPrimaryCategoryAxisTitleNone");
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis, "HasTitle", &[])
+                .expect("Category Axis.HasTitle after title none"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis_title, "Text", &[])
+                .expect_err("Category AxisTitle handle should be stale after SetElement none")
+                .code,
+            OmErrorCode::InvalidState
+        );
+
+        let value_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.Axes(xlValue) before SetElement"),
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_PRIMARY_VALUE_AXIS_TITLE_VERTICAL,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementPrimaryValueAxisTitleVertical");
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "HasTitle", &[])
+                .expect("Value Axis.HasTitle after SetElement"),
+            OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_PRIMARY_VALUE_AXIS_TITLE_NONE,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementPrimaryValueAxisTitleNone");
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "HasTitle", &[])
+                .expect("Value Axis.HasTitle after title none"),
+            OmValue::Bool(false)
         );
 
         let legend = expect_object_handle(
