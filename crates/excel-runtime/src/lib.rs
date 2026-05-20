@@ -13598,6 +13598,81 @@ impl ExcelRuntime {
                     self.series_model(workbook, chart_id, series_index)?;
                     Ok(OmValue::Empty)
                 }
+                "Propagate" => {
+                    let [index] = args else {
+                        return Err(OmError::invalid_argument(
+                            "DataLabels.Propagate expects a single Index argument",
+                        ));
+                    };
+                    let index = coerce_i32_arg(index, "DataLabels.Propagate Index")?;
+                    if index < 0 {
+                        return Err(OmError::invalid_argument(
+                            "DataLabels.Propagate Index must be zero or a positive data label index",
+                        ));
+                    }
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    let chart = runtime
+                        .loaded
+                        .state
+                        .charts
+                        .get_mut(&chart_id)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    if chart.series.get(series_index).is_none() {
+                        return Err(OmError::new(OmErrorCode::NotFound, "series not found"));
+                    }
+                    let label_count = chart_data_labels_count_for_chart_series(chart, series_index);
+                    if index as usize > label_count {
+                        return Err(OmError::invalid_argument(
+                            "DataLabels.Propagate Index is out of bounds",
+                        ));
+                    }
+                    let chart_labels = chart.data_labels.clone();
+                    let series = chart
+                        .series
+                        .get_mut(series_index)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "series not found"))?;
+                    if index == 0 {
+                        if !series.point_data_labels.is_empty() {
+                            series.point_data_labels.clear();
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                    } else {
+                        let point_index = u32::try_from(index - 1).map_err(|_| {
+                            OmError::invalid_argument("DataLabels.Propagate Index is out of bounds")
+                        })?;
+                        let source = series
+                            .point_data_labels
+                            .get(&point_index)
+                            .cloned()
+                            .or_else(|| series.data_labels.clone())
+                            .or(chart_labels)
+                            .unwrap_or_else(chart_data_labels_default_visible_model);
+                        let mut changed = false;
+                        for point_index in 0..label_count {
+                            let point_index = u32::try_from(point_index).map_err(|_| {
+                                OmError::invalid_argument(
+                                    "DataLabels.Propagate point index is out of bounds",
+                                )
+                            })?;
+                            if series.point_data_labels.get(&point_index) != Some(&source) {
+                                series.point_data_labels.insert(point_index, source.clone());
+                                changed = true;
+                            }
+                        }
+                        if changed {
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                    }
+                    Ok(OmValue::Empty)
+                }
                 _ => Err(OmError::unsupported(format!(
                     "DataLabels.{member} is not implemented as a method"
                 ))),
@@ -14462,6 +14537,7 @@ impl ExcelRuntime {
                             | "Application"
                             | "Parent"
                             | "Delete"
+                            | "Propagate"
                             | "Select"
                             | "ClearFormats"
                     )
@@ -100347,6 +100423,157 @@ mod tests {
                 .expect("reopened third DataLabel.ShowValue"),
             OmValue::Bool(false)
         );
+    }
+
+    #[test]
+    fn data_labels_propagate_clones_point_label_and_resets_overrides() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+
+        runtime
+            .dispatch_set(series, "HasDataLabels", OmValue::Bool(true), &[])
+            .expect("Series.HasDataLabels = true");
+        let data_labels = expect_object_handle(
+            runtime
+                .dispatch_get(series, "DataLabels", &[])
+                .expect("Series.DataLabels"),
+        );
+        let first_label = expect_object_handle(
+            runtime
+                .dispatch_invoke(data_labels, "Item", &[OmValue::Number(1.0)])
+                .expect("DataLabels.Item(1)"),
+        );
+        let second_label = expect_object_handle(
+            runtime
+                .dispatch_invoke(data_labels, "Item", &[OmValue::Number(2.0)])
+                .expect("DataLabels.Item(2)"),
+        );
+        let third_label = expect_object_handle(
+            runtime
+                .dispatch_invoke(data_labels, "Item", &[OmValue::Number(3.0)])
+                .expect("DataLabels.Item(3)"),
+        );
+
+        runtime
+            .dispatch_set(second_label, "ShowValue", OmValue::Bool(false), &[])
+            .expect("DataLabel.ShowValue = false");
+        runtime
+            .dispatch_set(second_label, "ShowCategoryName", OmValue::Bool(true), &[])
+            .expect("DataLabel.ShowCategoryName = true");
+        runtime
+            .dispatch_set(
+                second_label,
+                "Separator",
+                OmValue::Text(" | ".to_string()),
+                &[],
+            )
+            .expect("DataLabel.Separator = pipe");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(data_labels, "Propagate", &[])
+                .expect_err("DataLabels.Propagate rejects missing index")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(data_labels, "Propagate", &[OmValue::Number(4.0)])
+                .expect_err("DataLabels.Propagate rejects out of bounds index")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(data_labels, "Propagate", &[OmValue::Text("2".to_string())])
+                .expect_err("DataLabels.Propagate rejects non-numeric index")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+
+        runtime
+            .dispatch_invoke(data_labels, "Propagate", &[OmValue::Number(2.0)])
+            .expect("DataLabels.Propagate(2)");
+        for label in [first_label, second_label, third_label] {
+            assert_eq!(
+                runtime
+                    .dispatch_get(label, "ShowValue", &[])
+                    .expect("DataLabel.ShowValue after Propagate"),
+                OmValue::Bool(false)
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(label, "ShowCategoryName", &[])
+                    .expect("DataLabel.ShowCategoryName after Propagate"),
+                OmValue::Bool(true)
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(label, "Separator", &[])
+                    .expect("DataLabel.Separator after Propagate"),
+                OmValue::Text(" | ".to_string())
+            );
+        }
+        {
+            let state = runtime.workbook_state(workbook).expect("workbook state");
+            let chart_model = state.charts.values().next().expect("chart model");
+            assert_eq!(chart_model.series[0].point_data_labels.len(), 3);
+        }
+
+        runtime
+            .dispatch_invoke(data_labels, "Propagate", &[OmValue::Number(0.0)])
+            .expect("DataLabels.Propagate(0)");
+        assert_eq!(
+            runtime
+                .dispatch_get(first_label, "ShowValue", &[])
+                .expect("DataLabel.ShowValue after reset"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_label, "ShowCategoryName", &[])
+                .expect("DataLabel.ShowCategoryName after reset"),
+            OmValue::Bool(false)
+        );
+        let state = runtime.workbook_state(workbook).expect("workbook state");
+        let chart_model = state.charts.values().next().expect("chart model");
+        assert!(chart_model.series[0].point_data_labels.is_empty());
     }
 
     #[test]
