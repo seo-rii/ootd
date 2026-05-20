@@ -3365,6 +3365,68 @@ impl ExcelRuntime {
                 }
             }
             RuntimeObjectKind::ShapeRange { workbook, source } => {
+                if member == "AlternativeText" {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "ShapeRange.AlternativeText does not accept index arguments",
+                        ));
+                    }
+                    let OmValue::Text(alternative_text) = value else {
+                        return Err(OmError::type_mismatch(
+                            "ShapeRange.AlternativeText expects a string value",
+                        ));
+                    };
+                    let chart_object_ids = self
+                        .shape_range_chart_object_entries(workbook, source)?
+                        .into_iter()
+                        .map(|(chart_object_id, _)| chart_object_id)
+                        .collect::<Vec<_>>();
+                    if chart_object_ids.is_empty() {
+                        return Err(OmError::new(
+                            OmErrorCode::NotFound,
+                            "chart object not found",
+                        ));
+                    }
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    let mut workbook_dirty = false;
+                    for drawing in runtime.loaded.state.drawings.values_mut() {
+                        for object in &mut drawing.objects {
+                            let DrawingObjectModel::ChartFrame(chart_object) = object else {
+                                continue;
+                            };
+                            if !chart_object_ids.contains(&chart_object.id) {
+                                continue;
+                            }
+                            let changed = if alternative_text.is_empty() {
+                                chart_object.non_visual_attrs.remove("descr").is_some()
+                            } else if chart_object.non_visual_attrs.get("descr")
+                                != Some(&alternative_text)
+                            {
+                                chart_object
+                                    .non_visual_attrs
+                                    .insert("descr".to_string(), alternative_text.clone());
+                                true
+                            } else {
+                                false
+                            };
+                            if changed {
+                                chart_object.dirty = true;
+                                drawing.dirty = true;
+                                workbook_dirty = true;
+                            }
+                        }
+                    }
+                    if workbook_dirty {
+                        runtime.dirty = true;
+                    }
+                    return Ok(());
+                }
                 let delegated = self.shape_range_delegate_handle(workbook, source, member)?;
                 self.dispatch_set(delegated, member, value, args)
             }
@@ -13007,6 +13069,7 @@ impl ExcelRuntime {
                             | "Chart"
                             | "Index"
                             | "Type"
+                            | "AlternativeText"
                             | "ZOrder"
                             | "ZOrderPosition"
                             | "Placement"
@@ -16230,6 +16293,36 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Number(f64::from(MSO_SHAPE_CHART)))
+            }
+            "AlternativeText" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ShapeRange.AlternativeText does not accept arguments",
+                    ));
+                }
+                let entries = self.shape_range_chart_object_entries(workbook, source)?;
+                if entries.is_empty() {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        "chart object not found",
+                    ));
+                }
+                let mut shared_alternative_text: Option<Option<String>> = None;
+                for (chart_object_id, _) in entries {
+                    let alternative_text = self
+                        .chart_object_model(workbook, chart_object_id)?
+                        .non_visual_attrs
+                        .get("descr")
+                        .cloned();
+                    match &shared_alternative_text {
+                        None => shared_alternative_text = Some(alternative_text),
+                        Some(shared) if *shared == alternative_text => {}
+                        Some(_) => return Ok(OmValue::Text(String::new())),
+                    }
+                }
+                Ok(OmValue::Text(
+                    shared_alternative_text.flatten().unwrap_or_default(),
+                ))
             }
             "Item" => self.dispatch_invoke_shape_range(workbook, source, member, args),
             "Application" => {
@@ -87484,6 +87577,14 @@ mod tests {
                 .code,
             OmErrorCode::InvalidArgument
         );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(shape_range, "AlternativeText", &[])
+                    .expect("ShapeRange.AlternativeText")
+            ),
+            "Revenue detail"
+        );
 
         let single_shape = expect_object_handle(
             runtime
@@ -87594,6 +87695,67 @@ mod tests {
             ),
             "Chart 2"
         );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(shape_range, "AlternativeText", &[])
+                    .expect("mixed ShapeRange.AlternativeText")
+            ),
+            ""
+        );
+
+        runtime
+            .dispatch_set(
+                shape_range,
+                "AlternativeText",
+                OmValue::Text("Revenue charts".to_string()),
+                &[],
+            )
+            .expect("set ShapeRange.AlternativeText");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(single_shape, "AlternativeText", &[])
+                    .expect("first ShapeRange.AlternativeText after set")
+            ),
+            "Revenue charts"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(second_shape, "AlternativeText", &[])
+                    .expect("second ShapeRange.AlternativeText after set")
+            ),
+            "Revenue charts"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(shape_range, "AlternativeText", OmValue::Number(1.0), &[],)
+                .expect_err("ShapeRange.AlternativeText rejects non-text")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        let saved_with_alt_text = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with ShapeRange.AlternativeText");
+        let saved_alt_text_package =
+            OpcPackage::from_bytes(&saved_with_alt_text).expect("saved alt text package");
+        let saved_alt_text_drawing = String::from_utf8(
+            saved_alt_text_package
+                .part("xl/drawings/drawing1.xml")
+                .expect("saved alt text drawing part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved alt text drawing XML utf8");
+        assert!(saved_alt_text_drawing.contains(r#"descr="Revenue charts""#));
 
         runtime
             .dispatch_set(shape_range, "Visible", OmValue::Bool(false), &[])
