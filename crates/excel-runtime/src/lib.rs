@@ -11704,22 +11704,7 @@ impl ExcelRuntime {
                 }
                 "ApplyDataLabels" => {
                     let data_labels = parse_chart_data_labels_args(args, "Chart")?;
-                    let runtime = self.runtime_workbook_mut(workbook)?;
-                    if runtime.read_only {
-                        return Err(OmError::new(
-                            OmErrorCode::InvalidState,
-                            "cannot modify a read-only workbook",
-                        ));
-                    }
-                    let chart = runtime
-                        .loaded
-                        .state
-                        .charts
-                        .get_mut(&chart_id)
-                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
-                    chart.data_labels = Some(data_labels);
-                    chart.dirty = true;
-                    runtime.dirty = true;
+                    self.apply_chart_data_labels(workbook, chart_id, data_labels)?;
                     Ok(OmValue::Empty)
                 }
                 "ApplyChartTemplate" => {
@@ -18609,6 +18594,12 @@ impl ExcelRuntime {
             "SeriesCollection" => {
                 self.dispatch_get_chart_group(workbook, chart_id, group_index, member, args)
             }
+            "ApplyDataLabels" => {
+                let data_labels = parse_chart_data_labels_args(args, "ChartGroup")?;
+                self.chart_group_model(workbook, chart_id, group_index)?;
+                self.apply_chart_data_labels(workbook, chart_id, data_labels)?;
+                Ok(OmValue::Empty)
+            }
             _ => Err(OmError::unsupported(format!(
                 "ChartGroup.{member} is not implemented as a method"
             ))),
@@ -24588,6 +24579,31 @@ impl ExcelRuntime {
         } else {
             Err(OmError::new(OmErrorCode::NotFound, "chart group not found"))
         }
+    }
+
+    fn apply_chart_data_labels(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        data_labels: ChartDataLabelsModel,
+    ) -> OmResult<()> {
+        let runtime = self.runtime_workbook_mut(workbook)?;
+        if runtime.read_only {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                "cannot modify a read-only workbook",
+            ));
+        }
+        let chart = runtime
+            .loaded
+            .state
+            .charts
+            .get_mut(&chart_id)
+            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+        chart.data_labels = Some(data_labels);
+        chart.dirty = true;
+        runtime.dirty = true;
+        Ok(())
     }
 
     fn chart_axis_index_for_type(
@@ -93584,6 +93600,180 @@ mod tests {
             ),
             f64::from(super::XL_LINE_MARKERS)
         );
+    }
+
+    #[test]
+    fn chart_group_apply_data_labels_uses_chart_level_labels() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_group = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("Chart.ChartGroups(1)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart_group,
+                    "ApplyDataLabels",
+                    &[
+                        OmValue::Number(f64::from(super::XL_DATA_LABELS_SHOW_LABEL)),
+                        OmValue::Text("bad".to_string()),
+                    ],
+                )
+                .expect_err("ChartGroup.ApplyDataLabels rejects non-bool LegendKey")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart_group,
+                    "ApplyDataLabels",
+                    &[
+                        OmValue::Number(f64::from(super::XL_DATA_LABELS_SHOW_LABEL)),
+                        OmValue::Bool(true),
+                        OmValue::Missing,
+                        OmValue::Bool(true),
+                        OmValue::Bool(false),
+                        OmValue::Bool(true),
+                        OmValue::Bool(true),
+                        OmValue::Bool(false),
+                        OmValue::Bool(false),
+                        OmValue::Text(" | ".to_string()),
+                    ],
+                )
+                .expect("ChartGroup.ApplyDataLabels"),
+            OmValue::Empty
+        );
+
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "SeriesCollection", &[])
+                .expect("ChartGroup.SeriesCollection"),
+        );
+        let first_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartGroup.SeriesCollection.Item(1)"),
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(first_series, "HasDataLabels", &[])
+                .expect("Series.HasDataLabels after ChartGroup.ApplyDataLabels")
+        ));
+        let data_labels = expect_object_handle(
+            runtime
+                .dispatch_get(first_series, "DataLabels", &[])
+                .expect("Series.DataLabels after ChartGroup.ApplyDataLabels"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(data_labels, "Type", &[])
+                    .expect("DataLabels.Type after ChartGroup.ApplyDataLabels")
+            ),
+            f64::from(super::XL_DATA_LABELS_SHOW_LABEL)
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(data_labels, "ShowLegendKey", &[])
+                .expect("DataLabels.ShowLegendKey after ChartGroup.ApplyDataLabels")
+        ));
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(data_labels, "ShowCategoryName", &[])
+                .expect("DataLabels.ShowCategoryName after ChartGroup.ApplyDataLabels")
+        ));
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(data_labels, "ShowValue", &[])
+                .expect("DataLabels.ShowValue after ChartGroup.ApplyDataLabels")
+        ));
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(data_labels, "Separator", &[])
+                    .expect("DataLabels.Separator after ChartGroup.ApplyDataLabels")
+            ),
+            " | "
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after ChartGroup.ApplyDataLabels");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:dLbls>"));
+        assert!(saved_chart_xml.contains(r#"<c:showLegendKey val="1"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:showLeaderLines val="1"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:showCatName val="1"/>"#));
+        assert!(saved_chart_xml.contains(r#"<c:showVal val="1"/>"#));
+        assert!(saved_chart_xml.contains("<c:separator> | </c:separator>"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after ChartGroup.ApplyDataLabels");
+        let reopened = reopened_runtime
+            .runtime_workbook_mut(reopened_workbook)
+            .expect("reopened runtime workbook");
+        let chart_model = reopened
+            .loaded
+            .state
+            .charts
+            .values()
+            .next()
+            .expect("reopened chart model");
+        let data_labels = chart_model.data_labels.as_ref().expect("data labels");
+        assert!(!data_labels.dirty);
     }
 
     #[test]
