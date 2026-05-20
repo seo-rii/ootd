@@ -13073,6 +13073,16 @@ impl ExcelRuntime {
                     self.series_model(workbook, chart_id, series_index)?;
                     Ok(OmValue::Empty)
                 }
+                "Copy" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "Series.Copy does not accept arguments",
+                        ));
+                    }
+                    self.series_model(workbook, chart_id, series_index)?;
+                    self.set_headless_copy_mode();
+                    Ok(OmValue::Empty)
+                }
                 "Select" => {
                     if !args.is_empty() {
                         return Err(OmError::invalid_argument(
@@ -14380,6 +14390,7 @@ impl ExcelRuntime {
                             | "Select"
                             | "ApplyDataLabels"
                             | "ClearFormats"
+                            | "Copy"
                             | "Delete"
                     )
                     | (
@@ -100964,6 +100975,7 @@ mod tests {
                     OmValue::Number(f64::from(super::XL_PRINTER)),
                 ],
             ),
+            (series, "Copy", Vec::new()),
         ] {
             runtime
                 .dispatch_set(application, "CutCopyMode", OmValue::Bool(false), &[])
