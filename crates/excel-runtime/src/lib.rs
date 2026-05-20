@@ -13072,9 +13072,11 @@ impl ExcelRuntime {
                             | "Chart"
                             | "Index"
                             | "Type"
+                            | "AutoShapeType"
                             | "AlternativeText"
                             | "Title"
                             | "HasChart"
+                            | "HasSmartArt"
                             | "ZOrder"
                             | "ZOrderPosition"
                             | "Placement"
@@ -16348,6 +16350,32 @@ impl ExcelRuntime {
                 } else {
                     MSO_FALSE
                 })))
+            }
+            "HasSmartArt" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ShapeRange.HasSmartArt does not accept arguments",
+                    ));
+                }
+                self.shape_range_chart_object_entries(workbook, source)?;
+                Ok(OmValue::Number(f64::from(MSO_FALSE)))
+            }
+            "AutoShapeType" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "ShapeRange.AutoShapeType does not accept arguments",
+                    ));
+                }
+                if self
+                    .shape_range_chart_object_entries(workbook, source)?
+                    .is_empty()
+                {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        "chart object not found",
+                    ));
+                }
+                Ok(OmValue::Number(f64::from(MSO_SHAPE_MIXED)))
             }
             "Item" => self.dispatch_invoke_shape_range(workbook, source, member, args),
             "Application" => {
@@ -87598,10 +87626,40 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
+                    .dispatch_get(shape_range, "AutoShapeType", &[])
+                    .expect("ShapeRange.AutoShapeType")
+            ),
+            f64::from(super::MSO_SHAPE_MIXED)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(shape_range, "AutoShapeType", &[OmValue::Missing])
+                .expect_err("ShapeRange.AutoShapeType rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            expect_number(
+                runtime
                     .dispatch_get(shape_range, "HasChart", &[])
                     .expect("ShapeRange.HasChart")
             ),
             f64::from(super::MSO_TRUE)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "HasSmartArt", &[])
+                    .expect("ShapeRange.HasSmartArt")
+            ),
+            f64::from(super::MSO_FALSE)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(shape_range, "HasSmartArt", &[OmValue::Missing])
+                .expect_err("ShapeRange.HasSmartArt rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
         );
         assert_eq!(
             runtime
@@ -87733,10 +87791,26 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
+                    .dispatch_get(shape_range, "AutoShapeType", &[])
+                    .expect("multi ShapeRange.AutoShapeType")
+            ),
+            f64::from(super::MSO_SHAPE_MIXED)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
                     .dispatch_get(shape_range, "HasChart", &[])
                     .expect("multi ShapeRange.HasChart")
             ),
             f64::from(super::MSO_TRUE)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "HasSmartArt", &[])
+                    .expect("multi ShapeRange.HasSmartArt")
+            ),
+            f64::from(super::MSO_FALSE)
         );
         let second_shape = expect_object_handle(
             runtime
