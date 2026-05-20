@@ -22905,9 +22905,157 @@ impl ExcelRuntime {
         insertion_index: usize,
     ) -> OmResult<WorksheetHandle> {
         if self.worksheet_model(workbook, sheet_id)?.kind == SheetKind::ChartSheet {
-            return Err(OmError::unsupported(
-                "Worksheet.Copy placement targets for chart sheets are not implemented",
-            ));
+            let result = (|| {
+                let (source_name, source_visibility, source_chart) = {
+                    let runtime = self.runtime_workbook(workbook)?;
+                    let worksheet = runtime
+                        .loaded
+                        .state
+                        .worksheets
+                        .iter()
+                        .find(|worksheet| worksheet.id == sheet_id)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?;
+                    let chart_binding = runtime
+                        .loaded
+                        .state
+                        .chart_sheets
+                        .get(&sheet_id)
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "chart sheet is missing a chart binding",
+                            )
+                        })?;
+                    let chart = runtime
+                        .loaded
+                        .state
+                        .charts
+                        .get(&chart_binding.chart_id)
+                        .ok_or_else(|| {
+                            OmError::new(OmErrorCode::InvalidState, "chart sheet chart is missing")
+                        })?
+                        .clone();
+                    (worksheet.name.clone(), worksheet.visibility, chart)
+                };
+
+                let placement_args = {
+                    let worksheets = &self
+                        .runtime_workbook(target_workbook)?
+                        .loaded
+                        .state
+                        .worksheets;
+                    if insertion_index >= worksheets.len() {
+                        let last_sheet_id = worksheets
+                            .last()
+                            .map(|worksheet| worksheet.id)
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "workbook has no worksheets",
+                                )
+                            })?;
+                        vec![
+                            OmValue::Missing,
+                            OmValue::Object(
+                                self.register_worksheet_handle(target_workbook, last_sheet_id)
+                                    .0,
+                            ),
+                            OmValue::Missing,
+                            OmValue::Number(f64::from(XL_SHEET_TYPE_CHART)),
+                        ]
+                    } else {
+                        let before_sheet_id = worksheets[insertion_index].id;
+                        vec![
+                            OmValue::Object(
+                                self.register_worksheet_handle(target_workbook, before_sheet_id)
+                                    .0,
+                            ),
+                            OmValue::Missing,
+                            OmValue::Missing,
+                            OmValue::Number(f64::from(XL_SHEET_TYPE_CHART)),
+                        ]
+                    }
+                };
+                let added_sheet = self.add_worksheet(target_workbook, &placement_args)?;
+                let added_sheet_id = match self.runtime_object(added_sheet.0)? {
+                    RuntimeObjectKind::Worksheet { sheet_id, .. } => sheet_id,
+                    _ => unreachable!("worksheet handle should resolve to a worksheet object"),
+                };
+
+                {
+                    let runtime = self.runtime_workbook_mut(target_workbook)?;
+                    let chart_binding = runtime
+                        .loaded
+                        .state
+                        .chart_sheets
+                        .get(&added_sheet_id)
+                        .cloned()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "copied chart sheet is missing a chart binding",
+                            )
+                        })?;
+                    let target_chart_raw_part_uri = runtime
+                        .loaded
+                        .state
+                        .charts
+                        .get(&chart_binding.chart_id)
+                        .and_then(|chart| chart.raw_part_uri.clone());
+                    let mut copied_chart = source_chart;
+                    copied_chart.id = chart_binding.chart_id;
+                    copied_chart.workbook_id = runtime.loaded.state.model.id;
+                    copied_chart.raw_part_uri = target_chart_raw_part_uri;
+                    copied_chart.dirty = true;
+                    runtime
+                        .loaded
+                        .state
+                        .charts
+                        .insert(chart_binding.chart_id, copied_chart);
+                    if let Some(worksheet) = runtime
+                        .loaded
+                        .state
+                        .worksheets
+                        .iter_mut()
+                        .find(|worksheet| worksheet.id == added_sheet_id)
+                    {
+                        worksheet.visibility = source_visibility;
+                    }
+                    runtime.dirty = true;
+                }
+
+                let copied_name = {
+                    let worksheets = &self
+                        .runtime_workbook(target_workbook)?
+                        .loaded
+                        .state
+                        .worksheets;
+                    if !worksheets.iter().any(|worksheet| {
+                        worksheet.id != added_sheet_id
+                            && worksheet.name.eq_ignore_ascii_case(source_name.as_str())
+                    }) {
+                        source_name.clone()
+                    } else {
+                        let mut suffix = 2usize;
+                        loop {
+                            let suffix_text = format!(" ({suffix})");
+                            let base_len = 31usize.saturating_sub(suffix_text.chars().count());
+                            let base = source_name.chars().take(base_len).collect::<String>();
+                            let candidate = format!("{base}{suffix_text}");
+                            if !worksheets.iter().any(|worksheet| {
+                                worksheet.id != added_sheet_id
+                                    && worksheet.name.eq_ignore_ascii_case(candidate.as_str())
+                            }) {
+                                break candidate;
+                            }
+                            suffix += 1;
+                        }
+                    }
+                };
+                self.dispatch_set(added_sheet.0, "Name", OmValue::Text(copied_name), &[])?;
+                Ok(added_sheet)
+            })();
+            return result;
         }
         let snapshot = self.spawn_single_sheet_workbook_from_source(
             workbook,
@@ -89075,9 +89223,19 @@ mod tests {
                 .dispatch_get(workbook.0, "Charts", &[])
                 .expect("Workbook.Charts"),
         );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(charts, "Add", &[])
+                .expect("Charts.Add"),
+        );
         runtime
-            .dispatch_invoke(charts, "Add", &[])
-            .expect("Charts.Add");
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_PIE)),
+                &[],
+            )
+            .expect("set chart sheet ChartType before copy");
         let chart_sheet = expect_object_handle(
             runtime
                 .dispatch_get(application, "ActiveSheet", &[])
@@ -89435,7 +89593,7 @@ mod tests {
     }
 
     #[test]
-    fn chart_sheet_copy_and_move_guard_uncloned_placement_paths() {
+    fn chart_sheet_copy_and_move_support_placement_paths() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -89451,9 +89609,22 @@ mod tests {
                 .dispatch_get(workbook.0, "Charts", &[])
                 .expect("Workbook.Charts"),
         );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(charts, "Add", &[])
+                .expect("Charts.Add"),
+        );
         runtime
-            .dispatch_invoke(charts, "Add", &[])
-            .expect("Charts.Add");
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_PIE)),
+                &[],
+            )
+            .expect("set chart sheet ChartType before copy");
+        runtime
+            .dispatch_set(chart, "HasTitle", OmValue::Bool(true), &[])
+            .expect("enable chart title before copy");
         let chart_sheet = expect_object_handle(
             runtime
                 .dispatch_get(application, "ActiveSheet", &[])
@@ -89470,16 +89641,43 @@ mod tests {
                 .expect("Worksheets.Item(1)"),
         );
 
-        assert_eq!(
+        runtime
+            .dispatch_invoke(
+                chart_sheet,
+                "Copy",
+                &[OmValue::Missing, OmValue::Object(worksheet)],
+            )
+            .expect("chart sheet placement Copy should create a sibling chart sheet");
+        let sheets = expect_object_handle(
             runtime
-                .dispatch_invoke(
-                    chart_sheet,
-                    "Copy",
-                    &[OmValue::Missing, OmValue::Object(worksheet)]
-                )
-                .expect_err("chart sheet placement Copy should be unsupported")
-                .code,
-            OmErrorCode::Unsupported
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("Workbook.Sheets after chart sheet copy"),
+        );
+        let copied_chart_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(sheets, "Item", &[OmValue::Number(3.0)])
+                .expect("Sheets.Item(3) after chart sheet copy"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(copied_chart_sheet, "Name", &[])
+                    .expect("copied chart sheet name")
+            ),
+            "Chart1 (2)"
+        );
+        let copied_chart = expect_object_handle(
+            runtime
+                .dispatch_get(charts, "Item", &[OmValue::Number(2.0)])
+                .expect("Charts.Item(2) copied chart"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_chart, "ChartType", &[])
+                    .expect("copied chart ChartType")
+            ),
+            f64::from(super::XL_PIE)
         );
         runtime
             .dispatch_invoke(
@@ -89488,11 +89686,6 @@ mod tests {
                 &[OmValue::Missing, OmValue::Object(worksheet)],
             )
             .expect("chart sheet same-workbook Move should reorder sheet entries");
-        let sheets = expect_object_handle(
-            runtime
-                .dispatch_get(workbook.0, "Sheets", &[])
-                .expect("Workbook.Sheets"),
-        );
         let moved_chart_sheet = expect_object_handle(
             runtime
                 .dispatch_get(sheets, "Item", &[OmValue::Number(2.0)])
@@ -89523,17 +89716,42 @@ mod tests {
                 .expect("other workbook active sheet"),
         );
         assert_ne!(other_workbook, workbook.0);
-        assert_eq!(
+        runtime
+            .dispatch_invoke(
+                chart_sheet,
+                "Move",
+                &[OmValue::Missing, OmValue::Object(other_sheet)],
+            )
+            .expect("chart sheet cross-workbook Move should copy then delete the source sheet");
+        let other_charts = expect_object_handle(
             runtime
-                .dispatch_invoke(
-                    chart_sheet,
-                    "Move",
-                    &[OmValue::Missing, OmValue::Object(other_sheet)]
-                )
-                .expect_err("chart sheet cross-workbook Move should be unsupported")
-                .code,
-            OmErrorCode::Unsupported
+                .dispatch_get(other_workbook, "Charts", &[])
+                .expect("other workbook Charts after chart sheet move"),
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(other_charts, "Count", &[])
+                    .expect("other workbook Charts.Count after move")
+            ),
+            1.0
+        );
+        let moved_cross_workbook_chart = expect_object_handle(
+            runtime
+                .dispatch_get(other_charts, "Item", &[OmValue::Number(1.0)])
+                .expect("other workbook copied chart"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(moved_cross_workbook_chart, "ChartType", &[])
+                    .expect("moved cross-workbook ChartType")
+            ),
+            f64::from(super::XL_PIE)
+        );
+        runtime
+            .dispatch_get(chart_sheet, "Name", &[])
+            .expect_err("moved chart sheet source handle should be stale");
     }
 
     #[test]
@@ -89645,16 +89863,33 @@ mod tests {
                 .expect("Worksheets.Item(1)"),
         );
 
-        assert_eq!(
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_LINE)),
+                &[],
+            )
+            .expect("set chart sheet ChartType before Chart.Copy");
+        runtime
+            .dispatch_invoke(
+                chart,
+                "Copy",
+                &[OmValue::Missing, OmValue::Object(worksheet)],
+            )
+            .expect("chart sheet Chart.Copy placement should create a sibling chart sheet");
+        let copied_chart = expect_object_handle(
             runtime
-                .dispatch_invoke(
-                    chart,
-                    "Copy",
-                    &[OmValue::Missing, OmValue::Object(worksheet)]
-                )
-                .expect_err("chart sheet Chart.Copy placement should be unsupported")
-                .code,
-            OmErrorCode::Unsupported
+                .dispatch_get(charts, "Item", &[OmValue::Number(2.0)])
+                .expect("copied chart sheet Chart.Copy result"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_chart, "ChartType", &[])
+                    .expect("copied chart sheet ChartType")
+            ),
+            f64::from(super::XL_LINE)
         );
         runtime
             .dispatch_invoke(
