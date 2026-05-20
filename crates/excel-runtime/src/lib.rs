@@ -278,6 +278,10 @@ const MSO_ELEMENT_PRIMARY_CATEGORY_GRIDLINES_NONE: i32 = 332;
 const MSO_ELEMENT_PRIMARY_CATEGORY_GRIDLINES_MINOR: i32 = 333;
 const MSO_ELEMENT_PRIMARY_CATEGORY_GRIDLINES_MAJOR: i32 = 334;
 const MSO_ELEMENT_PRIMARY_CATEGORY_GRIDLINES_MINOR_MAJOR: i32 = 335;
+const MSO_ELEMENT_SERIES_AXIS_GRIDLINES_NONE: i32 = 344;
+const MSO_ELEMENT_SERIES_AXIS_GRIDLINES_MINOR: i32 = 345;
+const MSO_ELEMENT_SERIES_AXIS_GRIDLINES_MAJOR: i32 = 346;
+const MSO_ELEMENT_SERIES_AXIS_GRIDLINES_MINOR_MAJOR: i32 = 347;
 const MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_NONE: i32 = 348;
 const MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_SHOW: i32 = 349;
 const MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_WITHOUT_LABELS: i32 = 350;
@@ -288,6 +292,10 @@ const MSO_ELEMENT_PRIMARY_VALUE_AXIS_THOUSANDS: i32 = 354;
 const MSO_ELEMENT_PRIMARY_VALUE_AXIS_MILLIONS: i32 = 355;
 const MSO_ELEMENT_PRIMARY_VALUE_AXIS_BILLIONS: i32 = 356;
 const MSO_ELEMENT_PRIMARY_VALUE_AXIS_LOG_SCALE: i32 = 357;
+const MSO_ELEMENT_SERIES_AXIS_NONE: i32 = 368;
+const MSO_ELEMENT_SERIES_AXIS_SHOW: i32 = 369;
+const MSO_ELEMENT_SERIES_AXIS_WITHOUT_LABELING: i32 = 370;
+const MSO_ELEMENT_SERIES_AXIS_REVERSE: i32 = 371;
 const MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_LOG_SCALE: i32 = 375;
 const MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_NONE: i32 = 300;
 const MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_ADJACENT_TO_AXIS: i32 = 301;
@@ -301,6 +309,10 @@ const MSO_ELEMENT_PRIMARY_VALUE_AXIS_TITLE_BELOW_AXIS: i32 = 308;
 const MSO_ELEMENT_PRIMARY_VALUE_AXIS_TITLE_ROTATED: i32 = 309;
 const MSO_ELEMENT_PRIMARY_VALUE_AXIS_TITLE_VERTICAL: i32 = 310;
 const MSO_ELEMENT_PRIMARY_VALUE_AXIS_TITLE_HORIZONTAL: i32 = 311;
+const MSO_ELEMENT_SERIES_AXIS_TITLE_NONE: i32 = 324;
+const MSO_ELEMENT_SERIES_AXIS_TITLE_ROTATED: i32 = 325;
+const MSO_ELEMENT_SERIES_AXIS_TITLE_VERTICAL: i32 = 326;
+const MSO_ELEMENT_SERIES_AXIS_TITLE_HORIZONTAL: i32 = 327;
 const MSO_SHAPE_MIXED: i32 = -2;
 const MSO_SHAPE_CHART: i32 = 3;
 const MSO_BRING_TO_FRONT: i32 = 0;
@@ -12030,6 +12042,8 @@ impl ExcelRuntime {
                         MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_SHOW => Some((XL_CATEGORY, true)),
                         MSO_ELEMENT_PRIMARY_VALUE_AXIS_NONE => Some((XL_VALUE, false)),
                         MSO_ELEMENT_PRIMARY_VALUE_AXIS_SHOW => Some((XL_VALUE, true)),
+                        MSO_ELEMENT_SERIES_AXIS_NONE => Some((XL_SERIES_AXIS, false)),
+                        MSO_ELEMENT_SERIES_AXIS_SHOW => Some((XL_SERIES_AXIS, true)),
                         _ => None,
                     };
                     if let Some((axis_type, has_axis)) = primary_axis_visibility {
@@ -12063,6 +12077,18 @@ impl ExcelRuntime {
                         }
                         MSO_ELEMENT_PRIMARY_CATEGORY_GRIDLINES_MINOR_MAJOR => {
                             Some((XL_CATEGORY, true, true))
+                        }
+                        MSO_ELEMENT_SERIES_AXIS_GRIDLINES_NONE => {
+                            Some((XL_SERIES_AXIS, false, false))
+                        }
+                        MSO_ELEMENT_SERIES_AXIS_GRIDLINES_MINOR => {
+                            Some((XL_SERIES_AXIS, false, true))
+                        }
+                        MSO_ELEMENT_SERIES_AXIS_GRIDLINES_MAJOR => {
+                            Some((XL_SERIES_AXIS, true, false))
+                        }
+                        MSO_ELEMENT_SERIES_AXIS_GRIDLINES_MINOR_MAJOR => {
+                            Some((XL_SERIES_AXIS, true, true))
                         }
                         _ => None,
                     };
@@ -12123,6 +12149,14 @@ impl ExcelRuntime {
                             "DisplayUnit",
                             OmValue::Number(f64::from(XL_THOUSAND_MILLIONS)),
                         )),
+                        MSO_ELEMENT_SERIES_AXIS_WITHOUT_LABELING => Some((
+                            XL_SERIES_AXIS,
+                            "TickLabelPosition",
+                            OmValue::Number(f64::from(XL_TICK_LABEL_POSITION_NONE)),
+                        )),
+                        MSO_ELEMENT_SERIES_AXIS_REVERSE => {
+                            Some((XL_SERIES_AXIS, "ReversePlotOrder", OmValue::Bool(true)))
+                        }
                         _ => None,
                     };
                     if let Some((axis_type, member, value)) = primary_axis_setting {
@@ -12162,6 +12196,10 @@ impl ExcelRuntime {
                         | MSO_ELEMENT_PRIMARY_VALUE_AXIS_TITLE_ROTATED
                         | MSO_ELEMENT_PRIMARY_VALUE_AXIS_TITLE_VERTICAL
                         | MSO_ELEMENT_PRIMARY_VALUE_AXIS_TITLE_HORIZONTAL => Some((XL_VALUE, true)),
+                        MSO_ELEMENT_SERIES_AXIS_TITLE_NONE => Some((XL_SERIES_AXIS, false)),
+                        MSO_ELEMENT_SERIES_AXIS_TITLE_ROTATED
+                        | MSO_ELEMENT_SERIES_AXIS_TITLE_VERTICAL
+                        | MSO_ELEMENT_SERIES_AXIS_TITLE_HORIZONTAL => Some((XL_SERIES_AXIS, true)),
                         _ => None,
                     };
                     if let Some((axis_type, has_title)) = axis_title {
@@ -101221,6 +101259,156 @@ mod tests {
                 )
                 .expect("Chart.HasAxis(xlValue) after SetElement show"),
             OmValue::Bool(true)
+        );
+
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_SERIES_AXIS_SHOW,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementSeriesAxisShow");
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "HasAxis",
+                    &[OmValue::Number(f64::from(super::XL_SERIES_AXIS))],
+                )
+                .expect("Chart.HasAxis(xlSeriesAxis) after SetElement show"),
+            OmValue::Bool(true)
+        );
+        let series_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_SERIES_AXIS))],
+                )
+                .expect("Chart.Axes(xlSeriesAxis) after SetElement show"),
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_SERIES_AXIS_TITLE_VERTICAL,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementSeriesAxisTitleVertical");
+        assert_eq!(
+            runtime
+                .dispatch_get(series_axis, "HasTitle", &[])
+                .expect("Series Axis.HasTitle after SetElement title"),
+            OmValue::Bool(true)
+        );
+        let series_axis_title = expect_object_handle(
+            runtime
+                .dispatch_get(series_axis, "AxisTitle", &[])
+                .expect("Series Axis.AxisTitle after SetElement title"),
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_SERIES_AXIS_TITLE_NONE,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementSeriesAxisTitleNone");
+        assert_eq!(
+            runtime
+                .dispatch_get(series_axis, "HasTitle", &[])
+                .expect("Series Axis.HasTitle after title none"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series_axis_title, "Text", &[])
+                .expect_err("Series AxisTitle handle should be stale after SetElement title none")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_SERIES_AXIS_GRIDLINES_MINOR_MAJOR,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementSeriesAxisGridLinesMinorMajor");
+        assert_eq!(
+            runtime
+                .dispatch_get(series_axis, "HasMajorGridlines", &[])
+                .expect("Series Axis.HasMajorGridlines after SetElement"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series_axis, "HasMinorGridlines", &[])
+                .expect("Series Axis.HasMinorGridlines after SetElement"),
+            OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_SERIES_AXIS_WITHOUT_LABELING,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementSeriesAxisWithoutLabeling");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_axis, "TickLabelPosition", &[])
+                    .expect("Series Axis.TickLabelPosition after SetElement")
+            ),
+            f64::from(super::XL_TICK_LABEL_POSITION_NONE)
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_SERIES_AXIS_REVERSE,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementSeriesAxisReverse");
+        assert_eq!(
+            runtime
+                .dispatch_get(series_axis, "ReversePlotOrder", &[])
+                .expect("Series Axis.ReversePlotOrder after SetElement"),
+            OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_SERIES_AXIS_NONE,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementSeriesAxisNone");
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "HasAxis",
+                    &[OmValue::Number(f64::from(super::XL_SERIES_AXIS))],
+                )
+                .expect("Chart.HasAxis(xlSeriesAxis) after SetElement none"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series_axis, "ReversePlotOrder", &[])
+                .expect_err("Series axis handle should be stale after SetElement axis none")
+                .code,
+            OmErrorCode::InvalidState
         );
 
         let legend = expect_object_handle(
