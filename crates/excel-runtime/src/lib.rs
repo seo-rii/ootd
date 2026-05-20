@@ -3853,6 +3853,11 @@ impl ExcelRuntime {
                     )
                 };
                 match member {
+                    "ChartType" => {
+                        self.series_model(workbook, chart_id, series_index)?;
+                        let chart = self.register_chart_handle(workbook, chart_id);
+                        self.dispatch_set(chart, "ChartType", value, &[])
+                    }
                     "AxisGroup" => {
                         let OmValue::Number(number) = value else {
                             return Err(OmError::type_mismatch(
@@ -14351,12 +14356,13 @@ impl ExcelRuntime {
                     )
                     | (
                         "SeriesCollection",
-                        "Count" | "Item" | "Creator" | "Application" | "Parent"
+                        "Count" | "Item" | "NewSeries" | "Creator" | "Application" | "Parent"
                     )
                     | (
                         "Series",
                         "Name"
                             | "Format"
+                            | "ChartType"
                             | "Values"
                             | "XValues"
                             | "BubbleSizes"
@@ -14374,6 +14380,7 @@ impl ExcelRuntime {
                             | "Select"
                             | "ApplyDataLabels"
                             | "ClearFormats"
+                            | "Delete"
                     )
                     | (
                         "DataLabels",
@@ -20164,6 +20171,15 @@ impl ExcelRuntime {
                         },
                     },
                 )))
+            }
+            "ChartType" => {
+                let chart = self.chart_model(workbook, chart_id)?;
+                if chart.series.get(series_index).is_none() {
+                    return Err(OmError::new(OmErrorCode::NotFound, "series not found"));
+                }
+                Ok(OmValue::Number(f64::from(chart_type_to_excel_value(
+                    &chart.chart_type,
+                )?)))
             }
             "Values" => Ok(chart_source_expr_text(
                 self.series_model(workbook, chart_id, series_index)?
@@ -95555,6 +95571,99 @@ mod tests {
                 .code,
             OmErrorCode::InvalidArgument
         );
+    }
+
+    #[test]
+    fn chart_series_chart_type_uses_chart_type_rewrite_path() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[OmValue::Number(1.0)])
+                .expect("Chart.SeriesCollection(1)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series, "ChartType", &[])
+                    .expect("Series.ChartType")
+            ),
+            f64::from(super::XL_BAR_CLUSTERED)
+        );
+
+        runtime
+            .dispatch_set(
+                series,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_LINE_MARKERS)),
+                &[],
+            )
+            .expect("set Series.ChartType");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series, "ChartType", &[])
+                    .expect("Series.ChartType after set")
+            ),
+            f64::from(super::XL_LINE_MARKERS)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "ChartType", &[])
+                    .expect("Chart.ChartType after Series.ChartType")
+            ),
+            f64::from(super::XL_LINE_MARKERS)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after Series.ChartType");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:lineChart>"));
+        assert!(!saved_chart_xml.contains("<c:barChart>"));
     }
 
     #[test]
