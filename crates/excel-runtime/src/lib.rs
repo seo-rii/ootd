@@ -5461,39 +5461,53 @@ impl ExcelRuntime {
                                 "ChartGroup.{member} expects a boolean value"
                             )));
                         };
-                        let runtime = self.runtime_workbook_mut(workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
-                        }
-                        let chart =
-                            runtime
-                                .loaded
-                                .state
-                                .charts
-                                .get_mut(&chart_id)
-                                .ok_or_else(|| {
-                                    OmError::new(OmErrorCode::NotFound, "chart not found")
-                                })?;
-                        if group_index != 0 {
-                            return Err(OmError::new(
-                                OmErrorCode::NotFound,
-                                "chart group not found",
-                            ));
-                        }
-                        let target = match member {
-                            "HasSeriesLines" => &mut chart.has_series_lines,
-                            "HasDropLines" => &mut chart.has_drop_lines,
-                            "HasHiLoLines" => &mut chart.has_hi_lo_lines,
-                            "HasUpDownBars" => &mut chart.has_up_down_bars,
+                        let line_kind = match member {
+                            "HasSeriesLines" => ChartGroupLineKind::SeriesLines,
+                            "HasDropLines" => ChartGroupLineKind::DropLines,
+                            "HasHiLoLines" => ChartGroupLineKind::HiLoLines,
+                            "HasUpDownBars" => ChartGroupLineKind::UpBars,
                             _ => unreachable!(),
                         };
-                        if *target != Some(enabled) {
-                            *target = Some(enabled);
-                            chart.dirty = true;
-                            runtime.dirty = true;
+                        let mut removed_lines = false;
+                        {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            if group_index != 0 {
+                                return Err(OmError::new(
+                                    OmErrorCode::NotFound,
+                                    "chart group not found",
+                                ));
+                            }
+                            let target = match line_kind {
+                                ChartGroupLineKind::SeriesLines => &mut chart.has_series_lines,
+                                ChartGroupLineKind::DropLines => &mut chart.has_drop_lines,
+                                ChartGroupLineKind::HiLoLines => &mut chart.has_hi_lo_lines,
+                                ChartGroupLineKind::UpBars | ChartGroupLineKind::DownBars => {
+                                    &mut chart.has_up_down_bars
+                                }
+                            };
+                            if *target != Some(enabled) {
+                                *target = Some(enabled);
+                                chart.dirty = true;
+                                runtime.dirty = true;
+                                removed_lines = !enabled;
+                            }
+                        }
+                        if removed_lines {
+                            self.stale_chart_group_line_handles_for_group(
+                                workbook,
+                                chart_id,
+                                group_index,
+                                line_kind,
+                            );
                         }
                         Ok(())
                     }
@@ -19086,6 +19100,20 @@ impl ExcelRuntime {
                     "SeriesLines" | "DropLines" | "HiLoLines" | "UpBars" | "DownBars" => {
                         let kind = ChartGroupLineKind::from_chart_group_member(member)
                             .expect("matched ChartGroup line object member");
+                        let has_lines = match kind {
+                            ChartGroupLineKind::SeriesLines => chart.has_series_lines,
+                            ChartGroupLineKind::DropLines => chart.has_drop_lines,
+                            ChartGroupLineKind::HiLoLines => chart.has_hi_lo_lines,
+                            ChartGroupLineKind::UpBars | ChartGroupLineKind::DownBars => {
+                                chart.has_up_down_bars
+                            }
+                        };
+                        if has_lines != Some(true) {
+                            return Err(OmError::new(
+                                OmErrorCode::NotFound,
+                                format!("{} not found", kind.display_name()),
+                            ));
+                        }
                         Ok(OmValue::Object(self.register_object(
                             RuntimeObjectKind::ChartGroupLines {
                                 workbook,
@@ -19262,35 +19290,47 @@ impl ExcelRuntime {
                         "{surface}.Delete does not accept arguments"
                     )));
                 }
-                let runtime = self.runtime_workbook_mut(workbook)?;
-                if runtime.read_only {
-                    return Err(OmError::new(
-                        OmErrorCode::InvalidState,
-                        "cannot modify a read-only workbook",
-                    ));
-                }
-                let chart = runtime
-                    .loaded
-                    .state
-                    .charts
-                    .get_mut(&chart_id)
-                    .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
-                if group_index != 0 {
-                    return Err(OmError::new(OmErrorCode::NotFound, "chart group not found"));
-                }
-                let target = match kind {
-                    ChartGroupLineKind::SeriesLines => &mut chart.has_series_lines,
-                    ChartGroupLineKind::DropLines => &mut chart.has_drop_lines,
-                    ChartGroupLineKind::HiLoLines => &mut chart.has_hi_lo_lines,
-                    ChartGroupLineKind::UpBars | ChartGroupLineKind::DownBars => {
-                        &mut chart.has_up_down_bars
+                {
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
                     }
-                };
-                if *target != Some(false) {
+                    let chart = runtime
+                        .loaded
+                        .state
+                        .charts
+                        .get_mut(&chart_id)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    if group_index != 0 {
+                        return Err(OmError::new(OmErrorCode::NotFound, "chart group not found"));
+                    }
+                    let target = match kind {
+                        ChartGroupLineKind::SeriesLines => &mut chart.has_series_lines,
+                        ChartGroupLineKind::DropLines => &mut chart.has_drop_lines,
+                        ChartGroupLineKind::HiLoLines => &mut chart.has_hi_lo_lines,
+                        ChartGroupLineKind::UpBars | ChartGroupLineKind::DownBars => {
+                            &mut chart.has_up_down_bars
+                        }
+                    };
+                    if *target != Some(true) {
+                        return Err(OmError::new(
+                            OmErrorCode::NotFound,
+                            format!("{surface} not found"),
+                        ));
+                    }
                     *target = Some(false);
                     chart.dirty = true;
                     runtime.dirty = true;
                 }
+                self.stale_chart_group_line_handles_for_group(
+                    workbook,
+                    chart_id,
+                    group_index,
+                    kind,
+                );
                 Ok(OmValue::Empty)
             }
             _ => Err(OmError::unsupported(format!(
@@ -26256,6 +26296,71 @@ impl ExcelRuntime {
                     && *object_chart_id == chart_id
                     && *object_axis_index == axis_index
                     && *object_major == major =>
+                {
+                    Some(object_id)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for object_id in stale_object_ids {
+            self.objects.remove(&object_id);
+            self.stale_objects.insert(object_id);
+        }
+    }
+
+    fn stale_chart_group_line_handles_for_group(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        group_index: usize,
+        kind: ChartGroupLineKind,
+    ) {
+        let stale_object_ids = self
+            .objects
+            .iter()
+            .filter_map(|(&object_id, object)| match object {
+                RuntimeObjectKind::ChartGroupLines {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    group_index: object_group_index,
+                    kind: object_kind,
+                }
+                | RuntimeObjectKind::ChartFormat {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::ChartGroupLines {
+                            chart_id: object_chart_id,
+                            group_index: object_group_index,
+                            kind: object_kind,
+                        },
+                }
+                | RuntimeObjectKind::Adjustments {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::ChartGroupLines {
+                            chart_id: object_chart_id,
+                            group_index: object_group_index,
+                            kind: object_kind,
+                        },
+                }
+                | RuntimeObjectKind::ChartFormatChild {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::ChartGroupLines {
+                            chart_id: object_chart_id,
+                            group_index: object_group_index,
+                            kind: object_kind,
+                        },
+                    ..
+                } if *object_workbook == workbook
+                    && *object_chart_id == chart_id
+                    && *object_group_index == group_index
+                    && (*object_kind == kind
+                        || matches!(
+                            (kind, *object_kind),
+                            (ChartGroupLineKind::UpBars, ChartGroupLineKind::DownBars)
+                                | (ChartGroupLineKind::DownBars, ChartGroupLineKind::UpBars)
+                        )) =>
                 {
                     Some(object_id)
                 }
@@ -95354,13 +95459,51 @@ mod tests {
                 OmValue::Bool(true)
             );
         }
+        let stale_series_lines = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "SeriesLines", &[])
+                .expect("ChartGroup.SeriesLines before HasSeriesLines=False"),
+        );
+        let stale_series_lines_format = expect_object_handle(
+            runtime
+                .dispatch_get(stale_series_lines, "Format", &[])
+                .expect("SeriesLines.Format before HasSeriesLines=False"),
+        );
+        runtime
+            .dispatch_set(chart_group, "HasSeriesLines", OmValue::Bool(false), &[])
+            .expect("set ChartGroup.HasSeriesLines false");
+        assert_eq!(
+            runtime
+                .dispatch_get(stale_series_lines, "Name", &[])
+                .expect_err("SeriesLines handle should be stale after HasSeriesLines=False")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(stale_series_lines_format, "Creator", &[])
+                .expect_err("SeriesLines.Format should be stale after HasSeriesLines=False")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "SeriesLines", &[])
+                .expect_err("ChartGroup.SeriesLines should be unavailable when hidden")
+                .code,
+            OmErrorCode::NotFound
+        );
+        runtime
+            .dispatch_set(chart_group, "HasSeriesLines", OmValue::Bool(true), &[])
+            .expect("restore ChartGroup.HasSeriesLines true");
+
         let mut line_objects = Vec::new();
         for (member, display_name, flag_member) in [
             ("SeriesLines", "Series Lines", "HasSeriesLines"),
             ("DropLines", "Drop Lines", "HasDropLines"),
             ("HiLoLines", "High-Low Lines", "HasHiLoLines"),
-            ("UpBars", "Up Bars", "HasUpDownBars"),
             ("DownBars", "Down Bars", "HasUpDownBars"),
+            ("UpBars", "Up Bars", "HasUpDownBars"),
         ] {
             let line_object = expect_object_handle(
                 runtime
@@ -95452,10 +95595,15 @@ mod tests {
                     .code,
                 OmErrorCode::Unsupported
             );
-            line_objects.push((line_object, member, flag_member));
+            line_objects.push((line_object, format, member, flag_member));
         }
 
-        for (line_object, member, flag_member) in line_objects {
+        let mut down_bars_handles = None;
+        for (line_object, format, member, flag_member) in line_objects {
+            if member == "DownBars" {
+                down_bars_handles = Some((line_object, format));
+                continue;
+            }
             runtime
                 .dispatch_invoke(line_object, "Delete", &[])
                 .expect("ChartGroup line object Delete");
@@ -95466,7 +95614,89 @@ mod tests {
                 OmValue::Bool(false),
                 "{member}.Delete should clear {flag_member}"
             );
+            assert_eq!(
+                runtime
+                    .dispatch_get(line_object, "Name", &[])
+                    .expect_err("deleted ChartGroup line handle should be stale")
+                    .code,
+                OmErrorCode::InvalidState
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(format, "Creator", &[])
+                    .expect_err("deleted ChartGroup line Format should be stale")
+                    .code,
+                OmErrorCode::InvalidState
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(chart_group, member, &[])
+                    .expect_err("deleted ChartGroup line object should be unavailable")
+                    .code,
+                OmErrorCode::NotFound
+            );
+            if member == "UpBars" {
+                let (down_bars, down_bars_format) =
+                    down_bars_handles.expect("DownBars handle before UpBars.Delete");
+                assert_eq!(
+                    runtime
+                        .dispatch_get(down_bars, "Name", &[])
+                        .expect_err("DownBars handle should be stale after UpBars.Delete")
+                        .code,
+                    OmErrorCode::InvalidState
+                );
+                assert_eq!(
+                    runtime
+                        .dispatch_get(down_bars_format, "Creator", &[])
+                        .expect_err("DownBars.Format should be stale after UpBars.Delete")
+                        .code,
+                    OmErrorCode::InvalidState
+                );
+                assert_eq!(
+                    runtime
+                        .dispatch_get(chart_group, "DownBars", &[])
+                        .expect_err("DownBars should be unavailable after UpBars.Delete")
+                        .code,
+                    OmErrorCode::NotFound
+                );
+            }
         }
+        runtime
+            .dispatch_set(chart_group, "HasUpDownBars", OmValue::Bool(true), &[])
+            .expect("restore ChartGroup.HasUpDownBars true");
+        let down_bars = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "DownBars", &[])
+                .expect("ChartGroup.DownBars after restore"),
+        );
+        let down_bars_format = expect_object_handle(
+            runtime
+                .dispatch_get(down_bars, "Format", &[])
+                .expect("DownBars.Format after restore"),
+        );
+        runtime
+            .dispatch_invoke(down_bars, "Delete", &[])
+            .expect("DownBars.Delete after restore");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "HasUpDownBars", &[])
+                .expect("ChartGroup.HasUpDownBars after DownBars.Delete"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(down_bars, "Name", &[])
+                .expect_err("DownBars handle should be stale after DownBars.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(down_bars_format, "Creator", &[])
+                .expect_err("DownBars.Format should be stale after DownBars.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
 
         let saved = runtime
             .save_workbook(
