@@ -11415,10 +11415,22 @@ impl ExcelRuntime {
                     ))
                 }
                 "Activate" | "Select" => {
-                    if !args.is_empty() {
+                    if member == "Activate" && !args.is_empty() {
                         return Err(OmError::invalid_argument(format!(
                             "ChartObject.{member} does not accept arguments"
                         )));
+                    }
+                    if member == "Select" {
+                        if args.len() > 1 {
+                            return Err(OmError::invalid_argument(
+                                "ChartObject.Select accepts at most a Replace argument",
+                            ));
+                        }
+                        if let Some(value) = args.first()
+                            && !om_value_is_omitted(value)
+                        {
+                            coerce_optional_bool_arg(value, true, "ChartObject.Select Replace")?;
+                        }
                     }
                     let chart_object = self.chart_object_model(workbook, chart_object_id)?.clone();
                     self.chart_model(workbook, chart_object.chart_id)?;
@@ -90203,6 +90215,43 @@ mod tests {
             OmValue::Empty
         );
         runtime
+            .dispatch_invoke(chart_object, "Select", &[OmValue::Bool(false)])
+            .expect("ChartObject.Select with Replace");
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                .expect("ActiveChart after ChartObject.Select Replace"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_chart, "Name", &[])
+                    .expect("ActiveChart.Name after ChartObject.Select Replace")
+            ),
+            "Embedded Revenue Chart"
+        );
+        runtime
+            .dispatch_invoke(worksheet, "Activate", &[])
+            .expect("Worksheet.Activate clears ChartObject.Select Replace");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_object, "Select", &[OmValue::Text("bad".to_string())])
+                .expect_err("ChartObject.Select rejects non-bool Replace")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart_object,
+                    "Select",
+                    &[OmValue::Bool(true), OmValue::Bool(false)]
+                )
+                .expect_err("ChartObject.Select rejects extra args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        runtime
             .dispatch_invoke(chart_objects, "Select", &[OmValue::Bool(false)])
             .expect("ChartObjects.Select with Replace");
         let active_chart = expect_object_handle(
@@ -90236,13 +90285,6 @@ mod tests {
                     &[OmValue::Bool(true), OmValue::Bool(false)]
                 )
                 .expect_err("ChartObjects.Select rejects extra args")
-                .code,
-            OmErrorCode::InvalidArgument
-        );
-        assert_eq!(
-            runtime
-                .dispatch_invoke(chart_object, "Select", &[OmValue::Bool(true)])
-                .expect_err("ChartObject.Select rejects arguments")
                 .code,
             OmErrorCode::InvalidArgument
         );
