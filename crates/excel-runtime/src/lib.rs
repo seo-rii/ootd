@@ -241,6 +241,18 @@ const XL_QUALITY_MINIMUM: i32 = 1;
 const MSO_ELEMENT_CHART_TITLE_NONE: i32 = 0;
 const MSO_ELEMENT_CHART_TITLE_CENTERED_OVERLAY: i32 = 1;
 const MSO_ELEMENT_CHART_TITLE_ABOVE_CHART: i32 = 2;
+const MSO_ELEMENT_DATA_LABEL_NONE: i32 = 200;
+const MSO_ELEMENT_DATA_LABEL_SHOW: i32 = 201;
+const MSO_ELEMENT_DATA_LABEL_CENTER: i32 = 202;
+const MSO_ELEMENT_DATA_LABEL_INSIDE_END: i32 = 203;
+const MSO_ELEMENT_DATA_LABEL_INSIDE_BASE: i32 = 204;
+const MSO_ELEMENT_DATA_LABEL_OUTSIDE_END: i32 = 205;
+const MSO_ELEMENT_DATA_LABEL_LEFT: i32 = 206;
+const MSO_ELEMENT_DATA_LABEL_RIGHT: i32 = 207;
+const MSO_ELEMENT_DATA_LABEL_TOP: i32 = 208;
+const MSO_ELEMENT_DATA_LABEL_BOTTOM: i32 = 209;
+const MSO_ELEMENT_DATA_LABEL_BEST_FIT: i32 = 210;
+const MSO_ELEMENT_DATA_LABEL_CALLOUT: i32 = 211;
 const MSO_ELEMENT_LEGEND_NONE: i32 = 100;
 const MSO_ELEMENT_LEGEND_RIGHT: i32 = 101;
 const MSO_ELEMENT_LEGEND_TOP: i32 = 102;
@@ -248,6 +260,9 @@ const MSO_ELEMENT_LEGEND_LEFT: i32 = 103;
 const MSO_ELEMENT_LEGEND_BOTTOM: i32 = 104;
 const MSO_ELEMENT_LEGEND_RIGHT_OVERLAY: i32 = 105;
 const MSO_ELEMENT_LEGEND_LEFT_OVERLAY: i32 = 106;
+const MSO_ELEMENT_DATA_TABLE_NONE: i32 = 500;
+const MSO_ELEMENT_DATA_TABLE_SHOW: i32 = 501;
+const MSO_ELEMENT_DATA_TABLE_WITH_LEGEND_KEYS: i32 = 502;
 const MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_NONE: i32 = 300;
 const MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_ADJACENT_TO_AXIS: i32 = 301;
 const MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_BELOW_AXIS: i32 = 302;
@@ -11850,6 +11865,86 @@ impl ExcelRuntime {
                         ));
                     }
                     let element = *number as i32;
+                    let data_label_position = match element {
+                        MSO_ELEMENT_DATA_LABEL_CENTER => Some(ChartDataLabelPosition::Center),
+                        MSO_ELEMENT_DATA_LABEL_INSIDE_END => {
+                            Some(ChartDataLabelPosition::InsideEnd)
+                        }
+                        MSO_ELEMENT_DATA_LABEL_INSIDE_BASE => {
+                            Some(ChartDataLabelPosition::InsideBase)
+                        }
+                        MSO_ELEMENT_DATA_LABEL_OUTSIDE_END => {
+                            Some(ChartDataLabelPosition::OutsideEnd)
+                        }
+                        MSO_ELEMENT_DATA_LABEL_LEFT => Some(ChartDataLabelPosition::Left),
+                        MSO_ELEMENT_DATA_LABEL_RIGHT => Some(ChartDataLabelPosition::Right),
+                        MSO_ELEMENT_DATA_LABEL_TOP => Some(ChartDataLabelPosition::Above),
+                        MSO_ELEMENT_DATA_LABEL_BOTTOM => Some(ChartDataLabelPosition::Below),
+                        MSO_ELEMENT_DATA_LABEL_BEST_FIT => Some(ChartDataLabelPosition::BestFit),
+                        _ => None,
+                    };
+                    if element == MSO_ELEMENT_DATA_LABEL_NONE
+                        || element == MSO_ELEMENT_DATA_LABEL_SHOW
+                        || element == MSO_ELEMENT_DATA_LABEL_CALLOUT
+                        || data_label_position.is_some()
+                    {
+                        let data_labels = if element == MSO_ELEMENT_DATA_LABEL_NONE {
+                            chart_data_labels_disabled_model()
+                        } else {
+                            let mut data_labels = chart_data_labels_default_visible_model();
+                            data_labels.position = data_label_position;
+                            data_labels
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        chart.data_labels = Some(data_labels);
+                        chart.dirty = true;
+                        runtime.dirty = true;
+                        return Ok(OmValue::Empty);
+                    }
+                    let data_table_legend_keys = match element {
+                        MSO_ELEMENT_DATA_TABLE_NONE => Some(None),
+                        MSO_ELEMENT_DATA_TABLE_SHOW => Some(Some(false)),
+                        MSO_ELEMENT_DATA_TABLE_WITH_LEGEND_KEYS => Some(Some(true)),
+                        _ => None,
+                    };
+                    if let Some(show_legend_key) = data_table_legend_keys {
+                        let chart = self.register_chart_handle(workbook, chart_id);
+                        self.dispatch_set(
+                            chart,
+                            "HasDataTable",
+                            OmValue::Bool(show_legend_key.is_some()),
+                            &[],
+                        )?;
+                        if let Some(show_legend_key) = show_legend_key {
+                            let OmValue::Object(data_table) =
+                                self.dispatch_get(chart, "DataTable", &[])?
+                            else {
+                                unreachable!("Chart.DataTable returned a non-object value")
+                            };
+                            self.dispatch_set(
+                                data_table,
+                                "ShowLegendKey",
+                                OmValue::Bool(show_legend_key),
+                                &[],
+                            )?;
+                        }
+                        return Ok(OmValue::Empty);
+                    }
                     let axis_title = match element {
                         MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_NONE => Some((XL_CATEGORY, false)),
                         MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_ADJACENT_TO_AXIS
@@ -100328,6 +100423,140 @@ mod tests {
             OmValue::Bool(false)
         );
 
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection before SetElement data labels"),
+        );
+        let first_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1) before SetElement data labels"),
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_DATA_LABEL_TOP,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementDataLabelTop");
+        assert_eq!(
+            runtime
+                .dispatch_get(first_series, "HasDataLabels", &[])
+                .expect("Series.HasDataLabels after SetElement data label top"),
+            OmValue::Bool(true)
+        );
+        let data_labels = expect_object_handle(
+            runtime
+                .dispatch_get(first_series, "DataLabels", &[])
+                .expect("Series.DataLabels after SetElement data label top"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(data_labels, "Type", &[])
+                    .expect("DataLabels.Type after SetElement data label top")
+            ),
+            f64::from(super::XL_DATA_LABELS_SHOW_VALUE)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(data_labels, "Position", &[])
+                    .expect("DataLabels.Position after SetElement data label top")
+            ),
+            f64::from(super::XL_LABEL_POSITION_ABOVE)
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_DATA_LABEL_NONE,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementDataLabelNone");
+        assert_eq!(
+            runtime
+                .dispatch_get(first_series, "HasDataLabels", &[])
+                .expect("Series.HasDataLabels after SetElement data label none"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(data_labels, "Type", &[])
+                    .expect("DataLabels.Type after SetElement data label none")
+            ),
+            f64::from(super::XL_DATA_LABELS_SHOW_NONE)
+        );
+
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_DATA_TABLE_WITH_LEGEND_KEYS,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementDataTableWithLegendKeys");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasDataTable", &[])
+                .expect("Chart.HasDataTable after SetElement data table"),
+            OmValue::Bool(true)
+        );
+        let data_table = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "DataTable", &[])
+                .expect("Chart.DataTable after SetElement data table"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table, "ShowLegendKey", &[])
+                .expect("DataTable.ShowLegendKey after SetElement with legend keys"),
+            OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_DATA_TABLE_SHOW,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementDataTableShow");
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table, "ShowLegendKey", &[])
+                .expect("DataTable.ShowLegendKey after SetElement data table show"),
+            OmValue::Bool(false)
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_DATA_TABLE_NONE,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementDataTableNone");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasDataTable", &[])
+                .expect("Chart.HasDataTable after SetElement data table none"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table, "ShowLegendKey", &[])
+                .expect_err("DataTable handle should be stale after SetElement data table none")
+                .code,
+            OmErrorCode::InvalidState
+        );
+
         let chart_title = expect_object_handle(
             runtime
                 .dispatch_get(chart, "ChartTitle", &[])
@@ -100549,7 +100778,7 @@ mod tests {
         );
         assert_eq!(
             runtime
-                .dispatch_invoke(chart, "SetElement", &[OmValue::Number(200.0)])
+                .dispatch_invoke(chart, "SetElement", &[OmValue::Number(1200.0)])
                 .expect("Chart.SetElement unsupported but valid MsoChartElementType"),
             OmValue::Empty
         );
