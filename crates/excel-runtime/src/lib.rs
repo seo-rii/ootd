@@ -11062,7 +11062,7 @@ impl ExcelRuntime {
                         self.register_chart_object_handle(workbook, duplicate_id),
                     ))
                 }
-                "BringToFront" | "SendToBack" => {
+                "BringToFront" | "SendToBack" | "BringForward" | "SendBackward" => {
                     if !args.is_empty() {
                         return Err(OmError::invalid_argument(format!(
                             "ChartObject.{member} does not accept arguments"
@@ -13244,12 +13244,14 @@ impl ExcelRuntime {
                             | "Parent"
                             | "Activate"
                             | "Select"
+                            | "BringForward"
                             | "BringToFront"
                             | "Copy"
                             | "Cut"
                             | "Duplicate"
                             | "CopyPicture"
                             | "Delete"
+                            | "SendBackward"
                             | "SendToBack"
                     )
                     | (
@@ -108617,6 +108619,20 @@ mod tests {
                 )
                 .expect("ChartObjects.Add second chart"),
         );
+        let third_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(48.0),
+                        OmValue::Number(60.0),
+                        OmValue::Number(160.0),
+                        OmValue::Number(80.0),
+                    ],
+                )
+                .expect("ChartObjects.Add third chart"),
+        );
         assert_eq!(
             expect_text(
                 runtime
@@ -108634,11 +108650,85 @@ mod tests {
             "Chart 2"
         );
         assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(third_chart_object, "Name", &[])
+                    .expect("third ChartObject.Name")
+            ),
+            "Chart 3"
+        );
+        assert_eq!(
             runtime
                 .dispatch_invoke(first_chart_object, "BringToFront", &[OmValue::Missing])
                 .expect_err("ChartObject.BringToFront rejects arguments")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(first_chart_object, "BringForward", &[])
+                .expect("ChartObject.BringForward"),
+            OmValue::Empty
+        );
+        let ordered_second = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(2.0)])
+                .expect("ChartObjects.Item(2) after BringForward"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(ordered_second, "Name", &[])
+                    .expect("second ordered ChartObject.Name after BringForward")
+            ),
+            "Embedded Revenue Chart"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_chart_object, "ZOrder", &[])
+                    .expect("first ChartObject.ZOrder after BringForward")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_chart_object, "ZOrder", &[])
+                    .expect("second ChartObject.ZOrder after BringForward")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(third_chart_object, "ZOrder", &[])
+                    .expect("third ChartObject.ZOrder after BringForward")
+            ),
+            3.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(first_chart_object, "SendBackward", &[])
+                .expect("ChartObject.SendBackward"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_chart_object, "ZOrder", &[])
+                    .expect("first ChartObject.ZOrder after SendBackward")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_chart_object, "ZOrder", &[])
+                    .expect("second ChartObject.ZOrder after SendBackward")
+            ),
+            2.0
         );
 
         assert_eq!(
@@ -108666,7 +108756,7 @@ mod tests {
                     .dispatch_get(first_chart_object, "ZOrder", &[])
                     .expect("first ChartObject.ZOrder after BringToFront")
             ),
-            2.0
+            3.0
         );
         assert_eq!(
             expect_number(
@@ -108675,6 +108765,14 @@ mod tests {
                     .expect("second ChartObject.ZOrder after BringToFront")
             ),
             1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(third_chart_object, "ZOrder", &[])
+                    .expect("third ChartObject.ZOrder after BringToFront")
+            ),
+            2.0
         );
 
         let saved = runtime
@@ -108713,6 +108811,11 @@ mod tests {
         );
         let reopened_front_chart_object = expect_object_handle(
             reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(3.0)])
+                .expect("reopened ChartObjects.Item(3)"),
+        );
+        let reopened_middle_chart_object = expect_object_handle(
+            reopened_runtime
                 .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(2.0)])
                 .expect("reopened ChartObjects.Item(2)"),
         );
@@ -108723,6 +108826,14 @@ mod tests {
                     .expect("reopened back ChartObject.Name")
             ),
             "Chart 2"
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(reopened_middle_chart_object, "Name", &[])
+                    .expect("reopened middle ChartObject.Name")
+            ),
+            "Chart 3"
         );
         assert_eq!(
             expect_text(
