@@ -263,6 +263,25 @@ const MSO_ELEMENT_LEGEND_LEFT_OVERLAY: i32 = 106;
 const MSO_ELEMENT_DATA_TABLE_NONE: i32 = 500;
 const MSO_ELEMENT_DATA_TABLE_SHOW: i32 = 501;
 const MSO_ELEMENT_DATA_TABLE_WITH_LEGEND_KEYS: i32 = 502;
+const MSO_ELEMENT_PRIMARY_VALUE_GRIDLINES_NONE: i32 = 328;
+const MSO_ELEMENT_PRIMARY_VALUE_GRIDLINES_MINOR: i32 = 329;
+const MSO_ELEMENT_PRIMARY_VALUE_GRIDLINES_MAJOR: i32 = 330;
+const MSO_ELEMENT_PRIMARY_VALUE_GRIDLINES_MINOR_MAJOR: i32 = 331;
+const MSO_ELEMENT_PRIMARY_CATEGORY_GRIDLINES_NONE: i32 = 332;
+const MSO_ELEMENT_PRIMARY_CATEGORY_GRIDLINES_MINOR: i32 = 333;
+const MSO_ELEMENT_PRIMARY_CATEGORY_GRIDLINES_MAJOR: i32 = 334;
+const MSO_ELEMENT_PRIMARY_CATEGORY_GRIDLINES_MINOR_MAJOR: i32 = 335;
+const MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_NONE: i32 = 348;
+const MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_SHOW: i32 = 349;
+const MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_WITHOUT_LABELS: i32 = 350;
+const MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_REVERSE: i32 = 351;
+const MSO_ELEMENT_PRIMARY_VALUE_AXIS_NONE: i32 = 352;
+const MSO_ELEMENT_PRIMARY_VALUE_AXIS_SHOW: i32 = 353;
+const MSO_ELEMENT_PRIMARY_VALUE_AXIS_THOUSANDS: i32 = 354;
+const MSO_ELEMENT_PRIMARY_VALUE_AXIS_MILLIONS: i32 = 355;
+const MSO_ELEMENT_PRIMARY_VALUE_AXIS_BILLIONS: i32 = 356;
+const MSO_ELEMENT_PRIMARY_VALUE_AXIS_LOG_SCALE: i32 = 357;
+const MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_LOG_SCALE: i32 = 375;
 const MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_NONE: i32 = 300;
 const MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_ADJACENT_TO_AXIS: i32 = 301;
 const MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_TITLE_BELOW_AXIS: i32 = 302;
@@ -11943,6 +11962,128 @@ impl ExcelRuntime {
                                 &[],
                             )?;
                         }
+                        return Ok(OmValue::Empty);
+                    }
+                    let primary_axis_visibility = match element {
+                        MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_NONE => Some((XL_CATEGORY, false)),
+                        MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_SHOW => Some((XL_CATEGORY, true)),
+                        MSO_ELEMENT_PRIMARY_VALUE_AXIS_NONE => Some((XL_VALUE, false)),
+                        MSO_ELEMENT_PRIMARY_VALUE_AXIS_SHOW => Some((XL_VALUE, true)),
+                        _ => None,
+                    };
+                    if let Some((axis_type, has_axis)) = primary_axis_visibility {
+                        let chart = self.register_chart_handle(workbook, chart_id);
+                        self.dispatch_set(
+                            chart,
+                            "HasAxis",
+                            OmValue::Bool(has_axis),
+                            &[
+                                OmValue::Number(f64::from(axis_type)),
+                                OmValue::Number(f64::from(XL_PRIMARY)),
+                            ],
+                        )?;
+                        return Ok(OmValue::Empty);
+                    }
+                    let primary_gridlines = match element {
+                        MSO_ELEMENT_PRIMARY_VALUE_GRIDLINES_NONE => Some((XL_VALUE, false, false)),
+                        MSO_ELEMENT_PRIMARY_VALUE_GRIDLINES_MINOR => Some((XL_VALUE, false, true)),
+                        MSO_ELEMENT_PRIMARY_VALUE_GRIDLINES_MAJOR => Some((XL_VALUE, true, false)),
+                        MSO_ELEMENT_PRIMARY_VALUE_GRIDLINES_MINOR_MAJOR => {
+                            Some((XL_VALUE, true, true))
+                        }
+                        MSO_ELEMENT_PRIMARY_CATEGORY_GRIDLINES_NONE => {
+                            Some((XL_CATEGORY, false, false))
+                        }
+                        MSO_ELEMENT_PRIMARY_CATEGORY_GRIDLINES_MINOR => {
+                            Some((XL_CATEGORY, false, true))
+                        }
+                        MSO_ELEMENT_PRIMARY_CATEGORY_GRIDLINES_MAJOR => {
+                            Some((XL_CATEGORY, true, false))
+                        }
+                        MSO_ELEMENT_PRIMARY_CATEGORY_GRIDLINES_MINOR_MAJOR => {
+                            Some((XL_CATEGORY, true, true))
+                        }
+                        _ => None,
+                    };
+                    if let Some((axis_type, major, minor)) = primary_gridlines {
+                        let chart = self.register_chart_handle(workbook, chart_id);
+                        self.dispatch_set(
+                            chart,
+                            "HasAxis",
+                            OmValue::Bool(true),
+                            &[
+                                OmValue::Number(f64::from(axis_type)),
+                                OmValue::Number(f64::from(XL_PRIMARY)),
+                            ],
+                        )?;
+                        let OmValue::Object(axis) = self.dispatch_get(
+                            chart,
+                            "Axes",
+                            &[OmValue::Number(f64::from(axis_type))],
+                        )?
+                        else {
+                            unreachable!("Chart.Axes returned a non-object value")
+                        };
+                        self.dispatch_set(axis, "HasMajorGridlines", OmValue::Bool(major), &[])?;
+                        self.dispatch_set(axis, "HasMinorGridlines", OmValue::Bool(minor), &[])?;
+                        return Ok(OmValue::Empty);
+                    }
+                    let primary_axis_setting = match element {
+                        MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_WITHOUT_LABELS => Some((
+                            XL_CATEGORY,
+                            "TickLabelPosition",
+                            OmValue::Number(f64::from(XL_TICK_LABEL_POSITION_NONE)),
+                        )),
+                        MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_REVERSE => {
+                            Some((XL_CATEGORY, "ReversePlotOrder", OmValue::Bool(true)))
+                        }
+                        MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_LOG_SCALE => Some((
+                            XL_CATEGORY,
+                            "ScaleType",
+                            OmValue::Number(f64::from(XL_SCALE_LOGARITHMIC)),
+                        )),
+                        MSO_ELEMENT_PRIMARY_VALUE_AXIS_LOG_SCALE => Some((
+                            XL_VALUE,
+                            "ScaleType",
+                            OmValue::Number(f64::from(XL_SCALE_LOGARITHMIC)),
+                        )),
+                        MSO_ELEMENT_PRIMARY_VALUE_AXIS_THOUSANDS => Some((
+                            XL_VALUE,
+                            "DisplayUnit",
+                            OmValue::Number(f64::from(XL_THOUSANDS)),
+                        )),
+                        MSO_ELEMENT_PRIMARY_VALUE_AXIS_MILLIONS => Some((
+                            XL_VALUE,
+                            "DisplayUnit",
+                            OmValue::Number(f64::from(XL_MILLIONS)),
+                        )),
+                        MSO_ELEMENT_PRIMARY_VALUE_AXIS_BILLIONS => Some((
+                            XL_VALUE,
+                            "DisplayUnit",
+                            OmValue::Number(f64::from(XL_THOUSAND_MILLIONS)),
+                        )),
+                        _ => None,
+                    };
+                    if let Some((axis_type, member, value)) = primary_axis_setting {
+                        let chart = self.register_chart_handle(workbook, chart_id);
+                        self.dispatch_set(
+                            chart,
+                            "HasAxis",
+                            OmValue::Bool(true),
+                            &[
+                                OmValue::Number(f64::from(axis_type)),
+                                OmValue::Number(f64::from(XL_PRIMARY)),
+                            ],
+                        )?;
+                        let OmValue::Object(axis) = self.dispatch_get(
+                            chart,
+                            "Axes",
+                            &[OmValue::Number(f64::from(axis_type))],
+                        )?
+                        else {
+                            unreachable!("Chart.Axes returned a non-object value")
+                        };
+                        self.dispatch_set(axis, member, value, &[])?;
                         return Ok(OmValue::Empty);
                     }
                     let axis_title = match element {
@@ -100690,6 +100831,227 @@ mod tests {
                 .dispatch_get(value_axis, "HasTitle", &[])
                 .expect("Value Axis.HasTitle after title none"),
             OmValue::Bool(false)
+        );
+
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_PRIMARY_VALUE_GRIDLINES_MINOR_MAJOR,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementPrimaryValueGridLinesMinorMajor");
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "HasMajorGridlines", &[])
+                .expect("Value Axis.HasMajorGridlines after SetElement"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "HasMinorGridlines", &[])
+                .expect("Value Axis.HasMinorGridlines after SetElement"),
+            OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_PRIMARY_VALUE_GRIDLINES_NONE,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementPrimaryValueGridLinesNone");
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "HasMajorGridlines", &[])
+                .expect("Value Axis.HasMajorGridlines after gridlines none"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "HasMinorGridlines", &[])
+                .expect("Value Axis.HasMinorGridlines after gridlines none"),
+            OmValue::Bool(false)
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_PRIMARY_VALUE_AXIS_MILLIONS,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementPrimaryValueAxisMillions");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(value_axis, "DisplayUnit", &[])
+                    .expect("Value Axis.DisplayUnit after SetElement")
+            ),
+            f64::from(super::XL_MILLIONS)
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_PRIMARY_VALUE_AXIS_LOG_SCALE,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementPrimaryValueAxisLogScale");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(value_axis, "ScaleType", &[])
+                    .expect("Value Axis.ScaleType after SetElement")
+            ),
+            f64::from(super::XL_SCALE_LOGARITHMIC)
+        );
+
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_PRIMARY_CATEGORY_GRIDLINES_MAJOR,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementPrimaryCategoryGridLinesMajor");
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis, "HasMajorGridlines", &[])
+                .expect("Category Axis.HasMajorGridlines after SetElement"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis, "HasMinorGridlines", &[])
+                .expect("Category Axis.HasMinorGridlines after SetElement"),
+            OmValue::Bool(false)
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_WITHOUT_LABELS,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementPrimaryCategoryAxisWithoutLabels");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(category_axis, "TickLabelPosition", &[])
+                    .expect("Category Axis.TickLabelPosition after SetElement")
+            ),
+            f64::from(super::XL_TICK_LABEL_POSITION_NONE)
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_REVERSE,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementPrimaryCategoryAxisReverse");
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis, "ReversePlotOrder", &[])
+                .expect("Category Axis.ReversePlotOrder after SetElement"),
+            OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_NONE,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementPrimaryCategoryAxisNone");
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "HasAxis",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.HasAxis(xlCategory) after SetElement none"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis, "ReversePlotOrder", &[])
+                .expect_err("Category axis handle should be stale after SetElement axis none")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_PRIMARY_CATEGORY_AXIS_SHOW,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementPrimaryCategoryAxisShow");
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "HasAxis",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.HasAxis(xlCategory) after SetElement show"),
+            OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_PRIMARY_VALUE_AXIS_NONE,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementPrimaryValueAxisNone");
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "HasAxis",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.HasAxis(xlValue) after SetElement none"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "ScaleType", &[])
+                .expect_err("Value axis handle should be stale after SetElement axis none")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_PRIMARY_VALUE_AXIS_SHOW,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementPrimaryValueAxisShow");
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "HasAxis",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.HasAxis(xlValue) after SetElement show"),
+            OmValue::Bool(true)
         );
 
         let legend = expect_object_handle(
