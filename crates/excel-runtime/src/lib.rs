@@ -13373,6 +13373,7 @@ impl ExcelRuntime {
                             | "Axes"
                             | "SeriesCollection"
                             | "FullSeriesCollection"
+                            | "ChartObjects"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -14398,7 +14399,15 @@ impl ExcelRuntime {
                 }
             }
             "ChartObjects" => {
-                self.ensure_grid_worksheet(workbook, sheet_id, "Worksheet.ChartObjects")?;
+                let sheet_kind = self.worksheet_model(workbook, sheet_id)?.kind;
+                if !matches!(
+                    sheet_kind,
+                    SheetKind::Worksheet | SheetKind::ChartSheet | SheetKind::DialogSheet
+                ) {
+                    return Err(OmError::unsupported(
+                        "Worksheet.ChartObjects is only available on worksheets, chart sheets, and dialog sheets",
+                    ));
+                }
                 let handle = self.register_chart_objects_handle(workbook, sheet_id);
                 if args.is_empty() {
                     Ok(OmValue::Object(handle))
@@ -17586,6 +17595,19 @@ impl ExcelRuntime {
             }
             "FullSeriesCollection" => {
                 let handle = self.register_series_collection_handle(workbook, chart_id);
+                if args.is_empty() {
+                    Ok(OmValue::Object(handle))
+                } else {
+                    self.dispatch_invoke(handle, "Item", args)
+                }
+            }
+            "ChartObjects" => {
+                let Some(sheet_id) = self.chart_sheet_id_for_chart(workbook, chart_id)? else {
+                    return Err(OmError::unsupported(
+                        "Chart.ChartObjects is only available for chart sheets",
+                    ));
+                };
+                let handle = self.register_chart_objects_handle(workbook, sheet_id);
                 if args.is_empty() {
                     Ok(OmValue::Object(handle))
                 } else {
@@ -23036,17 +23058,26 @@ impl ExcelRuntime {
         {
             return Err(OmError::new(OmErrorCode::NotFound, "unknown worksheet"));
         }
+        let chart_sheet_primary_chart_id = state
+            .chart_sheets
+            .get(&sheet_id)
+            .map(|binding| binding.chart_id);
         let mut entries = state
             .drawings
             .values()
             .filter(|drawing| drawing.host_sheet_id == sheet_id)
             .flat_map(|drawing| drawing.objects.iter())
             .filter_map(|object| match object {
-                DrawingObjectModel::ChartFrame(chart_object) => Some((
-                    chart_object.z_order.unwrap_or(u32::MAX),
-                    chart_object.id,
-                    chart_object.name.clone(),
-                )),
+                DrawingObjectModel::ChartFrame(chart_object)
+                    if Some(chart_object.chart_id) != chart_sheet_primary_chart_id =>
+                {
+                    Some((
+                        chart_object.z_order.unwrap_or(u32::MAX),
+                        chart_object.id,
+                        chart_object.name.clone(),
+                    ))
+                }
+                DrawingObjectModel::ChartFrame(_) => None,
                 DrawingObjectModel::UnsupportedRaw { .. } => None,
             })
             .enumerate()
@@ -87351,6 +87382,37 @@ mod tests {
             ),
             f64::from(super::XL_SHEET_TYPE_CHART)
         );
+        let chart_sheet_chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(chart_sheet, "ChartObjects", &[])
+                .expect("chart sheet ChartObjects"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_sheet_chart_objects, "Count", &[])
+                    .expect("chart sheet ChartObjects.Count")
+            ),
+            0.0
+        );
+        let chart_from_charts = expect_object_handle(
+            runtime
+                .dispatch_invoke(charts, "Item", &[OmValue::Number(1.0)])
+                .expect("Charts.Item(1)"),
+        );
+        let chart_handle_chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(chart_from_charts, "ChartObjects", &[])
+                .expect("Chart.ChartObjects on chart sheet"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_handle_chart_objects, "Count", &[])
+                    .expect("Chart.ChartObjects.Count on chart sheet")
+            ),
+            0.0
+        );
 
         macro_rules! assert_unsupported {
             ($expr:expr, $label:literal) => {
@@ -87358,10 +87420,6 @@ mod tests {
             };
         }
 
-        assert_unsupported!(
-            runtime.dispatch_get(chart_sheet, "ChartObjects", &[]),
-            "chart sheet ChartObjects should be unsupported"
-        );
         assert_unsupported!(
             runtime.dispatch_get(chart_sheet, "UsedRange", &[]),
             "chart sheet UsedRange should be unsupported"
