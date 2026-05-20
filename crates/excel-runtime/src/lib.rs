@@ -3374,7 +3374,9 @@ impl ExcelRuntime {
                         ));
                     }
                     let rotation_units = match value {
-                        OmValue::Number(number) => rotation_units_from_degrees(number)?,
+                        OmValue::Number(number) => {
+                            rotation_units_from_degrees(number, "ShapeRange.Rotation")?
+                        }
                         _ => {
                             return Err(OmError::type_mismatch(
                                 "ShapeRange.Rotation expects a numeric degrees value",
@@ -13240,6 +13242,7 @@ impl ExcelRuntime {
                             | "Delete"
                             | "Flip"
                             | "Select"
+                            | "IncrementRotation"
                             | "ScaleWidth"
                             | "ScaleHeight"
                     )
@@ -16076,6 +16079,72 @@ impl ExcelRuntime {
                         OmValue::Number(current + *increment),
                         &[],
                     )?;
+                }
+                Ok(OmValue::Empty)
+            }
+            "IncrementRotation" => {
+                let [increment] = args else {
+                    return Err(OmError::invalid_argument(
+                        "ShapeRange.IncrementRotation expects a single increment argument",
+                    ));
+                };
+                let OmValue::Number(increment) = increment else {
+                    return Err(OmError::type_mismatch(
+                        "ShapeRange.IncrementRotation expects a numeric degrees value",
+                    ));
+                };
+                let increment_units =
+                    rotation_units_from_degrees(*increment, "ShapeRange.IncrementRotation")?;
+                let chart_object_ids = self
+                    .shape_range_chart_object_entries(workbook, source)?
+                    .into_iter()
+                    .map(|(chart_object_id, _)| chart_object_id)
+                    .collect::<Vec<_>>();
+                if chart_object_ids.is_empty() {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        "chart object not found",
+                    ));
+                }
+                let runtime = self.runtime_workbook_mut(workbook)?;
+                if runtime.read_only {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        "cannot modify a read-only workbook",
+                    ));
+                }
+                let mut workbook_dirty = false;
+                for drawing in runtime.loaded.state.drawings.values_mut() {
+                    for object in &mut drawing.objects {
+                        let DrawingObjectModel::ChartFrame(chart_object) = object else {
+                            continue;
+                        };
+                        if !chart_object_ids.contains(&chart_object.id) {
+                            continue;
+                        }
+                        let current_units = graphic_frame_rotation_units(
+                            chart_object.graphic_frame_transform_xml.as_deref(),
+                        )?;
+                        let updated_units =
+                            current_units.checked_add(increment_units).ok_or_else(|| {
+                                OmError::invalid_argument(
+                                    "ShapeRange.IncrementRotation result is out of range",
+                                )
+                            })?;
+                        let updated_transform = set_graphic_frame_rotation_xml(
+                            chart_object.graphic_frame_transform_xml.as_deref(),
+                            updated_units,
+                        )?;
+                        if chart_object.graphic_frame_transform_xml != updated_transform {
+                            chart_object.graphic_frame_transform_xml = updated_transform;
+                            chart_object.dirty = true;
+                            drawing.dirty = true;
+                            workbook_dirty = true;
+                        }
+                    }
+                }
+                if workbook_dirty {
+                    runtime.dirty = true;
                 }
                 Ok(OmValue::Empty)
             }
@@ -25444,11 +25513,11 @@ fn xml_bool_attr_value_is_true(value: &str) -> bool {
     value == "1" || value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("on")
 }
 
-fn rotation_units_from_degrees(degrees: f64) -> OmResult<i64> {
+fn rotation_units_from_degrees(degrees: f64, context: &str) -> OmResult<i64> {
     if !degrees.is_finite() || degrees.abs() > i64::MAX as f64 / 60_000.0 {
-        return Err(OmError::invalid_argument(
-            "ShapeRange.Rotation expects a finite degrees value",
-        ));
+        return Err(OmError::invalid_argument(format!(
+            "{context} expects a finite degrees value"
+        )));
     }
     Ok((degrees * 60_000.0).round() as i64)
 }
@@ -89370,6 +89439,19 @@ mod tests {
         runtime
             .dispatch_invoke(shape_range, "IncrementTop", &[OmValue::Number(-5.0)])
             .expect("ShapeRange.IncrementTop");
+        let first_shape = expect_object_handle(
+            runtime
+                .dispatch_get(first_chart_object, "ShapeRange", &[])
+                .expect("first ChartObject.ShapeRange"),
+        );
+        let second_shape = expect_object_handle(
+            runtime
+                .dispatch_get(second_chart_object, "ShapeRange", &[])
+                .expect("second ChartObject.ShapeRange"),
+        );
+        runtime
+            .dispatch_invoke(shape_range, "IncrementRotation", &[OmValue::Number(15.0)])
+            .expect("ShapeRange.IncrementRotation");
 
         assert_eq!(
             expect_number(
@@ -89403,11 +89485,21 @@ mod tests {
             ),
             second_top - 5.0
         );
-
-        let second_shape = expect_object_handle(
-            runtime
-                .dispatch_get(second_chart_object, "ShapeRange", &[])
-                .expect("second ChartObject.ShapeRange"),
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_shape, "Rotation", &[])
+                    .expect("first ShapeRange.Rotation after range increment")
+            ),
+            15.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_shape, "Rotation", &[])
+                    .expect("second ShapeRange.Rotation after range increment")
+            ),
+            15.0
         );
         runtime
             .dispatch_invoke(second_shape, "IncrementLeft", &[OmValue::Number(-4.0)])
@@ -89415,6 +89507,9 @@ mod tests {
         runtime
             .dispatch_invoke(second_shape, "IncrementTop", &[OmValue::Number(2.0)])
             .expect("single ShapeRange.IncrementTop");
+        runtime
+            .dispatch_invoke(second_shape, "IncrementRotation", &[OmValue::Number(7.5)])
+            .expect("single ShapeRange.IncrementRotation");
         assert_eq!(
             expect_number(
                 runtime
@@ -89439,6 +89534,22 @@ mod tests {
             ),
             second_top - 3.0
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_shape, "Rotation", &[])
+                    .expect("second ShapeRange.Rotation after single increment")
+            ),
+            22.5
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "Rotation", &[])
+                    .expect("mixed ShapeRange.Rotation after single increment")
+            ),
+            f64::from(super::MSO_SHAPE_MIXED)
+        );
 
         assert_eq!(
             runtime
@@ -89458,6 +89569,51 @@ mod tests {
                 .code,
             OmErrorCode::InvalidArgument
         );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    shape_range,
+                    "IncrementRotation",
+                    &[OmValue::Text("turn".to_string())],
+                )
+                .expect_err("ShapeRange.IncrementRotation rejects non-number")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    shape_range,
+                    "IncrementRotation",
+                    &[OmValue::Number(f64::NAN)],
+                )
+                .expect_err("ShapeRange.IncrementRotation rejects NaN")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with ShapeRange.IncrementRotation");
+        let saved_package =
+            OpcPackage::from_bytes(&saved).expect("saved ShapeRange.IncrementRotation package");
+        let saved_drawing = String::from_utf8(
+            saved_package
+                .part("xl/drawings/drawing1.xml")
+                .expect("saved ShapeRange.IncrementRotation drawing part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved ShapeRange.IncrementRotation drawing XML utf8");
+        assert!(saved_drawing.contains(r#"rot="900000""#));
+        assert!(saved_drawing.contains(r#"rot="1350000""#));
     }
 
     #[test]

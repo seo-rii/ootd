@@ -1486,6 +1486,51 @@ impl XlsxCodec {
                         }
                         return Ok(Some(rewritten));
                     }
+                    if local_name == b"xfrm" {
+                        let Some(graphic_frame_transform_xml) =
+                            chart_object.graphic_frame_transform_xml.as_deref()
+                        else {
+                            return Ok(None);
+                        };
+                        let mut transform_reader = Reader::from_reader(Cursor::new(
+                            graphic_frame_transform_xml.as_bytes(),
+                        ));
+                        transform_reader.config_mut().trim_text(false);
+                        let mut transform_buffer = Vec::new();
+                        let mut desired_attrs = Vec::<(String, String)>::new();
+                        loop {
+                            match transform_reader.read_event_into(&mut transform_buffer) {
+                                Ok(Event::Start(transform_element))
+                                | Ok(Event::Empty(transform_element))
+                                    if xml_local_name(transform_element.name().as_ref())
+                                        == b"xfrm" =>
+                                {
+                                    for attr in transform_element.attributes() {
+                                        let attr = attr.map_err(xml_error)?;
+                                        let key =
+                                            String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+                                        let value = attr
+                                            .decode_and_unescape_value(transform_reader.decoder())
+                                            .map_err(xml_error)?
+                                            .into_owned();
+                                        desired_attrs.push((key, value));
+                                    }
+                                    break;
+                                }
+                                Ok(Event::Eof) => break,
+                                Ok(_) => {}
+                                Err(error) => return Err(xml_error(error)),
+                            }
+                            transform_buffer.clear();
+                        }
+                        let mut rewritten = BytesStart::new(
+                            String::from_utf8_lossy(element.name().as_ref()).into_owned(),
+                        );
+                        for (key, value) in desired_attrs {
+                            rewritten.push_attribute((key.as_str(), value.as_str()));
+                        }
+                        return Ok(Some(rewritten));
+                    }
                     let replacements = match (chart_object.anchor.as_ref(), local_name) {
                         (Some(DrawingAnchor::Absolute(anchor)), b"pos") => vec![
                             ("x".to_string(), anchor.position.x.0.to_string()),
