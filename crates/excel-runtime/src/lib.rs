@@ -3365,16 +3365,21 @@ impl ExcelRuntime {
                 }
             }
             RuntimeObjectKind::ShapeRange { workbook, source } => {
-                if member == "AlternativeText" {
+                if matches!(member, "AlternativeText" | "Title") {
+                    let (attr_name, property_name) = match member {
+                        "AlternativeText" => ("descr", "AlternativeText"),
+                        "Title" => ("title", "Title"),
+                        _ => unreachable!("ShapeRange non-visual text member was matched"),
+                    };
                     if !args.is_empty() {
-                        return Err(OmError::invalid_argument(
-                            "ShapeRange.AlternativeText does not accept index arguments",
-                        ));
+                        return Err(OmError::invalid_argument(format!(
+                            "ShapeRange.{property_name} does not accept index arguments"
+                        )));
                     }
-                    let OmValue::Text(alternative_text) = value else {
-                        return Err(OmError::type_mismatch(
-                            "ShapeRange.AlternativeText expects a string value",
-                        ));
+                    let OmValue::Text(text) = value else {
+                        return Err(OmError::type_mismatch(format!(
+                            "ShapeRange.{property_name} expects a string value"
+                        )));
                     };
                     let chart_object_ids = self
                         .shape_range_chart_object_entries(workbook, source)?
@@ -3403,14 +3408,12 @@ impl ExcelRuntime {
                             if !chart_object_ids.contains(&chart_object.id) {
                                 continue;
                             }
-                            let changed = if alternative_text.is_empty() {
-                                chart_object.non_visual_attrs.remove("descr").is_some()
-                            } else if chart_object.non_visual_attrs.get("descr")
-                                != Some(&alternative_text)
-                            {
+                            let changed = if text.is_empty() {
+                                chart_object.non_visual_attrs.remove(attr_name).is_some()
+                            } else if chart_object.non_visual_attrs.get(attr_name) != Some(&text) {
                                 chart_object
                                     .non_visual_attrs
-                                    .insert("descr".to_string(), alternative_text.clone());
+                                    .insert(attr_name.to_string(), text.clone());
                                 true
                             } else {
                                 false
@@ -13070,6 +13073,7 @@ impl ExcelRuntime {
                             | "Index"
                             | "Type"
                             | "AlternativeText"
+                            | "Title"
                             | "ZOrder"
                             | "ZOrderPosition"
                             | "Placement"
@@ -16294,11 +16298,16 @@ impl ExcelRuntime {
                 }
                 Ok(OmValue::Number(f64::from(MSO_SHAPE_CHART)))
             }
-            "AlternativeText" => {
+            "AlternativeText" | "Title" => {
+                let (attr_name, property_name) = match member {
+                    "AlternativeText" => ("descr", "AlternativeText"),
+                    "Title" => ("title", "Title"),
+                    _ => unreachable!("ShapeRange non-visual text member was matched"),
+                };
                 if !args.is_empty() {
-                    return Err(OmError::invalid_argument(
-                        "ShapeRange.AlternativeText does not accept arguments",
-                    ));
+                    return Err(OmError::invalid_argument(format!(
+                        "ShapeRange.{property_name} does not accept arguments"
+                    )));
                 }
                 let entries = self.shape_range_chart_object_entries(workbook, source)?;
                 if entries.is_empty() {
@@ -16312,7 +16321,7 @@ impl ExcelRuntime {
                     let alternative_text = self
                         .chart_object_model(workbook, chart_object_id)?
                         .non_visual_attrs
-                        .get("descr")
+                        .get(attr_name)
                         .cloned();
                     match &shared_alternative_text {
                         None => shared_alternative_text = Some(alternative_text),
@@ -87585,6 +87594,14 @@ mod tests {
             ),
             "Revenue detail"
         );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(shape_range, "Title", &[])
+                    .expect("ShapeRange.Title")
+            ),
+            "Chart Alt"
+        );
 
         let single_shape = expect_object_handle(
             runtime
@@ -87703,6 +87720,14 @@ mod tests {
             ),
             ""
         );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(shape_range, "Title", &[])
+                    .expect("mixed ShapeRange.Title")
+            ),
+            ""
+        );
 
         runtime
             .dispatch_set(
@@ -87735,7 +87760,45 @@ mod tests {
                 .code,
             OmErrorCode::TypeMismatch
         );
-        let saved_with_alt_text = runtime
+        runtime
+            .dispatch_set(
+                shape_range,
+                "Title",
+                OmValue::Text("Revenue chart title".to_string()),
+                &[],
+            )
+            .expect("set ShapeRange.Title");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(single_shape, "Title", &[])
+                    .expect("first ShapeRange.Title after set")
+            ),
+            "Revenue chart title"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(second_shape, "Title", &[])
+                    .expect("second ShapeRange.Title after set")
+            ),
+            "Revenue chart title"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(shape_range, "Title", &[OmValue::Missing])
+                .expect_err("ShapeRange.Title rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(shape_range, "Title", OmValue::Number(1.0), &[])
+                .expect_err("ShapeRange.Title rejects non-text")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        let saved_with_non_visual_text = runtime
             .save_workbook(
                 workbook,
                 SaveWorkbookSpec {
@@ -87744,18 +87807,19 @@ mod tests {
                     lossless: true,
                 },
             )
-            .expect("save workbook with ShapeRange.AlternativeText");
-        let saved_alt_text_package =
-            OpcPackage::from_bytes(&saved_with_alt_text).expect("saved alt text package");
-        let saved_alt_text_drawing = String::from_utf8(
-            saved_alt_text_package
+            .expect("save workbook with ShapeRange non-visual text");
+        let saved_non_visual_text_package = OpcPackage::from_bytes(&saved_with_non_visual_text)
+            .expect("saved non-visual text package");
+        let saved_non_visual_text_drawing = String::from_utf8(
+            saved_non_visual_text_package
                 .part("xl/drawings/drawing1.xml")
-                .expect("saved alt text drawing part")
+                .expect("saved non-visual text drawing part")
                 .bytes
                 .clone(),
         )
-        .expect("saved alt text drawing XML utf8");
-        assert!(saved_alt_text_drawing.contains(r#"descr="Revenue charts""#));
+        .expect("saved non-visual text drawing XML utf8");
+        assert!(saved_non_visual_text_drawing.contains(r#"descr="Revenue charts""#));
+        assert!(saved_non_visual_text_drawing.contains(r#"title="Revenue chart title""#));
 
         runtime
             .dispatch_set(shape_range, "Visible", OmValue::Bool(false), &[])
