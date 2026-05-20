@@ -11358,6 +11358,9 @@ impl ExcelRuntime {
                         ));
                     }
                     self.chart_model(workbook, chart_id)?;
+                    if self.active_chart == Some((workbook, chart_id)) {
+                        self.active_chart = None;
+                    }
                     Ok(OmValue::Empty)
                 }
                 "ClearToMatchColorStyle" | "ClearToMatchStyle" => {
@@ -88341,6 +88344,15 @@ mod tests {
                     .expect("ActiveChart.Name after embedded Chart.Select")
             ),
             "Embedded Revenue Chart"
+        );
+        runtime
+            .dispatch_invoke(chart, "Deselect", &[])
+            .expect("embedded Chart.Deselect");
+        assert_eq!(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                .expect("ActiveChart after embedded Chart.Deselect"),
+            OmValue::Empty
         );
         runtime
             .dispatch_set(
