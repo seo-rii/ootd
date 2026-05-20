@@ -11487,6 +11487,34 @@ impl ExcelRuntime {
                     }
                     Ok(OmValue::Empty)
                 }
+                "ApplyCustomType" => {
+                    if args.is_empty() || args.len() > 2 {
+                        return Err(OmError::invalid_argument(
+                            "Chart.ApplyCustomType expects ChartType and optional TypeName arguments",
+                        ));
+                    }
+                    self.chart_model(workbook, chart_id)?;
+                    if let Some(type_name) = args.get(1)
+                        && !om_value_is_omitted(type_name)
+                    {
+                        match type_name {
+                            OmValue::Text(name) if !name.is_empty() => {}
+                            OmValue::Text(_) => {
+                                return Err(OmError::invalid_argument(
+                                    "Chart.ApplyCustomType TypeName must not be empty",
+                                ));
+                            }
+                            _ => {
+                                return Err(OmError::type_mismatch(
+                                    "Chart.ApplyCustomType TypeName expects a text value when provided",
+                                ));
+                            }
+                        }
+                    }
+                    let chart = self.register_chart_handle(workbook, chart_id);
+                    self.dispatch_set(chart, "ChartType", args[0].clone(), &[])?;
+                    Ok(OmValue::Empty)
+                }
                 "ChartWizard" => {
                     if args.len() > 11 {
                         return Err(OmError::invalid_argument(
@@ -100593,6 +100621,27 @@ mod tests {
             runtime
                 .dispatch_invoke(
                     chart,
+                    "ApplyCustomType",
+                    &[
+                        OmValue::Number(f64::from(super::XL_LINE_MARKERS)),
+                        OmValue::Text("Line markers".to_string()),
+                    ],
+                )
+                .expect("Chart.ApplyCustomType"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "ChartType", &[])
+                    .expect("Chart.ChartType after ApplyCustomType")
+            ),
+            f64::from(super::XL_LINE_MARKERS)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
                     "ApplyDataLabels",
                     &[
                         OmValue::Number(4.0),
@@ -101563,6 +101612,67 @@ mod tests {
                 .expect_err("Chart.ApplyLayout rejects non-numeric ChartType")
                 .code,
             OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "ApplyCustomType", &[])
+                .expect_err("Chart.ApplyCustomType requires ChartType")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "ApplyCustomType",
+                    &[
+                        OmValue::Number(f64::from(super::XL_LINE)),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                    ],
+                )
+                .expect_err("Chart.ApplyCustomType rejects too many arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "ApplyCustomType",
+                    &[OmValue::Text("bad".to_string())],
+                )
+                .expect_err("Chart.ApplyCustomType rejects non-numeric ChartType")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "ApplyCustomType",
+                    &[
+                        OmValue::Number(f64::from(super::XL_LINE)),
+                        OmValue::Number(1.0)
+                    ],
+                )
+                .expect_err("Chart.ApplyCustomType rejects non-text TypeName")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "ApplyCustomType",
+                    &[
+                        OmValue::Number(f64::from(super::XL_LINE)),
+                        OmValue::Text(String::new()),
+                    ],
+                )
+                .expect_err("Chart.ApplyCustomType rejects empty TypeName")
+                .code,
+            OmErrorCode::InvalidArgument
         );
         assert_eq!(
             runtime
