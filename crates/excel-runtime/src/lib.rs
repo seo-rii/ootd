@@ -263,6 +263,13 @@ const MSO_ELEMENT_LEGEND_LEFT_OVERLAY: i32 = 106;
 const MSO_ELEMENT_DATA_TABLE_NONE: i32 = 500;
 const MSO_ELEMENT_DATA_TABLE_SHOW: i32 = 501;
 const MSO_ELEMENT_DATA_TABLE_WITH_LEGEND_KEYS: i32 = 502;
+const MSO_ELEMENT_LINE_NONE: i32 = 800;
+const MSO_ELEMENT_LINE_DROP_LINE: i32 = 801;
+const MSO_ELEMENT_LINE_HI_LO_LINE: i32 = 802;
+const MSO_ELEMENT_LINE_SERIES_LINE: i32 = 803;
+const MSO_ELEMENT_LINE_DROP_HI_LO_LINE: i32 = 804;
+const MSO_ELEMENT_UP_DOWN_BARS_NONE: i32 = 900;
+const MSO_ELEMENT_UP_DOWN_BARS_SHOW: i32 = 901;
 const MSO_ELEMENT_PRIMARY_VALUE_GRIDLINES_NONE: i32 = 328;
 const MSO_ELEMENT_PRIMARY_VALUE_GRIDLINES_MINOR: i32 = 329;
 const MSO_ELEMENT_PRIMARY_VALUE_GRIDLINES_MAJOR: i32 = 330;
@@ -11959,6 +11966,60 @@ impl ExcelRuntime {
                                 data_table,
                                 "ShowLegendKey",
                                 OmValue::Bool(show_legend_key),
+                                &[],
+                            )?;
+                        }
+                        return Ok(OmValue::Empty);
+                    }
+                    let chart_group_line_flags = match element {
+                        MSO_ELEMENT_LINE_NONE => Some((false, false, false, None)),
+                        MSO_ELEMENT_LINE_DROP_LINE => Some((false, true, false, None)),
+                        MSO_ELEMENT_LINE_HI_LO_LINE => Some((false, false, true, None)),
+                        MSO_ELEMENT_LINE_SERIES_LINE => Some((true, false, false, None)),
+                        MSO_ELEMENT_LINE_DROP_HI_LO_LINE => Some((false, true, true, None)),
+                        MSO_ELEMENT_UP_DOWN_BARS_NONE => Some((false, false, false, Some(false))),
+                        MSO_ELEMENT_UP_DOWN_BARS_SHOW => Some((false, false, false, Some(true))),
+                        _ => None,
+                    };
+                    if let Some((series_lines, drop_lines, hi_lo_lines, up_down_bars)) =
+                        chart_group_line_flags
+                    {
+                        let chart = self.register_chart_handle(workbook, chart_id);
+                        let OmValue::Object(chart_groups) =
+                            self.dispatch_get(chart, "ChartGroups", &[])?
+                        else {
+                            unreachable!("Chart.ChartGroups returned a non-object value")
+                        };
+                        let OmValue::Object(chart_group) =
+                            self.dispatch_invoke(chart_groups, "Item", &[OmValue::Number(1.0)])?
+                        else {
+                            unreachable!("ChartGroups.Item returned a non-object value")
+                        };
+                        if up_down_bars.is_none() {
+                            self.dispatch_set(
+                                chart_group,
+                                "HasSeriesLines",
+                                OmValue::Bool(series_lines),
+                                &[],
+                            )?;
+                            self.dispatch_set(
+                                chart_group,
+                                "HasDropLines",
+                                OmValue::Bool(drop_lines),
+                                &[],
+                            )?;
+                            self.dispatch_set(
+                                chart_group,
+                                "HasHiLoLines",
+                                OmValue::Bool(hi_lo_lines),
+                                &[],
+                            )?;
+                        }
+                        if let Some(up_down_bars) = up_down_bars {
+                            self.dispatch_set(
+                                chart_group,
+                                "HasUpDownBars",
+                                OmValue::Bool(up_down_bars),
                                 &[],
                             )?;
                         }
@@ -100696,6 +100757,114 @@ mod tests {
                 .expect_err("DataTable handle should be stale after SetElement data table none")
                 .code,
             OmErrorCode::InvalidState
+        );
+
+        let chart_groups = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[])
+                .expect("Chart.ChartGroups before SetElement line flags"),
+        );
+        let chart_group = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_groups, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartGroups.Item(1) before SetElement line flags"),
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_LINE_DROP_HI_LO_LINE,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementLineDropHiLoLine");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "HasDropLines", &[])
+                .expect("ChartGroup.HasDropLines after SetElement"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "HasHiLoLines", &[])
+                .expect("ChartGroup.HasHiLoLines after SetElement"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "HasSeriesLines", &[])
+                .expect("ChartGroup.HasSeriesLines after SetElement drop hi-lo"),
+            OmValue::Bool(false)
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_LINE_SERIES_LINE,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementLineSeriesLine");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "HasSeriesLines", &[])
+                .expect("ChartGroup.HasSeriesLines after SetElement"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "HasDropLines", &[])
+                .expect("ChartGroup.HasDropLines after SetElement series line"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "HasHiLoLines", &[])
+                .expect("ChartGroup.HasHiLoLines after SetElement series line"),
+            OmValue::Bool(false)
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(super::MSO_ELEMENT_LINE_NONE))],
+            )
+            .expect("Chart.SetElement msoElementLineNone");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "HasSeriesLines", &[])
+                .expect("ChartGroup.HasSeriesLines after SetElement none"),
+            OmValue::Bool(false)
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_UP_DOWN_BARS_SHOW,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementUpDownBarsShow");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "HasUpDownBars", &[])
+                .expect("ChartGroup.HasUpDownBars after SetElement"),
+            OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_UP_DOWN_BARS_NONE,
+                ))],
+            )
+            .expect("Chart.SetElement msoElementUpDownBarsNone");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "HasUpDownBars", &[])
+                .expect("ChartGroup.HasUpDownBars after SetElement none"),
+            OmValue::Bool(false)
         );
 
         let chart_title = expect_object_handle(
