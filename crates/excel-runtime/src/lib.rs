@@ -17154,23 +17154,9 @@ impl ExcelRuntime {
                 }) {
                     return Ok(OmValue::Text(worksheet.name.clone()));
                 }
-                if let Some(name) = state.drawings.values().find_map(|drawing| {
-                    (state.worksheets.iter().any(|worksheet| {
-                        worksheet.id == drawing.host_sheet_id
-                            && worksheet.kind == SheetKind::Worksheet
-                    }))
-                    .then(|| {
-                        drawing.objects.iter().find_map(|object| match object {
-                            DrawingObjectModel::ChartFrame(chart_object)
-                                if chart_object.chart_id == chart_id =>
-                            {
-                                Some(chart_object.name.clone())
-                            }
-                            _ => None,
-                        })
-                    })
-                    .flatten()
-                }) {
+                if let Some((_, _, name)) =
+                    self.embedded_chart_object_for_chart(workbook, chart_id)?
+                {
                     return Ok(OmValue::Text(name));
                 }
                 Err(OmError::new(OmErrorCode::NotFound, "chart not found"))
@@ -17343,26 +17329,11 @@ impl ExcelRuntime {
                                 .is_some_and(|binding| binding.chart_id == chart_id)
                         })
                         .map(|index| index + 1);
-                    let embedded_chart_object = if chart_sheet_index.is_none() {
-                        state.drawings.values().find_map(|drawing| {
-                            if !state.worksheets.iter().any(|worksheet| {
-                                worksheet.id == drawing.host_sheet_id
-                                    && worksheet.kind == SheetKind::Worksheet
-                            }) {
-                                return None;
-                            }
-                            drawing.objects.iter().find_map(|object| match object {
-                                DrawingObjectModel::ChartFrame(chart_object)
-                                    if chart_object.chart_id == chart_id =>
-                                {
-                                    Some((chart_object.host_sheet_id, chart_object.id))
-                                }
-                                _ => None,
-                            })
-                        })
-                    } else {
-                        None
-                    };
+                    let embedded_chart_object = self
+                        .embedded_chart_object_for_chart(workbook, chart_id)?
+                        .map(|(host_sheet_id, chart_object_id, _)| {
+                            (host_sheet_id, chart_object_id)
+                        });
                     (chart_sheet_index, embedded_chart_object)
                 };
                 if let Some(index) = chart_sheet_index {
@@ -17396,26 +17367,9 @@ impl ExcelRuntime {
                         .find_map(|(sheet_id, binding)| {
                             (binding.chart_id == chart_id).then_some(*sheet_id)
                         })
-                        .or_else(|| {
-                            state.drawings.values().find_map(|drawing| {
-                                if !state.worksheets.iter().any(|worksheet| {
-                                    worksheet.id == drawing.host_sheet_id
-                                        && worksheet.kind == SheetKind::Worksheet
-                                }) {
-                                    return None;
-                                }
-                                drawing
-                                    .objects
-                                    .iter()
-                                    .any(|object| match object {
-                                        DrawingObjectModel::ChartFrame(chart_object) => {
-                                            chart_object.chart_id == chart_id
-                                        }
-                                        DrawingObjectModel::UnsupportedRaw { .. } => false,
-                                    })
-                                    .then_some(drawing.host_sheet_id)
-                            })
-                        })
+                        .or(self
+                            .embedded_chart_object_for_chart(workbook, chart_id)?
+                            .map(|(host_sheet_id, _, _)| host_sheet_id))
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
                     let index = state
                         .worksheets
@@ -17648,24 +17602,9 @@ impl ExcelRuntime {
                         "Chart.Parent does not accept arguments",
                     ));
                 }
-                let state = &self.runtime_workbook(workbook)?.loaded.state;
-                let embedded_parent = state.drawings.values().find_map(|drawing| {
-                    if !state.worksheets.iter().any(|worksheet| {
-                        worksheet.id == drawing.host_sheet_id
-                            && worksheet.kind == SheetKind::Worksheet
-                    }) {
-                        return None;
-                    }
-                    drawing.objects.iter().find_map(|object| match object {
-                        DrawingObjectModel::ChartFrame(chart_object)
-                            if chart_object.chart_id == chart_id =>
-                        {
-                            Some(chart_object.id)
-                        }
-                        _ => None,
-                    })
-                });
-                if let Some(chart_object_id) = embedded_parent {
+                if let Some((_, chart_object_id, _)) =
+                    self.embedded_chart_object_for_chart(workbook, chart_id)?
+                {
                     return Ok(OmValue::Object(
                         self.register_chart_object_handle(workbook, chart_object_id),
                     ));
@@ -23246,6 +23185,40 @@ impl ExcelRuntime {
             .chart_sheets
             .iter()
             .find_map(|(sheet_id, binding)| (binding.chart_id == chart_id).then_some(*sheet_id)))
+    }
+
+    fn embedded_chart_object_for_chart(
+        &self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+    ) -> OmResult<Option<(SheetId, ChartObjectId, String)>> {
+        if self.chart_sheet_id_for_chart(workbook, chart_id)?.is_some() {
+            return Ok(None);
+        }
+        let state = &self.runtime_workbook(workbook)?.loaded.state;
+        Ok(state.drawings.values().find_map(|drawing| {
+            if !state
+                .worksheets
+                .iter()
+                .any(|worksheet| worksheet.id == drawing.host_sheet_id)
+            {
+                return None;
+            }
+            drawing.objects.iter().find_map(|object| match object {
+                DrawingObjectModel::ChartFrame(chart_object)
+                    if chart_object.chart_id == chart_id =>
+                {
+                    Some((
+                        chart_object.host_sheet_id,
+                        chart_object.id,
+                        chart_object.name.clone(),
+                    ))
+                }
+                DrawingObjectModel::ChartFrame(_) | DrawingObjectModel::UnsupportedRaw { .. } => {
+                    None
+                }
+            })
+        }))
     }
 
     fn delete_chart_object(
@@ -87573,6 +87546,40 @@ mod tests {
             ),
             1.0
         );
+        let embedded_chart = expect_object_handle(
+            runtime
+                .dispatch_get(embedded_chart_object, "Chart", &[])
+                .expect("embedded ChartObject.Chart"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(embedded_chart, "Name", &[])
+                    .expect("chart sheet embedded Chart.Name")
+            ),
+            "Chart 2"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(embedded_chart, "Index", &[])
+                    .expect("chart sheet embedded Chart.Index")
+            ),
+            1.0
+        );
+        let embedded_chart_parent = expect_object_handle(
+            runtime
+                .dispatch_get(embedded_chart, "Parent", &[])
+                .expect("chart sheet embedded Chart.Parent"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(embedded_chart_parent, "Name", &[])
+                    .expect("chart sheet embedded Chart.Parent.Name")
+            ),
+            "Chart 2"
+        );
         let chart_handle_chart_objects = expect_object_handle(
             runtime
                 .dispatch_get(chart, "ChartObjects", &[])
@@ -87680,6 +87687,32 @@ mod tests {
                 reopened_runtime
                     .dispatch_get(reopened_chart_object, "Name", &[])
                     .expect("reopened embedded ChartObject.Name")
+            ),
+            "Chart 2"
+        );
+        let reopened_embedded_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened embedded ChartObject.Chart"),
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(reopened_embedded_chart, "Name", &[])
+                    .expect("reopened chart sheet embedded Chart.Name")
+            ),
+            "Chart 2"
+        );
+        let reopened_embedded_parent = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_embedded_chart, "Parent", &[])
+                .expect("reopened chart sheet embedded Chart.Parent"),
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(reopened_embedded_parent, "Name", &[])
+                    .expect("reopened chart sheet embedded Chart.Parent.Name")
             ),
             "Chart 2"
         );
