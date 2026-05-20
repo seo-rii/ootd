@@ -5257,6 +5257,55 @@ impl ExcelRuntime {
                             )),
                         }
                     }
+                    "HasRadarAxisLabels" => {
+                        let OmValue::Bool(enabled) = value else {
+                            return Err(OmError::type_mismatch(
+                                "ChartGroup.HasRadarAxisLabels expects a boolean value",
+                            ));
+                        };
+                        let chart = self.chart_group_model(workbook, chart_id, group_index)?;
+                        if !chart_type_supports_radar_axis_labels(&chart.chart_type) {
+                            return Err(OmError::unsupported(
+                                "ChartGroup.HasRadarAxisLabels is only supported for radar chart groups",
+                            ));
+                        }
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let axis = chart
+                            .axes
+                            .iter_mut()
+                            .find(|axis| {
+                                matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date)
+                            })
+                            .ok_or_else(|| {
+                                OmError::new(OmErrorCode::NotFound, "radar axis labels not found")
+                            })?;
+                        let tick_label_position = if enabled {
+                            ChartTickLabelPosition::NextToAxis
+                        } else {
+                            ChartTickLabelPosition::None
+                        };
+                        if axis.tick_label_position != Some(tick_label_position) {
+                            axis.tick_label_position = Some(tick_label_position);
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     "VaryByCategories" => {
                         let OmValue::Bool(vary_by_categories) = value else {
                             return Err(OmError::type_mismatch(
@@ -13971,6 +14020,7 @@ impl ExcelRuntime {
                             | "VaryByCategories"
                             | "GapWidth"
                             | "Overlap"
+                            | "HasRadarAxisLabels"
                             | "HasSeriesLines"
                             | "HasDropLines"
                             | "HasHiLoLines"
@@ -18528,6 +18578,22 @@ impl ExcelRuntime {
                     )?))),
                     "Index" => Ok(OmValue::Number((group_index + 1) as f64)),
                     "AxisGroup" => Ok(OmValue::Number(f64::from(XL_PRIMARY))),
+                    "HasRadarAxisLabels" => {
+                        if !chart_type_supports_radar_axis_labels(&chart.chart_type) {
+                            return Err(OmError::unsupported(
+                                "ChartGroup.HasRadarAxisLabels is only supported for radar chart groups",
+                            ));
+                        }
+                        let position = chart
+                            .axes
+                            .iter()
+                            .find(|axis| {
+                                matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date)
+                            })
+                            .and_then(|axis| axis.tick_label_position)
+                            .unwrap_or(ChartTickLabelPosition::NextToAxis);
+                        Ok(OmValue::Bool(position != ChartTickLabelPosition::None))
+                    }
                     "VaryByCategories" => {
                         Ok(OmValue::Bool(chart.vary_by_categories.unwrap_or(false)))
                     }
@@ -18593,12 +18659,6 @@ impl ExcelRuntime {
         match member {
             "SeriesCollection" => {
                 self.dispatch_get_chart_group(workbook, chart_id, group_index, member, args)
-            }
-            "ApplyDataLabels" => {
-                let data_labels = parse_chart_data_labels_args(args, "ChartGroup")?;
-                self.chart_group_model(workbook, chart_id, group_index)?;
-                self.apply_chart_data_labels(workbook, chart_id, data_labels)?;
-                Ok(OmValue::Empty)
             }
             _ => Err(OmError::unsupported(format!(
                 "ChartGroup.{member} is not implemented as a method"
@@ -28921,6 +28981,13 @@ fn chart_type_supports_series_marker(chart_type: &ChartType) -> bool {
     matches!(
         chart_group_xml_name(chart_type),
         Some("lineChart" | "scatterChart" | "radarChart")
+    )
+}
+
+fn chart_type_supports_radar_axis_labels(chart_type: &ChartType) -> bool {
+    matches!(
+        chart_type,
+        ChartType::Radar | ChartType::RadarMarkers | ChartType::RadarFilled
     )
 }
 
@@ -93603,180 +93670,6 @@ mod tests {
     }
 
     #[test]
-    fn chart_group_apply_data_labels_uses_chart_level_labels() {
-        let mut runtime = ExcelRuntime::new();
-        let workbook = runtime
-            .open_workbook(OpenWorkbookSpec {
-                bytes: synthetic_workbook_with_embedded_chart_bytes(),
-                format_hint: Some(FileFormat::Xlsx),
-                profile: ExcelProfile::Excel365,
-                read_only: false,
-            })
-            .expect("open workbook with chart");
-        let worksheet = expect_object_handle(
-            runtime
-                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
-                .expect("Workbook.Worksheets(1)"),
-        );
-        let chart_objects = expect_object_handle(
-            runtime
-                .dispatch_get(worksheet, "ChartObjects", &[])
-                .expect("Worksheet.ChartObjects"),
-        );
-        let chart_object = expect_object_handle(
-            runtime
-                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
-                .expect("ChartObjects.Item(1)"),
-        );
-        let chart = expect_object_handle(
-            runtime
-                .dispatch_get(chart_object, "Chart", &[])
-                .expect("ChartObject.Chart"),
-        );
-        let chart_group = expect_object_handle(
-            runtime
-                .dispatch_get(chart, "ChartGroups", &[OmValue::Number(1.0)])
-                .expect("Chart.ChartGroups(1)"),
-        );
-
-        assert_eq!(
-            runtime
-                .dispatch_invoke(
-                    chart_group,
-                    "ApplyDataLabels",
-                    &[
-                        OmValue::Number(f64::from(super::XL_DATA_LABELS_SHOW_LABEL)),
-                        OmValue::Text("bad".to_string()),
-                    ],
-                )
-                .expect_err("ChartGroup.ApplyDataLabels rejects non-bool LegendKey")
-                .code,
-            OmErrorCode::TypeMismatch
-        );
-        assert_eq!(
-            runtime
-                .dispatch_invoke(
-                    chart_group,
-                    "ApplyDataLabels",
-                    &[
-                        OmValue::Number(f64::from(super::XL_DATA_LABELS_SHOW_LABEL)),
-                        OmValue::Bool(true),
-                        OmValue::Missing,
-                        OmValue::Bool(true),
-                        OmValue::Bool(false),
-                        OmValue::Bool(true),
-                        OmValue::Bool(true),
-                        OmValue::Bool(false),
-                        OmValue::Bool(false),
-                        OmValue::Text(" | ".to_string()),
-                    ],
-                )
-                .expect("ChartGroup.ApplyDataLabels"),
-            OmValue::Empty
-        );
-
-        let series_collection = expect_object_handle(
-            runtime
-                .dispatch_get(chart_group, "SeriesCollection", &[])
-                .expect("ChartGroup.SeriesCollection"),
-        );
-        let first_series = expect_object_handle(
-            runtime
-                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
-                .expect("ChartGroup.SeriesCollection.Item(1)"),
-        );
-        assert!(expect_bool(
-            runtime
-                .dispatch_get(first_series, "HasDataLabels", &[])
-                .expect("Series.HasDataLabels after ChartGroup.ApplyDataLabels")
-        ));
-        let data_labels = expect_object_handle(
-            runtime
-                .dispatch_get(first_series, "DataLabels", &[])
-                .expect("Series.DataLabels after ChartGroup.ApplyDataLabels"),
-        );
-        assert_eq!(
-            expect_number(
-                runtime
-                    .dispatch_get(data_labels, "Type", &[])
-                    .expect("DataLabels.Type after ChartGroup.ApplyDataLabels")
-            ),
-            f64::from(super::XL_DATA_LABELS_SHOW_LABEL)
-        );
-        assert!(expect_bool(
-            runtime
-                .dispatch_get(data_labels, "ShowLegendKey", &[])
-                .expect("DataLabels.ShowLegendKey after ChartGroup.ApplyDataLabels")
-        ));
-        assert!(expect_bool(
-            runtime
-                .dispatch_get(data_labels, "ShowCategoryName", &[])
-                .expect("DataLabels.ShowCategoryName after ChartGroup.ApplyDataLabels")
-        ));
-        assert!(expect_bool(
-            runtime
-                .dispatch_get(data_labels, "ShowValue", &[])
-                .expect("DataLabels.ShowValue after ChartGroup.ApplyDataLabels")
-        ));
-        assert_eq!(
-            expect_text(
-                runtime
-                    .dispatch_get(data_labels, "Separator", &[])
-                    .expect("DataLabels.Separator after ChartGroup.ApplyDataLabels")
-            ),
-            " | "
-        );
-
-        let saved = runtime
-            .save_workbook(
-                workbook,
-                SaveWorkbookSpec {
-                    format: FileFormat::Xlsx,
-                    profile: ExcelProfile::Excel365,
-                    lossless: true,
-                },
-            )
-            .expect("save workbook after ChartGroup.ApplyDataLabels");
-        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
-        let saved_chart_xml = std::str::from_utf8(
-            saved_package
-                .part("xl/charts/chart1.xml")
-                .expect("saved chart part")
-                .bytes
-                .as_slice(),
-        )
-        .expect("saved chart xml utf8");
-        assert!(saved_chart_xml.contains("<c:dLbls>"));
-        assert!(saved_chart_xml.contains(r#"<c:showLegendKey val="1"/>"#));
-        assert!(saved_chart_xml.contains(r#"<c:showLeaderLines val="1"/>"#));
-        assert!(saved_chart_xml.contains(r#"<c:showCatName val="1"/>"#));
-        assert!(saved_chart_xml.contains(r#"<c:showVal val="1"/>"#));
-        assert!(saved_chart_xml.contains("<c:separator> | </c:separator>"));
-
-        let mut reopened_runtime = ExcelRuntime::new();
-        let reopened_workbook = reopened_runtime
-            .open_workbook(OpenWorkbookSpec {
-                bytes: saved,
-                format_hint: Some(FileFormat::Xlsx),
-                profile: ExcelProfile::Excel365,
-                read_only: false,
-            })
-            .expect("reopen workbook after ChartGroup.ApplyDataLabels");
-        let reopened = reopened_runtime
-            .runtime_workbook_mut(reopened_workbook)
-            .expect("reopened runtime workbook");
-        let chart_model = reopened
-            .loaded
-            .state
-            .charts
-            .values()
-            .next()
-            .expect("reopened chart model");
-        let data_labels = chart_model.data_labels.as_ref().expect("data labels");
-        assert!(!data_labels.dirty);
-    }
-
-    #[test]
     fn chart_group_numeric_setters_roundtrip() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -94096,6 +93989,165 @@ mod tests {
                 OmValue::Bool(false)
             );
         }
+    }
+
+    #[test]
+    fn chart_group_has_radar_axis_labels_roundtrips() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_group = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("Chart.ChartGroups(1)"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "HasRadarAxisLabels", &[])
+                .expect_err("non-radar ChartGroup.HasRadarAxisLabels should fail")
+                .code,
+            OmErrorCode::Unsupported
+        );
+
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_RADAR)),
+                &[],
+            )
+            .expect("set Chart.ChartType to radar");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(chart_group, "HasRadarAxisLabels", &[])
+                .expect("ChartGroup.HasRadarAxisLabels default")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    chart_group,
+                    "HasRadarAxisLabels",
+                    OmValue::Text("bad".to_string()),
+                    &[],
+                )
+                .expect_err("ChartGroup.HasRadarAxisLabels rejects non-bool")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        runtime
+            .dispatch_set(chart_group, "HasRadarAxisLabels", OmValue::Bool(false), &[])
+            .expect("set ChartGroup.HasRadarAxisLabels false");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(chart_group, "HasRadarAxisLabels", &[])
+                .expect("ChartGroup.HasRadarAxisLabels after false")
+        ));
+
+        let category_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.Axes(xlCategory)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(category_axis, "TickLabelPosition", &[])
+                    .expect("category Axis.TickLabelPosition")
+            ),
+            f64::from(super::XL_TICK_LABEL_POSITION_NONE)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save chart group radar axis labels");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:radarChart>"));
+        assert!(saved_chart_xml.contains(r#"<c:tickLblPos val="none"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen saved chart group workbook");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_chart_group = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("reopened Chart.ChartGroups(1)"),
+        );
+        assert!(!expect_bool(
+            reopened_runtime
+                .dispatch_get(reopened_chart_group, "HasRadarAxisLabels", &[])
+                .expect("reopened ChartGroup.HasRadarAxisLabels")
+        ));
     }
 
     #[test]
