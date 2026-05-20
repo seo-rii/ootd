@@ -20065,20 +20065,64 @@ impl ExcelRuntime {
             "Item" => {
                 let [index] = args else {
                     return Err(OmError::invalid_argument(
-                        "SeriesCollection.Item expects a single 1-based index",
+                        "SeriesCollection.Item expects a single 1-based index or series name",
                     ));
                 };
-                let index = coerce_u32_arg(index, "SeriesCollection.Item index")? as usize;
-                if index == 0 || index > self.chart_model(workbook, chart_id)?.series.len() {
-                    return Err(OmError::invalid_argument(
-                        "SeriesCollection.Item index is out of bounds",
-                    ));
-                }
-                Ok(OmValue::Object(self.register_series_handle(
-                    workbook,
-                    chart_id,
-                    index - 1,
-                )))
+                let index = match index {
+                    OmValue::Number(_) => {
+                        let index = coerce_u32_arg(index, "SeriesCollection.Item index")? as usize;
+                        if index == 0 || index > self.chart_model(workbook, chart_id)?.series.len()
+                        {
+                            return Err(OmError::invalid_argument(
+                                "SeriesCollection.Item index is out of bounds",
+                            ));
+                        }
+                        index - 1
+                    }
+                    OmValue::Text(name) => {
+                        let lookup = name.trim();
+                        let state = &self.runtime_workbook(workbook)?.loaded.state;
+                        let chart = state.charts.get(&chart_id).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "chart not found")
+                        })?;
+                        let mut matched_index = None;
+                        for (series_index, series) in chart.series.iter().enumerate() {
+                            let Some(source) = series.name.as_ref() else {
+                                continue;
+                            };
+                            let raw = source.raw.text.trim();
+                            let raw_without_equals = raw.trim_start_matches('=');
+                            let display_name = chart_source_value_text_for_index(state, source, 0);
+                            let formula_name = chart_source_expr_text(Some(source));
+                            if raw.eq_ignore_ascii_case(lookup)
+                                || raw_without_equals.eq_ignore_ascii_case(lookup)
+                                || display_name
+                                    .as_deref()
+                                    .is_some_and(|value| value.eq_ignore_ascii_case(lookup))
+                                || formula_name
+                                    .as_deref()
+                                    .is_some_and(|value| value.eq_ignore_ascii_case(lookup))
+                            {
+                                matched_index = Some(series_index);
+                                break;
+                            }
+                        }
+                        matched_index.ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::NotFound,
+                                "SeriesCollection.Item series name not found",
+                            )
+                        })?
+                    }
+                    _ => {
+                        return Err(OmError::type_mismatch(
+                            "SeriesCollection.Item expects a numeric index or series name",
+                        ));
+                    }
+                };
+                Ok(OmValue::Object(
+                    self.register_series_handle(workbook, chart_id, index),
+                ))
             }
             "NewSeries" => {
                 if !args.is_empty() {
@@ -94164,6 +94208,40 @@ mod tests {
                 runtime
                     .dispatch_get(series, "Values", &[])
                     .expect("Series.Values")
+            ),
+            "=Sheet1!$A$1:$C$1"
+        );
+        let series_by_display_name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    series_collection,
+                    "Item",
+                    &[OmValue::Text("shared".to_string())],
+                )
+                .expect("SeriesCollection.Item(\"shared\")"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series_by_display_name, "Values", &[])
+                    .expect("Series.Values from SeriesCollection.Item(\"shared\")")
+            ),
+            "=Sheet1!$A$1:$C$1"
+        );
+        let series_by_formula_name = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "SeriesCollection",
+                    &[OmValue::Text("Sheet1!$C$1".to_string())],
+                )
+                .expect("Chart.SeriesCollection(\"Sheet1!$C$1\")"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series_by_formula_name, "Values", &[])
+                    .expect("Series.Values from Chart.SeriesCollection(\"Sheet1!$C$1\")")
             ),
             "=Sheet1!$A$1:$C$1"
         );
