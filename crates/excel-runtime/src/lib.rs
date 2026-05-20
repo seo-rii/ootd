@@ -17308,6 +17308,19 @@ impl ExcelRuntime {
                     _ => unreachable!("chart protection getter was matched"),
                 }))
             }
+            "ProtectionMode" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Chart.ProtectionMode does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Bool(
+                    self.chart_model(workbook, chart_id)?
+                        .protection
+                        .unwrap_or_default()
+                        .user_interface_only,
+                ))
+            }
             "Creator" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(
@@ -98047,6 +98060,7 @@ mod tests {
             "ProtectData",
             "ProtectFormatting",
             "ProtectSelection",
+            "ProtectionMode",
         ] {
             assert_eq!(
                 runtime
@@ -98121,6 +98135,12 @@ mod tests {
             runtime
                 .dispatch_get(chart, "ProtectContents", &[])
                 .expect("Chart.ProtectContents after Protect"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ProtectionMode", &[])
+                .expect("Chart.ProtectionMode after Protect"),
             OmValue::Bool(true)
         );
         assert_eq!(
@@ -98201,6 +98221,7 @@ mod tests {
             ("ProtectData", true),
             ("ProtectFormatting", true),
             ("ProtectSelection", true),
+            ("ProtectionMode", true),
         ] {
             assert_eq!(
                 protected_runtime
@@ -98225,6 +98246,7 @@ mod tests {
             "ProtectData",
             "ProtectFormatting",
             "ProtectSelection",
+            "ProtectionMode",
         ] {
             assert_eq!(
                 protected_runtime
