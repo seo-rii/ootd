@@ -11667,35 +11667,8 @@ impl ExcelRuntime {
                     Ok(OmValue::Empty)
                 }
                 "CheckSpelling" => {
-                    if args.len() > 4 {
-                        return Err(OmError::invalid_argument(
-                            "Chart.CheckSpelling accepts at most CustomDictionary, IgnoreUppercase, AlwaysSuggest, and SpellLang arguments",
-                        ));
-                    }
+                    validate_check_spelling_args(args, "Chart")?;
                     self.chart_model(workbook, chart_id)?;
-                    if let Some(value) = args.first()
-                        && !om_value_is_omitted(value)
-                        && !matches!(value, OmValue::Text(_))
-                    {
-                        return Err(OmError::type_mismatch(
-                            "Chart.CheckSpelling CustomDictionary expects a text value when provided",
-                        ));
-                    }
-                    if let Some(value) = args.get(1) {
-                        coerce_optional_bool_arg(
-                            value,
-                            false,
-                            "Chart.CheckSpelling IgnoreUppercase",
-                        )?;
-                    }
-                    if let Some(value) = args.get(2) {
-                        coerce_optional_bool_arg(
-                            value,
-                            false,
-                            "Chart.CheckSpelling AlwaysSuggest",
-                        )?;
-                    }
-                    validate_optional_integer_arg(args, 3, "Chart.CheckSpelling SpellLang")?;
                     Ok(OmValue::Empty)
                 }
                 "Deselect" => {
@@ -14035,7 +14008,10 @@ impl ExcelRuntime {
             && matches!(
                 (surface, member),
                 ("Application" | "Workbook" | "Worksheet", "Names")
-                    | ("Workbook" | "Worksheet", "PrintPreview" | "PrintOut")
+                    | (
+                        "Workbook" | "Worksheet",
+                        "PrintPreview" | "PrintOut" | "CheckSpelling"
+                    )
                     | ("Application", "ActiveChart")
                     | ("Worksheet", "ChartObjects")
                     | ("Names", "Count" | "Item" | "Add" | "Application" | "Parent")
@@ -21449,6 +21425,11 @@ impl ExcelRuntime {
                 }
                 Ok(OmValue::Empty)
             }
+            "CheckSpelling" => {
+                validate_check_spelling_args(args, "Workbook")?;
+                self.runtime_workbook(workbook)?;
+                Ok(OmValue::Empty)
+            }
             "PrintPreview" => {
                 validate_print_preview_args(args, "Workbook")?;
                 self.runtime_workbook(workbook)?;
@@ -24241,6 +24222,11 @@ impl ExcelRuntime {
             }
             "PrintOut" => {
                 validate_print_out_args(args, "Worksheet")?;
+                self.worksheet_model(workbook, sheet_id)?;
+                Ok(OmValue::Empty)
+            }
+            "CheckSpelling" => {
+                validate_check_spelling_args(args, "Worksheet")?;
                 self.worksheet_model(workbook, sheet_id)?;
                 Ok(OmValue::Empty)
             }
@@ -28591,6 +28577,33 @@ fn validate_optional_text_arg(args: &[OmValue], index: usize, label: &str) -> Om
             "{label} expects a string value when provided"
         ))),
     }
+}
+
+fn validate_check_spelling_args(args: &[OmValue], object_name: &str) -> OmResult<()> {
+    if args.len() > 4 {
+        return Err(OmError::invalid_argument(format!(
+            "{object_name}.CheckSpelling accepts at most CustomDictionary, IgnoreUppercase, AlwaysSuggest, and SpellLang arguments"
+        )));
+    }
+    if let Some(value) = args.first()
+        && !om_value_is_omitted(value)
+        && !matches!(value, OmValue::Text(_))
+    {
+        return Err(OmError::type_mismatch(format!(
+            "{object_name}.CheckSpelling CustomDictionary expects a text value when provided"
+        )));
+    }
+    if let Some(value) = args.get(1) {
+        let label = format!("{object_name}.CheckSpelling IgnoreUppercase");
+        coerce_optional_bool_arg(value, false, &label)?;
+    }
+    if let Some(value) = args.get(2) {
+        let label = format!("{object_name}.CheckSpelling AlwaysSuggest");
+        coerce_optional_bool_arg(value, false, &label)?;
+    }
+    let label = format!("{object_name}.CheckSpelling SpellLang");
+    validate_optional_integer_arg(args, 3, &label)?;
+    Ok(())
 }
 
 fn validate_print_preview_args(args: &[OmValue], object_name: &str) -> OmResult<()> {
@@ -89861,6 +89874,144 @@ mod tests {
                     ],
                 )
                 .expect_err("Sheets.PrintOut rejects too many arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn workbook_and_worksheet_check_spelling_are_headless_noops_and_validate_arguments() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("Workbook.Sheets"),
+        );
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        runtime
+            .dispatch_invoke(charts, "Add", &[])
+            .expect("Charts.Add");
+        runtime
+            .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
+            .expect("Workbook.Saved = true");
+
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(sheets, "Item", &[OmValue::Number(2.0)])
+                .expect("Workbook.Sheets(2)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbook.0,
+                    "CheckSpelling",
+                    &[
+                        OmValue::Text("custom.dic".to_string()),
+                        OmValue::Bool(true),
+                        OmValue::Bool(false),
+                        OmValue::Number(1033.0),
+                    ],
+                )
+                .expect("Workbook.CheckSpelling"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "CheckSpelling",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Bool(false),
+                        OmValue::Bool(true),
+                        OmValue::Number(1042.0),
+                    ],
+                )
+                .expect("Worksheet.CheckSpelling"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_sheet, "CheckSpelling", &[])
+                .expect("chart sheet CheckSpelling"),
+            OmValue::Empty
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after CheckSpelling")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbook.0,
+                    "CheckSpelling",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                    ],
+                )
+                .expect_err("Workbook.CheckSpelling rejects too many arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(worksheet, "CheckSpelling", &[OmValue::Number(1.0)])
+                .expect_err("Worksheet.CheckSpelling rejects non-text CustomDictionary")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbook.0,
+                    "CheckSpelling",
+                    &[OmValue::Missing, OmValue::Text("bad".to_string())],
+                )
+                .expect_err("Workbook.CheckSpelling rejects non-bool IgnoreUppercase")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "CheckSpelling",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(1.5),
+                    ],
+                )
+                .expect_err("Worksheet.CheckSpelling rejects fractional SpellLang")
                 .code,
             OmErrorCode::InvalidArgument
         );
