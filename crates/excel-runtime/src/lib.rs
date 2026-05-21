@@ -22083,6 +22083,42 @@ impl ExcelRuntime {
                 }
                 Ok(OmValue::Empty)
             }
+            "Select" if collection_kind == RuntimeSheetCollectionKind::Charts => {
+                if args.len() > 1 {
+                    return Err(OmError::invalid_argument(
+                        "Charts.Select accepts at most a Replace argument",
+                    ));
+                }
+                if let Some(value) = args.first()
+                    && !om_value_is_omitted(value)
+                {
+                    coerce_optional_bool_arg(value, true, "Charts.Select Replace")?;
+                }
+                let (sheet_id, chart_id) = {
+                    let runtime = self.runtime_workbook(workbook)?;
+                    runtime
+                        .loaded
+                        .state
+                        .worksheets
+                        .iter()
+                        .filter(|worksheet| worksheet.kind == SheetKind::ChartSheet)
+                        .find_map(|worksheet| {
+                            runtime
+                                .loaded
+                                .state
+                                .chart_sheets
+                                .get(&worksheet.id)
+                                .map(|binding| (worksheet.id, binding.chart_id))
+                        })
+                        .ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "Charts collection is empty")
+                        })?
+                };
+                self.ensure_worksheet_visible(workbook, sheet_id, "Charts.Select")?;
+                self.set_selection(workbook, sheet_id, Rect::single_cell(1, 1));
+                self.active_chart = Some((workbook, chart_id));
+                Ok(OmValue::Empty)
+            }
             "Item" => self.resolve_sheet_collection_item(workbook, collection_kind, args),
             _ => Err(OmError::unsupported(format!(
                 "{collection_name}.{member} is not implemented as a method"
@@ -89361,6 +89397,56 @@ mod tests {
                     .expect("second Chart.Index")
             ),
             3.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(charts, "Select", &[OmValue::Bool(false)])
+                .expect("Charts.Select"),
+            OmValue::Empty
+        );
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                .expect("ActiveChart after Charts.Select"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_chart, "Name", &[])
+                    .expect("ActiveChart.Name after Charts.Select")
+            ),
+            "Chart3"
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet after Charts.Select"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("ActiveSheet.Name after Charts.Select")
+            ),
+            "Chart3"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(charts, "Select", &[OmValue::Text("bad".to_string())])
+                .expect_err("Charts.Select rejects non-bool Replace")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    charts,
+                    "Select",
+                    &[OmValue::Bool(true), OmValue::Bool(false)]
+                )
+                .expect_err("Charts.Select rejects extra arguments")
+                .code,
+            OmErrorCode::InvalidArgument
         );
         assert_eq!(
             expect_number(
