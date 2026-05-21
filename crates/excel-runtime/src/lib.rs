@@ -543,7 +543,7 @@ struct RuntimeFindState {
     last_match: Option<(u32, u32)>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RangeProjection {
     Cells,
     Rows,
@@ -8571,6 +8571,50 @@ impl ExcelRuntime {
                 if range.areas().len() != 1 {
                     self.focus_member_supported("Range", member, false)?;
                     match member {
+                        "Item" => {
+                            if projection != RangeProjection::Cells {
+                                return Err(OmError::unsupported(
+                                    "multi-area range projected Item is not supported yet",
+                                ));
+                            }
+                            let [index] = args else {
+                                return Err(OmError::invalid_argument(
+                                    "Range.Item expects a single cell index for multi-area ranges",
+                                ));
+                            };
+                            let index = coerce_u32_arg(index, "Range.Item index")?;
+                            let mut zero_based = u64::from(index - 1);
+                            for area in range.areas() {
+                                let SheetScope::Single(sheet_id) = area.scope else {
+                                    return Err(OmError::unsupported(
+                                        "3D range handles are not supported by this operation yet",
+                                    ));
+                                };
+                                let area_cell_count =
+                                    u64::from(area.rect.width()) * u64::from(area.rect.height());
+                                if zero_based < area_cell_count {
+                                    let row_offset =
+                                        (zero_based / u64::from(area.rect.width())) as u32;
+                                    let col_offset =
+                                        (zero_based % u64::from(area.rect.width())) as u32;
+                                    return Ok(OmValue::Object(
+                                        self.register_range_handle(
+                                            workbook,
+                                            sheet_id,
+                                            Rect::single_cell(
+                                                area.rect.row_first + row_offset,
+                                                area.rect.col_first + col_offset,
+                                            ),
+                                        )
+                                        .0,
+                                    ));
+                                }
+                                zero_based -= area_cell_count;
+                            }
+                            return Err(OmError::invalid_argument(
+                                "Range.Item index is out of bounds",
+                            ));
+                        }
                         "Calculate" => {
                             if !args.is_empty() {
                                 return Err(OmError::invalid_argument(
@@ -16256,11 +16300,9 @@ impl ExcelRuntime {
                 }
             }
             "Cells" => {
-                let (sheet_id, rect) = Self::range_set_first_area(&range)?;
-                let handle = self.register_projected_range_handle(
+                let handle = self.register_projected_range_set_handle(
                     workbook,
-                    sheet_id,
-                    rect,
+                    range,
                     RangeProjection::Cells,
                 );
                 if args.is_empty() {
@@ -78401,6 +78443,52 @@ mod tests {
         assert_eq!(
             expect_number(runtime.dispatch_get(range, "Count", &[]).expect("Count")),
             3.0
+        );
+        let cells = expect_object_handle(
+            runtime
+                .dispatch_get(range, "Cells", &[])
+                .expect("multi-area Cells"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(cells, "Count", &[])
+                    .expect("multi-area Cells.Count")
+            ),
+            3.0
+        );
+        let first_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(cells, "Item", &[OmValue::Number(1.0)])
+                .expect("multi-area Cells.Item(1)"),
+        );
+        let third_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(range, "Item", &[OmValue::Number(3.0)])
+                .expect("multi-area Range.Item(3)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(first_cell, "Address", &[])
+                    .expect("multi-area Cells.Item(1) address")
+            ),
+            "$C$1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(third_cell, "Address", &[])
+                    .expect("multi-area Range.Item(3) address")
+            ),
+            "$B$1"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(cells, "Item", &[OmValue::Number(4.0)])
+                .expect_err("multi-area Cells.Item out of bounds")
+                .code,
+            OmErrorCode::InvalidArgument
         );
         assert_eq!(
             expect_number(
