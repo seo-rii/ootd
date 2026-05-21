@@ -13926,6 +13926,7 @@ impl ExcelRuntime {
                         "Workbook" | "Worksheet",
                         "PrintPreview" | "PrintOut" | "CheckSpelling" | "ExportAsFixedFormat"
                     )
+                    | ("Worksheet", "Paste")
                     | ("Application", "ActiveChart")
                     | ("Worksheet", "ChartObjects")
                     | ("Names", "Count" | "Item" | "Add" | "Application" | "Parent")
@@ -24153,6 +24154,63 @@ impl ExcelRuntime {
                 validate_export_as_fixed_format_args(args, "Worksheet")?;
                 self.worksheet_model(workbook, sheet_id)?;
                 Ok(OmValue::Empty)
+            }
+            "Paste" => {
+                self.ensure_grid_worksheet(workbook, sheet_id, "Worksheet.Paste")?;
+                if args.len() > 2 {
+                    return Err(OmError::invalid_argument(
+                        "Worksheet.Paste accepts at most Destination and Link arguments",
+                    ));
+                }
+                if let Some(value) = args.get(1) {
+                    let link = coerce_optional_bool_arg(value, false, "Worksheet.Paste Link")?;
+                    if link {
+                        return Err(OmError::unsupported(
+                            "Worksheet.Paste Link is not supported",
+                        ));
+                    }
+                }
+                let destination = match args.first() {
+                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => None,
+                    Some(OmValue::Object(handle)) => {
+                        let RuntimeObjectKind::Range {
+                            workbook: destination_workbook,
+                            range: destination_range,
+                            ..
+                        } = self.runtime_object(*handle)?
+                        else {
+                            return Err(OmError::type_mismatch(
+                                "Worksheet.Paste Destination expects a Range object",
+                            ));
+                        };
+                        let (destination_sheet_id, _) =
+                            Self::range_set_single_area(&destination_range)?;
+                        if destination_workbook != workbook || destination_sheet_id != sheet_id {
+                            return Err(OmError::invalid_argument(
+                                "Worksheet.Paste Destination must belong to the same worksheet",
+                            ));
+                        }
+                        Some(*handle)
+                    }
+                    Some(_) => {
+                        return Err(OmError::type_mismatch(
+                            "Worksheet.Paste Destination expects a Range object",
+                        ));
+                    }
+                };
+                let destination = if let Some(destination) = destination {
+                    destination
+                } else {
+                    let rect = self
+                        .selection
+                        .filter(|selection| {
+                            selection.workbook == workbook && selection.sheet_id == sheet_id
+                        })
+                        .map(|selection| selection.rect)
+                        .unwrap_or(Rect::single_cell(1, 1));
+                    self.register_range_handle(workbook, sheet_id, rect).0
+                };
+                self.dispatch_invoke(destination, "PasteSpecial", &[])
             }
             "Calculate" => {
                 if !args.is_empty() {
@@ -84163,6 +84221,198 @@ mod tests {
     }
 
     #[test]
+    fn worksheet_paste_uses_selection_or_destination_range_and_validates_arguments() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B1".to_string())])
+                .expect("Range(A1:B1)"),
+        );
+        let selection_target = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("C3".to_string())])
+                .expect("Range(C3)"),
+        );
+        let destination_target = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("E4".to_string())])
+                .expect("Range(E4)"),
+        );
+
+        runtime
+            .dispatch_invoke(source, "Copy", &[])
+            .expect("Range.Copy clipboard for selection paste");
+        runtime
+            .dispatch_invoke(selection_target, "Select", &[])
+            .expect("select C3");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(worksheet, "Paste", &[])
+                .expect("Worksheet.Paste to selection"),
+            OmValue::Empty
+        );
+        let pasted_selection_value = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("C3".to_string())])
+                .expect("Range(C3) after Worksheet.Paste"),
+        );
+        let pasted_selection_formula = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("D3".to_string())])
+                .expect("Range(D3) after Worksheet.Paste"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(pasted_selection_value, "Value", &[])
+                    .expect("C3 Value after Worksheet.Paste")
+            ),
+            42.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(pasted_selection_formula, "Formula", &[])
+                    .expect("D3 Formula after Worksheet.Paste")
+            ),
+            r#"=UPPER("shared")"#
+        );
+
+        runtime
+            .dispatch_invoke(source, "Copy", &[])
+            .expect("Range.Copy clipboard for destination paste");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "Paste",
+                    &[OmValue::Object(destination_target), OmValue::Missing],
+                )
+                .expect("Worksheet.Paste Destination"),
+            OmValue::Empty
+        );
+        let pasted_destination_value = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("E4".to_string())])
+                .expect("Range(E4) after Worksheet.Paste Destination"),
+        );
+        let pasted_destination_formula = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("F4".to_string())])
+                .expect("Range(F4) after Worksheet.Paste Destination"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(pasted_destination_value, "Value", &[])
+                    .expect("E4 Value after Worksheet.Paste Destination")
+            ),
+            42.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(pasted_destination_formula, "Formula", &[])
+                    .expect("F4 Formula after Worksheet.Paste Destination")
+            ),
+            r#"=UPPER("shared")"#
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Worksheet.Paste")
+        ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after Worksheet.Paste")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(worksheet, "Paste", &[])
+                .expect_err("Worksheet.Paste rejects empty clipboard")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(worksheet, "Paste", &[OmValue::Text("C3".to_string())])
+                .expect_err("Worksheet.Paste rejects non-range Destination")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "Paste",
+                    &[OmValue::Missing, OmValue::Text("bad".to_string())],
+                )
+                .expect_err("Worksheet.Paste rejects non-bool Link")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(worksheet, "Paste", &[OmValue::Missing, OmValue::Bool(true)])
+                .expect_err("Worksheet.Paste rejects Link paste")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "Paste",
+                    &[OmValue::Missing, OmValue::Missing, OmValue::Missing,],
+                )
+                .expect_err("Worksheet.Paste rejects too many arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let other_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Add", &[])
+                .expect("Worksheets.Add"),
+        );
+        let other_sheet_destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(other_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("other sheet Range(A1)"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "Paste",
+                    &[OmValue::Object(other_sheet_destination)],
+                )
+                .expect_err("Worksheet.Paste rejects Destination from another worksheet")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
     fn range_paste_special_supports_values_formulas_and_formats() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -91324,6 +91574,10 @@ mod tests {
         assert_unsupported!(
             runtime.dispatch_invoke(chart_sheet, "Evaluate", &[OmValue::Text("1+1".to_string())]),
             "chart sheet Evaluate should be unsupported"
+        );
+        assert_unsupported!(
+            runtime.dispatch_invoke(chart_sheet, "Paste", &[]),
+            "chart sheet Paste should be unsupported"
         );
         assert_unsupported!(
             runtime.dispatch_get(application, "Cells", &[]),
