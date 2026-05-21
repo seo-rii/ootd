@@ -12774,12 +12774,12 @@ impl ExcelRuntime {
                     Ok(OmValue::Empty)
                 }
                 "PrintPreview" => {
-                    validate_chart_print_preview_args(args, "Chart")?;
+                    validate_print_preview_args(args, "Chart")?;
                     self.chart_model(workbook, chart_id)?;
                     Ok(OmValue::Empty)
                 }
                 "PrintOut" => {
-                    validate_chart_print_out_args(args, "Chart")?;
+                    validate_print_out_args(args, "Chart")?;
                     self.chart_model(workbook, chart_id)?;
                     Ok(OmValue::Empty)
                 }
@@ -14035,6 +14035,7 @@ impl ExcelRuntime {
             && matches!(
                 (surface, member),
                 ("Application" | "Workbook" | "Worksheet", "Names")
+                    | ("Workbook" | "Worksheet", "PrintPreview" | "PrintOut")
                     | ("Application", "ActiveChart")
                     | ("Worksheet", "ChartObjects")
                     | ("Names", "Count" | "Item" | "Add" | "Application" | "Parent")
@@ -21448,6 +21449,16 @@ impl ExcelRuntime {
                 }
                 Ok(OmValue::Empty)
             }
+            "PrintPreview" => {
+                validate_print_preview_args(args, "Workbook")?;
+                self.runtime_workbook(workbook)?;
+                Ok(OmValue::Empty)
+            }
+            "PrintOut" => {
+                validate_print_out_args(args, "Workbook")?;
+                self.runtime_workbook(workbook)?;
+                Ok(OmValue::Empty)
+            }
             "Close" => {
                 if args.len() > 3 {
                     return Err(OmError::invalid_argument(
@@ -22227,40 +22238,42 @@ impl ExcelRuntime {
                 }
                 Ok(OmValue::Empty)
             }
-            "PrintPreview" | "PrintOut"
-                if collection_kind == RuntimeSheetCollectionKind::Charts =>
-            {
+            "PrintPreview" | "PrintOut" => {
                 match member {
-                    "PrintPreview" => validate_chart_print_preview_args(args, "Charts")?,
-                    "PrintOut" => validate_chart_print_out_args(args, "Charts")?,
-                    _ => unreachable!("Charts print method branch"),
+                    "PrintPreview" => validate_print_preview_args(args, collection_name)?,
+                    "PrintOut" => validate_print_out_args(args, collection_name)?,
+                    _ => unreachable!("sheet collection print method branch"),
                 }
-                let chart_ids = {
-                    let runtime = self.runtime_workbook(workbook)?;
-                    runtime
-                        .loaded
-                        .state
-                        .worksheets
-                        .iter()
-                        .filter(|worksheet| worksheet.kind == SheetKind::ChartSheet)
-                        .map(|worksheet| {
-                            runtime
-                                .loaded
-                                .state
-                                .chart_sheets
-                                .get(&worksheet.id)
-                                .map(|binding| binding.chart_id)
-                                .ok_or_else(|| {
-                                    OmError::new(
-                                        OmErrorCode::InvalidState,
-                                        "chart sheet is missing a chart binding",
-                                    )
-                                })
-                        })
-                        .collect::<OmResult<Vec<_>>>()?
-                };
-                for chart_id in chart_ids {
-                    self.chart_model(workbook, chart_id)?;
+                if collection_kind == RuntimeSheetCollectionKind::Charts {
+                    let chart_ids = {
+                        let runtime = self.runtime_workbook(workbook)?;
+                        runtime
+                            .loaded
+                            .state
+                            .worksheets
+                            .iter()
+                            .filter(|worksheet| worksheet.kind == SheetKind::ChartSheet)
+                            .map(|worksheet| {
+                                runtime
+                                    .loaded
+                                    .state
+                                    .chart_sheets
+                                    .get(&worksheet.id)
+                                    .map(|binding| binding.chart_id)
+                                    .ok_or_else(|| {
+                                        OmError::new(
+                                            OmErrorCode::InvalidState,
+                                            "chart sheet is missing a chart binding",
+                                        )
+                                    })
+                            })
+                            .collect::<OmResult<Vec<_>>>()?
+                    };
+                    for chart_id in chart_ids {
+                        self.chart_model(workbook, chart_id)?;
+                    }
+                } else {
+                    self.runtime_workbook(workbook)?;
                 }
                 Ok(OmValue::Empty)
             }
@@ -24219,6 +24232,16 @@ impl ExcelRuntime {
                     .map(|selection| selection.rect)
                     .unwrap_or(Rect::single_cell(1, 1));
                 self.set_selection(workbook, sheet_id, rect);
+                Ok(OmValue::Empty)
+            }
+            "PrintPreview" => {
+                validate_print_preview_args(args, "Worksheet")?;
+                self.worksheet_model(workbook, sheet_id)?;
+                Ok(OmValue::Empty)
+            }
+            "PrintOut" => {
+                validate_print_out_args(args, "Worksheet")?;
+                self.worksheet_model(workbook, sheet_id)?;
                 Ok(OmValue::Empty)
             }
             "Calculate" => {
@@ -28570,7 +28593,7 @@ fn validate_optional_text_arg(args: &[OmValue], index: usize, label: &str) -> Om
     }
 }
 
-fn validate_chart_print_preview_args(args: &[OmValue], object_name: &str) -> OmResult<()> {
+fn validate_print_preview_args(args: &[OmValue], object_name: &str) -> OmResult<()> {
     if args.len() > 1 {
         return Err(OmError::invalid_argument(format!(
             "{object_name}.PrintPreview accepts at most an EnableChanges argument"
@@ -28583,7 +28606,7 @@ fn validate_chart_print_preview_args(args: &[OmValue], object_name: &str) -> OmR
     Ok(())
 }
 
-fn validate_chart_print_out_args(args: &[OmValue], object_name: &str) -> OmResult<()> {
+fn validate_print_out_args(args: &[OmValue], object_name: &str) -> OmResult<()> {
     if args.len() > 9 {
         return Err(OmError::invalid_argument(format!(
             "{object_name}.PrintOut accepts at most From, To, Copies, Preview, ActivePrinter, PrintToFile, Collate, PrToFileName, and IgnorePrintAreas arguments"
@@ -89548,6 +89571,296 @@ mod tests {
                     ],
                 )
                 .expect_err("Charts.PrintOut rejects too many arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn workbook_print_methods_are_headless_noops_and_validate_arguments() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved before print methods")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(workbook.0, "PrintPreview", &[OmValue::Bool(false)])
+                .expect("Workbook.PrintPreview"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbook.0,
+                    "PrintOut",
+                    &[
+                        OmValue::Number(1.0),
+                        OmValue::Number(1.0),
+                        OmValue::Number(2.0),
+                        OmValue::Bool(true),
+                        OmValue::Text("Printer".to_string()),
+                        OmValue::Bool(true),
+                        OmValue::Bool(false),
+                        OmValue::Text("workbook.prn".to_string()),
+                        OmValue::Bool(true),
+                    ],
+                )
+                .expect("Workbook.PrintOut"),
+            OmValue::Empty
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after print methods")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbook.0,
+                    "PrintPreview",
+                    &[OmValue::Text("bad".to_string())]
+                )
+                .expect_err("Workbook.PrintPreview rejects non-bool EnableChanges")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(workbook.0, "PrintOut", &[OmValue::Number(0.0)])
+                .expect_err("Workbook.PrintOut rejects non-positive From")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbook.0,
+                    "PrintOut",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                    ],
+                )
+                .expect_err("Workbook.PrintOut rejects non-text ActivePrinter")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbook.0,
+                    "PrintOut",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                    ],
+                )
+                .expect_err("Workbook.PrintOut rejects too many arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn worksheet_and_sheet_collection_print_methods_are_headless_noops_and_validate_arguments() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("Workbook.Sheets"),
+        );
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        runtime
+            .dispatch_invoke(charts, "Add", &[])
+            .expect("Charts.Add");
+        runtime
+            .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
+            .expect("Workbook.Saved = true");
+
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(sheets, "Item", &[OmValue::Number(2.0)])
+                .expect("Workbook.Sheets(2)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(worksheet, "PrintPreview", &[OmValue::Bool(false)])
+                .expect("Worksheet.PrintPreview"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "PrintOut",
+                    &[
+                        OmValue::Number(1.0),
+                        OmValue::Number(1.0),
+                        OmValue::Number(1.0),
+                        OmValue::Bool(false),
+                    ],
+                )
+                .expect("Worksheet.PrintOut"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_sheet, "PrintPreview", &[])
+                .expect("chart sheet PrintPreview"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(worksheets, "PrintPreview", &[])
+                .expect("Worksheets.PrintPreview"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheets,
+                    "PrintOut",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                        OmValue::Bool(true),
+                    ],
+                )
+                .expect("Worksheets.PrintOut"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(sheets, "PrintPreview", &[OmValue::Empty])
+                .expect("Sheets.PrintPreview"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    sheets,
+                    "PrintOut",
+                    &[OmValue::Number(1.0), OmValue::Missing, OmValue::Number(1.0),],
+                )
+                .expect("Sheets.PrintOut"),
+            OmValue::Empty
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after sheet print methods")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "PrintPreview",
+                    &[OmValue::Text("bad".to_string())]
+                )
+                .expect_err("Worksheet.PrintPreview rejects non-bool EnableChanges")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "PrintOut",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                    ],
+                )
+                .expect_err("Worksheet.PrintOut rejects non-text ActivePrinter")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(worksheets, "PrintOut", &[OmValue::Number(0.0)])
+                .expect_err("Worksheets.PrintOut rejects non-positive From")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    sheets,
+                    "PrintPreview",
+                    &[OmValue::Bool(false), OmValue::Bool(true)],
+                )
+                .expect_err("Sheets.PrintPreview rejects too many arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    sheets,
+                    "PrintOut",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                    ],
+                )
+                .expect_err("Sheets.PrintOut rejects too many arguments")
                 .code,
             OmErrorCode::InvalidArgument
         );
