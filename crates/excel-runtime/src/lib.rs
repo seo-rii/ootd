@@ -15847,25 +15847,16 @@ impl ExcelRuntime {
                     workbook,
                     range: self.range_ref(workbook, sheet_id, rect)?,
                 })?;
-                let render_text = |value: &OmValue| match value {
-                    OmValue::Missing | OmValue::Empty | OmValue::Null => String::new(),
-                    OmValue::Bool(true) => "TRUE".to_string(),
-                    OmValue::Bool(false) => "FALSE".to_string(),
-                    OmValue::Number(number) => number.to_string(),
-                    OmValue::Text(text) => text.clone(),
-                    OmValue::Error(error) => formula_cell_error_text(*error).to_string(),
-                    OmValue::Object(_) | OmValue::Array(_) => String::new(),
-                };
                 let Some(first) = array.values.first() else {
                     return Ok(OmValue::Text(String::new()));
                 };
-                let first_text = render_text(first);
+                let first_text = render_range_text_value(first);
                 if array.values.len() == 1 {
                     Ok(OmValue::Text(first_text))
                 } else if array
                     .values
                     .iter()
-                    .all(|value| render_text(value) == first_text)
+                    .all(|value| render_range_text_value(value) == first_text)
                 {
                     Ok(OmValue::Text(first_text))
                 } else {
@@ -16111,6 +16102,42 @@ impl ExcelRuntime {
                 Ok(OmValue::Object(self.register_areas_handle(workbook, range)))
             }
             "Address" => self.range_set_address(workbook, &range, args),
+            "Text" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Range.Text does not accept arguments",
+                    ));
+                }
+                let state = &self.runtime_workbook(workbook)?.loaded.state;
+                let mut first_text = None;
+                for area in range.areas() {
+                    let SheetScope::Single(sheet_id) = area.scope else {
+                        return Err(OmError::unsupported(
+                            "3D range handles are not supported by this operation yet",
+                        ));
+                    };
+                    let worksheet_data = state.worksheet_data_for_sheet(sheet_id)?;
+                    for row in area.rect.row_first..=area.rect.row_last {
+                        for col in area.rect.col_first..=area.rect.col_last {
+                            let value = worksheet_data
+                                .cells
+                                .get(&(row, col))
+                                .map(|cell| OmValue::from(cell.value.clone()))
+                                .unwrap_or(OmValue::Empty);
+                            let text = render_range_text_value(&value);
+                            match &first_text {
+                                Some(first_text) if first_text != &text => {
+                                    return Ok(OmValue::Null);
+                                }
+                                Some(_) => {}
+                                None => first_text = Some(text),
+                            }
+                        }
+                    }
+                }
+
+                Ok(OmValue::Text(first_text.unwrap_or_default()))
+            }
             "HasFormula" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(
@@ -44730,6 +44757,18 @@ fn formula_text_from_value_probe(value: FormulaValueProbe) -> Result<String, For
         FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => {
             Err(FormulaEvalError::Value)
         }
+    }
+}
+
+fn render_range_text_value(value: &OmValue) -> String {
+    match value {
+        OmValue::Missing | OmValue::Empty | OmValue::Null => String::new(),
+        OmValue::Bool(true) => "TRUE".to_string(),
+        OmValue::Bool(false) => "FALSE".to_string(),
+        OmValue::Number(number) => number.to_string(),
+        OmValue::Text(text) => text.clone(),
+        OmValue::Error(error) => formula_cell_error_text(*error).to_string(),
+        OmValue::Object(_) | OmValue::Array(_) => String::new(),
     }
 }
 
@@ -78644,6 +78683,77 @@ mod tests {
             runtime
                 .dispatch_get(formula_range, "HasFormula", &[OmValue::Missing])
                 .expect_err("multi-area HasFormula rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn range_multi_area_text_aggregates_all_areas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let uniform_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1,D1".to_string())])
+                .expect("Range(B1,D1)"),
+        );
+        let mixed_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1,C1".to_string())])
+                .expect("Range(B1,C1)"),
+        );
+        let empty_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E1,G1".to_string())])
+                .expect("Range(E1,G1)"),
+        );
+        runtime
+            .dispatch_set(
+                uniform_range,
+                "Value2",
+                OmValue::Text("same".to_string()),
+                &[],
+            )
+            .expect("multi-area Value2 setter");
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(uniform_range, "Text", &[])
+                    .expect("multi-area uniform Text")
+            ),
+            "same"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(mixed_range, "Text", &[])
+                .expect("multi-area mixed Text"),
+            OmValue::Null
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(empty_range, "Text", &[])
+                    .expect("multi-area empty Text")
+            ),
+            ""
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(uniform_range, "Text", &[OmValue::Missing])
+                .expect_err("multi-area Text rejects arguments")
                 .code,
             OmErrorCode::InvalidArgument
         );
