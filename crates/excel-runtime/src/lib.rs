@@ -16111,6 +16111,44 @@ impl ExcelRuntime {
                 Ok(OmValue::Object(self.register_areas_handle(workbook, range)))
             }
             "Address" => self.range_set_address(workbook, &range, args),
+            "EntireRow" | "EntireColumn" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "Range.{member} does not accept arguments"
+                    )));
+                }
+                let mut areas = Vec::with_capacity(range.len());
+                for area in range.areas() {
+                    if matches!(area.scope, SheetScope::Multi3D { .. }) {
+                        return Err(OmError::unsupported(
+                            "3D range handles are not supported by this operation yet",
+                        ));
+                    }
+                    let rect = if member == "EntireRow" {
+                        Rect {
+                            row_first: area.rect.row_first,
+                            row_last: area.rect.row_last,
+                            col_first: 1,
+                            col_last: EXCEL_MAX_COLUMN_INDEX,
+                        }
+                    } else {
+                        Rect {
+                            row_first: 1,
+                            row_last: EXCEL_MAX_ROW_INDEX,
+                            col_first: area.rect.col_first,
+                            col_last: area.rect.col_last,
+                        }
+                    };
+                    areas.push(RangeArea::new(area.scope, rect)?);
+                }
+                Ok(OmValue::Object(
+                    self.register_range_set_handle(
+                        workbook,
+                        RangeSet::new(range.workbook_id(), areas)?,
+                    )
+                    .0,
+                ))
+            }
             "Count" | "CountLarge" => Ok(OmValue::Number(
                 range
                     .areas()
@@ -78328,6 +78366,42 @@ mod tests {
                     .expect("application multi-area address")
             ),
             "$C$1,$A$1:$B$1"
+        );
+
+        let axis_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("B2:C3,E5".to_string())],
+                )
+                .expect("Range(B2:C3,E5)"),
+        );
+        let entire_row = expect_object_handle(
+            runtime
+                .dispatch_get(axis_range, "EntireRow", &[])
+                .expect("multi-area EntireRow"),
+        );
+        let entire_column = expect_object_handle(
+            runtime
+                .dispatch_get(axis_range, "EntireColumn", &[])
+                .expect("multi-area EntireColumn"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(entire_row, "Address", &[])
+                    .expect("multi-area EntireRow address")
+            ),
+            "$2:$3,$5:$5"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(entire_column, "Address", &[])
+                    .expect("multi-area EntireColumn address")
+            ),
+            "$B:$C,$E:$E"
         );
     }
 
