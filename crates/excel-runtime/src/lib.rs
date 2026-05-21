@@ -2998,8 +2998,148 @@ impl ExcelRuntime {
                 range,
                 projection,
             } => {
-                let (sheet_id, rect) = Self::range_set_single_area(&range)?;
-                self.dispatch_set_range(workbook, sheet_id, rect, projection, member, value, args)
+                if range.areas().len() == 1 {
+                    let (sheet_id, rect) = Self::range_set_single_area(&range)?;
+                    self.dispatch_set_range(
+                        workbook, sheet_id, rect, projection, member, value, args,
+                    )
+                } else {
+                    self.focus_member_supported("Range", member, true)?;
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(format!(
+                            "Range.{member} does not accept index arguments"
+                        )));
+                    }
+
+                    match member {
+                        "Value" | "Value2" | "Formula" | "FormulaR1C1" | "Formula2"
+                        | "Formula2R1C1" | "FormulaLocal" | "FormulaR1C1Local"
+                        | "Formula2Local" | "Formula2R1C1Local" => {
+                            let values = match value {
+                                OmValue::Array(array) => array,
+                                scalar => OmArray::new(1, 1, vec![scalar])?,
+                            };
+                            if matches!(
+                                member,
+                                "Formula" | "Formula2" | "FormulaLocal" | "Formula2Local"
+                            ) {
+                                self.set_range_formulas(SetRangeValuesSpec {
+                                    workbook,
+                                    range: RangeRef::try_from(&range)?,
+                                    values,
+                                })?;
+                            } else if matches!(
+                                member,
+                                "FormulaR1C1"
+                                    | "Formula2R1C1"
+                                    | "FormulaR1C1Local"
+                                    | "Formula2R1C1Local"
+                            ) {
+                                if values.rows != 1 || values.cols != 1 {
+                                    return Err(OmError::unsupported(
+                                        "multi-area range R1C1 formula assignment currently supports scalar values only",
+                                    ));
+                                }
+                                let (cell_value, formula) = match values
+                                    .values
+                                    .into_iter()
+                                    .next()
+                                    .unwrap_or(OmValue::Empty)
+                                {
+                                    OmValue::Text(text) => {
+                                        if let Some(formula_text) = text.strip_prefix('=') {
+                                            (
+                                                CellValue::Blank,
+                                                Some(FormulaSource {
+                                                    text: formula_text.to_string(),
+                                                    is_r1c1: true,
+                                                }),
+                                            )
+                                        } else {
+                                            (CellValue::Text(text), None)
+                                        }
+                                    }
+                                    other => (CellValue::try_from(other)?, None),
+                                };
+                                let (sheet_id, rects) = Self::range_set_single_sheet_rects(&range)?;
+                                let mut updates = Vec::with_capacity(
+                                    rects
+                                        .iter()
+                                        .map(|rect| (rect.height() * rect.width()) as usize)
+                                        .sum(),
+                                );
+                                for rect in rects {
+                                    for row in rect.row_first..=rect.row_last {
+                                        for col in rect.col_first..=rect.col_last {
+                                            updates.push((
+                                                (row, col),
+                                                cell_value.clone(),
+                                                formula.clone(),
+                                            ));
+                                        }
+                                    }
+                                }
+
+                                let runtime = self.runtime_workbook_mut(workbook)?;
+                                if runtime.read_only {
+                                    return Err(OmError::new(
+                                        OmErrorCode::InvalidState,
+                                        "cannot modify a read-only workbook",
+                                    ));
+                                }
+                                let worksheet = runtime
+                                    .loaded
+                                    .state
+                                    .worksheet_data_for_sheet_mut(sheet_id)?;
+                                for (key, cell_value, formula) in updates {
+                                    if let Some(existing) = worksheet.cells.get_mut(&key) {
+                                        if existing.value == cell_value
+                                            && existing.formula == formula
+                                        {
+                                            continue;
+                                        }
+
+                                        existing.value = cell_value;
+                                        existing.formula = formula;
+                                        if matches!(existing.value, CellValue::Blank)
+                                            && existing.style_id.is_none()
+                                            && existing.formula.is_none()
+                                        {
+                                            worksheet.cells.remove(&key);
+                                        }
+                                        worksheet.dirty = true;
+                                        worksheet.dirty_cells.insert(key);
+                                        continue;
+                                    }
+
+                                    if !matches!(cell_value, CellValue::Blank) || formula.is_some()
+                                    {
+                                        worksheet.cells.insert(
+                                            key,
+                                            excel_model::CellData {
+                                                value: cell_value,
+                                                formula,
+                                                style_id: None,
+                                            },
+                                        );
+                                        worksheet.dirty = true;
+                                        worksheet.dirty_cells.insert(key);
+                                    }
+                                }
+                            } else {
+                                self.set_range_values(SetRangeValuesSpec {
+                                    workbook,
+                                    range: RangeRef::try_from(&range)?,
+                                    values,
+                                })?;
+                            }
+                            Ok(())
+                        }
+                        _ => Err(OmError::unsupported(format!(
+                            "Range.{member} is not writable"
+                        ))),
+                    }
+                }
             }
             RuntimeObjectKind::Areas { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
@@ -77988,6 +78128,147 @@ mod tests {
             ),
             "$C$1,$A$1:$B$1"
         );
+    }
+
+    #[test]
+    fn range_multi_area_scalar_setters_broadcast_values_and_formulas() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("E2,F3:G3".to_string())],
+                )
+                .expect("Range(E2,F3:G3)"),
+        );
+        runtime
+            .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
+            .expect("reset Workbook.Saved before multi-area set");
+
+        runtime
+            .dispatch_set(range, "Value2", OmValue::Text("broadcast".to_string()), &[])
+            .expect("multi-area Value2 scalar setter");
+        for address in ["E2", "F3", "G3"] {
+            let cell = expect_object_handle(
+                runtime
+                    .dispatch_invoke(active_sheet, "Range", &[OmValue::Text(address.to_string())])
+                    .expect("cell range after multi-area Value2"),
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(cell, "Value2", &[])
+                        .expect("cell Value2 after multi-area broadcast")
+                ),
+                "broadcast"
+            );
+        }
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    range,
+                    "Value2",
+                    OmValue::Array(
+                        OmArray::new(
+                            1,
+                            2,
+                            vec![
+                                OmValue::Text("left".to_string()),
+                                OmValue::Text("right".to_string()),
+                            ],
+                        )
+                        .expect("value array"),
+                    ),
+                    &[],
+                )
+                .expect_err("multi-area Value2 rejects array setter")
+                .code,
+            OmErrorCode::Unsupported
+        );
+
+        runtime
+            .dispatch_set(range, "Formula", OmValue::Text("=ROW()".to_string()), &[])
+            .expect("multi-area Formula scalar setter");
+        for address in ["E2", "F3", "G3"] {
+            let cell = expect_object_handle(
+                runtime
+                    .dispatch_invoke(active_sheet, "Range", &[OmValue::Text(address.to_string())])
+                    .expect("cell range after multi-area Formula"),
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(cell, "Formula", &[])
+                        .expect("cell Formula after multi-area broadcast")
+                ),
+                "=ROW()"
+            );
+        }
+
+        runtime
+            .dispatch_set(
+                range,
+                "FormulaR1C1",
+                OmValue::Text("=R[0]C[-1]".to_string()),
+                &[],
+            )
+            .expect("multi-area FormulaR1C1 scalar setter");
+        for address in ["E2", "F3", "G3"] {
+            let cell = expect_object_handle(
+                runtime
+                    .dispatch_invoke(active_sheet, "Range", &[OmValue::Text(address.to_string())])
+                    .expect("cell range after multi-area FormulaR1C1"),
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(cell, "FormulaR1C1", &[])
+                        .expect("cell FormulaR1C1 after multi-area broadcast")
+                ),
+                "=R[0]C[-1]"
+            );
+        }
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    range,
+                    "FormulaR1C1",
+                    OmValue::Array(
+                        OmArray::new(
+                            1,
+                            2,
+                            vec![
+                                OmValue::Text("=R[0]C[-1]".to_string()),
+                                OmValue::Text("=R[0]C[-2]".to_string()),
+                            ],
+                        )
+                        .expect("formula array"),
+                    ),
+                    &[],
+                )
+                .expect_err("multi-area FormulaR1C1 rejects array setter")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after multi-area set")
+        ));
     }
 
     #[test]
