@@ -12774,67 +12774,13 @@ impl ExcelRuntime {
                     Ok(OmValue::Empty)
                 }
                 "PrintPreview" => {
-                    if args.len() > 1 {
-                        return Err(OmError::invalid_argument(
-                            "Chart.PrintPreview accepts at most an EnableChanges argument",
-                        ));
-                    }
+                    validate_chart_print_preview_args(args, "Chart")?;
                     self.chart_model(workbook, chart_id)?;
-                    if let Some(value) = args.first() {
-                        coerce_optional_bool_arg(value, true, "Chart.PrintPreview EnableChanges")?;
-                    }
                     Ok(OmValue::Empty)
                 }
                 "PrintOut" => {
-                    if args.len() > 9 {
-                        return Err(OmError::invalid_argument(
-                            "Chart.PrintOut accepts at most From, To, Copies, Preview, ActivePrinter, PrintToFile, Collate, PrToFileName, and IgnorePrintAreas arguments",
-                        ));
-                    }
+                    validate_chart_print_out_args(args, "Chart")?;
                     self.chart_model(workbook, chart_id)?;
-                    for (index, label) in [
-                        "Chart.PrintOut From",
-                        "Chart.PrintOut To",
-                        "Chart.PrintOut Copies",
-                    ]
-                    .into_iter()
-                    .enumerate()
-                    {
-                        if let Some(value) = args.get(index) {
-                            if om_value_is_omitted(value) {
-                                continue;
-                            }
-                            coerce_u32_arg(value, label)?;
-                        }
-                    }
-                    if let Some(value) = args.get(3) {
-                        coerce_optional_bool_arg(value, false, "Chart.PrintOut Preview")?;
-                    }
-                    if let Some(value) = args.get(4)
-                        && !om_value_is_omitted(value)
-                        && !matches!(value, OmValue::Text(_))
-                    {
-                        return Err(OmError::type_mismatch(
-                            "Chart.PrintOut ActivePrinter must be text when provided",
-                        ));
-                    }
-                    if let Some(value) = args.get(5) {
-                        coerce_optional_bool_arg(value, false, "Chart.PrintOut PrintToFile")?;
-                    }
-                    if let Some(value) = args.get(6) {
-                        coerce_optional_bool_arg(value, false, "Chart.PrintOut Collate")?;
-                    }
-                    if let Some(value) = args.get(7)
-                        && !om_value_is_omitted(value)
-                        && !matches!(value, OmValue::Text(_))
-                    {
-                        return Err(OmError::type_mismatch(
-                            "Chart.PrintOut PrToFileName must be text when provided",
-                        ));
-                    }
-                    if let Some(value) = args.get(8) {
-                        coerce_optional_bool_arg(value, false, "Chart.PrintOut IgnorePrintAreas")?;
-                    }
                     Ok(OmValue::Empty)
                 }
                 "Delete" => {
@@ -22100,6 +22046,43 @@ impl ExcelRuntime {
                 }
                 Ok(OmValue::Bool(true))
             }
+            "PrintPreview" | "PrintOut"
+                if collection_kind == RuntimeSheetCollectionKind::Charts =>
+            {
+                match member {
+                    "PrintPreview" => validate_chart_print_preview_args(args, "Charts")?,
+                    "PrintOut" => validate_chart_print_out_args(args, "Charts")?,
+                    _ => unreachable!("Charts print method branch"),
+                }
+                let chart_ids = {
+                    let runtime = self.runtime_workbook(workbook)?;
+                    runtime
+                        .loaded
+                        .state
+                        .worksheets
+                        .iter()
+                        .filter(|worksheet| worksheet.kind == SheetKind::ChartSheet)
+                        .map(|worksheet| {
+                            runtime
+                                .loaded
+                                .state
+                                .chart_sheets
+                                .get(&worksheet.id)
+                                .map(|binding| binding.chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(
+                                        OmErrorCode::InvalidState,
+                                        "chart sheet is missing a chart binding",
+                                    )
+                                })
+                        })
+                        .collect::<OmResult<Vec<_>>>()?
+                };
+                for chart_id in chart_ids {
+                    self.chart_model(workbook, chart_id)?;
+                }
+                Ok(OmValue::Empty)
+            }
             "Item" => self.resolve_sheet_collection_item(workbook, collection_kind, args),
             _ => Err(OmError::unsupported(format!(
                 "{collection_name}.{member} is not implemented as a method"
@@ -28285,6 +28268,69 @@ fn validate_optional_text_arg(args: &[OmValue], index: usize, label: &str) -> Om
             "{label} expects a string value when provided"
         ))),
     }
+}
+
+fn validate_chart_print_preview_args(args: &[OmValue], object_name: &str) -> OmResult<()> {
+    if args.len() > 1 {
+        return Err(OmError::invalid_argument(format!(
+            "{object_name}.PrintPreview accepts at most an EnableChanges argument"
+        )));
+    }
+    if let Some(value) = args.first() {
+        let label = format!("{object_name}.PrintPreview EnableChanges");
+        coerce_optional_bool_arg(value, true, &label)?;
+    }
+    Ok(())
+}
+
+fn validate_chart_print_out_args(args: &[OmValue], object_name: &str) -> OmResult<()> {
+    if args.len() > 9 {
+        return Err(OmError::invalid_argument(format!(
+            "{object_name}.PrintOut accepts at most From, To, Copies, Preview, ActivePrinter, PrintToFile, Collate, PrToFileName, and IgnorePrintAreas arguments"
+        )));
+    }
+    for (index, label) in ["From", "To", "Copies"].into_iter().enumerate() {
+        if let Some(value) = args.get(index) {
+            if om_value_is_omitted(value) {
+                continue;
+            }
+            let label = format!("{object_name}.PrintOut {label}");
+            coerce_u32_arg(value, &label)?;
+        }
+    }
+    if let Some(value) = args.get(3) {
+        let label = format!("{object_name}.PrintOut Preview");
+        coerce_optional_bool_arg(value, false, &label)?;
+    }
+    if let Some(value) = args.get(4)
+        && !om_value_is_omitted(value)
+        && !matches!(value, OmValue::Text(_))
+    {
+        return Err(OmError::type_mismatch(format!(
+            "{object_name}.PrintOut ActivePrinter must be text when provided"
+        )));
+    }
+    if let Some(value) = args.get(5) {
+        let label = format!("{object_name}.PrintOut PrintToFile");
+        coerce_optional_bool_arg(value, false, &label)?;
+    }
+    if let Some(value) = args.get(6) {
+        let label = format!("{object_name}.PrintOut Collate");
+        coerce_optional_bool_arg(value, false, &label)?;
+    }
+    if let Some(value) = args.get(7)
+        && !om_value_is_omitted(value)
+        && !matches!(value, OmValue::Text(_))
+    {
+        return Err(OmError::type_mismatch(format!(
+            "{object_name}.PrintOut PrToFileName must be text when provided"
+        )));
+    }
+    if let Some(value) = args.get(8) {
+        let label = format!("{object_name}.PrintOut IgnorePrintAreas");
+        coerce_optional_bool_arg(value, false, &label)?;
+    }
+    Ok(())
 }
 
 fn sheet_visibility_to_excel_value(visibility: SheetVisibility) -> i32 {
@@ -89095,6 +89141,116 @@ mod tests {
         assert!(!saved_package.contains("xl/chartsheets/sheet2.xml"));
         assert!(!saved_package.contains("xl/charts/chart1.xml"));
         assert!(!saved_package.contains("xl/charts/chart2.xml"));
+    }
+
+    #[test]
+    fn charts_print_methods_are_headless_noops_and_validate_arguments() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(charts, "PrintPreview", &[])
+                .expect("empty Charts.PrintPreview"),
+            OmValue::Empty
+        );
+        runtime
+            .dispatch_invoke(charts, "Add", &[])
+            .expect("first Charts.Add");
+        runtime
+            .dispatch_invoke(charts, "Add", &[])
+            .expect("second Charts.Add");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(charts, "PrintPreview", &[OmValue::Bool(false)])
+                .expect("Charts.PrintPreview"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    charts,
+                    "PrintOut",
+                    &[
+                        OmValue::Number(1.0),
+                        OmValue::Number(1.0),
+                        OmValue::Number(2.0),
+                        OmValue::Bool(true),
+                        OmValue::Text("Printer".to_string()),
+                        OmValue::Bool(true),
+                        OmValue::Bool(false),
+                        OmValue::Text("charts.prn".to_string()),
+                        OmValue::Bool(true),
+                    ],
+                )
+                .expect("Charts.PrintOut"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(charts, "PrintPreview", &[OmValue::Text("bad".to_string())])
+                .expect_err("Charts.PrintPreview rejects non-bool EnableChanges")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(charts, "PrintOut", &[OmValue::Number(0.0)])
+                .expect_err("Charts.PrintOut rejects non-positive From")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    charts,
+                    "PrintOut",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                    ],
+                )
+                .expect_err("Charts.PrintOut rejects non-text ActivePrinter")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    charts,
+                    "PrintOut",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                    ],
+                )
+                .expect_err("Charts.PrintOut rejects too many arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
     }
 
     #[test]
