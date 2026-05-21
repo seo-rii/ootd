@@ -8361,10 +8361,47 @@ impl ExcelRuntime {
                     ))),
                 }
             }
-            RuntimeObjectKind::WorkbooksCollection
-            | RuntimeObjectKind::WorksheetsCollection { .. } => Err(OmError::unsupported(format!(
+            RuntimeObjectKind::WorkbooksCollection => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
             ))),
+            RuntimeObjectKind::WorksheetsCollection { workbook, kind } => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "{}.{member} does not accept index arguments",
+                        kind.member_name()
+                    )));
+                }
+                match (kind, member) {
+                    (RuntimeSheetCollectionKind::Charts, "Visible") => {
+                        coerce_sheet_visibility(value.clone())?;
+                        let chart_sheet_ids = {
+                            let runtime = self.runtime_workbook(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            runtime
+                                .loaded
+                                .state
+                                .worksheets
+                                .iter()
+                                .filter(|worksheet| worksheet.kind == SheetKind::ChartSheet)
+                                .map(|worksheet| worksheet.id)
+                                .collect::<Vec<_>>()
+                        };
+                        for sheet_id in chart_sheet_ids {
+                            let sheet = self.register_worksheet_handle(workbook, sheet_id).0;
+                            self.dispatch_set(sheet, "Visible", value.clone(), &[])?;
+                        }
+                        Ok(())
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "member {member} is not writable for this object handle"
+                    ))),
+                }
+            }
         }
     }
 
@@ -15253,6 +15290,35 @@ impl ExcelRuntime {
                     )));
                 }
                 Ok(OmValue::Number(f64::from(XL_CREATOR_CODE)))
+            }
+            "Visible" if collection_kind == RuntimeSheetCollectionKind::Charts => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Charts.Visible does not accept arguments",
+                    ));
+                }
+                let visibilities = self
+                    .runtime_workbook(workbook)?
+                    .loaded
+                    .state
+                    .worksheets
+                    .iter()
+                    .filter(|worksheet| worksheet.kind == SheetKind::ChartSheet)
+                    .map(|worksheet| worksheet.visibility)
+                    .collect::<Vec<_>>();
+                let Some(first_visibility) = visibilities.first().copied() else {
+                    return Ok(OmValue::Empty);
+                };
+                if visibilities
+                    .iter()
+                    .all(|visibility| *visibility == first_visibility)
+                {
+                    Ok(OmValue::Number(f64::from(sheet_visibility_to_excel_value(
+                        first_visibility,
+                    ))))
+                } else {
+                    Ok(OmValue::Null)
+                }
             }
             "Item" => self.resolve_sheet_collection_item(workbook, collection_kind, args),
             _ => Err(OmError::unsupported(format!(
@@ -89143,6 +89209,14 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
+                    .dispatch_get(charts, "Visible", &[])
+                    .expect("Charts.Visible initially")
+            ),
+            f64::from(super::XL_SHEET_VISIBLE)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
                     .dispatch_get(first_chart, "Visible", &[])
                     .expect("first Chart.Visible")
             ),
@@ -89165,6 +89239,12 @@ mod tests {
             f64::from(super::XL_SHEET_HIDDEN)
         );
         assert_eq!(
+            runtime
+                .dispatch_get(charts, "Visible", &[])
+                .expect("Charts.Visible mixed visibility"),
+            OmValue::Null
+        );
+        assert_eq!(
             expect_number(
                 runtime
                     .dispatch_get(first_chart, "Index", &[])
@@ -89182,6 +89262,61 @@ mod tests {
                     .expect("first Chart.Visible after show")
             ),
             f64::from(super::XL_SHEET_VISIBLE)
+        );
+        runtime
+            .dispatch_set(
+                charts,
+                "Visible",
+                OmValue::Number(f64::from(super::XL_SHEET_HIDDEN)),
+                &[],
+            )
+            .expect("hide all chart sheets via Charts.Visible");
+        for (label, chart) in [
+            ("first", first_chart),
+            ("second", second_chart),
+            ("third", third_chart),
+        ] {
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(chart, "Visible", &[])
+                        .unwrap_or_else(|error| panic!("{label} Chart.Visible failed: {error:?}"))
+                ),
+                f64::from(super::XL_SHEET_HIDDEN)
+            );
+        }
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Visible", &[])
+                    .expect("Charts.Visible after collection hide")
+            ),
+            f64::from(super::XL_SHEET_HIDDEN)
+        );
+        runtime
+            .dispatch_set(charts, "Visible", OmValue::Bool(true), &[])
+            .expect("show all chart sheets via Charts.Visible");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Visible", &[])
+                    .expect("Charts.Visible after collection show")
+            ),
+            f64::from(super::XL_SHEET_VISIBLE)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(charts, "Visible", &[OmValue::Missing])
+                .expect_err("Charts.Visible rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(charts, "Visible", OmValue::Text("hidden".to_string()), &[])
+                .expect_err("Charts.Visible rejects non-visibility values")
+                .code,
+            OmErrorCode::TypeMismatch
         );
         assert_eq!(
             runtime
