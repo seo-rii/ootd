@@ -8568,6 +8568,100 @@ impl ExcelRuntime {
                 range,
                 projection,
             } => {
+                if range.areas().len() != 1 {
+                    self.focus_member_supported("Range", member, false)?;
+                    match member {
+                        "ClearContents" => {
+                            if !args.is_empty() {
+                                return Err(OmError::invalid_argument(
+                                    "Range.ClearContents does not accept arguments",
+                                ));
+                            }
+                            let range_ref = RangeRef::try_from(&range)?;
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            runtime.loaded.state.clear_range_contents(&range_ref)?;
+                            return Ok(OmValue::Empty);
+                        }
+                        "Clear" => {
+                            if !args.is_empty() {
+                                return Err(OmError::invalid_argument(
+                                    "Range.Clear does not accept arguments",
+                                ));
+                            }
+                            let (sheet_id, rects) = Self::range_set_single_sheet_rects(&range)?;
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let worksheet = runtime
+                                .loaded
+                                .state
+                                .worksheet_data_for_sheet_mut(sheet_id)?;
+                            for rect in rects {
+                                for row in rect.row_first..=rect.row_last {
+                                    for col in rect.col_first..=rect.col_last {
+                                        if worksheet.cells.remove(&(row, col)).is_some() {
+                                            worksheet.dirty = true;
+                                            worksheet.dirty_cells.insert((row, col));
+                                        }
+                                    }
+                                }
+                            }
+                            return Ok(OmValue::Empty);
+                        }
+                        "ClearFormats" => {
+                            if !args.is_empty() {
+                                return Err(OmError::invalid_argument(
+                                    "Range.ClearFormats does not accept arguments",
+                                ));
+                            }
+                            let (sheet_id, rects) = Self::range_set_single_sheet_rects(&range)?;
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let worksheet = runtime
+                                .loaded
+                                .state
+                                .worksheet_data_for_sheet_mut(sheet_id)?;
+                            for rect in rects {
+                                for row in rect.row_first..=rect.row_last {
+                                    for col in rect.col_first..=rect.col_last {
+                                        let key = (row, col);
+                                        let mut remove_cell = false;
+                                        if let Some(existing) = worksheet.cells.get_mut(&key)
+                                            && existing.style_id.is_some()
+                                        {
+                                            existing.style_id = None;
+                                            remove_cell =
+                                                matches!(existing.value, CellValue::Blank)
+                                                    && existing.formula.is_none();
+                                            worksheet.dirty = true;
+                                            worksheet.dirty_cells.insert(key);
+                                        }
+                                        if remove_cell {
+                                            worksheet.cells.remove(&key);
+                                        }
+                                    }
+                                }
+                            }
+                            return Ok(OmValue::Empty);
+                        }
+                        _ => {}
+                    }
+                }
                 let (sheet_id, rect) = Self::range_set_single_area(&range)?;
                 self.focus_member_supported("Range", member, false)?;
                 match member {
@@ -78268,6 +78362,223 @@ mod tests {
             runtime
                 .dispatch_get(workbook.0, "Saved", &[])
                 .expect("Workbook.Saved after multi-area set")
+        ));
+    }
+
+    #[test]
+    fn range_multi_area_clear_methods_apply_each_area() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let clear_formats_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("E2,F3:G3".to_string())],
+                )
+                .expect("Range(E2,F3:G3)"),
+        );
+        let clear_contents_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("H2,I3:J3".to_string())],
+                )
+                .expect("Range(H2,I3:J3)"),
+        );
+        let clear_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("K2,L3:M3".to_string())],
+                )
+                .expect("Range(K2,L3:M3)"),
+        );
+        runtime
+            .dispatch_set(
+                clear_formats_range,
+                "Value2",
+                OmValue::Text("kept".to_string()),
+                &[],
+            )
+            .expect("seed clear-format values");
+        runtime
+            .dispatch_set(
+                clear_contents_range,
+                "Formula",
+                OmValue::Text("=ROW()".to_string()),
+                &[],
+            )
+            .expect("seed clear-contents formulas");
+        runtime
+            .dispatch_set(
+                clear_range,
+                "Value2",
+                OmValue::Text("removed".to_string()),
+                &[],
+            )
+            .expect("seed clear values");
+        let sheet_id = runtime
+            .runtime_workbook(workbook)
+            .expect("runtime workbook")
+            .loaded
+            .state
+            .worksheets
+            .first()
+            .expect("worksheet")
+            .id;
+        {
+            let worksheet = runtime
+                .runtime_workbook_mut(workbook)
+                .expect("runtime workbook mut")
+                .loaded
+                .state
+                .worksheet_data_for_sheet_mut(sheet_id)
+                .expect("worksheet data");
+            for key in [
+                (2, 5),
+                (3, 6),
+                (3, 7),
+                (2, 8),
+                (3, 9),
+                (3, 10),
+                (2, 11),
+                (3, 12),
+                (3, 13),
+            ] {
+                worksheet.cells.get_mut(&key).expect("seeded cell").style_id = Some(StyleId(0));
+            }
+        }
+        runtime
+            .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
+            .expect("reset Workbook.Saved before multi-area clear");
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(clear_formats_range, "ClearFormats", &[])
+                .expect("multi-area ClearFormats"),
+            OmValue::Empty
+        );
+        for address in ["E2", "F3", "G3"] {
+            let cell = expect_object_handle(
+                runtime
+                    .dispatch_invoke(active_sheet, "Range", &[OmValue::Text(address.to_string())])
+                    .expect("cell range after multi-area ClearFormats"),
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(cell, "Value2", &[])
+                        .expect("cell Value2 after multi-area ClearFormats")
+                ),
+                "kept"
+            );
+        }
+        {
+            let worksheet = runtime
+                .runtime_workbook(workbook)
+                .expect("runtime workbook after ClearFormats")
+                .loaded
+                .state
+                .worksheet_data_for_sheet(sheet_id)
+                .expect("worksheet data after ClearFormats");
+            for key in [(2, 5), (3, 6), (3, 7)] {
+                assert_eq!(
+                    worksheet
+                        .cells
+                        .get(&key)
+                        .expect("format-cleared cell")
+                        .style_id,
+                    None
+                );
+            }
+        }
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(clear_contents_range, "ClearContents", &[])
+                .expect("multi-area ClearContents"),
+            OmValue::Empty
+        );
+        for address in ["H2", "I3", "J3"] {
+            let cell = expect_object_handle(
+                runtime
+                    .dispatch_invoke(active_sheet, "Range", &[OmValue::Text(address.to_string())])
+                    .expect("cell range after multi-area ClearContents"),
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(cell, "Formula", &[])
+                    .expect("cell Formula after multi-area ClearContents"),
+                OmValue::Empty
+            );
+        }
+        {
+            let worksheet = runtime
+                .runtime_workbook(workbook)
+                .expect("runtime workbook after ClearContents")
+                .loaded
+                .state
+                .worksheet_data_for_sheet(sheet_id)
+                .expect("worksheet data after ClearContents");
+            for key in [(2, 8), (3, 9), (3, 10)] {
+                assert_eq!(
+                    worksheet
+                        .cells
+                        .get(&key)
+                        .expect("contents-cleared style shell")
+                        .style_id,
+                    Some(StyleId(0))
+                );
+            }
+        }
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(clear_range, "Clear", &[])
+                .expect("multi-area Clear"),
+            OmValue::Empty
+        );
+        {
+            let worksheet = runtime
+                .runtime_workbook(workbook)
+                .expect("runtime workbook after Clear")
+                .loaded
+                .state
+                .worksheet_data_for_sheet(sheet_id)
+                .expect("worksheet data after Clear");
+            for key in [(2, 11), (3, 12), (3, 13)] {
+                assert!(
+                    worksheet.cells.get(&key).is_none(),
+                    "Range.Clear should remove multi-area cell {key:?}"
+                );
+            }
+        }
+        assert_eq!(
+            runtime
+                .dispatch_invoke(clear_range, "Clear", &[OmValue::Bool(true)])
+                .expect_err("multi-area Clear rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after multi-area clear")
         ));
     }
 
