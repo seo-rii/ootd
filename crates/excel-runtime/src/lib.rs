@@ -16111,6 +16111,44 @@ impl ExcelRuntime {
                 Ok(OmValue::Object(self.register_areas_handle(workbook, range)))
             }
             "Address" => self.range_set_address(workbook, &range, args),
+            "HasFormula" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Range.HasFormula does not accept arguments",
+                    ));
+                }
+                let state = &self.runtime_workbook(workbook)?.loaded.state;
+                let mut has_formula = false;
+                let mut has_non_formula = false;
+                for area in range.areas() {
+                    let SheetScope::Single(sheet_id) = area.scope else {
+                        return Err(OmError::unsupported(
+                            "3D range handles are not supported by this operation yet",
+                        ));
+                    };
+                    let worksheet_data = state.worksheet_data_for_sheet(sheet_id)?;
+                    for row in area.rect.row_first..=area.rect.row_last {
+                        for col in area.rect.col_first..=area.rect.col_last {
+                            if worksheet_data
+                                .cells
+                                .get(&(row, col))
+                                .and_then(|cell| cell.formula.as_ref())
+                                .is_some()
+                            {
+                                has_formula = true;
+                            } else {
+                                has_non_formula = true;
+                            }
+
+                            if has_formula && has_non_formula {
+                                return Ok(OmValue::Null);
+                            }
+                        }
+                    }
+                }
+
+                Ok(OmValue::Bool(has_formula))
+            }
             "EntireRow" | "EntireColumn" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(format!(
@@ -78544,6 +78582,71 @@ mod tests {
                 .dispatch_get(workbook.0, "Saved", &[])
                 .expect("Workbook.Saved after multi-area set")
         ));
+    }
+
+    #[test]
+    fn range_multi_area_has_formula_aggregates_all_areas() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formula_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1,D1".to_string())])
+                .expect("Range(B1,D1)"),
+        );
+        let mixed_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1,C1".to_string())])
+                .expect("Range(B1,C1)"),
+        );
+        let empty_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E1,G1".to_string())])
+                .expect("Range(E1,G1)"),
+        );
+        runtime
+            .dispatch_set(
+                formula_range,
+                "Formula",
+                OmValue::Text("=ROW()".to_string()),
+                &[],
+            )
+            .expect("multi-area Formula setter");
+
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(formula_range, "HasFormula", &[])
+                .expect("multi-area HasFormula true")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_get(mixed_range, "HasFormula", &[])
+                .expect("multi-area HasFormula mixed"),
+            OmValue::Null
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(empty_range, "HasFormula", &[])
+                .expect("multi-area HasFormula false")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_get(formula_range, "HasFormula", &[OmValue::Missing])
+                .expect_err("multi-area HasFormula rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
     }
 
     #[test]
