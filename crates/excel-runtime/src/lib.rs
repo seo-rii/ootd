@@ -12656,94 +12656,8 @@ impl ExcelRuntime {
                     Ok(OmValue::Bool(false))
                 }
                 "ExportAsFixedFormat" => {
-                    if args.is_empty() || args.len() > 9 {
-                        return Err(OmError::invalid_argument(
-                            "Chart.ExportAsFixedFormat expects Type and up to 8 optional arguments",
-                        ));
-                    }
+                    validate_export_as_fixed_format_args(args, "Chart")?;
                     self.chart_model(workbook, chart_id)?;
-                    let OmValue::Number(format_type) = &args[0] else {
-                        return Err(OmError::type_mismatch(
-                            "Chart.ExportAsFixedFormat Type expects a numeric value",
-                        ));
-                    };
-                    if !format_type.is_finite()
-                        || format_type.fract() != 0.0
-                        || *format_type < i32::MIN as f64
-                        || *format_type > i32::MAX as f64
-                    {
-                        return Err(OmError::invalid_argument(
-                            "Chart.ExportAsFixedFormat Type expects an integer value",
-                        ));
-                    }
-                    if !matches!(*format_type as i32, XL_TYPE_PDF | XL_TYPE_XPS) {
-                        return Err(OmError::invalid_argument(
-                            "Chart.ExportAsFixedFormat Type supports xlTypePDF and xlTypeXPS",
-                        ));
-                    }
-                    if let Some(value) = args.get(1)
-                        && !om_value_is_omitted(value)
-                        && !matches!(value, OmValue::Text(_))
-                    {
-                        return Err(OmError::type_mismatch(
-                            "Chart.ExportAsFixedFormat FileName expects a text value when provided",
-                        ));
-                    }
-                    if let Some(value) = args.get(2)
-                        && !om_value_is_omitted(value)
-                    {
-                        let OmValue::Number(quality) = value else {
-                            return Err(OmError::type_mismatch(
-                                "Chart.ExportAsFixedFormat Quality expects a numeric value when provided",
-                            ));
-                        };
-                        if !quality.is_finite()
-                            || quality.fract() != 0.0
-                            || *quality < i32::MIN as f64
-                            || *quality > i32::MAX as f64
-                        {
-                            return Err(OmError::invalid_argument(
-                                "Chart.ExportAsFixedFormat Quality expects an integer value when provided",
-                            ));
-                        }
-                        if !matches!(*quality as i32, XL_QUALITY_STANDARD | XL_QUALITY_MINIMUM) {
-                            return Err(OmError::invalid_argument(
-                                "Chart.ExportAsFixedFormat Quality supports xlQualityStandard and xlQualityMinimum",
-                            ));
-                        }
-                    }
-                    if let Some(value) = args.get(3) {
-                        coerce_optional_bool_arg(
-                            value,
-                            true,
-                            "Chart.ExportAsFixedFormat IncludeDocProperties",
-                        )?;
-                    }
-                    if let Some(value) = args.get(4) {
-                        coerce_optional_bool_arg(
-                            value,
-                            false,
-                            "Chart.ExportAsFixedFormat IgnorePrintAreas",
-                        )?;
-                    }
-                    for (index, label) in [
-                        (5, "Chart.ExportAsFixedFormat From"),
-                        (6, "Chart.ExportAsFixedFormat To"),
-                    ] {
-                        if let Some(value) = args.get(index) {
-                            if om_value_is_omitted(value) {
-                                continue;
-                            }
-                            coerce_u32_arg(value, label)?;
-                        }
-                    }
-                    if let Some(value) = args.get(7) {
-                        coerce_optional_bool_arg(
-                            value,
-                            false,
-                            "Chart.ExportAsFixedFormat OpenAfterPublish",
-                        )?;
-                    }
                     Ok(OmValue::Empty)
                 }
                 "PrintPreview" => {
@@ -14010,7 +13924,7 @@ impl ExcelRuntime {
                 ("Application" | "Workbook" | "Worksheet", "Names")
                     | (
                         "Workbook" | "Worksheet",
-                        "PrintPreview" | "PrintOut" | "CheckSpelling"
+                        "PrintPreview" | "PrintOut" | "CheckSpelling" | "ExportAsFixedFormat"
                     )
                     | ("Application", "ActiveChart")
                     | ("Worksheet", "ChartObjects")
@@ -21430,6 +21344,11 @@ impl ExcelRuntime {
                 self.runtime_workbook(workbook)?;
                 Ok(OmValue::Empty)
             }
+            "ExportAsFixedFormat" => {
+                validate_export_as_fixed_format_args(args, "Workbook")?;
+                self.runtime_workbook(workbook)?;
+                Ok(OmValue::Empty)
+            }
             "PrintPreview" => {
                 validate_print_preview_args(args, "Workbook")?;
                 self.runtime_workbook(workbook)?;
@@ -24227,6 +24146,11 @@ impl ExcelRuntime {
             }
             "CheckSpelling" => {
                 validate_check_spelling_args(args, "Worksheet")?;
+                self.worksheet_model(workbook, sheet_id)?;
+                Ok(OmValue::Empty)
+            }
+            "ExportAsFixedFormat" => {
+                validate_export_as_fixed_format_args(args, "Worksheet")?;
                 self.worksheet_model(workbook, sheet_id)?;
                 Ok(OmValue::Empty)
             }
@@ -28603,6 +28527,86 @@ fn validate_check_spelling_args(args: &[OmValue], object_name: &str) -> OmResult
     }
     let label = format!("{object_name}.CheckSpelling SpellLang");
     validate_optional_integer_arg(args, 3, &label)?;
+    Ok(())
+}
+
+fn validate_export_as_fixed_format_args(args: &[OmValue], object_name: &str) -> OmResult<()> {
+    if args.is_empty() || args.len() > 9 {
+        return Err(OmError::invalid_argument(format!(
+            "{object_name}.ExportAsFixedFormat expects Type and up to 8 optional arguments"
+        )));
+    }
+    let OmValue::Number(format_type) = &args[0] else {
+        return Err(OmError::type_mismatch(format!(
+            "{object_name}.ExportAsFixedFormat Type expects a numeric value"
+        )));
+    };
+    if !format_type.is_finite()
+        || format_type.fract() != 0.0
+        || *format_type < i32::MIN as f64
+        || *format_type > i32::MAX as f64
+    {
+        return Err(OmError::invalid_argument(format!(
+            "{object_name}.ExportAsFixedFormat Type expects an integer value"
+        )));
+    }
+    if !matches!(*format_type as i32, XL_TYPE_PDF | XL_TYPE_XPS) {
+        return Err(OmError::invalid_argument(format!(
+            "{object_name}.ExportAsFixedFormat Type supports xlTypePDF and xlTypeXPS"
+        )));
+    }
+    if let Some(value) = args.get(1)
+        && !om_value_is_omitted(value)
+        && !matches!(value, OmValue::Text(_))
+    {
+        return Err(OmError::type_mismatch(format!(
+            "{object_name}.ExportAsFixedFormat FileName expects a text value when provided"
+        )));
+    }
+    if let Some(value) = args.get(2)
+        && !om_value_is_omitted(value)
+    {
+        let OmValue::Number(quality) = value else {
+            return Err(OmError::type_mismatch(format!(
+                "{object_name}.ExportAsFixedFormat Quality expects a numeric value when provided"
+            )));
+        };
+        if !quality.is_finite()
+            || quality.fract() != 0.0
+            || *quality < i32::MIN as f64
+            || *quality > i32::MAX as f64
+        {
+            return Err(OmError::invalid_argument(format!(
+                "{object_name}.ExportAsFixedFormat Quality expects an integer value"
+            )));
+        }
+        if !matches!(*quality as i32, XL_QUALITY_STANDARD | XL_QUALITY_MINIMUM) {
+            return Err(OmError::invalid_argument(format!(
+                "{object_name}.ExportAsFixedFormat Quality supports xlQualityStandard and xlQualityMinimum"
+            )));
+        }
+    }
+    if let Some(value) = args.get(3) {
+        let label = format!("{object_name}.ExportAsFixedFormat IncludeDocProperties");
+        coerce_optional_bool_arg(value, true, &label)?;
+    }
+    if let Some(value) = args.get(4) {
+        let label = format!("{object_name}.ExportAsFixedFormat IgnorePrintAreas");
+        coerce_optional_bool_arg(value, false, &label)?;
+    }
+    for (index, label) in [(5, "From"), (6, "To")] {
+        if let Some(value) = args.get(index) {
+            if om_value_is_omitted(value) {
+                continue;
+            }
+            let label = format!("{object_name}.ExportAsFixedFormat {label}");
+            coerce_u32_arg(value, &label)?;
+        }
+    }
+    if let Some(value) = args.get(7) {
+        let label = format!("{object_name}.ExportAsFixedFormat OpenAfterPublish");
+        coerce_optional_bool_arg(value, false, &label)?;
+    }
     Ok(())
 }
 
@@ -90012,6 +90016,210 @@ mod tests {
                     ],
                 )
                 .expect_err("Worksheet.CheckSpelling rejects fractional SpellLang")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn workbook_and_worksheet_export_fixed_format_are_headless_noops_and_validate_arguments() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("Workbook.Sheets"),
+        );
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        runtime
+            .dispatch_invoke(charts, "Add", &[])
+            .expect("Charts.Add");
+        runtime
+            .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
+            .expect("Workbook.Saved = true");
+
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(sheets, "Item", &[OmValue::Number(2.0)])
+                .expect("Workbook.Sheets(2)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbook.0,
+                    "ExportAsFixedFormat",
+                    &[
+                        OmValue::Number(f64::from(super::XL_TYPE_PDF)),
+                        OmValue::Text("workbook.pdf".to_string()),
+                        OmValue::Number(f64::from(super::XL_QUALITY_STANDARD)),
+                        OmValue::Bool(true),
+                        OmValue::Bool(false),
+                        OmValue::Number(1.0),
+                        OmValue::Number(2.0),
+                        OmValue::Bool(false),
+                    ],
+                )
+                .expect("Workbook.ExportAsFixedFormat"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "ExportAsFixedFormat",
+                    &[
+                        OmValue::Number(f64::from(super::XL_TYPE_XPS)),
+                        OmValue::Missing,
+                        OmValue::Number(f64::from(super::XL_QUALITY_MINIMUM)),
+                    ],
+                )
+                .expect("Worksheet.ExportAsFixedFormat"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart_sheet,
+                    "ExportAsFixedFormat",
+                    &[OmValue::Number(f64::from(super::XL_TYPE_PDF))],
+                )
+                .expect("chart sheet ExportAsFixedFormat"),
+            OmValue::Empty
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after ExportAsFixedFormat")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(workbook.0, "ExportAsFixedFormat", &[])
+                .expect_err("Workbook.ExportAsFixedFormat requires Type")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbook.0,
+                    "ExportAsFixedFormat",
+                    &[OmValue::Text("pdf".to_string())],
+                )
+                .expect_err("Workbook.ExportAsFixedFormat rejects non-numeric Type")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(worksheet, "ExportAsFixedFormat", &[OmValue::Number(999.0)],)
+                .expect_err("Worksheet.ExportAsFixedFormat rejects unsupported Type")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbook.0,
+                    "ExportAsFixedFormat",
+                    &[
+                        OmValue::Number(f64::from(super::XL_TYPE_PDF)),
+                        OmValue::Number(1.0)
+                    ],
+                )
+                .expect_err("Workbook.ExportAsFixedFormat rejects non-text FileName")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "ExportAsFixedFormat",
+                    &[
+                        OmValue::Number(f64::from(super::XL_TYPE_PDF)),
+                        OmValue::Missing,
+                        OmValue::Number(999.0),
+                    ],
+                )
+                .expect_err("Worksheet.ExportAsFixedFormat rejects unsupported Quality")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "ExportAsFixedFormat",
+                    &[
+                        OmValue::Number(f64::from(super::XL_TYPE_PDF)),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Text("bad".to_string()),
+                    ],
+                )
+                .expect_err("Worksheet.ExportAsFixedFormat rejects non-bool IncludeDocProperties")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbook.0,
+                    "ExportAsFixedFormat",
+                    &[
+                        OmValue::Number(f64::from(super::XL_TYPE_PDF)),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(0.0),
+                    ],
+                )
+                .expect_err("Workbook.ExportAsFixedFormat rejects non-positive From")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    workbook.0,
+                    "ExportAsFixedFormat",
+                    &[
+                        OmValue::Number(f64::from(super::XL_TYPE_PDF)),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                    ],
+                )
+                .expect_err("Workbook.ExportAsFixedFormat rejects too many arguments")
                 .code,
             OmErrorCode::InvalidArgument
         );
