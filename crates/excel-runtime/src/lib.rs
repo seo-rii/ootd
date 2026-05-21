@@ -13931,7 +13931,7 @@ impl ExcelRuntime {
                         "Workbook" | "Worksheet",
                         "PrintPreview" | "PrintOut" | "CheckSpelling" | "ExportAsFixedFormat"
                     )
-                    | ("Worksheet", "Paste")
+                    | ("Worksheet", "Paste" | "PasteSpecial")
                     | ("Range", "CopyPicture")
                     | ("Application", "ActiveChart")
                     | ("Worksheet", "ChartObjects")
@@ -24217,6 +24217,74 @@ impl ExcelRuntime {
                     self.register_range_handle(workbook, sheet_id, rect).0
                 };
                 self.dispatch_invoke(destination, "PasteSpecial", &[])
+            }
+            "PasteSpecial" => {
+                self.ensure_grid_worksheet(workbook, sheet_id, "Worksheet.PasteSpecial")?;
+                if args.len() > 7 {
+                    return Err(OmError::invalid_argument(
+                        "Worksheet.PasteSpecial accepts at most Format, Link, DisplayAsIcon, IconFileName, IconIndex, IconLabel, and NoHTMLFormatting arguments",
+                    ));
+                }
+                validate_optional_text_arg(args, 0, "Worksheet.PasteSpecial Format")?;
+                if matches!(args.first(), Some(OmValue::Text(format)) if !format.is_empty()) {
+                    return Err(OmError::unsupported(
+                        "Worksheet.PasteSpecial Format is not supported",
+                    ));
+                }
+                if let Some(value) = args.get(1) {
+                    let link =
+                        coerce_optional_bool_arg(value, false, "Worksheet.PasteSpecial Link")?;
+                    if link {
+                        return Err(OmError::unsupported(
+                            "Worksheet.PasteSpecial Link is not supported",
+                        ));
+                    }
+                }
+                if let Some(value) = args.get(2) {
+                    let display_as_icon = coerce_optional_bool_arg(
+                        value,
+                        false,
+                        "Worksheet.PasteSpecial DisplayAsIcon",
+                    )?;
+                    if display_as_icon {
+                        return Err(OmError::unsupported(
+                            "Worksheet.PasteSpecial DisplayAsIcon is not supported",
+                        ));
+                    }
+                }
+                validate_optional_text_arg(args, 3, "Worksheet.PasteSpecial IconFileName")?;
+                if matches!(args.get(3), Some(OmValue::Text(icon_file_name)) if !icon_file_name.is_empty())
+                {
+                    return Err(OmError::unsupported(
+                        "Worksheet.PasteSpecial IconFileName is not supported",
+                    ));
+                }
+                validate_optional_integer_arg(args, 4, "Worksheet.PasteSpecial IconIndex")?;
+                if args.get(4).is_some_and(|value| !om_value_is_omitted(value)) {
+                    return Err(OmError::unsupported(
+                        "Worksheet.PasteSpecial IconIndex is not supported",
+                    ));
+                }
+                validate_optional_text_arg(args, 5, "Worksheet.PasteSpecial IconLabel")?;
+                if matches!(args.get(5), Some(OmValue::Text(icon_label)) if !icon_label.is_empty())
+                {
+                    return Err(OmError::unsupported(
+                        "Worksheet.PasteSpecial IconLabel is not supported",
+                    ));
+                }
+                if let Some(value) = args.get(6) {
+                    let no_html_formatting = coerce_optional_bool_arg(
+                        value,
+                        false,
+                        "Worksheet.PasteSpecial NoHTMLFormatting",
+                    )?;
+                    if no_html_formatting {
+                        return Err(OmError::unsupported(
+                            "Worksheet.PasteSpecial NoHTMLFormatting is not supported",
+                        ));
+                    }
+                }
+                self.dispatch_invoke_worksheet(workbook, sheet_id, "Paste", &[])
             }
             "Calculate" => {
                 if !args.is_empty() {
@@ -84506,6 +84574,297 @@ mod tests {
     }
 
     #[test]
+    fn worksheet_pastespecial_delegates_default_paste_and_validates_ole_arguments() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B1".to_string())])
+                .expect("Range(A1:B1)"),
+        );
+        let full_args_target = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("G5".to_string())])
+                .expect("Range(G5)"),
+        );
+        runtime
+            .dispatch_invoke(full_args_target, "Select", &[])
+            .expect("select G5");
+        runtime
+            .dispatch_invoke(source, "Copy", &[])
+            .expect("Range.Copy before Worksheet.PasteSpecial full default args");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "PasteSpecial",
+                    &[
+                        OmValue::Text(String::new()),
+                        OmValue::Bool(false),
+                        OmValue::Bool(false),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Text(String::new()),
+                        OmValue::Bool(false),
+                    ],
+                )
+                .expect("Worksheet.PasteSpecial with default OLE args"),
+            OmValue::Empty
+        );
+        let g5 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("G5".to_string())])
+                .expect("Range(G5) after PasteSpecial"),
+        );
+        let h5 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("H5".to_string())])
+                .expect("Range(H5) after PasteSpecial"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(g5, "Value", &[])
+                    .expect("G5 Value after Worksheet.PasteSpecial")
+            ),
+            42.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(h5, "Formula", &[])
+                    .expect("H5 Formula after Worksheet.PasteSpecial")
+            ),
+            r#"=UPPER("shared")"#
+        );
+
+        let no_args_target = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("I6".to_string())])
+                .expect("Range(I6)"),
+        );
+        runtime
+            .dispatch_invoke(no_args_target, "Select", &[])
+            .expect("select I6");
+        runtime
+            .dispatch_invoke(source, "Copy", &[])
+            .expect("Range.Copy before Worksheet.PasteSpecial no args");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(worksheet, "PasteSpecial", &[])
+                .expect("Worksheet.PasteSpecial no args"),
+            OmValue::Empty
+        );
+        let i6 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("I6".to_string())])
+                .expect("Range(I6) after PasteSpecial"),
+        );
+        let j6 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("J6".to_string())])
+                .expect("Range(J6) after PasteSpecial"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(i6, "Value", &[])
+                    .expect("I6 Value after Worksheet.PasteSpecial")
+            ),
+            42.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(j6, "Formula", &[])
+                    .expect("J6 Formula after Worksheet.PasteSpecial")
+            ),
+            r#"=UPPER("shared")"#
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Worksheet.PasteSpecial")
+        ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after Worksheet.PasteSpecial")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "PasteSpecial",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                    ],
+                )
+                .expect_err("Worksheet.PasteSpecial rejects too many arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(worksheet, "PasteSpecial", &[OmValue::Number(1.0)])
+                .expect_err("Worksheet.PasteSpecial rejects non-text Format")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "PasteSpecial",
+                    &[OmValue::Text("Text".to_string())],
+                )
+                .expect_err("Worksheet.PasteSpecial rejects explicit Format")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "PasteSpecial",
+                    &[OmValue::Missing, OmValue::Bool(true)],
+                )
+                .expect_err("Worksheet.PasteSpecial rejects Link")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "PasteSpecial",
+                    &[OmValue::Missing, OmValue::Text("bad".to_string())],
+                )
+                .expect_err("Worksheet.PasteSpecial rejects non-bool Link")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "PasteSpecial",
+                    &[OmValue::Missing, OmValue::Missing, OmValue::Bool(true)],
+                )
+                .expect_err("Worksheet.PasteSpecial rejects DisplayAsIcon")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "PasteSpecial",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Text("icon.ico".to_string()),
+                    ],
+                )
+                .expect_err("Worksheet.PasteSpecial rejects IconFileName")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "PasteSpecial",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Text("bad".to_string()),
+                    ],
+                )
+                .expect_err("Worksheet.PasteSpecial rejects non-integer IconIndex")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "PasteSpecial",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                    ],
+                )
+                .expect_err("Worksheet.PasteSpecial rejects IconIndex")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "PasteSpecial",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Text("label".to_string()),
+                    ],
+                )
+                .expect_err("Worksheet.PasteSpecial rejects IconLabel")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "PasteSpecial",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Bool(true),
+                    ],
+                )
+                .expect_err("Worksheet.PasteSpecial rejects NoHTMLFormatting")
+                .code,
+            OmErrorCode::Unsupported
+        );
+    }
+
+    #[test]
     fn range_paste_special_supports_values_formulas_and_formats() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -91671,6 +92030,10 @@ mod tests {
         assert_unsupported!(
             runtime.dispatch_invoke(chart_sheet, "Paste", &[]),
             "chart sheet Paste should be unsupported"
+        );
+        assert_unsupported!(
+            runtime.dispatch_invoke(chart_sheet, "PasteSpecial", &[]),
+            "chart sheet PasteSpecial should be unsupported"
         );
         assert_unsupported!(
             runtime.dispatch_get(application, "Cells", &[]),
