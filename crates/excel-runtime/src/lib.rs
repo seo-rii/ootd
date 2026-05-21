@@ -8583,6 +8583,11 @@ impl ExcelRuntime {
                             }
                             return Ok(OmValue::Empty);
                         }
+                        "CopyPicture" => {
+                            validate_copy_picture_args(args, 2, "Range.CopyPicture")?;
+                            self.set_headless_copy_mode();
+                            return Ok(OmValue::Empty);
+                        }
                         "ClearContents" => {
                             if !args.is_empty() {
                                 return Err(OmError::invalid_argument(
@@ -84711,6 +84716,11 @@ mod tests {
                 .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B1".to_string())])
                 .expect("Range(A1:B1)"),
         );
+        let multi_area_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1,C1".to_string())])
+                .expect("Range(A1,C1)"),
+        );
         runtime
             .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
             .expect("reset Workbook.Saved before Range.CopyPicture");
@@ -84745,6 +84755,24 @@ mod tests {
                 .dispatch_get(workbook.0, "Saved", &[])
                 .expect("Workbook.Saved after Range.CopyPicture")
         ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(multi_area_range, "CopyPicture", &[])
+                .expect("multi-area Range.CopyPicture"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode after multi-area Range.CopyPicture")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        assert!(
+            runtime.clipboard.is_none(),
+            "multi-area Range.CopyPicture should not populate a Range clipboard payload"
+        );
         assert_eq!(
             runtime
                 .dispatch_invoke(
