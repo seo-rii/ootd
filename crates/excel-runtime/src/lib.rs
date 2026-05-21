@@ -8571,6 +8571,18 @@ impl ExcelRuntime {
                 if range.areas().len() != 1 {
                     self.focus_member_supported("Range", member, false)?;
                     match member {
+                        "Calculate" => {
+                            if !args.is_empty() {
+                                return Err(OmError::invalid_argument(
+                                    "Range.Calculate does not accept arguments",
+                                ));
+                            }
+                            let (sheet_id, rects) = Self::range_set_single_sheet_rects(&range)?;
+                            for rect in rects {
+                                self.calculate_sheet_formulas(workbook, sheet_id, Some(rect))?;
+                            }
+                            return Ok(OmValue::Empty);
+                        }
                         "ClearContents" => {
                             if !args.is_empty() {
                                 return Err(OmError::invalid_argument(
@@ -78032,6 +78044,96 @@ mod tests {
                 .dispatch_get(c1, "Value2", &[])
                 .expect("C1 Value2 without Calculate"),
             OmValue::Empty
+        );
+    }
+
+    #[test]
+    fn range_calculate_updates_only_formulas_inside_multi_area_target_range() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let a1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        let b1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Range(B1)"),
+        );
+        let c1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1".to_string())])
+                .expect("Range(C1)"),
+        );
+        let d1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1".to_string())])
+                .expect("Range(D1)"),
+        );
+        let calculate_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1,D1".to_string())])
+                .expect("Range(B1,D1)"),
+        );
+
+        runtime
+            .dispatch_set(a1, "Value2", OmValue::Number(10.0), &[])
+            .expect("set A1");
+        runtime
+            .dispatch_set(b1, "Formula", OmValue::Text("=A1+1".to_string()), &[])
+            .expect("set B1 Formula");
+        runtime
+            .dispatch_set(c1, "Formula", OmValue::Text("=A1+2".to_string()), &[])
+            .expect("set C1 Formula");
+        runtime
+            .dispatch_set(d1, "Formula", OmValue::Text("=A1+3".to_string()), &[])
+            .expect("set D1 Formula");
+
+        runtime
+            .dispatch_invoke(calculate_range, "Calculate", &[])
+            .expect("multi-area Range.Calculate");
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(b1, "Value2", &[])
+                    .expect("B1 Value2 after multi-area Calculate")
+            ),
+            11.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(c1, "Value2", &[])
+                .expect("C1 Value2 outside multi-area Calculate"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(d1, "Value2", &[])
+                    .expect("D1 Value2 after multi-area Calculate")
+            ),
+            13.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(calculate_range, "Calculate", &[OmValue::Missing])
+                .expect_err("multi-area Range.Calculate args should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 
