@@ -10070,6 +10070,11 @@ impl ExcelRuntime {
                         self.clipboard = None;
                         Ok(OmValue::Empty)
                     }
+                    "CopyPicture" => {
+                        validate_copy_picture_args(args, 2, "Range.CopyPicture")?;
+                        self.set_headless_copy_mode();
+                        Ok(OmValue::Empty)
+                    }
                     "Cut" => {
                         let destination = match args {
                             [] | [OmValue::Missing] | [OmValue::Empty] | [OmValue::Null] => None,
@@ -13927,6 +13932,7 @@ impl ExcelRuntime {
                         "PrintPreview" | "PrintOut" | "CheckSpelling" | "ExportAsFixedFormat"
                     )
                     | ("Worksheet", "Paste")
+                    | ("Range", "CopyPicture")
                     | ("Application", "ActiveChart")
                     | ("Worksheet", "ChartObjects")
                     | ("Names", "Count" | "Item" | "Add" | "Application" | "Parent")
@@ -83919,6 +83925,93 @@ mod tests {
                 .dispatch_get(workbook.0, "Saved", &[])
                 .expect("Workbook.Saved after Range.Copy")
         ));
+    }
+
+    #[test]
+    fn range_copypicture_sets_headless_copy_mode_and_validates_arguments() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B1".to_string())])
+                .expect("Range(A1:B1)"),
+        );
+        runtime
+            .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
+            .expect("reset Workbook.Saved before Range.CopyPicture");
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    range,
+                    "CopyPicture",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Number(f64::from(super::XL_PICTURE)),
+                    ],
+                )
+                .expect("Range.CopyPicture"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode after Range.CopyPicture")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        assert!(
+            runtime.clipboard.is_none(),
+            "Range.CopyPicture should not populate a Range clipboard payload"
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after Range.CopyPicture")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    range,
+                    "CopyPicture",
+                    &[OmValue::Missing, OmValue::Missing, OmValue::Missing],
+                )
+                .expect_err("Range.CopyPicture rejects too many arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(range, "CopyPicture", &[OmValue::Text("bad".to_string())])
+                .expect_err("Range.CopyPicture rejects non-numeric Appearance")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    range,
+                    "CopyPicture",
+                    &[OmValue::Missing, OmValue::Number(99.0)],
+                )
+                .expect_err("Range.CopyPicture rejects unsupported Format")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
     }
 
     #[test]
