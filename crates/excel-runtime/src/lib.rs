@@ -22046,6 +22046,97 @@ impl ExcelRuntime {
                 }
                 Ok(OmValue::Bool(true))
             }
+            "Copy" if collection_kind == RuntimeSheetCollectionKind::Charts => {
+                if args.len() > 2 {
+                    return Err(OmError::invalid_argument(
+                        "Charts.Copy accepts at most Before and After arguments",
+                    ));
+                }
+                let chart_sheet_ids = {
+                    let runtime = self.runtime_workbook(workbook)?;
+                    runtime
+                        .loaded
+                        .state
+                        .worksheets
+                        .iter()
+                        .filter(|worksheet| worksheet.kind == SheetKind::ChartSheet)
+                        .map(|worksheet| worksheet.id)
+                        .collect::<Vec<_>>()
+                };
+                if chart_sheet_ids.is_empty() {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        "Charts collection is empty",
+                    ));
+                }
+                if let Some((target_workbook, base_insertion_index)) = self
+                    .worksheet_placement_target(
+                        workbook,
+                        args.first(),
+                        args.get(1),
+                        "Charts.Copy",
+                    )?
+                {
+                    for (offset, sheet_id) in chart_sheet_ids.iter().copied().enumerate() {
+                        let insertion_index =
+                            base_insertion_index.checked_add(offset).ok_or_else(|| {
+                                OmError::invalid_argument("Charts.Copy target index is too large")
+                            })?;
+                        self.copy_basic_worksheet_to_workbook(
+                            workbook,
+                            sheet_id,
+                            target_workbook,
+                            insertion_index,
+                        )?;
+                    }
+                    return Ok(OmValue::Empty);
+                }
+
+                let copied_workbook = self.create_workbook()?;
+                let default_sheet_id = self
+                    .runtime_workbook(copied_workbook)?
+                    .loaded
+                    .state
+                    .worksheets
+                    .first()
+                    .map(|worksheet| worksheet.id)
+                    .ok_or_else(|| {
+                        OmError::new(OmErrorCode::InvalidState, "workbook has no worksheets")
+                    })?;
+                let mut copied_sheet_ids = Vec::with_capacity(chart_sheet_ids.len());
+                for sheet_id in chart_sheet_ids {
+                    let insertion_index = self
+                        .runtime_workbook(copied_workbook)?
+                        .loaded
+                        .state
+                        .worksheets
+                        .len();
+                    let copied_sheet = self.copy_basic_worksheet_to_workbook(
+                        workbook,
+                        sheet_id,
+                        copied_workbook,
+                        insertion_index,
+                    )?;
+                    let RuntimeObjectKind::Worksheet {
+                        sheet_id: copied_sheet_id,
+                        ..
+                    } = self.runtime_object(copied_sheet.0)?
+                    else {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "Charts.Copy did not create a chart sheet",
+                        ));
+                    };
+                    copied_sheet_ids.push(copied_sheet_id);
+                }
+                self.delete_worksheet(copied_workbook, default_sheet_id, false)?;
+                let active_sheet_id = copied_sheet_ids
+                    .first()
+                    .copied()
+                    .ok_or_else(|| OmError::new(OmErrorCode::InvalidState, "no charts copied"))?;
+                self.set_selection(copied_workbook, active_sheet_id, Rect::single_cell(1, 1));
+                Ok(OmValue::Empty)
+            }
             "PrintPreview" | "PrintOut"
                 if collection_kind == RuntimeSheetCollectionKind::Charts =>
             {
@@ -89286,6 +89377,346 @@ mod tests {
                 .expect_err("Charts.PrintOut rejects too many arguments")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn charts_copy_without_targets_creates_chart_sheet_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        let first_chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(charts, "Add", &[])
+                .expect("first Charts.Add"),
+        );
+        let second_chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    charts,
+                    "Add",
+                    &[OmValue::Missing, OmValue::Object(first_chart)],
+                )
+                .expect("second Charts.Add after first chart"),
+        );
+        runtime
+            .dispatch_set(
+                first_chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_LINE)),
+                &[],
+            )
+            .expect("set first source chart type");
+        runtime
+            .dispatch_set(
+                second_chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_PIE)),
+                &[],
+            )
+            .expect("set second source chart type");
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(charts, "Copy", &[])
+                .expect("Charts.Copy without targets"),
+            OmValue::Empty
+        );
+        let copied_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after Charts.Copy"),
+        );
+        assert_ne!(copied_workbook, workbook.0);
+        let copied_sheets = expect_object_handle(
+            runtime
+                .dispatch_get(copied_workbook, "Sheets", &[])
+                .expect("copied Workbook.Sheets"),
+        );
+        let copied_charts = expect_object_handle(
+            runtime
+                .dispatch_get(copied_workbook, "Charts", &[])
+                .expect("copied Workbook.Charts"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_sheets, "Count", &[])
+                    .expect("copied Sheets.Count")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_charts, "Count", &[])
+                    .expect("copied Charts.Count")
+            ),
+            2.0
+        );
+        let copied_first_chart = expect_object_handle(
+            runtime
+                .dispatch_get(copied_charts, "Item", &[OmValue::Number(1.0)])
+                .expect("copied Charts.Item(1)"),
+        );
+        let copied_second_chart = expect_object_handle(
+            runtime
+                .dispatch_get(copied_charts, "Item", &[OmValue::Number(2.0)])
+                .expect("copied Charts.Item(2)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(copied_first_chart, "Name", &[])
+                    .expect("copied first Chart.Name")
+            ),
+            "Chart1"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_first_chart, "ChartType", &[])
+                    .expect("copied first ChartType")
+            ),
+            f64::from(super::XL_LINE)
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(copied_second_chart, "Name", &[])
+                    .expect("copied second Chart.Name")
+            ),
+            "Chart2"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_second_chart, "ChartType", &[])
+                    .expect("copied second ChartType")
+            ),
+            f64::from(super::XL_PIE)
+        );
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveChart", &[])
+                .expect("ActiveChart after Charts.Copy"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_chart, "Name", &[])
+                    .expect("copied ActiveChart.Name")
+            ),
+            "Chart1"
+        );
+
+        let source_charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("source Workbook.Charts after Charts.Copy"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(source_charts, "Count", &[])
+                    .expect("source Charts.Count after Charts.Copy")
+            ),
+            2.0
+        );
+        let saved = runtime
+            .save_workbook(
+                super::WorkbookHandle(copied_workbook),
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save copied Charts.Copy workbook");
+        let saved_package =
+            OpcPackage::from_bytes(&saved).expect("saved Charts.Copy workbook package");
+        assert!(!saved_package.contains("xl/worksheets/sheet1.xml"));
+        assert!(saved_package.contains("xl/chartsheets/sheet1.xml"));
+        assert!(saved_package.contains("xl/chartsheets/sheet2.xml"));
+        assert!(saved_package.contains("xl/charts/chart1.xml"));
+        assert!(saved_package.contains("xl/charts/chart2.xml"));
+    }
+
+    #[test]
+    fn charts_copy_supports_placement_targets_and_validation() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let first_chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(charts, "Add", &[])
+                .expect("first Charts.Add"),
+        );
+        let second_chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    charts,
+                    "Add",
+                    &[OmValue::Missing, OmValue::Object(first_chart)],
+                )
+                .expect("second Charts.Add after first chart"),
+        );
+        runtime
+            .dispatch_set(
+                first_chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_LINE)),
+                &[],
+            )
+            .expect("set first source chart type");
+        runtime
+            .dispatch_set(
+                second_chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_PIE)),
+                &[],
+            )
+            .expect("set second source chart type");
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    charts,
+                    "Copy",
+                    &[OmValue::Missing, OmValue::Object(worksheet)]
+                )
+                .expect("Charts.Copy after worksheet"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Count", &[])
+                    .expect("Charts.Count after placement Copy")
+            ),
+            4.0
+        );
+        let copied_first = expect_object_handle(
+            runtime
+                .dispatch_get(charts, "Item", &[OmValue::Number(3.0)])
+                .expect("copied first chart item"),
+        );
+        let copied_second = expect_object_handle(
+            runtime
+                .dispatch_get(charts, "Item", &[OmValue::Number(4.0)])
+                .expect("copied second chart item"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(copied_first, "Name", &[])
+                    .expect("copied first chart name")
+            ),
+            "Chart1 (2)"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_first, "ChartType", &[])
+                    .expect("copied first chart type")
+            ),
+            f64::from(super::XL_LINE)
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(copied_second, "Name", &[])
+                    .expect("copied second chart name")
+            ),
+            "Chart2 (2)"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_second, "ChartType", &[])
+                    .expect("copied second chart type")
+            ),
+            f64::from(super::XL_PIE)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    charts,
+                    "Copy",
+                    &[
+                        OmValue::Object(worksheet),
+                        OmValue::Object(worksheet),
+                        OmValue::Missing,
+                    ],
+                )
+                .expect_err("Charts.Copy rejects too many arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    charts,
+                    "Copy",
+                    &[OmValue::Object(worksheet), OmValue::Object(worksheet)],
+                )
+                .expect_err("Charts.Copy rejects Before and After together")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+
+        let empty_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with no charts");
+        let empty_charts = expect_object_handle(
+            runtime
+                .dispatch_get(empty_workbook.0, "Charts", &[])
+                .expect("empty Workbook.Charts"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(empty_charts, "Copy", &[])
+                .expect_err("empty Charts.Copy should fail")
+                .code,
+            OmErrorCode::NotFound
         );
     }
 
