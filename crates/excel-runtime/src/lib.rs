@@ -8632,6 +8632,35 @@ impl ExcelRuntime {
                             self.set_headless_copy_mode();
                             return Ok(OmValue::Empty);
                         }
+                        "FillDown" | "FillRight" | "FillUp" | "FillLeft" => {
+                            if !args.is_empty() {
+                                return Err(OmError::invalid_argument(format!(
+                                    "Range.{member} does not accept arguments"
+                                )));
+                            }
+                            let (sheet_id, rects) = Self::range_set_single_sheet_rects(&range)?;
+                            for rect in rects {
+                                let handle = self.register_range_handle(workbook, sheet_id, rect);
+                                self.dispatch_invoke(handle.0, member, &[])?;
+                            }
+                            return Ok(OmValue::Empty);
+                        }
+                        "Replace" => {
+                            let (sheet_id, rects) = Self::range_set_single_sheet_rects(&range)?;
+                            let mut replaced_any = false;
+                            for rect in rects {
+                                let handle = self.register_range_handle(workbook, sheet_id, rect);
+                                match self.dispatch_invoke(handle.0, member, args)? {
+                                    OmValue::Bool(replaced) => replaced_any |= replaced,
+                                    _ => {
+                                        return Err(OmError::invalid_state(
+                                            "Range.Replace returned a non-boolean result",
+                                        ));
+                                    }
+                                }
+                            }
+                            return Ok(OmValue::Bool(replaced_any));
+                        }
                         "ClearContents" => {
                             if !args.is_empty() {
                                 return Err(OmError::invalid_argument(
@@ -81109,6 +81138,141 @@ mod tests {
     }
 
     #[test]
+    fn range_multi_area_replace_applies_each_area() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let a1_a2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:A2".to_string())])
+                .expect("Range(A1:A2)"),
+        );
+        let c1_c2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1:C2".to_string())])
+                .expect("Range(C1:C2)"),
+        );
+        runtime
+            .dispatch_set(
+                a1_a2,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        1,
+                        vec![
+                            OmValue::Text("cat one".to_string()),
+                            OmValue::Text("dog".to_string()),
+                        ],
+                    )
+                    .expect("A1:A2 values"),
+                ),
+                &[],
+            )
+            .expect("A1:A2.Value2");
+        runtime
+            .dispatch_set(
+                c1_c2,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        1,
+                        vec![
+                            OmValue::Text("cat two".to_string()),
+                            OmValue::Text("Cat three".to_string()),
+                        ],
+                    )
+                    .expect("C1:C2 values"),
+                ),
+                &[],
+            )
+            .expect("C1:C2.Value2");
+
+        let target = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A2,C1:C2".to_string())],
+                )
+                .expect("Range(A1:A2,C1:C2)"),
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_invoke(
+                    target,
+                    "Replace",
+                    &[
+                        OmValue::Text("cat".to_string()),
+                        OmValue::Text("fox".to_string()),
+                    ],
+                )
+                .expect("multi-area Range.Replace cat"),
+        ));
+
+        for (address, expected) in [
+            ("A1", "fox one"),
+            ("A2", "dog"),
+            ("C1", "fox two"),
+            ("C2", "fox three"),
+        ] {
+            let cell = expect_object_handle(
+                runtime
+                    .dispatch_invoke(active_sheet, "Range", &[OmValue::Text(address.to_string())])
+                    .expect("cell Range"),
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(cell, "Value2", &[])
+                        .expect("replaced cell Value2")
+                ),
+                expected
+            );
+        }
+        assert!(!expect_bool(
+            runtime
+                .dispatch_invoke(
+                    target,
+                    "Replace",
+                    &[
+                        OmValue::Text("missing".to_string()),
+                        OmValue::Text("x".to_string()),
+                    ],
+                )
+                .expect("multi-area Range.Replace missing"),
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    target,
+                    "Replace",
+                    &[
+                        OmValue::Text("fox".to_string()),
+                        OmValue::Text("wolf".to_string()),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Bool(true),
+                    ],
+                )
+                .expect("multi-area Range.Replace MatchCase true"),
+            OmValue::Bool(true)
+        );
+    }
+
+    #[test]
     fn range_sort_dispatch_sorts_rows_by_key_and_header() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -88014,6 +88178,195 @@ mod tests {
                     .expect("D1 Formula after FillLeft")
             ),
             "=D2+$F2+D$2+$F$2"
+        );
+    }
+
+    #[test]
+    fn range_multi_area_fill_methods_apply_each_area() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+
+        let a1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        let e1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E1".to_string())])
+                .expect("Range(E1)"),
+        );
+        runtime
+            .dispatch_set(a1, "Value2", OmValue::Number(11.0), &[])
+            .expect("A1.Value2");
+        runtime
+            .dispatch_set(e1, "Value2", OmValue::Number(22.0), &[])
+            .expect("E1.Value2");
+        let fill_down = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A3,E1:E3".to_string())],
+                )
+                .expect("Range(A1:A3,E1:E3)"),
+        );
+        runtime
+            .dispatch_invoke(fill_down, "FillDown", &[])
+            .expect("multi-area FillDown");
+
+        let c5_c6 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C5:C6".to_string())])
+                .expect("Range(C5:C6)"),
+        );
+        let g5_g6 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("G5:G6".to_string())])
+                .expect("Range(G5:G6)"),
+        );
+        runtime
+            .dispatch_set(
+                c5_c6,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        1,
+                        vec![OmValue::Number(7.0), OmValue::Text("left".to_string())],
+                    )
+                    .expect("C5:C6 values"),
+                ),
+                &[],
+            )
+            .expect("C5:C6.Value2");
+        runtime
+            .dispatch_set(
+                g5_g6,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        1,
+                        vec![OmValue::Number(8.0), OmValue::Text("right".to_string())],
+                    )
+                    .expect("G5:G6 values"),
+                ),
+                &[],
+            )
+            .expect("G5:G6.Value2");
+        let fill_right = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("C5:D6,G5:H6".to_string())],
+                )
+                .expect("Range(C5:D6,G5:H6)"),
+        );
+        runtime
+            .dispatch_invoke(fill_right, "FillRight", &[])
+            .expect("multi-area FillRight");
+
+        let a10 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A10".to_string())])
+                .expect("Range(A10)"),
+        );
+        let e10 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E10".to_string())])
+                .expect("Range(E10)"),
+        );
+        runtime
+            .dispatch_set(a10, "Value2", OmValue::Number(31.0), &[])
+            .expect("A10.Value2");
+        runtime
+            .dispatch_set(e10, "Value2", OmValue::Number(32.0), &[])
+            .expect("E10.Value2");
+        let fill_up = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A8:A10,E8:E10".to_string())],
+                )
+                .expect("Range(A8:A10,E8:E10)"),
+        );
+        runtime
+            .dispatch_invoke(fill_up, "FillUp", &[])
+            .expect("multi-area FillUp");
+
+        let d12 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D12".to_string())])
+                .expect("Range(D12)"),
+        );
+        let h12 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("H12".to_string())])
+                .expect("Range(H12)"),
+        );
+        runtime
+            .dispatch_set(d12, "Value2", OmValue::Number(41.0), &[])
+            .expect("D12.Value2");
+        runtime
+            .dispatch_set(h12, "Value2", OmValue::Number(42.0), &[])
+            .expect("H12.Value2");
+        let fill_left = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("C12:D12,G12:H12".to_string())],
+                )
+                .expect("Range(C12:D12,G12:H12)"),
+        );
+        runtime
+            .dispatch_invoke(fill_left, "FillLeft", &[])
+            .expect("multi-area FillLeft");
+
+        for (address, expected) in [
+            ("A3", OmValue::Number(11.0)),
+            ("E3", OmValue::Number(22.0)),
+            ("D5", OmValue::Number(7.0)),
+            ("H6", OmValue::Text("right".to_string())),
+            ("A8", OmValue::Number(31.0)),
+            ("E8", OmValue::Number(32.0)),
+            ("C12", OmValue::Number(41.0)),
+            ("G12", OmValue::Number(42.0)),
+        ] {
+            let cell = expect_object_handle(
+                runtime
+                    .dispatch_invoke(active_sheet, "Range", &[OmValue::Text(address.to_string())])
+                    .expect("cell Range"),
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(cell, "Value2", &[])
+                    .expect("filled cell Value2"),
+                expected,
+                "{address} should be filled from its own area"
+            );
+        }
+        assert_eq!(
+            runtime
+                .dispatch_invoke(fill_down, "FillDown", &[OmValue::Missing])
+                .expect_err("multi-area FillDown should reject arguments")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 
