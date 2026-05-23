@@ -8632,6 +8632,192 @@ impl ExcelRuntime {
                             self.set_headless_copy_mode();
                             return Ok(OmValue::Empty);
                         }
+                        "Offset" => {
+                            let coerce_offset = |value: &OmValue, label: &str| -> OmResult<i32> {
+                                match value {
+                                    OmValue::Missing | OmValue::Empty | OmValue::Null => Ok(0),
+                                    OmValue::Number(number) => {
+                                        if !number.is_finite()
+                                            || number.fract() != 0.0
+                                            || *number < i32::MIN as f64
+                                            || *number > i32::MAX as f64
+                                        {
+                                            return Err(OmError::invalid_argument(format!(
+                                                "{label} must be a whole number"
+                                            )));
+                                        }
+                                        Ok(*number as i32)
+                                    }
+                                    _ => Err(OmError::type_mismatch(format!(
+                                        "{label} must be numeric when provided"
+                                    ))),
+                                }
+                            };
+                            let translate_axis =
+                                |value: u32, offset: i32, max: u32, label: &str| -> OmResult<u32> {
+                                    let translated = i64::from(value) + i64::from(offset);
+                                    if !(1..=i64::from(max)).contains(&translated) {
+                                        return Err(OmError::invalid_argument(format!(
+                                            "{label} moves the range outside worksheet bounds"
+                                        )));
+                                    }
+                                    Ok(translated as u32)
+                                };
+
+                            let (row_offset, column_offset) = match args {
+                                [] => (0, 0),
+                                [row_offset] => {
+                                    (coerce_offset(row_offset, "Range.Offset row offset")?, 0)
+                                }
+                                [row_offset, column_offset] => (
+                                    coerce_offset(row_offset, "Range.Offset row offset")?,
+                                    coerce_offset(column_offset, "Range.Offset column offset")?,
+                                ),
+                                _ => {
+                                    return Err(OmError::invalid_argument(
+                                        "Range.Offset expects optional row and column offsets",
+                                    ));
+                                }
+                            };
+                            let mut areas = Vec::with_capacity(range.len());
+                            for area in range.areas() {
+                                if matches!(area.scope, SheetScope::Multi3D { .. }) {
+                                    return Err(OmError::unsupported(
+                                        "3D range handles are not supported by this operation yet",
+                                    ));
+                                }
+                                areas.push(RangeArea::new(
+                                    area.scope,
+                                    Rect {
+                                        row_first: translate_axis(
+                                            area.rect.row_first,
+                                            row_offset,
+                                            EXCEL_MAX_ROW_INDEX,
+                                            "Range.Offset row offset",
+                                        )?,
+                                        row_last: translate_axis(
+                                            area.rect.row_last,
+                                            row_offset,
+                                            EXCEL_MAX_ROW_INDEX,
+                                            "Range.Offset row offset",
+                                        )?,
+                                        col_first: translate_axis(
+                                            area.rect.col_first,
+                                            column_offset,
+                                            EXCEL_MAX_COLUMN_INDEX,
+                                            "Range.Offset column offset",
+                                        )?,
+                                        col_last: translate_axis(
+                                            area.rect.col_last,
+                                            column_offset,
+                                            EXCEL_MAX_COLUMN_INDEX,
+                                            "Range.Offset column offset",
+                                        )?,
+                                    },
+                                )?);
+                            }
+                            let handle = self.register_projected_range_set_handle(
+                                workbook,
+                                RangeSet::new(range.workbook_id(), areas)?,
+                                projection,
+                            );
+                            return Ok(OmValue::Object(handle.0));
+                        }
+                        "Resize" => {
+                            let coerce_size =
+                                |value: &OmValue, default: u32, label: &str| -> OmResult<u32> {
+                                    match value {
+                                        OmValue::Missing | OmValue::Empty | OmValue::Null => {
+                                            Ok(default)
+                                        }
+                                        OmValue::Number(number) => {
+                                            coerce_positive_index(*number, label)
+                                        }
+                                        _ => Err(OmError::type_mismatch(format!(
+                                            "{label} must be numeric when provided"
+                                        ))),
+                                    }
+                                };
+
+                            let mut areas = Vec::with_capacity(range.len());
+                            for area in range.areas() {
+                                if matches!(area.scope, SheetScope::Multi3D { .. }) {
+                                    return Err(OmError::unsupported(
+                                        "3D range handles are not supported by this operation yet",
+                                    ));
+                                }
+                                let (row_size, column_size) = match args {
+                                    [] => (area.rect.height(), area.rect.width()),
+                                    [row_size] => (
+                                        coerce_size(
+                                            row_size,
+                                            area.rect.height(),
+                                            "Range.Resize row size",
+                                        )?,
+                                        area.rect.width(),
+                                    ),
+                                    [row_size, column_size] => (
+                                        coerce_size(
+                                            row_size,
+                                            area.rect.height(),
+                                            "Range.Resize row size",
+                                        )?,
+                                        coerce_size(
+                                            column_size,
+                                            area.rect.width(),
+                                            "Range.Resize column size",
+                                        )?,
+                                    ),
+                                    _ => {
+                                        return Err(OmError::invalid_argument(
+                                            "Range.Resize expects optional row and column sizes",
+                                        ));
+                                    }
+                                };
+                                let row_last =
+                                    area.rect.row_first.checked_add(row_size - 1).ok_or_else(
+                                        || {
+                                            OmError::invalid_argument(
+                                                "Range.Resize row size overflows worksheet bounds",
+                                            )
+                                        },
+                                    )?;
+                                if row_last > EXCEL_MAX_ROW_INDEX {
+                                    return Err(OmError::invalid_argument(
+                                        "Range.Resize row size overflows worksheet bounds",
+                                    ));
+                                }
+                                let col_last = area
+                                    .rect
+                                    .col_first
+                                    .checked_add(column_size - 1)
+                                    .ok_or_else(|| {
+                                        OmError::invalid_argument(
+                                            "Range.Resize column size overflows worksheet bounds",
+                                        )
+                                    })?;
+                                if col_last > EXCEL_MAX_COLUMN_INDEX {
+                                    return Err(OmError::invalid_argument(
+                                        "Range.Resize column size overflows worksheet bounds",
+                                    ));
+                                }
+                                areas.push(RangeArea::new(
+                                    area.scope,
+                                    Rect {
+                                        row_first: area.rect.row_first,
+                                        row_last,
+                                        col_first: area.rect.col_first,
+                                        col_last,
+                                    },
+                                )?);
+                            }
+                            let handle = self.register_projected_range_set_handle(
+                                workbook,
+                                RangeSet::new(range.workbook_id(), areas)?,
+                                projection,
+                            );
+                            return Ok(OmValue::Object(handle.0));
+                        }
                         "FillDown" | "FillRight" | "FillUp" | "FillLeft" => {
                             if !args.is_empty() {
                                 return Err(OmError::invalid_argument(format!(
@@ -79847,6 +80033,145 @@ mod tests {
                     &[OmValue::Missing, OmValue::Number(2.0)],
                 )
                 .expect_err("Range.Resize beyond max column should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn range_multi_area_offset_and_resize_transform_each_area() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("B2:C3,E5".to_string())],
+                )
+                .expect("Range(B2:C3,E5)"),
+        );
+        let unchanged = expect_object_handle(
+            runtime
+                .dispatch_invoke(range, "Offset", &[])
+                .expect("multi-area Offset()"),
+        );
+        let shifted = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    range,
+                    "Offset",
+                    &[OmValue::Number(1.0), OmValue::Number(1.0)],
+                )
+                .expect("multi-area Offset(1, 1)"),
+        );
+        let resized = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    range,
+                    "Resize",
+                    &[OmValue::Number(1.0), OmValue::Number(3.0)],
+                )
+                .expect("multi-area Resize(1, 3)"),
+        );
+        let default_width_resized = expect_object_handle(
+            runtime
+                .dispatch_invoke(range, "Resize", &[OmValue::Number(2.0), OmValue::Missing])
+                .expect("multi-area Resize(2, )"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(unchanged, "Address", &[])
+                    .expect("multi-area Offset().Address")
+            ),
+            "$B$2:$C$3,$E$5"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(shifted, "Address", &[])
+                    .expect("multi-area Offset(1, 1).Address")
+            ),
+            "$C$3:$D$4,$F$6"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(resized, "Address", &[])
+                    .expect("multi-area Resize(1, 3).Address")
+            ),
+            "$B$2:$D$2,$E$5:$G$5"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(default_width_resized, "Address", &[])
+                    .expect("multi-area Resize(2, ).Address")
+            ),
+            "$B$2:$C$3,$E$5:$E$6"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(resized, "Count", &[])
+                    .expect("multi-area Resize Count")
+            ),
+            6.0
+        );
+
+        let edge_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1,XFD1048576".to_string())],
+                )
+                .expect("Range(A1,XFD1048576)"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(edge_range, "Offset", &[OmValue::Number(-1.0)])
+                .expect_err("multi-area Offset beyond top should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    edge_range,
+                    "Resize",
+                    &[OmValue::Missing, OmValue::Number(2.0)],
+                )
+                .expect_err("multi-area Resize beyond max column should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    range,
+                    "Offset",
+                    &[
+                        OmValue::Number(1.0),
+                        OmValue::Number(1.0),
+                        OmValue::Number(1.0)
+                    ],
+                )
+                .expect_err("multi-area Offset should reject extra arguments")
                 .code,
             OmErrorCode::InvalidArgument
         );
