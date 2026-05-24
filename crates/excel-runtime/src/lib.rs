@@ -122874,6 +122874,126 @@ mod tests {
                 &[],
             )
             .expect("set Chart.ChartType to bubble");
+
+        let bubble_sizes = OmArray::new(
+            1,
+            3,
+            vec![
+                OmValue::Number(3.0),
+                OmValue::Number(4.0),
+                OmValue::Number(5.0),
+            ],
+        )
+        .expect("bubble size array");
+        runtime
+            .dispatch_set(
+                series,
+                "BubbleSizes",
+                OmValue::Array(bubble_sizes.clone()),
+                &[],
+            )
+            .expect("set Series.BubbleSizes from array");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "BubbleSizes", &[])
+                .expect("Series.BubbleSizes after array setter"),
+            OmValue::Text("={3,4,5}".to_string())
+        );
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after bubble array setter");
+            let chart = state.charts.values().next().expect("chart model");
+            assert_eq!(
+                chart.series[0]
+                    .bubble_size
+                    .as_ref()
+                    .and_then(|source| source.resolved.as_ref()),
+                Some(&ReferenceTarget::Array(bubble_sizes))
+            );
+        }
+
+        let saved_array = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after bubble array setter");
+        let saved_array_package = OpcPackage::from_bytes(&saved_array).expect("saved package");
+        let saved_array_chart_xml = std::str::from_utf8(
+            saved_array_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_array_chart_xml.contains(
+            r#"<c:bubbleSize><c:numLit><c:ptCount val="3"/><c:pt idx="0"><c:v>3</c:v></c:pt><c:pt idx="1"><c:v>4</c:v></c:pt><c:pt idx="2"><c:v>5</c:v></c:pt></c:numLit></c:bubbleSize>"#
+        ));
+
+        let mut reopened_array_runtime = ExcelRuntime::new();
+        let reopened_array_workbook = reopened_array_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved_array,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after bubble array setter");
+        let reopened_array_worksheet = expect_object_handle(
+            reopened_array_runtime
+                .dispatch_get(
+                    reopened_array_workbook.0,
+                    "Worksheets",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_array_chart_objects = expect_object_handle(
+            reopened_array_runtime
+                .dispatch_get(reopened_array_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_array_chart_object = expect_object_handle(
+            reopened_array_runtime
+                .dispatch_invoke(
+                    reopened_array_chart_objects,
+                    "Item",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_array_chart = expect_object_handle(
+            reopened_array_runtime
+                .dispatch_get(reopened_array_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_array_series_collection = expect_object_handle(
+            reopened_array_runtime
+                .dispatch_get(reopened_array_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_array_series = expect_object_handle(
+            reopened_array_runtime
+                .dispatch_invoke(
+                    reopened_array_series_collection,
+                    "Item",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        assert_eq!(
+            reopened_array_runtime
+                .dispatch_get(reopened_array_series, "BubbleSizes", &[])
+                .expect("reopened Series.BubbleSizes from array"),
+            OmValue::Text("={3,4,5}".to_string())
+        );
+
         runtime
             .dispatch_set(
                 series,
