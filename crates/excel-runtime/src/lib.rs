@@ -15319,6 +15319,11 @@ impl ExcelRuntime {
                     .selection
                     .filter(|selection| selection.workbook == active_workbook)
                     .unwrap_or(self.default_selection(active_workbook)?);
+                self.ensure_grid_worksheet(
+                    active_workbook,
+                    selection.sheet_id,
+                    "Application.ActiveCell",
+                )?;
                 Ok(OmValue::Object(
                     self.register_range_handle(
                         active_workbook,
@@ -94799,6 +94804,10 @@ mod tests {
         assert_unsupported!(
             runtime.dispatch_get(application, "Columns", &[]),
             "Application.Columns should be unsupported on an active chart sheet"
+        );
+        assert_unsupported!(
+            runtime.dispatch_get(application, "ActiveCell", &[]),
+            "Application.ActiveCell should be unsupported on an active chart sheet"
         );
         assert_unsupported!(
             runtime.dispatch_invoke(application, "Range", &[OmValue::Text("A1".to_string())]),
