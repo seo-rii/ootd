@@ -21658,6 +21658,23 @@ impl ExcelRuntime {
         } else {
             None
         };
+        let mut common_sheet_id = None;
+        let mut spans_multiple_sheets = false;
+        for area in range.areas() {
+            let SheetScope::Single(sheet_id) = area.scope else {
+                return Err(OmError::unsupported(
+                    "3D range handles are not supported by Range.Address yet",
+                ));
+            };
+            match common_sheet_id {
+                Some(existing_sheet_id) if existing_sheet_id != sheet_id => {
+                    spans_multiple_sheets = true;
+                    break;
+                }
+                Some(_) => {}
+                None => common_sheet_id = Some(sheet_id),
+            }
+        }
         let mut parts = Vec::with_capacity(range.areas().len());
         for area in range.areas() {
             let SheetScope::Single(sheet_id) = area.scope else {
@@ -21687,6 +21704,9 @@ impl ExcelRuntime {
                     0,
                     format_external_address_qualifier(workbook_name, &worksheet_name).as_str(),
                 );
+            } else if spans_multiple_sheets {
+                let worksheet_name = self.worksheet_model(workbook, sheet_id)?.name.clone();
+                address.insert_str(0, formula_sheet_address_qualifier(&worksheet_name).as_str());
             }
             parts.push(address);
         }
@@ -78712,7 +78732,7 @@ mod tests {
     #[test]
     fn worksheet_range_parses_multi_area_text_and_exposes_areas_collection() {
         let mut runtime = ExcelRuntime::new();
-        let _workbook = runtime
+        let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
                 bytes: synthetic_workbook_bytes(),
                 format_hint: Some(FileFormat::Xlsx),
@@ -78850,6 +78870,42 @@ mod tests {
                     .expect("application multi-area address")
             ),
             "$C$1,$A$1:$B$1"
+        );
+
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let second_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Add", &[])
+                .expect("Worksheets.Add"),
+        );
+        runtime
+            .dispatch_set(
+                second_sheet,
+                "Name",
+                OmValue::Text("Data 2".to_string()),
+                &[],
+            )
+            .expect("rename second sheet");
+        let cross_sheet_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    runtime.root_application(),
+                    "Range",
+                    &[OmValue::Text("Sheet1!C1,'Data 2'!A1:B1".to_string())],
+                )
+                .expect("Application.Range(Sheet1!C1,'Data 2'!A1:B1)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(cross_sheet_range, "Address", &[])
+                    .expect("cross-sheet multi-area address")
+            ),
+            "Sheet1!$C$1,'Data 2'!$A$1:$B$1"
         );
 
         let axis_range = expect_object_handle(
