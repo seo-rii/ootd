@@ -4316,14 +4316,20 @@ impl ExcelRuntime {
                                             "Series.{member} cross-workbook ranges are not supported"
                                         )));
                                     }
-                                    let (sheet_id, rect) = Self::range_set_single_area(&range)?;
-                                    let worksheet_name =
-                                        self.worksheet_model(workbook, sheet_id)?.name.clone();
-                                    Some(chart_source_expr_for_range(
+                                    let mut areas = Vec::with_capacity(range.len());
+                                    for area in range.areas() {
+                                        let SheetScope::Single(sheet_id) = area.scope else {
+                                            return Err(OmError::unsupported(format!(
+                                                "Series.{member} 3D ranges are not supported"
+                                            )));
+                                        };
+                                        let worksheet_name =
+                                            self.worksheet_model(workbook, sheet_id)?.name.clone();
+                                        areas.push((sheet_id, area.rect, worksheet_name));
+                                    }
+                                    Some(chart_source_expr_for_range_areas(
                                         range.workbook_id(),
-                                        sheet_id,
-                                        rect,
-                                        &worksheet_name,
+                                        areas,
                                     )?)
                                 }
                                 _ => {
@@ -4463,7 +4469,15 @@ impl ExcelRuntime {
                                 if text.is_empty() {
                                     None
                                 } else {
-                                    let raw_text = text.trim_start_matches('=').to_string();
+                                    let unwrapped = if let Some(inner) = text
+                                        .strip_prefix('(')
+                                        .and_then(|text| text.strip_suffix(')'))
+                                    {
+                                        inner.trim()
+                                    } else {
+                                        text
+                                    };
+                                    let raw_text = unwrapped.trim_start_matches('=').to_string();
                                     let resolved = resolve_chart_source_reference_with_names(
                                         &raw_text,
                                         chart_source_workbook_id,
@@ -39318,19 +39332,35 @@ fn chart_source_expr_for_range(
     rect: Rect,
     worksheet_name: &str,
 ) -> OmResult<ChartSourceExpr> {
+    chart_source_expr_for_range_areas(
+        workbook_id,
+        vec![(sheet_id, rect, worksheet_name.to_string())],
+    )
+}
+
+fn chart_source_expr_for_range_areas(
+    workbook_id: WorkbookId,
+    areas: Vec<(SheetId, Rect, String)>,
+) -> OmResult<ChartSourceExpr> {
+    let mut raw_parts = Vec::with_capacity(areas.len());
+    let mut range_areas = Vec::with_capacity(areas.len());
+    for (sheet_id, rect, worksheet_name) in areas {
+        raw_parts.push(format!(
+            "{}{}",
+            formula_sheet_address_qualifier(&worksheet_name),
+            format_rect_address_with_flags(rect, true, true)
+        ));
+        range_areas.push(RangeArea::new(SheetScope::Single(sheet_id), rect)?);
+    }
+
     Ok(ChartSourceExpr {
         raw: FormulaSource {
-            text: format!(
-                "{}{}",
-                formula_sheet_address_qualifier(worksheet_name),
-                format_rect_address_with_flags(rect, true, true)
-            ),
+            text: raw_parts.join(","),
             is_r1c1: false,
         },
-        resolved: Some(ReferenceTarget::Range(RangeSet::single_rect(
+        resolved: Some(ReferenceTarget::Range(RangeSet::new(
             workbook_id,
-            sheet_id,
-            rect,
+            range_areas,
         )?)),
         cache: None,
         dirty: true,
@@ -39349,7 +39379,36 @@ fn chart_source_expr_text(source: Option<&excel_model::ChartSourceExpr>) -> Opti
 
 fn series_formula_text(series: &SeriesModel, series_index: usize) -> String {
     let formula_arg_text = |source: Option<&excel_model::ChartSourceExpr>| {
-        source.map(|source| source.raw.text.trim_start_matches('=').to_string())
+        source.map(|source| {
+            let text = source.raw.text.trim_start_matches('=').to_string();
+            let mut in_quote = false;
+            let mut depth = 0usize;
+            let mut has_top_level_comma = false;
+            let mut chars = text.chars().peekable();
+            while let Some(ch) = chars.next() {
+                match ch {
+                    '\'' => {
+                        if in_quote && chars.peek() == Some(&'\'') {
+                            chars.next();
+                        } else {
+                            in_quote = !in_quote;
+                        }
+                    }
+                    '(' | '{' if !in_quote => depth += 1,
+                    ')' | '}' if !in_quote && depth > 0 => depth -= 1,
+                    ',' if !in_quote && depth == 0 => {
+                        has_top_level_comma = true;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            if has_top_level_comma {
+                format!("({text})")
+            } else {
+                text
+            }
+        })
     };
     let name = formula_arg_text(series.name.as_ref()).unwrap_or_default();
     let x_values = formula_arg_text(series.x_values.as_ref()).unwrap_or_default();
@@ -121122,6 +121181,15 @@ mod tests {
                 .dispatch_invoke(worksheet, "Range", &[OmValue::Text("B1:B3".to_string())])
                 .expect("Worksheet.Range(B1:B3)"),
         );
+        let multi_values_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "Range",
+                    &[OmValue::Text("B1:B2,D1:D2".to_string())],
+                )
+                .expect("Worksheet.Range(B1:B2,D1:D2)"),
+        );
         let chart_objects = expect_object_handle(
             runtime
                 .dispatch_get(worksheet, "ChartObjects", &[])
@@ -121197,6 +121265,62 @@ mod tests {
                 }
             );
         }
+        runtime
+            .dispatch_set(series, "Values", OmValue::Object(multi_values_range), &[])
+            .expect("set Series.Values from multi-area Range");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Formula", &[])
+                    .expect("Series.Formula after multi-area Range setter")
+            ),
+            "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,(Sheet1!$B$1:$B$2,Sheet1!$D$1:$D$2),1)"
+        );
+        runtime
+            .dispatch_set(
+                series,
+                "Formula",
+                OmValue::Text(
+                    "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,(Sheet1!$B$1:$B$2,Sheet1!$D$1:$D$2),1)"
+                        .to_string(),
+                ),
+                &[],
+            )
+            .expect("round-trip multi-area Series.Formula");
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after multi-area Range series setter");
+            let sheet_id = state.worksheets[0].id;
+            let chart = state.charts.values().next().expect("chart model");
+            let values = chart.series[0].values.as_ref().expect("series values");
+            assert_eq!(values.raw.text, "Sheet1!$B$1:$B$2,Sheet1!$D$1:$D$2");
+            let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
+                panic!("multi-area series values should keep a resolved range");
+            };
+            assert_eq!(range.workbook_id(), state.model.id);
+            assert_eq!(range.areas().len(), 2);
+            assert_eq!(range.areas()[0].scope, SheetScope::Single(sheet_id));
+            assert_eq!(
+                range.areas()[0].rect,
+                Rect {
+                    row_first: 1,
+                    row_last: 2,
+                    col_first: 2,
+                    col_last: 2,
+                }
+            );
+            assert_eq!(range.areas()[1].scope, SheetScope::Single(sheet_id));
+            assert_eq!(
+                range.areas()[1].rect,
+                Rect {
+                    row_first: 1,
+                    row_last: 2,
+                    col_first: 4,
+                    col_last: 4,
+                }
+            );
+        }
 
         let saved = runtime
             .save_workbook(
@@ -121258,7 +121382,7 @@ mod tests {
                     .dispatch_get(reopened_series, "Formula", &[])
                     .expect("reopened Series.Formula")
             ),
-            "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1)"
+            "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,(Sheet1!$B$1:$B$2,Sheet1!$D$1:$D$2),1)"
         );
     }
 
