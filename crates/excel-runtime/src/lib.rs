@@ -8978,6 +8978,13 @@ impl ExcelRuntime {
                             );
                             return Ok(OmValue::Object(handle.0));
                         }
+                        "End" => {
+                            let (sheet_id, rect) = Self::range_set_first_area(&range)?;
+                            let handle = self.register_projected_range_handle(
+                                workbook, sheet_id, rect, projection,
+                            );
+                            return self.dispatch_invoke(handle.0, member, args);
+                        }
                         "FillDown" | "FillRight" | "FillUp" | "FillLeft" => {
                             if !args.is_empty() {
                                 return Err(OmError::invalid_argument(format!(
@@ -80488,6 +80495,94 @@ mod tests {
                 .expect_err("Range.End should reject unsupported direction")
                 .code,
             OmErrorCode::Unsupported
+        );
+    }
+
+    #[test]
+    fn range_multi_area_end_uses_first_area_in_explicit_order() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime.create_workbook().expect("blank workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheet"),
+        );
+        let a1_a3 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:A3".to_string())])
+                .expect("Range(A1:A3)"),
+        );
+        let d1_d2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("D1:D2".to_string())])
+                .expect("Range(D1:D2)"),
+        );
+        runtime
+            .dispatch_set(
+                a1_a3,
+                "Value2",
+                OmValue::Text("left region".to_string()),
+                &[],
+            )
+            .expect("A1:A3.Value2");
+        runtime
+            .dispatch_set(
+                d1_d2,
+                "Value2",
+                OmValue::Text("right region".to_string()),
+                &[],
+            )
+            .expect("D1:D2.Value2");
+
+        let left_first = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1,D1".to_string())])
+                .expect("Range(A1,D1)"),
+        );
+        let right_first = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("D1,A1".to_string())])
+                .expect("Range(D1,A1)"),
+        );
+        let left_end = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    left_first,
+                    "End",
+                    &[OmValue::Number(f64::from(super::XL_DOWN))],
+                )
+                .expect("Range(A1,D1).End(xlDown)"),
+        );
+        let right_end = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    right_first,
+                    "End",
+                    &[OmValue::Number(f64::from(super::XL_DOWN))],
+                )
+                .expect("Range(D1,A1).End(xlDown)"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(left_end, "Address", &[])
+                    .expect("left-first End Address")
+            ),
+            "$A$3"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(right_end, "Address", &[])
+                    .expect("right-first End Address")
+            ),
+            "$D$2"
         );
     }
 
