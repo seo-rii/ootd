@@ -16434,6 +16434,32 @@ impl ExcelRuntime {
 
                 Ok(OmValue::Bool(has_formula))
             }
+            "CurrentRegion" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Range.CurrentRegion does not accept arguments",
+                    ));
+                }
+                let mut areas = Vec::with_capacity(range.len());
+                for area in range.areas() {
+                    let SheetScope::Single(sheet_id) = area.scope else {
+                        return Err(OmError::unsupported(
+                            "3D range handles are not supported by this operation yet",
+                        ));
+                    };
+                    areas.push(RangeArea::new(
+                        area.scope,
+                        self.current_region_rect(workbook, sheet_id, area.rect)?,
+                    )?);
+                }
+                Ok(OmValue::Object(
+                    self.register_range_set_handle(
+                        workbook,
+                        RangeSet::new(range.workbook_id(), areas)?,
+                    )
+                    .0,
+                ))
+            }
             "EntireRow" | "EntireColumn" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(format!(
@@ -79743,6 +79769,113 @@ mod tests {
                     .expect("blank B2.CurrentRegion.Address")
             ),
             "$B$2"
+        );
+    }
+
+    #[test]
+    fn range_multi_area_current_region_expands_each_area_in_order() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime.create_workbook().expect("blank workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheet"),
+        );
+        let left_region = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B2".to_string())])
+                .expect("Range(A1:B2)"),
+        );
+        let right_region = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("D1:E2".to_string())])
+                .expect("Range(D1:E2)"),
+        );
+        runtime
+            .dispatch_set(
+                left_region,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        2,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(4.0),
+                        ],
+                    )
+                    .expect("left region values"),
+                ),
+                &[],
+            )
+            .expect("A1:B2.Value2");
+        runtime
+            .dispatch_set(
+                right_region,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        2,
+                        2,
+                        vec![
+                            OmValue::Number(5.0),
+                            OmValue::Number(6.0),
+                            OmValue::Number(7.0),
+                            OmValue::Number(8.0),
+                        ],
+                    )
+                    .expect("right region values"),
+                ),
+                &[],
+            )
+            .expect("D1:E2.Value2");
+
+        let seeds = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1,D1".to_string())])
+                .expect("Range(A1,D1)"),
+        );
+        let current_regions = expect_object_handle(
+            runtime
+                .dispatch_get(seeds, "CurrentRegion", &[])
+                .expect("Range(A1,D1).CurrentRegion"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(current_regions, "Address", &[])
+                    .expect("CurrentRegion.Address")
+            ),
+            "$A$1:$B$2,$D$1:$E$2"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(current_regions, "Count", &[])
+                    .expect("CurrentRegion.Count")
+            ),
+            8.0
+        );
+        let areas = expect_object_handle(
+            runtime
+                .dispatch_get(current_regions, "Areas", &[])
+                .expect("CurrentRegion.Areas"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(areas, "Count", &[])
+                    .expect("CurrentRegion.Areas.Count")
+            ),
+            2.0
         );
     }
 
