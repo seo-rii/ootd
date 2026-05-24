@@ -121795,6 +121795,58 @@ mod tests {
         assert!(!saved_chart_xml.contains("<c:f>{10,20}</c:f>"));
         assert!(!saved_chart_xml.contains("<c:f>Sheet1!$A$1:$B$1</c:f>"));
         assert!(!saved_chart_xml.contains("<c:f>Sheet1!$A$1:$C$1</c:f>"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after array source save");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_series, "XValues", &[])
+                .expect("reopened Series.XValues"),
+            OmValue::Text(r#"={"North","South"}"#.to_string())
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_series, "Values", &[])
+                .expect("reopened Series.Values"),
+            OmValue::Text("={10,20}".to_string())
+        );
     }
 
     #[test]
