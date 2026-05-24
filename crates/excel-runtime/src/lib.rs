@@ -15332,10 +15332,33 @@ impl ExcelRuntime {
                 let Some(active_workbook) = self.active_workbook else {
                     return Ok(OmValue::Empty);
                 };
+                if let Some((chart_workbook, chart_id)) = self.active_chart {
+                    if chart_workbook == active_workbook
+                        && self.chart_model(chart_workbook, chart_id).is_ok()
+                    {
+                        return Ok(OmValue::Object(
+                            self.register_chart_handle(chart_workbook, chart_id),
+                        ));
+                    }
+                    self.active_chart = None;
+                }
                 let selection = self
                     .selection
                     .filter(|selection| selection.workbook == active_workbook)
                     .unwrap_or(self.default_selection(active_workbook)?);
+                let active_sheet_chart_id = {
+                    self.runtime_workbook(active_workbook)?
+                        .loaded
+                        .state
+                        .chart_sheets
+                        .get(&selection.sheet_id)
+                        .map(|binding| binding.chart_id)
+                };
+                if let Some(chart_id) = active_sheet_chart_id {
+                    return Ok(OmValue::Object(
+                        self.register_chart_handle(active_workbook, chart_id),
+                    ));
+                }
                 Ok(OmValue::Object(
                     self.register_range_handle(active_workbook, selection.sheet_id, selection.rect)
                         .0,
@@ -94670,6 +94693,19 @@ mod tests {
             ),
             f64::from(super::XL_SHEET_TYPE_CHART)
         );
+        let selection_chart = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Application.Selection on chart sheet"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(selection_chart, "ChartType", &[])
+                    .expect("Application.Selection.ChartType on chart sheet")
+            ),
+            f64::from(super::XL_PIE)
+        );
         let chart_sheet_chart_objects = expect_object_handle(
             runtime
                 .dispatch_get(chart_sheet, "ChartObjects", &[])
@@ -95659,6 +95695,19 @@ mod tests {
             ),
             "Embedded Revenue Chart"
         );
+        let selection_chart = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Selection", &[])
+                .expect("Selection after ChartObject.Select"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection_chart, "Name", &[])
+                    .expect("Selection.Name after ChartObject.Select")
+            ),
+            "Embedded Revenue Chart"
+        );
         runtime
             .dispatch_invoke(worksheet, "Activate", &[])
             .expect("Worksheet.Activate clears selected embedded chart");
@@ -95774,6 +95823,19 @@ mod tests {
                 runtime
                     .dispatch_get(active_chart, "Name", &[])
                     .expect("ActiveChart.Name after embedded Chart.Select")
+            ),
+            "Embedded Revenue Chart"
+        );
+        let selection_chart = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Selection", &[])
+                .expect("Selection after embedded Chart.Select"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection_chart, "Name", &[])
+                    .expect("Selection.Name after embedded Chart.Select")
             ),
             "Embedded Revenue Chart"
         );
