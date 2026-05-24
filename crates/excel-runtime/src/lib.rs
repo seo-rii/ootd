@@ -16208,7 +16208,7 @@ impl ExcelRuntime {
                     Some(value) if om_value_is_omitted(value) => None,
                     Some(OmValue::Object(handle)) => match self.runtime_object(*handle)? {
                         RuntimeObjectKind::Range { range, .. } => {
-                            let (_, relative_rect) = Self::range_set_single_area(&range)?;
+                            let (_, relative_rect) = Self::range_set_first_area(&range)?;
                             Some((relative_rect.row_first, relative_rect.col_first))
                         }
                         _ => {
@@ -21623,7 +21623,7 @@ impl ExcelRuntime {
             Some(value) if om_value_is_omitted(value) => None,
             Some(OmValue::Object(handle)) => match self.runtime_object(*handle)? {
                 RuntimeObjectKind::Range { range, .. } => {
-                    let (_, relative_rect) = Self::range_set_single_area(&range)?;
+                    let (_, relative_rect) = Self::range_set_first_area(&range)?;
                     Some((relative_rect.row_first, relative_rect.col_first))
                 }
                 _ => {
@@ -82823,6 +82823,20 @@ mod tests {
                 .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C3".to_string())])
                 .expect("Range(C3)"),
         );
+        let multi_area_relative_to = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C3,E5".to_string())])
+                .expect("Range(C3,E5)"),
+        );
+        let multi_area_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:B2,D4".to_string())],
+                )
+                .expect("Range(A1:B2,D4)"),
+        );
 
         assert_eq!(
             expect_text(
@@ -82893,6 +82907,42 @@ mod tests {
                     .expect("Address(false, false, xlR1C1, false, C3)")
             ),
             "R[-2]C[-2]:R[-1]C[-1]"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        range,
+                        "Address",
+                        &[
+                            OmValue::Bool(false),
+                            OmValue::Bool(false),
+                            OmValue::Number(XL_R1C1 as f64),
+                            OmValue::Bool(false),
+                            OmValue::Object(multi_area_relative_to)
+                        ],
+                    )
+                    .expect("Address(false, false, xlR1C1, false, C3,E5)")
+            ),
+            "R[-2]C[-2]:R[-1]C[-1]"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(
+                        multi_area_range,
+                        "Address",
+                        &[
+                            OmValue::Bool(false),
+                            OmValue::Bool(false),
+                            OmValue::Number(XL_R1C1 as f64),
+                            OmValue::Bool(false),
+                            OmValue::Object(multi_area_relative_to)
+                        ],
+                    )
+                    .expect("multi-area Address(false, false, xlR1C1, false, C3,E5)")
+            ),
+            "R[-2]C[-2]:R[-1]C[-1],R[1]C[1]"
         );
         assert_eq!(
             runtime
