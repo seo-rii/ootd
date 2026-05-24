@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
 use office_common::{
-    ChartId, ChartObjectId, DrawingAnchor, DrawingId, DrawingObjectId, FormulaSource, NameScope,
-    ObjectPlacement, RangeArea, RangeSet, Rect, ReferenceTarget, SheetId, SheetScope, WorkbookId,
-    WorksheetModel,
+    CellError, CellValue, ChartId, ChartObjectId, DrawingAnchor, DrawingId, DrawingObjectId,
+    ExternalReference, FormulaSource, NameScope, ObjectPlacement, OmArray, OmValue, RangeArea,
+    RangeSet, Rect, ReferenceTarget, SheetId, SheetScope, WorkbookId, WorksheetModel,
 };
 
 use crate::names::DefinedNameTable;
@@ -833,6 +833,120 @@ fn resolve_chart_source_defined_name(
         return Some(target);
     }
 
+    let parse_scalar_value = |text: &str| -> Option<CellValue> {
+        let text = text.trim();
+        if text.is_empty() {
+            return None;
+        }
+        if let Some(inner) = text
+            .strip_prefix('"')
+            .and_then(|text| text.strip_suffix('"'))
+        {
+            let mut value = String::new();
+            let mut chars = inner.chars().peekable();
+            while let Some(ch) = chars.next() {
+                if ch == '"' {
+                    if chars.peek() == Some(&'"') {
+                        chars.next();
+                        value.push('"');
+                    } else {
+                        return None;
+                    }
+                } else {
+                    value.push(ch);
+                }
+            }
+            return Some(CellValue::Text(value));
+        }
+        if text.eq_ignore_ascii_case("TRUE") {
+            return Some(CellValue::Bool(true));
+        }
+        if text.eq_ignore_ascii_case("FALSE") {
+            return Some(CellValue::Bool(false));
+        }
+        let error = match text.to_ascii_uppercase().as_str() {
+            "#NULL!" => Some(CellError::Null),
+            "#DIV/0!" => Some(CellError::Div0),
+            "#VALUE!" => Some(CellError::Value),
+            "#REF!" => Some(CellError::Ref),
+            "#NAME?" => Some(CellError::Name),
+            "#NUM!" => Some(CellError::Num),
+            "#N/A" => Some(CellError::NA),
+            "#GETTING_DATA" => Some(CellError::GettingData),
+            "#SPILL!" => Some(CellError::Spill),
+            "#CALC!" => Some(CellError::Calc),
+            "#FIELD!" => Some(CellError::Field),
+            "#BLOCKED!" => Some(CellError::Blocked),
+            _ => None,
+        };
+        if let Some(error) = error {
+            return Some(CellValue::Error(error));
+        }
+        let number = text.parse::<f64>().ok()?;
+        number.is_finite().then_some(CellValue::Number(number))
+    };
+    let split_array_axis = |text: &str, separator: char| -> Option<Vec<String>> {
+        let mut parts = Vec::new();
+        let mut start = 0usize;
+        let mut in_string = false;
+        let mut chars = text.char_indices().peekable();
+        while let Some((index, ch)) = chars.next() {
+            if ch == '"' {
+                if in_string && chars.peek().is_some_and(|(_, next)| *next == '"') {
+                    chars.next();
+                } else {
+                    in_string = !in_string;
+                }
+            } else if ch == separator && !in_string {
+                let part = text[start..index].trim();
+                if part.is_empty() {
+                    return None;
+                }
+                parts.push(part.to_string());
+                start = index + ch.len_utf8();
+            }
+        }
+        if in_string {
+            return None;
+        }
+        let part = text[start..].trim();
+        if part.is_empty() {
+            return None;
+        }
+        parts.push(part.to_string());
+        Some(parts)
+    };
+    let parse_array_value = |text: &str| -> Option<OmArray> {
+        let inner = text
+            .trim()
+            .strip_prefix('{')
+            .and_then(|text| text.strip_suffix('}'))?
+            .trim();
+        if inner.is_empty() {
+            return None;
+        }
+        let rows = split_array_axis(inner, ';')?;
+        let mut values = Vec::new();
+        let mut cols = None::<usize>;
+        for row in &rows {
+            let row_values = split_array_axis(row.as_str(), ',')?;
+            if row_values.is_empty() {
+                return None;
+            }
+            if let Some(cols) = cols {
+                if row_values.len() != cols {
+                    return None;
+                }
+            } else {
+                cols = Some(row_values.len());
+            }
+            for value in row_values {
+                values.push(OmValue::from(parse_scalar_value(value.as_str())?));
+            }
+        }
+        OmArray::new(rows.len(), cols?, values).ok()
+    };
+
     let refers_to = defined_name
         .refers_to
         .text
@@ -840,30 +954,47 @@ fn resolve_chart_source_defined_name(
         .strip_prefix('=')
         .unwrap_or(defined_name.refers_to.text.trim())
         .trim();
+    if let Some(value) = parse_scalar_value(refers_to) {
+        return Some(ReferenceTarget::Value(value));
+    }
+    if let Some(array) = parse_array_value(refers_to) {
+        return Some(ReferenceTarget::Array(array));
+    }
+    if refers_to.starts_with('[') {
+        return Some(ReferenceTarget::External(ExternalReference {
+            text: defined_name.refers_to.text.clone(),
+        }));
+    }
     if refers_to.is_empty() || refers_to.contains('!') || refers_to.contains(',') {
-        return None;
+        return Some(ReferenceTarget::Formula(defined_name.refers_to.clone()));
     }
 
     let NameScope::Worksheet(sheet_id) = defined_name.scope else {
-        return None;
+        return Some(ReferenceTarget::Formula(defined_name.refers_to.clone()));
     };
     let worksheet_name = worksheets
         .iter()
         .find(|worksheet| worksheet.id == sheet_id)
         .map(|worksheet| worksheet.name.as_str())?;
     let qualified_reference = format!("'{}'!{}", worksheet_name.replace('\'', "''"), refers_to);
-    resolve_chart_source_reference(
+    if let Some(target) = resolve_chart_source_reference(
         &qualified_reference,
         workbook_id,
         workbook_display_name,
         worksheets,
-    )
+    ) {
+        return Some(target);
+    }
+
+    Some(ReferenceTarget::Formula(defined_name.refers_to.clone()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use office_common::{NameValidationMode, SheetKind, SheetVisibility};
+    use office_common::{
+        CellError, CellValue, NameValidationMode, OmValue, SheetKind, SheetVisibility,
+    };
 
     fn worksheet(id: u32, workbook_id: WorkbookId, name: &str) -> WorksheetModel {
         WorksheetModel {
@@ -1116,5 +1247,162 @@ mod tests {
         };
         assert_eq!(range.areas()[0].scope, SheetScope::Single(SheetId(4)));
         assert_eq!(range.areas()[0].rect.col_first, 3);
+    }
+
+    #[test]
+    fn resolve_chart_source_reference_with_names_resolves_constant_targets() {
+        let workbook_id = WorkbookId(9);
+        let worksheets = vec![worksheet(2, workbook_id, "Data")];
+        let mut defined_names = DefinedNameTable::default();
+        for (name, refers_to) in [
+            ("SeriesNumber", "42"),
+            ("SeriesText", "\"Revenue \"\"FY26\"\"\""),
+            ("SeriesBool", "TRUE"),
+            ("SeriesError", "#N/A"),
+        ] {
+            defined_names
+                .add(
+                    NameScope::Workbook,
+                    name,
+                    FormulaSource {
+                        text: refers_to.to_string(),
+                        is_r1c1: false,
+                    },
+                    NameValidationMode::StrictExcel,
+                )
+                .expect("add constant name");
+        }
+
+        assert_eq!(
+            resolve_chart_source_reference_with_names(
+                "SeriesNumber",
+                workbook_id,
+                None,
+                &worksheets,
+                &defined_names,
+                None,
+            ),
+            Some(ReferenceTarget::Value(CellValue::Number(42.0)))
+        );
+        assert_eq!(
+            resolve_chart_source_reference_with_names(
+                "SeriesText",
+                workbook_id,
+                None,
+                &worksheets,
+                &defined_names,
+                None,
+            ),
+            Some(ReferenceTarget::Value(CellValue::Text(
+                "Revenue \"FY26\"".to_string()
+            )))
+        );
+        assert_eq!(
+            resolve_chart_source_reference_with_names(
+                "SeriesBool",
+                workbook_id,
+                None,
+                &worksheets,
+                &defined_names,
+                None,
+            ),
+            Some(ReferenceTarget::Value(CellValue::Bool(true)))
+        );
+        assert_eq!(
+            resolve_chart_source_reference_with_names(
+                "SeriesError",
+                workbook_id,
+                None,
+                &worksheets,
+                &defined_names,
+                None,
+            ),
+            Some(ReferenceTarget::Value(CellValue::Error(CellError::NA)))
+        );
+    }
+
+    #[test]
+    fn resolve_chart_source_reference_with_names_resolves_array_formula_external_targets() {
+        let workbook_id = WorkbookId(10);
+        let worksheets = vec![worksheet(3, workbook_id, "Data")];
+        let mut defined_names = DefinedNameTable::default();
+        defined_names
+            .add(
+                NameScope::Workbook,
+                "SeriesArray",
+                FormulaSource {
+                    text: "{\"Q1\",\"Q2\";1,2}".to_string(),
+                    is_r1c1: false,
+                },
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add array name");
+        defined_names
+            .add(
+                NameScope::Workbook,
+                "SeriesFormula",
+                FormulaSource {
+                    text: "SUM(Data!$B$1:$B$3)".to_string(),
+                    is_r1c1: false,
+                },
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add formula name");
+        defined_names
+            .add(
+                NameScope::Workbook,
+                "ExternalSeries",
+                FormulaSource {
+                    text: "[Other.xlsx]Data!$A$1".to_string(),
+                    is_r1c1: false,
+                },
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add external name");
+
+        let target = resolve_chart_source_reference_with_names(
+            "SeriesArray",
+            workbook_id,
+            None,
+            &worksheets,
+            &defined_names,
+            None,
+        )
+        .expect("array target");
+        let ReferenceTarget::Array(array) = target else {
+            panic!("expected array target");
+        };
+        assert_eq!(array.rows, 2);
+        assert_eq!(array.cols, 2);
+        assert_eq!(array.values[0], OmValue::Text("Q1".to_string()));
+        assert_eq!(array.values[1], OmValue::Text("Q2".to_string()));
+        assert_eq!(array.values[2], OmValue::Number(1.0));
+        assert_eq!(array.values[3], OmValue::Number(2.0));
+
+        assert_eq!(
+            resolve_chart_source_reference_with_names(
+                "SeriesFormula",
+                workbook_id,
+                None,
+                &worksheets,
+                &defined_names,
+                None,
+            ),
+            Some(ReferenceTarget::Formula(FormulaSource {
+                text: "SUM(Data!$B$1:$B$3)".to_string(),
+                is_r1c1: false,
+            }))
+        );
+        let Some(ReferenceTarget::External(external)) = resolve_chart_source_reference_with_names(
+            "ExternalSeries",
+            workbook_id,
+            None,
+            &worksheets,
+            &defined_names,
+            None,
+        ) else {
+            panic!("expected external target");
+        };
+        assert_eq!(external.text, "[Other.xlsx]Data!$A$1");
     }
 }

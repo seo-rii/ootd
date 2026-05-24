@@ -119314,6 +119314,69 @@ mod tests {
             );
         }
         runtime
+            .dispatch_invoke(
+                names,
+                "Add",
+                &[
+                    OmValue::Text("SeriesConstant".to_string()),
+                    OmValue::Text("=42".to_string()),
+                ],
+            )
+            .expect("add constant defined name for chart source");
+        runtime
+            .dispatch_set(
+                series,
+                "Values",
+                OmValue::Text("=SeriesConstant".to_string()),
+                &[],
+            )
+            .expect("set Series.Values from constant defined name");
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after constant defined-name source setter");
+            let chart = state.charts.values().next().expect("chart model");
+            let values = chart.series[0].values.as_ref().expect("series values");
+            assert_eq!(
+                values.resolved.as_ref(),
+                Some(&ReferenceTarget::Value(CellValue::Number(42.0)))
+            );
+        }
+        runtime
+            .dispatch_invoke(
+                names,
+                "Add",
+                &[
+                    OmValue::Text("SeriesArray".to_string()),
+                    OmValue::Text("={1,2;3,4}".to_string()),
+                ],
+            )
+            .expect("add array defined name for chart source");
+        runtime
+            .dispatch_set(
+                series,
+                "Values",
+                OmValue::Text("=SeriesArray".to_string()),
+                &[],
+            )
+            .expect("set Series.Values from array defined name");
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after array defined-name source setter");
+            let chart = state.charts.values().next().expect("chart model");
+            let values = chart.series[0].values.as_ref().expect("series values");
+            let Some(ReferenceTarget::Array(array)) = values.resolved.as_ref() else {
+                panic!("array defined-name Series.Values should resolve to an array");
+            };
+            assert_eq!(array.rows, 2);
+            assert_eq!(array.cols, 2);
+            assert_eq!(array.values[0], OmValue::Number(1.0));
+            assert_eq!(array.values[1], OmValue::Number(2.0));
+            assert_eq!(array.values[2], OmValue::Number(3.0));
+            assert_eq!(array.values[3], OmValue::Number(4.0));
+        }
+        runtime
             .dispatch_set(
                 series,
                 "Values",
