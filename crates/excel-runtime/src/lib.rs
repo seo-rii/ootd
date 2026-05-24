@@ -17727,20 +17727,26 @@ impl ExcelRuntime {
                         entries
                             .get(index - 1)
                             .map(|(chart_object_id, _)| *chart_object_id)
+                            .ok_or_else(|| {
+                                OmError::invalid_argument("ShapeRange.Item index is out of bounds")
+                            })?
                     }
                     OmValue::Text(name) => entries
                         .iter()
                         .find(|(_, candidate)| candidate.eq_ignore_ascii_case(name))
-                        .map(|(chart_object_id, _)| *chart_object_id),
+                        .map(|(chart_object_id, _)| *chart_object_id)
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::NotFound,
+                                format!("shape '{name}' was not found"),
+                            )
+                        })?,
                     _ => {
                         return Err(OmError::type_mismatch(
                             "ShapeRange.Item expects a numeric index or shape name",
                         ));
                     }
-                }
-                .ok_or_else(|| {
-                    OmError::invalid_argument("ShapeRange.Item index is out of bounds")
-                })?;
+                };
                 Ok(OmValue::Object(self.register_shape_range_handle(
                     workbook,
                     ShapeRangeSource::ChartObject { chart_object_id },
@@ -120695,6 +120701,15 @@ mod tests {
             ),
             "Z Later Chart"
         );
+        let missing_shape = runtime
+            .dispatch_invoke(
+                selected_shape_range,
+                "Item",
+                &[OmValue::Text("Missing Chart".to_string())],
+            )
+            .expect_err("ShapeRange.Item rejects a missing shape name");
+        assert_eq!(missing_shape.code, OmErrorCode::NotFound);
+        assert!(missing_shape.message.contains("Missing Chart"));
 
         runtime
             .dispatch_set(selected_shape_range, "Visible", OmValue::Bool(false), &[])
