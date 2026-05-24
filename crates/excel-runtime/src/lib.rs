@@ -17309,7 +17309,13 @@ impl ExcelRuntime {
                     }
                     let mut selected_chart_object_ids = Vec::with_capacity(array.values.len());
                     for selector in &array.values {
-                        selected_chart_object_ids.push(resolve_chart_object(selector)?);
+                        let chart_object_id = resolve_chart_object(selector)?;
+                        if selected_chart_object_ids.contains(&chart_object_id) {
+                            return Err(OmError::invalid_argument(
+                                "ChartObjects.Item array must not contain duplicate chart objects",
+                            ));
+                        }
+                        selected_chart_object_ids.push(chart_object_id);
                     }
                     return Ok(OmValue::Object(self.register_shape_range_handle(
                         workbook,
@@ -120746,6 +120752,26 @@ mod tests {
                 .expect_err("ChartObjects.Item rejects invalid array entries")
                 .code,
             OmErrorCode::TypeMismatch
+        );
+        let duplicate_selection = OmArray::new(
+            1,
+            2,
+            vec![
+                OmValue::Number(2.0),
+                OmValue::Text("Z Ten Chart".to_string()),
+            ],
+        )
+        .expect("duplicate selection array");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Item",
+                    &[OmValue::Array(duplicate_selection)]
+                )
+                .expect_err("ChartObjects.Item rejects duplicate array entries")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 
