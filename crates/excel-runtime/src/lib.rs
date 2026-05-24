@@ -36756,19 +36756,20 @@ fn patch_loaded_chart_model_xml(
                         }
                     }
                 } else if let Some((slot, written)) = current_formula.as_mut()
-                    && !*written
                     && let Some(series_index) = current_series_index
                     && let Some(source) = source_for_slot(series_index, *slot)
                     && source.dirty
                 {
-                    let replacement = source.raw.text.trim_start_matches('=').to_string();
-                    writer
-                        .write_event(Event::Text(BytesText::from_escaped(partial_escape(
-                            &replacement,
-                        ))))
-                        .map_err(runtime_xml_error)?;
-                    *written = true;
-                    patched_sources += 1;
+                    if !*written {
+                        let replacement = source.raw.text.trim_start_matches('=').to_string();
+                        writer
+                            .write_event(Event::Text(BytesText::from_escaped(partial_escape(
+                                &replacement,
+                            ))))
+                            .map_err(runtime_xml_error)?;
+                        *written = true;
+                        patched_sources += 1;
+                    }
                 } else {
                     writer
                         .write_event(Event::Text(text.into_owned()))
@@ -36841,19 +36842,20 @@ fn patch_loaded_chart_model_xml(
                         }
                     }
                 } else if let Some((slot, written)) = current_formula.as_mut()
-                    && !*written
                     && let Some(series_index) = current_series_index
                     && let Some(source) = source_for_slot(series_index, *slot)
                     && source.dirty
                 {
-                    let replacement = source.raw.text.trim_start_matches('=').to_string();
-                    writer
-                        .write_event(Event::Text(BytesText::from_escaped(partial_escape(
-                            &replacement,
-                        ))))
-                        .map_err(runtime_xml_error)?;
-                    *written = true;
-                    patched_sources += 1;
+                    if !*written {
+                        let replacement = source.raw.text.trim_start_matches('=').to_string();
+                        writer
+                            .write_event(Event::Text(BytesText::from_escaped(partial_escape(
+                                &replacement,
+                            ))))
+                            .map_err(runtime_xml_error)?;
+                        *written = true;
+                        patched_sources += 1;
+                    }
                 } else {
                     writer
                         .write_event(Event::CData(data.into_owned()))
@@ -102075,6 +102077,86 @@ mod tests {
         assert!(saved_chart_xml.contains("<c:f>'Data 2026'!$A$1:$B$1</c:f>"));
         assert!(saved_chart_xml.contains("<c:f>'Data 2026'!$A$1:$C$1</c:f>"));
         assert!(!saved_chart_xml.contains("Sheet1!$A$1:$C$1"));
+    }
+
+    #[test]
+    fn loaded_chart_source_rename_rewrites_entity_escaped_formulas_once() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let workbook_xml = String::from_utf8(
+            package
+                .part("xl/workbook.xml")
+                .expect("workbook part")
+                .bytes
+                .clone(),
+        )
+        .expect("workbook xml utf8")
+        .replace(r#"name="Sheet1""#, r#"name="Data &amp; Ops""#);
+        package
+            .replace_part_bytes("xl/workbook.xml", workbook_xml.into_bytes())
+            .expect("replace workbook xml");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace("Sheet1!", "&apos;Data &amp; Ops&apos;!");
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with entity-escaped chart formulas");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+
+        runtime
+            .dispatch_set(
+                worksheet,
+                "Name",
+                OmValue::Text("Data 2026".to_string()),
+                &[],
+            )
+            .expect("rename chart source worksheet");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save renamed chart source workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+
+        assert!(saved_chart_xml.contains("<c:f>'Data 2026'!$C$1</c:f>"));
+        assert!(saved_chart_xml.contains("<c:f>'Data 2026'!$A$1:$B$1</c:f>"));
+        assert!(saved_chart_xml.contains("<c:f>'Data 2026'!$A$1:$C$1</c:f>"));
+        assert!(!saved_chart_xml.contains("&apos;'Data 2026'"));
+        assert!(!saved_chart_xml.contains("Data &amp; Ops"));
     }
 
     #[test]
