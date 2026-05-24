@@ -702,6 +702,22 @@ pub fn resolve_chart_source_reference_with_names(
                 current_sheet,
             )
         })
+        .or_else(|| {
+            chart_source_external_workbook_name(reference)
+                .filter(|source_workbook_name| {
+                    !workbook_display_name
+                        .is_some_and(|name| name.eq_ignore_ascii_case(source_workbook_name))
+                })
+                .map(|_| {
+                    let text = reference
+                        .trim()
+                        .strip_prefix('=')
+                        .unwrap_or(reference.trim())
+                        .trim()
+                        .to_string();
+                    ReferenceTarget::External(ExternalReference { text })
+                })
+        })
 }
 
 fn parse_chart_source_sheet_name(
@@ -760,6 +776,55 @@ fn parse_chart_source_sheet_name(
         return None;
     }
     Some(sheet_name)
+}
+
+fn chart_source_external_workbook_name(reference: &str) -> Option<&str> {
+    let reference = reference.trim();
+    let reference = reference.strip_prefix('=').unwrap_or(reference).trim();
+    if let Some(qualified) = reference.strip_prefix('[') {
+        let close_index = qualified.find(']')?;
+        let workbook_name = &qualified[..close_index];
+        if workbook_name.is_empty() || qualified[close_index + 1..].trim().is_empty() {
+            return None;
+        }
+        return Some(workbook_name);
+    }
+
+    let mut chars = reference.char_indices().peekable();
+    let (_, first) = chars.next()?;
+    let (_, second) = chars.next()?;
+    if first != '\'' || second != '[' {
+        return None;
+    }
+
+    let mut close_bracket_index = None;
+    let mut close_quote_index = None;
+    while let Some((index, ch)) = chars.next() {
+        match ch {
+            ']' if close_bracket_index.is_none() => close_bracket_index = Some(index),
+            '\'' => {
+                if chars.peek().is_some_and(|(_, next)| *next == '\'') {
+                    chars.next();
+                } else {
+                    close_quote_index = Some(index);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let close_bracket_index = close_bracket_index?;
+    let close_quote_index = close_quote_index?;
+    let workbook_name = &reference[2..close_bracket_index];
+    if workbook_name.is_empty()
+        || close_bracket_index > close_quote_index
+        || !reference[close_quote_index + 1..]
+            .trim_start()
+            .starts_with('!')
+    {
+        return None;
+    }
+    Some(workbook_name)
 }
 
 fn resolve_chart_source_literal(reference: &str) -> Option<ReferenceTarget> {
@@ -966,7 +1031,9 @@ fn resolve_chart_source_defined_name(
     if let Some(target) = resolve_chart_source_literal(refers_to) {
         return Some(target);
     }
-    if refers_to.starts_with('[') {
+    if chart_source_external_workbook_name(refers_to).is_some_and(|source_workbook_name| {
+        !workbook_display_name.is_some_and(|name| name.eq_ignore_ascii_case(source_workbook_name))
+    }) {
         return Some(ReferenceTarget::External(ExternalReference {
             text: defined_name.refers_to.text.clone(),
         }));
@@ -1176,17 +1243,17 @@ mod tests {
                 col_last: 2,
             }
         );
-        assert!(
-            resolve_chart_source_reference_with_names(
-                "[Other]SeriesValues",
-                workbook_id,
-                Some("Workbook"),
-                &worksheets,
-                &defined_names,
-                None,
-            )
-            .is_none()
-        );
+        let Some(ReferenceTarget::External(external)) = resolve_chart_source_reference_with_names(
+            "[Other]SeriesValues",
+            workbook_id,
+            Some("Workbook"),
+            &worksheets,
+            &defined_names,
+            None,
+        ) else {
+            panic!("expected workbook-qualified external name target");
+        };
+        assert_eq!(external.text, "[Other]SeriesValues");
     }
 
     #[test]
@@ -1461,5 +1528,41 @@ mod tests {
             panic!("expected external target");
         };
         assert_eq!(external.text, "[Other.xlsx]Data!$A$1");
+
+        let Some(ReferenceTarget::External(external)) = resolve_chart_source_reference_with_names(
+            "[Other.xlsx]Data!$B$1:$B$3",
+            workbook_id,
+            Some("Workbook.xlsx"),
+            &worksheets,
+            &defined_names,
+            None,
+        ) else {
+            panic!("expected direct external range target");
+        };
+        assert_eq!(external.text, "[Other.xlsx]Data!$B$1:$B$3");
+
+        let Some(ReferenceTarget::External(external)) = resolve_chart_source_reference_with_names(
+            "='[Other.xlsx]Data 2026'!$C$1",
+            workbook_id,
+            Some("Workbook.xlsx"),
+            &worksheets,
+            &defined_names,
+            None,
+        ) else {
+            panic!("expected quoted direct external range target");
+        };
+        assert_eq!(external.text, "'[Other.xlsx]Data 2026'!$C$1");
+
+        assert!(
+            resolve_chart_source_reference_with_names(
+                "[Workbook.xlsx]Missing!$A$1",
+                workbook_id,
+                Some("Workbook.xlsx"),
+                &worksheets,
+                &defined_names,
+                None,
+            )
+            .is_none()
+        );
     }
 }
