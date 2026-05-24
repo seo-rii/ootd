@@ -533,8 +533,7 @@ struct RuntimeClipboard {
 #[derive(Debug, Clone)]
 struct RuntimeFindState {
     workbook: WorkbookHandle,
-    sheet_id: SheetId,
-    rect: Rect,
+    range: RangeSet,
     what: String,
     look_in: i32,
     look_at: i32,
@@ -8568,6 +8567,167 @@ impl ExcelRuntime {
                 range,
                 projection,
             } => {
+                if matches!(member, "Find" | "FindNext" | "FindPrevious") {
+                    self.focus_member_supported("Range", member, false)?;
+                    let (sheet_id, rects) = Self::range_set_single_sheet_rects(&range)?;
+                    match member {
+                        "Find" => {
+                            if args.is_empty() || args.len() > 9 {
+                                return Err(OmError::invalid_argument(
+                                    "Range.Find expects What and optional After, LookIn, LookAt, SearchOrder, SearchDirection, MatchCase, MatchByte, and SearchFormat arguments",
+                                ));
+                            }
+                            let default_after = (rects[0].row_first, rects[0].col_first);
+                            let after_cell = self.coerce_range_find_after_cell(
+                                workbook,
+                                &range,
+                                args.get(1),
+                                default_after,
+                                "Range.Find",
+                            )?;
+                            let look_in = Self::coerce_range_find_enum(
+                                args.get(2),
+                                XL_FIND_LOOK_IN_VALUES,
+                                "Range.Find LookIn",
+                                &[XL_FIND_LOOK_IN_FORMULAS, XL_FIND_LOOK_IN_VALUES],
+                            )?;
+                            let look_at = Self::coerce_range_find_enum(
+                                args.get(3),
+                                XL_LOOK_AT_PART,
+                                "Range.Find LookAt",
+                                &[XL_LOOK_AT_WHOLE, XL_LOOK_AT_PART],
+                            )?;
+                            let search_order = Self::coerce_range_find_enum(
+                                args.get(4),
+                                XL_SEARCH_BY_ROWS,
+                                "Range.Find SearchOrder",
+                                &[XL_SEARCH_BY_ROWS, XL_SEARCH_BY_COLUMNS],
+                            )?;
+                            let search_direction = Self::coerce_range_find_enum(
+                                args.get(5),
+                                XL_SEARCH_NEXT,
+                                "Range.Find SearchDirection",
+                                &[XL_SEARCH_NEXT, XL_SEARCH_PREVIOUS],
+                            )?;
+                            let match_case = args
+                                .get(6)
+                                .map(|value| {
+                                    coerce_optional_bool_arg(value, false, "Range.Find MatchCase")
+                                })
+                                .transpose()?
+                                .unwrap_or(false);
+                            let _match_byte = args
+                                .get(7)
+                                .map(|value| {
+                                    coerce_optional_bool_arg(value, false, "Range.Find MatchByte")
+                                })
+                                .transpose()?
+                                .unwrap_or(false);
+                            let search_format = args
+                                .get(8)
+                                .map(|value| {
+                                    coerce_optional_bool_arg(
+                                        value,
+                                        false,
+                                        "Range.Find SearchFormat",
+                                    )
+                                })
+                                .transpose()?
+                                .unwrap_or(false);
+                            if search_format {
+                                return Err(OmError::unsupported(
+                                    "Range.Find SearchFormat is not implemented",
+                                ));
+                            }
+
+                            let mut find_state = RuntimeFindState {
+                                workbook,
+                                range: range.clone(),
+                                what: Self::coerce_range_scalar_text(&args[0], "Range.Find What")?,
+                                look_in,
+                                look_at,
+                                search_order,
+                                match_case,
+                                last_match: None,
+                            };
+                            let found_cell = self.find_range_cell(
+                                workbook,
+                                &range,
+                                after_cell,
+                                &find_state,
+                                search_direction,
+                            )?;
+                            find_state.last_match = found_cell;
+                            self.find_state = Some(find_state);
+                            return Ok(found_cell
+                                .map(|(row, col)| {
+                                    OmValue::Object(
+                                        self.register_range_handle(
+                                            workbook,
+                                            sheet_id,
+                                            Rect::single_cell(row, col),
+                                        )
+                                        .0,
+                                    )
+                                })
+                                .unwrap_or(OmValue::Empty));
+                        }
+                        "FindNext" | "FindPrevious" => {
+                            if args.len() > 1 {
+                                return Err(OmError::invalid_argument(format!(
+                                    "Range.{member} accepts at most one After argument"
+                                )));
+                            }
+                            let mut find_state = self.find_state.clone().ok_or_else(|| {
+                                OmError::invalid_state(format!(
+                                    "Range.{member} requires a prior Range.Find call"
+                                ))
+                            })?;
+                            if find_state.workbook != workbook || find_state.range != range {
+                                return Err(OmError::invalid_state(format!(
+                                    "Range.{member} requires the same range as the prior Range.Find call"
+                                )));
+                            }
+                            let after_cell = self.coerce_range_find_after_cell(
+                                workbook,
+                                &range,
+                                args.first(),
+                                find_state
+                                    .last_match
+                                    .unwrap_or((rects[0].row_first, rects[0].col_first)),
+                                &format!("Range.{member}"),
+                            )?;
+                            let search_direction = if member == "FindNext" {
+                                XL_SEARCH_NEXT
+                            } else {
+                                XL_SEARCH_PREVIOUS
+                            };
+                            let found_cell = self.find_range_cell(
+                                workbook,
+                                &range,
+                                after_cell,
+                                &find_state,
+                                search_direction,
+                            )?;
+                            find_state.last_match = found_cell;
+                            self.find_state = Some(find_state);
+                            return Ok(found_cell
+                                .map(|(row, col)| {
+                                    OmValue::Object(
+                                        self.register_range_handle(
+                                            workbook,
+                                            sheet_id,
+                                            Rect::single_cell(row, col),
+                                        )
+                                        .0,
+                                    )
+                                })
+                                .unwrap_or(OmValue::Empty));
+                        }
+                        _ => unreachable!("member was matched before dispatch"),
+                    }
+                }
+
                 if range.areas().len() != 1 {
                     self.focus_member_supported("Range", member, false)?;
                     match member {
@@ -9258,167 +9418,6 @@ impl ExcelRuntime {
                             )
                             .0,
                         ))
-                    }
-                    "Find" => {
-                        if args.is_empty() || args.len() > 9 {
-                            return Err(OmError::invalid_argument(
-                                "Range.Find expects What and optional After, LookIn, LookAt, SearchOrder, SearchDirection, MatchCase, MatchByte, and SearchFormat arguments",
-                            ));
-                        }
-
-                        let after_cell = self.coerce_range_find_after_cell(
-                            workbook,
-                            sheet_id,
-                            rect,
-                            args.get(1),
-                            (rect.row_first, rect.col_first),
-                            "Range.Find",
-                        )?;
-                        let look_in = Self::coerce_range_find_enum(
-                            args.get(2),
-                            XL_FIND_LOOK_IN_VALUES,
-                            "Range.Find LookIn",
-                            &[XL_FIND_LOOK_IN_FORMULAS, XL_FIND_LOOK_IN_VALUES],
-                        )?;
-                        let look_at = Self::coerce_range_find_enum(
-                            args.get(3),
-                            XL_LOOK_AT_PART,
-                            "Range.Find LookAt",
-                            &[XL_LOOK_AT_WHOLE, XL_LOOK_AT_PART],
-                        )?;
-                        let search_order = Self::coerce_range_find_enum(
-                            args.get(4),
-                            XL_SEARCH_BY_ROWS,
-                            "Range.Find SearchOrder",
-                            &[XL_SEARCH_BY_ROWS, XL_SEARCH_BY_COLUMNS],
-                        )?;
-                        let search_direction = Self::coerce_range_find_enum(
-                            args.get(5),
-                            XL_SEARCH_NEXT,
-                            "Range.Find SearchDirection",
-                            &[XL_SEARCH_NEXT, XL_SEARCH_PREVIOUS],
-                        )?;
-                        let match_case = args
-                            .get(6)
-                            .map(|value| {
-                                coerce_optional_bool_arg(value, false, "Range.Find MatchCase")
-                            })
-                            .transpose()?
-                            .unwrap_or(false);
-                        let _match_byte = args
-                            .get(7)
-                            .map(|value| {
-                                coerce_optional_bool_arg(value, false, "Range.Find MatchByte")
-                            })
-                            .transpose()?
-                            .unwrap_or(false);
-                        let search_format = args
-                            .get(8)
-                            .map(|value| {
-                                coerce_optional_bool_arg(value, false, "Range.Find SearchFormat")
-                            })
-                            .transpose()?
-                            .unwrap_or(false);
-                        if search_format {
-                            return Err(OmError::unsupported(
-                                "Range.Find SearchFormat is not implemented",
-                            ));
-                        }
-
-                        let mut find_state = RuntimeFindState {
-                            workbook,
-                            sheet_id,
-                            rect,
-                            what: Self::coerce_range_scalar_text(&args[0], "Range.Find What")?,
-                            look_in,
-                            look_at,
-                            search_order,
-                            match_case,
-                            last_match: None,
-                        };
-                        let found_cell = self.find_range_cell(
-                            workbook,
-                            sheet_id,
-                            rect,
-                            after_cell,
-                            &find_state,
-                            search_direction,
-                        )?;
-                        find_state.last_match = found_cell;
-                        self.find_state = Some(find_state);
-                        Ok(found_cell
-                            .map(|(row, col)| {
-                                OmValue::Object(
-                                    self.register_range_handle(
-                                        workbook,
-                                        sheet_id,
-                                        Rect::single_cell(row, col),
-                                    )
-                                    .0,
-                                )
-                            })
-                            .unwrap_or(OmValue::Empty))
-                    }
-                    "FindNext" | "FindPrevious" => {
-                        if args.len() > 1 {
-                            return Err(OmError::invalid_argument(format!(
-                                "Range.{member} accepts at most one After argument"
-                            )));
-                        }
-                        let mut find_state = self.find_state.clone().ok_or_else(|| {
-                            OmError::invalid_state(format!(
-                                "Range.{member} requires a prior Range.Find call"
-                            ))
-                        })?;
-                        let same_rect = find_state.rect.row_first == rect.row_first
-                            && find_state.rect.row_last == rect.row_last
-                            && find_state.rect.col_first == rect.col_first
-                            && find_state.rect.col_last == rect.col_last;
-                        if find_state.workbook != workbook
-                            || find_state.sheet_id != sheet_id
-                            || !same_rect
-                        {
-                            return Err(OmError::invalid_state(format!(
-                                "Range.{member} requires the same range as the prior Range.Find call"
-                            )));
-                        }
-                        let after_cell = self.coerce_range_find_after_cell(
-                            workbook,
-                            sheet_id,
-                            rect,
-                            args.first(),
-                            find_state
-                                .last_match
-                                .unwrap_or((rect.row_first, rect.col_first)),
-                            &format!("Range.{member}"),
-                        )?;
-                        let search_direction = if member == "FindNext" {
-                            XL_SEARCH_NEXT
-                        } else {
-                            XL_SEARCH_PREVIOUS
-                        };
-                        let found_cell = self.find_range_cell(
-                            workbook,
-                            sheet_id,
-                            rect,
-                            after_cell,
-                            &find_state,
-                            search_direction,
-                        )?;
-                        find_state.last_match = found_cell;
-                        self.find_state = Some(find_state);
-                        Ok(found_cell
-                            .map(|(row, col)| {
-                                OmValue::Object(
-                                    self.register_range_handle(
-                                        workbook,
-                                        sheet_id,
-                                        Rect::single_cell(row, col),
-                                    )
-                                    .0,
-                                )
-                            })
-                            .unwrap_or(OmValue::Empty))
                     }
                     "Replace" => {
                         if args.len() < 2 || args.len() > 8 {
@@ -28255,12 +28254,12 @@ impl ExcelRuntime {
     fn coerce_range_find_after_cell(
         &self,
         workbook: WorkbookHandle,
-        sheet_id: SheetId,
-        rect: Rect,
+        range: &RangeSet,
         value: Option<&OmValue>,
         default: (u32, u32),
         context: &str,
     ) -> OmResult<(u32, u32)> {
+        let (sheet_id, rects) = Self::range_set_single_sheet_rects(range)?;
         match value {
             None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => Ok(default),
             Some(OmValue::Object(handle)) => match self.runtime_object(*handle)? {
@@ -28280,9 +28279,11 @@ impl ExcelRuntime {
                             "{context} After must be a single cell"
                         )));
                     }
-                    if !(rect.row_first..=rect.row_last).contains(&after_rect.row_first)
-                        || !(rect.col_first..=rect.col_last).contains(&after_rect.col_first)
-                    {
+                    let after_is_inside = rects.iter().any(|rect| {
+                        (rect.row_first..=rect.row_last).contains(&after_rect.row_first)
+                            && (rect.col_first..=rect.col_last).contains(&after_rect.col_first)
+                    });
+                    if !after_is_inside {
                         return Err(OmError::invalid_argument(format!(
                             "{context} After must be inside the searched range"
                         )));
@@ -28302,25 +28303,36 @@ impl ExcelRuntime {
     fn find_range_cell(
         &self,
         workbook: WorkbookHandle,
-        sheet_id: SheetId,
-        rect: Rect,
+        range: &RangeSet,
         after_cell: (u32, u32),
         criteria: &RuntimeFindState,
         search_direction: i32,
     ) -> OmResult<Option<(u32, u32)>> {
-        let mut positions = Vec::with_capacity((rect.height() * rect.width()) as usize);
+        let (sheet_id, rects) = Self::range_set_single_sheet_rects(range)?;
+        let position_count = rects.iter().try_fold(0usize, |acc, rect| {
+            let area_count = u64::from(rect.height()) * u64::from(rect.width());
+            let area_count = usize::try_from(area_count)
+                .map_err(|_| OmError::invalid_argument("Range.Find searched range is too large"))?;
+            acc.checked_add(area_count)
+                .ok_or_else(|| OmError::invalid_argument("Range.Find searched range is too large"))
+        })?;
+        let mut positions = Vec::with_capacity(position_count);
         match criteria.search_order {
             XL_SEARCH_BY_ROWS => {
-                for row in rect.row_first..=rect.row_last {
-                    for col in rect.col_first..=rect.col_last {
-                        positions.push((row, col));
+                for rect in &rects {
+                    for row in rect.row_first..=rect.row_last {
+                        for col in rect.col_first..=rect.col_last {
+                            positions.push((row, col));
+                        }
                     }
                 }
             }
             XL_SEARCH_BY_COLUMNS => {
-                for col in rect.col_first..=rect.col_last {
-                    for row in rect.row_first..=rect.row_last {
-                        positions.push((row, col));
+                for rect in &rects {
+                    for col in rect.col_first..=rect.col_last {
+                        for row in rect.row_first..=rect.row_last {
+                            positions.push((row, col));
+                        }
                     }
                 }
             }
@@ -81229,6 +81241,147 @@ mod tests {
                 .expect_err("Range.Find should reject SearchFormat")
                 .code,
             OmErrorCode::Unsupported
+        );
+    }
+
+    #[test]
+    fn range_find_dispatch_searches_multi_area_ranges_in_area_order() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A2,C1:C2".to_string())],
+                )
+                .expect("Range(A1:A2,C1:C2)"),
+        );
+        let a1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        let a2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A2".to_string())])
+                .expect("Range(A2)"),
+        );
+        let b1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Range(B1)"),
+        );
+        let c1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1".to_string())])
+                .expect("Range(C1)"),
+        );
+        let c2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C2".to_string())])
+                .expect("Range(C2)"),
+        );
+
+        runtime
+            .dispatch_set(a1, "Value2", OmValue::Text("skip".to_string()), &[])
+            .expect("A1.Value2");
+        runtime
+            .dispatch_set(a2, "Value2", OmValue::Text("needle one".to_string()), &[])
+            .expect("A2.Value2");
+        runtime
+            .dispatch_set(c1, "Value2", OmValue::Text("needle two".to_string()), &[])
+            .expect("C1.Value2");
+        runtime
+            .dispatch_set(c2, "Value2", OmValue::Text("skip".to_string()), &[])
+            .expect("C2.Value2");
+
+        let first_match = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    search_range,
+                    "Find",
+                    &[OmValue::Text("needle".to_string()), OmValue::Object(a1)],
+                )
+                .expect("multi-area Range.Find"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(first_match, "Address", &[])
+                    .expect("multi-area Range.Find Address")
+            ),
+            "$A$2"
+        );
+
+        let next_match = expect_object_handle(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect("multi-area Range.FindNext"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(next_match, "Address", &[])
+                    .expect("multi-area Range.FindNext Address")
+            ),
+            "$C$1"
+        );
+
+        let previous_match = expect_object_handle(
+            runtime
+                .dispatch_invoke(search_range, "FindPrevious", &[])
+                .expect("multi-area Range.FindPrevious"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(previous_match, "Address", &[])
+                    .expect("multi-area Range.FindPrevious Address")
+            ),
+            "$A$2"
+        );
+
+        let wrapped_match = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    search_range,
+                    "Find",
+                    &[OmValue::Text("needle".to_string()), OmValue::Object(c1)],
+                )
+                .expect("multi-area Range.Find after second area"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(wrapped_match, "Address", &[])
+                    .expect("multi-area Range.Find wrapped Address")
+            ),
+            "$A$2"
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    search_range,
+                    "Find",
+                    &[OmValue::Text("needle".to_string()), OmValue::Object(b1)],
+                )
+                .expect_err("multi-area Range.Find should reject After outside areas")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 
