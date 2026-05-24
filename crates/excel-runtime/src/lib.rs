@@ -4306,6 +4306,64 @@ impl ExcelRuntime {
                                     dirty: true,
                                 })
                             }
+                            OmValue::Array(array) => {
+                                if member == "Name" {
+                                    return Err(OmError::type_mismatch(
+                                        "Series.Name expects a string source formula or Range object",
+                                    ));
+                                }
+                                let array_value_literal = |value: &OmValue| -> OmResult<String> {
+                                    match value {
+                                        OmValue::Missing | OmValue::Empty | OmValue::Null => {
+                                            Ok("\"\"".to_string())
+                                        }
+                                        OmValue::Bool(true) => Ok("TRUE".to_string()),
+                                        OmValue::Bool(false) => Ok("FALSE".to_string()),
+                                        OmValue::Number(number) => {
+                                            if !number.is_finite() {
+                                                return Err(OmError::invalid_argument(format!(
+                                                    "Series.{member} array values must be finite numbers"
+                                                )));
+                                            }
+                                            Ok(format_find_number(*number))
+                                        }
+                                        OmValue::Text(text) => {
+                                            Ok(format!("\"{}\"", text.replace('"', "\"\"")))
+                                        }
+                                        OmValue::Error(error) => {
+                                            Ok(formula_cell_error_text(*error).to_string())
+                                        }
+                                        OmValue::Object(_) | OmValue::Array(_) => {
+                                            Err(OmError::type_mismatch(format!(
+                                                "Series.{member} array values cannot contain objects or nested arrays"
+                                            )))
+                                        }
+                                    }
+                                };
+                                let mut row_literals = Vec::with_capacity(array.rows);
+                                for row in 0..array.rows {
+                                    let mut col_literals = Vec::with_capacity(array.cols);
+                                    for col in 0..array.cols {
+                                        let value = array.get(row, col).ok_or_else(|| {
+                                            OmError::invalid_argument(format!(
+                                                "Series.{member} array dimensions do not match values"
+                                            ))
+                                        })?;
+                                        col_literals.push(array_value_literal(value)?);
+                                    }
+                                    row_literals.push(col_literals.join(","));
+                                }
+                                let raw_text = format!("{{{}}}", row_literals.join(";"));
+                                Some(ChartSourceExpr {
+                                    raw: FormulaSource {
+                                        text: raw_text,
+                                        is_r1c1: false,
+                                    },
+                                    resolved: Some(ReferenceTarget::Array(array)),
+                                    cache: None,
+                                    dirty: true,
+                                })
+                            }
                             OmValue::Object(handle) => match self.runtime_object(handle)? {
                                 RuntimeObjectKind::Range {
                                     workbook: range_workbook,
@@ -4342,7 +4400,7 @@ impl ExcelRuntime {
                             OmValue::Empty | OmValue::Missing | OmValue::Null => None,
                             _ => {
                                 return Err(OmError::type_mismatch(format!(
-                                    "Series.{member} expects a string source formula or Range object"
+                                    "Series.{member} expects a string source formula, Range object, or array"
                                 )));
                             }
                         };
@@ -32418,6 +32476,85 @@ fn om_value_text(value: &OmValue) -> Option<String> {
     }
 }
 
+fn chart_source_container_xml_string(
+    chart_type: &ChartType,
+    slot: ChartSourceXmlSlot,
+    source: &ChartSourceExpr,
+) -> OmResult<String> {
+    let container_name = match (chart_type, slot) {
+        (_, ChartSourceXmlSlot::Name) => "tx",
+        (chart_type, ChartSourceXmlSlot::XValues) if chart_type_uses_xy_values(chart_type) => {
+            "xVal"
+        }
+        (chart_type, ChartSourceXmlSlot::Values) if chart_type_uses_xy_values(chart_type) => "yVal",
+        (_, ChartSourceXmlSlot::XValues) => "cat",
+        (_, ChartSourceXmlSlot::Values) => "val",
+        (_, ChartSourceXmlSlot::BubbleSize) => "bubbleSize",
+    };
+
+    if let Some(values) = chart_source_literal_values(source)? {
+        if slot == ChartSourceXmlSlot::Name {
+            let value = values.first().map(String::as_str).unwrap_or_default();
+            return Ok(format!("<c:tx><c:v>{}</c:v></c:tx>", partial_escape(value)));
+        }
+
+        let literal_name =
+            if slot == ChartSourceXmlSlot::XValues && !chart_type_uses_xy_values(chart_type) {
+                "strLit"
+            } else {
+                "numLit"
+            };
+        let mut xml = format!(
+            r#"<c:{container_name}><c:{literal_name}><c:ptCount val="{}"/>"#,
+            values.len()
+        );
+        for (index, value) in values.iter().enumerate() {
+            xml.push_str(&format!(
+                r#"<c:pt idx="{index}"><c:v>{}</c:v></c:pt>"#,
+                partial_escape(value)
+            ));
+        }
+        xml.push_str(&format!("</c:{literal_name}></c:{container_name}>"));
+        return Ok(xml);
+    }
+
+    let reference_name = match (chart_type, slot) {
+        (_, ChartSourceXmlSlot::Name) => "strRef",
+        (chart_type, ChartSourceXmlSlot::XValues) if chart_type_uses_xy_values(chart_type) => {
+            "numRef"
+        }
+        (chart_type, ChartSourceXmlSlot::Values) if chart_type_uses_xy_values(chart_type) => {
+            "numRef"
+        }
+        (_, ChartSourceXmlSlot::XValues) => "strRef",
+        (_, ChartSourceXmlSlot::Values) => "numRef",
+        (_, ChartSourceXmlSlot::BubbleSize) => "numRef",
+    };
+    let formula = partial_escape(source.raw.text.trim_start_matches('=')).to_string();
+    Ok(format!(
+        r#"<c:{container_name}><c:{reference_name}><c:f>{formula}</c:f></c:{reference_name}></c:{container_name}>"#
+    ))
+}
+
+fn chart_source_literal_values(source: &ChartSourceExpr) -> OmResult<Option<Vec<String>>> {
+    match source.resolved.as_ref() {
+        Some(ReferenceTarget::Array(array)) => array
+            .values
+            .iter()
+            .map(|value| {
+                om_value_text(value).ok_or_else(|| {
+                    OmError::type_mismatch(
+                        "chart literal arrays cannot contain object or nested array values",
+                    )
+                })
+            })
+            .collect::<OmResult<Vec<_>>>()
+            .map(Some),
+        Some(ReferenceTarget::Value(value)) => Ok(Some(vec![find_cell_value_text(value)])),
+        _ => Ok(None),
+    }
+}
+
 fn chart_number_xml_value(value: f64) -> String {
     if value.fract() == 0.0 {
         format!("{value:.0}")
@@ -33185,48 +33322,14 @@ fn patch_loaded_chart_model_xml(
             (_, ChartSourceXmlSlot::BubbleSize) => "bubbleSize",
         }
     };
-    let source_container_names = |slot: ChartSourceXmlSlot| -> (&'static str, &'static str) {
-        match (&chart.chart_type, slot) {
-            (_, ChartSourceXmlSlot::Name) => ("c:tx", "c:strRef"),
-            (chart_type, ChartSourceXmlSlot::XValues) if chart_type_uses_xy_values(chart_type) => {
-                ("c:xVal", "c:numRef")
-            }
-            (chart_type, ChartSourceXmlSlot::Values) if chart_type_uses_xy_values(chart_type) => {
-                ("c:yVal", "c:numRef")
-            }
-            (_, ChartSourceXmlSlot::XValues) => ("c:cat", "c:strRef"),
-            (_, ChartSourceXmlSlot::Values) => ("c:val", "c:numRef"),
-            (_, ChartSourceXmlSlot::BubbleSize) => ("c:bubbleSize", "c:numRef"),
-        }
-    };
     let write_chart_source_container = |writer: &mut Writer<Cursor<Vec<u8>>>,
                                         slot: ChartSourceXmlSlot,
                                         source: &ChartSourceExpr|
      -> OmResult<()> {
-        let (container_name, reference_name) = source_container_names(slot);
-        let formula = source.raw.text.trim_start_matches('=');
+        let xml = chart_source_container_xml_string(&chart.chart_type, slot, source)?;
         writer
-            .write_event(Event::Start(BytesStart::new(container_name)))
-            .map_err(runtime_xml_error)?;
-        writer
-            .write_event(Event::Start(BytesStart::new(reference_name)))
-            .map_err(runtime_xml_error)?;
-        writer
-            .write_event(Event::Start(BytesStart::new("c:f")))
-            .map_err(runtime_xml_error)?;
-        writer
-            .write_event(Event::Text(BytesText::from_escaped(partial_escape(
-                formula,
-            ))))
-            .map_err(runtime_xml_error)?;
-        writer
-            .write_event(Event::End(BytesEnd::new("c:f")))
-            .map_err(runtime_xml_error)?;
-        writer
-            .write_event(Event::End(BytesEnd::new(reference_name)))
-            .map_err(runtime_xml_error)?;
-        writer
-            .write_event(Event::End(BytesEnd::new(container_name)))
+            .get_mut()
+            .write_all(xml.as_bytes())
             .map_err(runtime_xml_error)?;
         Ok(())
     };
@@ -33800,11 +33903,11 @@ fn patch_loaded_chart_model_xml(
                             continue;
                         }
                     } else if let Some(slot) = source_container_slot(local_name.as_slice()) {
-                        if source_for_slot(series_index, slot).is_none() {
+                        let Some(source) = source_for_slot(series_index, slot) else {
                             skip_depth = 1;
                             buffer.clear();
                             continue;
-                        }
+                        };
                         if let Some(expected_points) =
                             expected_dirty_point_explosions.get(series_index)
                         {
@@ -33872,6 +33975,16 @@ fn patch_loaded_chart_model_xml(
                                     patched_sources += 1;
                                 }
                             }
+                        }
+                        if source.dirty && chart_source_literal_values(source)?.is_some() {
+                            write_chart_source_container(&mut writer, slot, source)?;
+                            if let Some(seen) = source_slots_seen.get_mut(series_index) {
+                                seen[slot_index(slot)] = true;
+                            }
+                            patched_sources += 1;
+                            skip_depth = 1;
+                            buffer.clear();
+                            continue;
                         }
                         source_stack.push(slot);
                     } else if local_name.as_slice() == b"f"
@@ -37996,7 +38109,7 @@ fn patch_loaded_chart_model_xml(
 
                 if current_series_index.is_some() {
                     match local_name.as_slice() {
-                        b"tx" | b"cat" | b"val" | b"xVal" | b"yVal" => {
+                        b"tx" | b"cat" | b"val" | b"xVal" | b"yVal" | b"bubbleSize" => {
                             source_stack.pop();
                         }
                         b"ser" => {
@@ -38732,40 +38845,34 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             series_xml.push_str("</c:marker>");
         }
         if let Some(name) = series.name.as_ref() {
-            let formula = partial_escape(name.raw.text.trim_start_matches('=')).to_string();
-            series_xml.push_str(&format!(
-                r#"<c:tx><c:strRef><c:f>{formula}</c:f></c:strRef></c:tx>"#
-            ));
+            series_xml.push_str(&chart_source_container_xml_string(
+                &chart.chart_type,
+                ChartSourceXmlSlot::Name,
+                name,
+            )?);
         }
         if let Some(x_values) = series.x_values.as_ref() {
-            let formula = partial_escape(x_values.raw.text.trim_start_matches('=')).to_string();
-            let (container_name, reference_name) = if chart_type_uses_xy_values(&chart.chart_type) {
-                ("xVal", "numRef")
-            } else {
-                ("cat", "strRef")
-            };
-            series_xml.push_str(&format!(
-                r#"<c:{container_name}><c:{reference_name}><c:f>{formula}</c:f></c:{reference_name}></c:{container_name}>"#
-            ));
+            series_xml.push_str(&chart_source_container_xml_string(
+                &chart.chart_type,
+                ChartSourceXmlSlot::XValues,
+                x_values,
+            )?);
         }
         if let Some(values) = series.values.as_ref() {
-            let formula = partial_escape(values.raw.text.trim_start_matches('=')).to_string();
-            let (container_name, reference_name) = if chart_type_uses_xy_values(&chart.chart_type) {
-                ("yVal", "numRef")
-            } else {
-                ("val", "numRef")
-            };
-            series_xml.push_str(&format!(
-                r#"<c:{container_name}><c:{reference_name}><c:f>{formula}</c:f></c:{reference_name}></c:{container_name}>"#
-            ));
+            series_xml.push_str(&chart_source_container_xml_string(
+                &chart.chart_type,
+                ChartSourceXmlSlot::Values,
+                values,
+            )?);
         }
         if chart_type_uses_bubble_size(&chart.chart_type)
             && let Some(bubble_size) = series.bubble_size.as_ref()
         {
-            let formula = partial_escape(bubble_size.raw.text.trim_start_matches('=')).to_string();
-            series_xml.push_str(&format!(
-                r#"<c:bubbleSize><c:numRef><c:f>{formula}</c:f></c:numRef></c:bubbleSize>"#
-            ));
+            series_xml.push_str(&chart_source_container_xml_string(
+                &chart.chart_type,
+                ChartSourceXmlSlot::BubbleSize,
+                bubble_size,
+            )?);
         }
         if let Some(invert_if_negative) = series.invert_if_negative {
             series_xml.push_str(&format!(
@@ -121555,6 +121662,139 @@ mod tests {
             ),
             "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,(Sheet1!$B$1:$B$2,Sheet1!$D$1:$D$2),1)"
         );
+    }
+
+    #[test]
+    fn chart_series_source_setters_accept_array_values_and_save_literals() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+
+        let name_array_error = runtime
+            .dispatch_set(
+                series,
+                "Name",
+                OmValue::Array(OmArray::scalar(OmValue::Text("Inline".to_string()))),
+                &[],
+            )
+            .expect_err("Series.Name should reject array values");
+        assert_eq!(name_array_error.code, OmErrorCode::TypeMismatch);
+
+        let x_values = OmArray::new(
+            1,
+            2,
+            vec![
+                OmValue::Text("North".to_string()),
+                OmValue::Text("South".to_string()),
+            ],
+        )
+        .expect("x values array");
+        let values = OmArray::new(1, 2, vec![OmValue::Number(10.0), OmValue::Number(20.0)])
+            .expect("values array");
+        runtime
+            .dispatch_set(series, "XValues", OmValue::Array(x_values.clone()), &[])
+            .expect("set Series.XValues from array");
+        runtime
+            .dispatch_set(series, "Values", OmValue::Array(values.clone()), &[])
+            .expect("set Series.Values from array");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "XValues", &[])
+                .expect("Series.XValues after array setter"),
+            OmValue::Text(r#"={"North","South"}"#.to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Values", &[])
+                .expect("Series.Values after array setter"),
+            OmValue::Text("={10,20}".to_string())
+        );
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after array source setters");
+            let chart = state.charts.values().next().expect("chart model");
+            let series = &chart.series[0];
+            assert_eq!(
+                series
+                    .x_values
+                    .as_ref()
+                    .and_then(|source| source.resolved.as_ref()),
+                Some(&ReferenceTarget::Array(x_values))
+            );
+            assert_eq!(
+                series
+                    .values
+                    .as_ref()
+                    .and_then(|source| source.resolved.as_ref()),
+                Some(&ReferenceTarget::Array(values))
+            );
+        }
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after array source setters");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved chart package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(
+            r#"<c:cat><c:strLit><c:ptCount val="2"/><c:pt idx="0"><c:v>North</c:v></c:pt><c:pt idx="1"><c:v>South</c:v></c:pt></c:strLit></c:cat>"#
+        ));
+        assert!(saved_chart_xml.contains(
+            r#"<c:val><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>10</c:v></c:pt><c:pt idx="1"><c:v>20</c:v></c:pt></c:numLit></c:val>"#
+        ));
+        assert!(!saved_chart_xml.contains("<c:f>{10,20}</c:f>"));
+        assert!(!saved_chart_xml.contains("<c:f>Sheet1!$A$1:$B$1</c:f>"));
+        assert!(!saved_chart_xml.contains("<c:f>Sheet1!$A$1:$C$1</c:f>"));
     }
 
     #[test]
