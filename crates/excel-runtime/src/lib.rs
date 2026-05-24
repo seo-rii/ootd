@@ -4287,24 +4287,38 @@ impl ExcelRuntime {
                     "Name" | "Values" | "XValues" | "BubbleSizes" => {
                         let source = match value {
                             OmValue::Text(text) => {
-                                let raw_text = text.trim_start_matches('=').to_string();
-                                let resolved = resolve_chart_source_reference_with_names(
-                                    &raw_text,
-                                    chart_source_workbook_id,
-                                    Some(&chart_source_workbook_display_name),
-                                    &chart_source_worksheets,
-                                    &chart_source_defined_names,
-                                    chart_source_current_sheet,
-                                );
-                                Some(ChartSourceExpr {
-                                    raw: FormulaSource {
-                                        text: raw_text,
-                                        is_r1c1: false,
-                                    },
-                                    resolved,
-                                    cache: None,
-                                    dirty: true,
-                                })
+                                if member == "Name" && !text.trim_start().starts_with('=') {
+                                    Some(ChartSourceExpr {
+                                        raw: FormulaSource {
+                                            text: format!("\"{}\"", text.replace('"', "\"\"")),
+                                            is_r1c1: false,
+                                        },
+                                        resolved: Some(ReferenceTarget::Value(CellValue::Text(
+                                            text,
+                                        ))),
+                                        cache: None,
+                                        dirty: true,
+                                    })
+                                } else {
+                                    let raw_text = text.trim_start_matches('=').to_string();
+                                    let resolved = resolve_chart_source_reference_with_names(
+                                        &raw_text,
+                                        chart_source_workbook_id,
+                                        Some(&chart_source_workbook_display_name),
+                                        &chart_source_worksheets,
+                                        &chart_source_defined_names,
+                                        chart_source_current_sheet,
+                                    );
+                                    Some(ChartSourceExpr {
+                                        raw: FormulaSource {
+                                            text: raw_text,
+                                            is_r1c1: false,
+                                        },
+                                        resolved,
+                                        cache: None,
+                                        dirty: true,
+                                    })
+                                }
                             }
                             OmValue::Array(array) => {
                                 if member == "Name" {
@@ -121720,10 +121734,10 @@ mod tests {
             .dispatch_set(
                 series,
                 "Name",
-                OmValue::Text(r#"="Inline Name""#.to_string()),
+                OmValue::Text("Inline Name".to_string()),
                 &[],
             )
-            .expect("set Series.Name from literal text");
+            .expect("set Series.Name from plain literal text");
         assert_eq!(
             runtime
                 .dispatch_get(series, "Name", &[])
