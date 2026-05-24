@@ -735,7 +735,17 @@ enum ShapeRangeSource {
     },
     ChartObject {
         chart_object_id: ChartObjectId,
+        parent: ChartObjectsParent,
     },
+}
+
+impl ShapeRangeSource {
+    fn parent(&self) -> ChartObjectsParent {
+        match self {
+            ShapeRangeSource::ChartObjects { parent, .. }
+            | ShapeRangeSource::ChartObject { parent, .. } => *parent,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17774,7 +17784,10 @@ impl ExcelRuntime {
                 };
                 Ok(OmValue::Object(self.register_shape_range_handle(
                     workbook,
-                    ShapeRangeSource::ChartObject { chart_object_id },
+                    ShapeRangeSource::ChartObject {
+                        chart_object_id,
+                        parent: source.parent(),
+                    },
                 )))
             }
             "Copy" | "Cut" | "CopyPicture" => {
@@ -17850,6 +17863,7 @@ impl ExcelRuntime {
                     workbook,
                     ShapeRangeSource::ChartObject {
                         chart_object_id: duplicated_id,
+                        parent: source.parent(),
                     },
                 )))
             }
@@ -18234,10 +18248,18 @@ impl ExcelRuntime {
                     self.register_chart_handle(workbook, chart_id),
                 ))
             }
-            "ShapeRange" => Ok(OmValue::Object(self.register_shape_range_handle(
-                workbook,
-                ShapeRangeSource::ChartObject { chart_object_id },
-            ))),
+            "ShapeRange" => {
+                let host_sheet_id = self
+                    .chart_object_model(workbook, chart_object_id)?
+                    .host_sheet_id;
+                Ok(OmValue::Object(self.register_shape_range_handle(
+                    workbook,
+                    ShapeRangeSource::ChartObject {
+                        chart_object_id,
+                        parent: ChartObjectsParent::Worksheet(host_sheet_id),
+                    },
+                )))
+            }
             "Index" | "ZOrder" => {
                 let sheet_id = self
                     .chart_object_model(workbook, chart_object_id)?
@@ -18757,12 +18779,14 @@ impl ExcelRuntime {
                             self.register_chart_handle(workbook, parent_chart_id)
                         }
                     },
-                    ShapeRangeSource::ChartObject { chart_object_id } => {
-                        let sheet_id = self
-                            .chart_object_model(workbook, chart_object_id)?
-                            .host_sheet_id;
-                        self.register_worksheet_handle(workbook, sheet_id).0
-                    }
+                    ShapeRangeSource::ChartObject { parent, .. } => match parent {
+                        ChartObjectsParent::Worksheet(parent_sheet_id) => {
+                            self.register_worksheet_handle(workbook, parent_sheet_id).0
+                        }
+                        ChartObjectsParent::Chart(parent_chart_id) => {
+                            self.register_chart_handle(workbook, parent_chart_id)
+                        }
+                    },
                 };
                 Ok(OmValue::Object(parent_handle))
             }
@@ -26050,7 +26074,9 @@ impl ExcelRuntime {
                 *sheet_id,
                 chart_object_ids.as_deref(),
             ),
-            ShapeRangeSource::ChartObject { chart_object_id } => {
+            ShapeRangeSource::ChartObject {
+                chart_object_id, ..
+            } => {
                 let chart_object = self.chart_object_model(workbook, *chart_object_id)?;
                 Ok(vec![(chart_object.id, chart_object.name.clone())])
             }
@@ -26064,7 +26090,9 @@ impl ExcelRuntime {
         member: &str,
     ) -> OmResult<ObjectHandle> {
         match source {
-            ShapeRangeSource::ChartObject { chart_object_id } => {
+            ShapeRangeSource::ChartObject {
+                chart_object_id, ..
+            } => {
                 self.chart_object_model(workbook, *chart_object_id)?;
                 Ok(self.register_chart_object_handle(workbook, *chart_object_id))
             }
@@ -27382,6 +27410,7 @@ impl ExcelRuntime {
                     source:
                         ShapeRangeSource::ChartObject {
                             chart_object_id: object_chart_object_id,
+                            ..
                         },
                 } if *object_workbook == workbook && *object_chart_object_id == chart_object_id => {
                     Some(object_id)
@@ -29024,7 +29053,10 @@ impl ExcelRuntime {
                 }
                 RuntimeObjectKind::ShapeRange {
                     workbook: object_workbook,
-                    source: ShapeRangeSource::ChartObject { chart_object_id },
+                    source:
+                        ShapeRangeSource::ChartObject {
+                            chart_object_id, ..
+                        },
                 } if *object_workbook == workbook
                     && self
                         .chart_object_model(workbook, *chart_object_id)
@@ -95156,6 +95188,42 @@ mod tests {
             runtime
                 .dispatch_get(chart, "ChartType", &[])
                 .expect("chart sheet Chart.ChartType after ShapeRange")
+        );
+        let chart_handle_shape_item = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_handle_shape_range, "Item", &[OmValue::Number(1.0)])
+                .expect("Chart.ChartObjects.ShapeRange.Item(1)"),
+        );
+        let chart_handle_shape_item_parent = expect_object_handle(
+            runtime
+                .dispatch_get(chart_handle_shape_item, "Parent", &[])
+                .expect("Chart.ChartObjects.ShapeRange.Item(1).Parent"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_handle_shape_item_parent, "ChartType", &[])
+                .expect("Chart.ChartObjects.ShapeRange.Item(1).Parent.ChartType"),
+            runtime
+                .dispatch_get(chart, "ChartType", &[])
+                .expect("chart sheet Chart.ChartType after ShapeRange.Item")
+        );
+        let chart_sheet_shape_item = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_sheet_shape_range, "Item", &[OmValue::Number(1.0)])
+                .expect("chart sheet ChartObjects.ShapeRange.Item(1)"),
+        );
+        let chart_sheet_shape_item_parent = expect_object_handle(
+            runtime
+                .dispatch_get(chart_sheet_shape_item, "Parent", &[])
+                .expect("chart sheet ChartObjects.ShapeRange.Item(1).Parent"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_sheet_shape_item_parent, "Type", &[])
+                    .expect("chart sheet ChartObjects.ShapeRange.Item(1).Parent.Type")
+            ),
+            f64::from(super::XL_SHEET_TYPE_CHART)
         );
         assert_eq!(
             expect_number(
