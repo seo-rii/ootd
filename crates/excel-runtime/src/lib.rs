@@ -12076,7 +12076,7 @@ impl ExcelRuntime {
                             "ChartObject.{member} does not accept arguments"
                         )));
                     }
-                    self.move_chart_object_z_order(workbook, chart_object_id, member)?;
+                    self.move_chart_objects_z_order(workbook, &[chart_object_id], member)?;
                     Ok(OmValue::Empty)
                 }
                 "CopyPicture" => {
@@ -18152,13 +18152,12 @@ impl ExcelRuntime {
                         ));
                     }
                 };
-                let entries = self.shape_range_chart_object_entries(workbook, &source)?;
-                let [(chart_object_id, _)] = entries.as_slice() else {
-                    return Err(OmError::unsupported(
-                        "ShapeRange.ZOrder is only implemented for a single chart object",
-                    ));
-                };
-                self.move_chart_object_z_order(workbook, *chart_object_id, operation)?;
+                let chart_object_ids = self
+                    .shape_range_chart_object_entries(workbook, &source)?
+                    .into_iter()
+                    .map(|(chart_object_id, _)| chart_object_id)
+                    .collect::<Vec<_>>();
+                self.move_chart_objects_z_order(workbook, &chart_object_ids, operation)?;
                 Ok(OmValue::Empty)
             }
             _ => Err(OmError::unsupported(format!(
@@ -26841,43 +26840,96 @@ impl ExcelRuntime {
         Ok(new_chart_object_id)
     }
 
-    fn move_chart_object_z_order(
+    fn move_chart_objects_z_order(
         &mut self,
         workbook: WorkbookHandle,
-        chart_object_id: ChartObjectId,
+        chart_object_ids: &[ChartObjectId],
         member: &str,
     ) -> OmResult<()> {
-        let host_sheet_id = self
-            .chart_object_model(workbook, chart_object_id)?
-            .host_sheet_id;
-        let mut ordered_chart_object_ids = self
-            .chart_object_entries_for_sheet(workbook, host_sheet_id)?
-            .into_iter()
-            .map(|(chart_object_id, _)| chart_object_id)
-            .collect::<Vec<_>>();
-        let Some(position) = ordered_chart_object_ids
-            .iter()
-            .position(|candidate_id| *candidate_id == chart_object_id)
+        let Some((first_chart_object_id, remaining_chart_object_ids)) =
+            chart_object_ids.split_first()
         else {
             return Err(OmError::new(
                 OmErrorCode::NotFound,
                 "chart object not found",
             ));
         };
-        if ordered_chart_object_ids.len() <= 1 {
+        let host_sheet_id = self
+            .chart_object_model(workbook, *first_chart_object_id)?
+            .host_sheet_id;
+        for chart_object_id in remaining_chart_object_ids {
+            let chart_object = self.chart_object_model(workbook, *chart_object_id)?;
+            if chart_object.host_sheet_id != host_sheet_id {
+                return Err(OmError::unsupported(
+                    "ShapeRange.ZOrder is unavailable for mixed-sheet ranges",
+                ));
+            }
+        }
+        let mut ordered_chart_object_ids = self
+            .chart_object_entries_for_sheet(workbook, host_sheet_id)?
+            .into_iter()
+            .map(|(chart_object_id, _)| chart_object_id)
+            .collect::<Vec<_>>();
+        if !chart_object_ids
+            .iter()
+            .all(|chart_object_id| ordered_chart_object_ids.contains(chart_object_id))
+        {
+            return Err(OmError::new(
+                OmErrorCode::NotFound,
+                "chart object not found",
+            ));
+        }
+        if ordered_chart_object_ids.len() <= 1
+            || ordered_chart_object_ids
+                .iter()
+                .all(|chart_object_id| chart_object_ids.contains(chart_object_id))
+        {
             return Ok(());
         }
-        let target = ordered_chart_object_ids.remove(position);
         match member {
-            "BringToFront" => ordered_chart_object_ids.push(target),
-            "SendToBack" => ordered_chart_object_ids.insert(0, target),
+            "BringToFront" => {
+                let selected = ordered_chart_object_ids
+                    .iter()
+                    .copied()
+                    .filter(|chart_object_id| chart_object_ids.contains(chart_object_id))
+                    .collect::<Vec<_>>();
+                ordered_chart_object_ids
+                    .retain(|chart_object_id| !chart_object_ids.contains(chart_object_id));
+                ordered_chart_object_ids.extend(selected);
+            }
+            "SendToBack" => {
+                let mut reordered = ordered_chart_object_ids
+                    .iter()
+                    .copied()
+                    .filter(|chart_object_id| chart_object_ids.contains(chart_object_id))
+                    .collect::<Vec<_>>();
+                reordered.extend(
+                    ordered_chart_object_ids
+                        .iter()
+                        .copied()
+                        .filter(|chart_object_id| !chart_object_ids.contains(chart_object_id)),
+                );
+                ordered_chart_object_ids = reordered;
+            }
             "BringForward" => {
-                let new_position = (position + 1).min(ordered_chart_object_ids.len());
-                ordered_chart_object_ids.insert(new_position, target);
+                if ordered_chart_object_ids.len() >= 2 {
+                    for index in (0..ordered_chart_object_ids.len() - 1).rev() {
+                        if chart_object_ids.contains(&ordered_chart_object_ids[index])
+                            && !chart_object_ids.contains(&ordered_chart_object_ids[index + 1])
+                        {
+                            ordered_chart_object_ids.swap(index, index + 1);
+                        }
+                    }
+                }
             }
             "SendBackward" => {
-                let new_position = position.saturating_sub(1);
-                ordered_chart_object_ids.insert(new_position, target);
+                for index in 1..ordered_chart_object_ids.len() {
+                    if chart_object_ids.contains(&ordered_chart_object_ids[index])
+                        && !chart_object_ids.contains(&ordered_chart_object_ids[index - 1])
+                    {
+                        ordered_chart_object_ids.swap(index, index - 1);
+                    }
+                }
             }
             _ => {
                 return Err(OmError::unsupported(format!(
@@ -97611,14 +97663,84 @@ mod tests {
         );
         assert_eq!(
             runtime
-                .dispatch_invoke(
-                    all_shapes,
-                    "ZOrder",
-                    &[OmValue::Number(f64::from(super::MSO_BRING_TO_FRONT))],
-                )
-                .expect_err("multi ShapeRange.ZOrder is unsupported")
+                .dispatch_invoke(all_shapes, "ZOrder", &[])
+                .expect_err("ShapeRange.ZOrder rejects missing command")
                 .code,
-            OmErrorCode::Unsupported
+            OmErrorCode::InvalidArgument
+        );
+        let selected_shapes = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Item",
+                    &[OmValue::Array(
+                        OmArray::new(1, 2, vec![OmValue::Number(1.0), OmValue::Number(2.0)])
+                            .expect("selected z-order array"),
+                    )],
+                )
+                .expect("ChartObjects.Item(array) for multi ZOrder"),
+        );
+        runtime
+            .dispatch_invoke(
+                selected_shapes,
+                "ZOrder",
+                &[OmValue::Number(f64::from(super::MSO_BRING_TO_FRONT))],
+            )
+            .expect("multi ShapeRange.ZOrder msoBringToFront");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(third_chart_object, "ZOrder", &[])
+                    .expect("third chart object z-order after multi bring to front")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_chart_object, "ZOrder", &[])
+                    .expect("first chart object z-order after multi bring to front")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_chart_object, "ZOrder", &[])
+                    .expect("second chart object z-order after multi bring to front")
+            ),
+            3.0
+        );
+        runtime
+            .dispatch_invoke(
+                selected_shapes,
+                "ZOrder",
+                &[OmValue::Number(f64::from(super::MSO_SEND_BACKWARD))],
+            )
+            .expect("multi ShapeRange.ZOrder msoSendBackward");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_chart_object, "ZOrder", &[])
+                    .expect("first chart object z-order after multi send backward")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_chart_object, "ZOrder", &[])
+                    .expect("second chart object z-order after multi send backward")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(third_chart_object, "ZOrder", &[])
+                    .expect("third chart object z-order after multi send backward")
+            ),
+            3.0
         );
     }
 
