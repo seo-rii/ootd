@@ -12069,7 +12069,7 @@ impl ExcelRuntime {
                         self.register_chart_object_handle(workbook, duplicate_id),
                     ))
                 }
-                "BringToFront" | "SendToBack" | "BringForward" | "SendBackward" => {
+                "BringToFront" | "SendToBack" => {
                     if !args.is_empty() {
                         return Err(OmError::invalid_argument(format!(
                             "ChartObject.{member} does not accept arguments"
@@ -14656,13 +14656,11 @@ impl ExcelRuntime {
                             | "Activate"
                             | "Select"
                             | "BringToFront"
-                            | "BringForward"
                             | "Copy"
                             | "Cut"
                             | "Duplicate"
                             | "CopyPicture"
                             | "Delete"
-                            | "SendBackward"
                             | "SendToBack"
                     )
                     | (
@@ -91467,16 +91465,6 @@ mod tests {
     }
 
     #[test]
-    fn focus_surface_includes_chartobject_z_order_methods() {
-        let runtime = ExcelRuntime::new();
-        for member in ["BringToFront", "BringForward", "SendBackward", "SendToBack"] {
-            runtime
-                .focus_member_supported("ChartObject", member, false)
-                .expect("ChartObject z-order member should be in focus surface");
-        }
-    }
-
-    #[test]
     fn workbooks_open_dispatch_reads_workbook_from_filesystem() {
         let mut runtime = ExcelRuntime::new();
         let path = std::env::temp_dir().join(format!(
@@ -118897,6 +118885,11 @@ mod tests {
                 .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
                 .expect("ChartObjects.Item(1)"),
         );
+        let first_chart_shape_range = expect_object_handle(
+            runtime
+                .dispatch_get(first_chart_object, "ShapeRange", &[])
+                .expect("ChartObject.ShapeRange"),
+        );
         let second_chart_object = expect_object_handle(
             runtime
                 .dispatch_invoke(
@@ -118930,19 +118923,39 @@ mod tests {
         assert_eq!(
             runtime
                 .dispatch_invoke(first_chart_object, "BringForward", &[])
-                .expect("ChartObject.BringForward"),
+                .expect_err("ChartObject.BringForward stays off the direct OM surface")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(first_chart_object, "SendBackward", &[])
+                .expect_err("ChartObject.SendBackward stays off the direct OM surface")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    first_chart_shape_range,
+                    "ZOrder",
+                    &[OmValue::Number(f64::from(super::MSO_BRING_FORWARD))],
+                )
+                .expect("ChartObject.ShapeRange.ZOrder msoBringForward"),
             OmValue::Empty
         );
         let stepped_forward_first = expect_object_handle(
             runtime
                 .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
-                .expect("ChartObjects.Item(1) after BringForward"),
+                .expect("ChartObjects.Item(1) after ShapeRange.ZOrder msoBringForward"),
         );
         assert_eq!(
             expect_text(
                 runtime
                     .dispatch_get(stepped_forward_first, "Name", &[])
-                    .expect("first ordered ChartObject.Name after BringForward")
+                    .expect(
+                        "first ordered ChartObject.Name after ShapeRange.ZOrder msoBringForward"
+                    )
             ),
             "Chart 2"
         );
@@ -118950,26 +118963,32 @@ mod tests {
             expect_number(
                 runtime
                     .dispatch_get(first_chart_object, "ZOrder", &[])
-                    .expect("first ChartObject.ZOrder after BringForward")
+                    .expect("first ChartObject.ZOrder after ShapeRange.ZOrder msoBringForward")
             ),
             2.0
         );
         assert_eq!(
             runtime
-                .dispatch_invoke(first_chart_object, "SendBackward", &[])
-                .expect("ChartObject.SendBackward"),
+                .dispatch_invoke(
+                    first_chart_shape_range,
+                    "ZOrder",
+                    &[OmValue::Number(f64::from(super::MSO_SEND_BACKWARD))],
+                )
+                .expect("ChartObject.ShapeRange.ZOrder msoSendBackward"),
             OmValue::Empty
         );
         let stepped_backward_first = expect_object_handle(
             runtime
                 .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
-                .expect("ChartObjects.Item(1) after SendBackward"),
+                .expect("ChartObjects.Item(1) after ShapeRange.ZOrder msoSendBackward"),
         );
         assert_eq!(
             expect_text(
                 runtime
                     .dispatch_get(stepped_backward_first, "Name", &[])
-                    .expect("first ordered ChartObject.Name after SendBackward")
+                    .expect(
+                        "first ordered ChartObject.Name after ShapeRange.ZOrder msoSendBackward"
+                    )
             ),
             "Embedded Revenue Chart"
         );
@@ -118977,7 +118996,7 @@ mod tests {
             expect_number(
                 runtime
                     .dispatch_get(first_chart_object, "ZOrder", &[])
-                    .expect("first ChartObject.ZOrder after SendBackward")
+                    .expect("first ChartObject.ZOrder after ShapeRange.ZOrder msoSendBackward")
             ),
             1.0
         );
