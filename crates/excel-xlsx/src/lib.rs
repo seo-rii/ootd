@@ -18401,6 +18401,75 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     separator.push_str(&text_value);
                 }
             }
+            Ok(Event::GeneralRef(reference)) => {
+                let reference = reference.decode().map_err(xml_error)?;
+                let text_value = if let Some(number) = reference.strip_prefix("#x") {
+                    let codepoint = u32::from_str_radix(number, 16).map_err(xml_error)?;
+                    char::from_u32(codepoint)
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::Parse,
+                                format!("invalid XML character reference: &{reference};"),
+                            )
+                        })?
+                        .to_string()
+                } else if let Some(number) = reference.strip_prefix("#X") {
+                    let codepoint = u32::from_str_radix(number, 16).map_err(xml_error)?;
+                    char::from_u32(codepoint)
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::Parse,
+                                format!("invalid XML character reference: &{reference};"),
+                            )
+                        })?
+                        .to_string()
+                } else if let Some(number) = reference.strip_prefix('#') {
+                    let codepoint = number.parse::<u32>().map_err(xml_error)?;
+                    char::from_u32(codepoint)
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::Parse,
+                                format!("invalid XML character reference: &{reference};"),
+                            )
+                        })?
+                        .to_string()
+                } else {
+                    match reference.as_ref() {
+                        "amp" => "&".to_string(),
+                        "lt" => "<".to_string(),
+                        "gt" => ">".to_string(),
+                        "quot" => "\"".to_string(),
+                        "apos" => "'".to_string(),
+                        _ => format!("&{reference};"),
+                    }
+                };
+                if let Some(value) = &mut formula_text {
+                    value.push_str(&text_value);
+                }
+                if let Some(value) = &mut active_literal_value_text {
+                    value.push_str(&text_value);
+                }
+                if title_text_depth > 0
+                    && let Some(title_text) = &mut title_text
+                {
+                    title_text.push_str(&text_value);
+                }
+                if axis_title_text_depth > 0
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(title_text) = &mut axes[axis_index].title_text
+                {
+                    title_text.push_str(&text_value);
+                }
+                if display_unit_label_text_depth > 0
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(label_text) = &mut axes[axis_index].display_unit_label_text
+                {
+                    label_text.push_str(&text_value);
+                }
+                if let Some(separator) = data_label_separator_text.as_mut() {
+                    separator.push_str(&text_value);
+                }
+            }
             Ok(Event::End(element)) if formula_depth > 0 => {
                 let element_name = element.name();
                 let local_name = xml_local_name(element_name.as_ref());
@@ -24027,8 +24096,8 @@ mod tests {
       <c:barChart>
         <c:ser>
           <c:idx val="0"/><c:order val="0"/>
-          <c:tx><c:v>Inline Name</c:v></c:tx>
-          <c:cat><c:strLit><c:ptCount val="2"/><c:pt idx="0"><c:v>North</c:v></c:pt><c:pt idx="1"><c:v>South</c:v></c:pt></c:strLit></c:cat>
+          <c:tx><c:v>Inline &quot;A&amp;B &lt;Q&gt;&quot;</c:v></c:tx>
+          <c:cat><c:strLit><c:ptCount val="2"/><c:pt idx="0"><c:v>North &amp; East</c:v></c:pt><c:pt idx="1"><c:v>South &lt;West&gt;</c:v></c:pt></c:strLit></c:cat>
           <c:val><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>10</c:v></c:pt><c:pt idx="1"><c:v>20</c:v></c:pt></c:numLit></c:val>
         </c:ser>
       </c:barChart>
@@ -24043,7 +24112,7 @@ mod tests {
                 kind: ChartCacheKindSummary::String,
                 points: vec![ChartSourceLiteralPointSummary {
                     index: 0,
-                    value: "Inline Name".to_string(),
+                    value: "Inline \"A&B <Q>\"".to_string(),
                 }],
             })
         );
@@ -24061,11 +24130,11 @@ mod tests {
                 points: vec![
                     ChartSourceLiteralPointSummary {
                         index: 0,
-                        value: "North".to_string(),
+                        value: "North & East".to_string(),
                     },
                     ChartSourceLiteralPointSummary {
                         index: 1,
-                        value: "South".to_string(),
+                        value: "South <West>".to_string(),
                     },
                 ],
             })
@@ -24112,22 +24181,22 @@ mod tests {
         );
         let model_series = model_series.first().expect("model series");
         let name = model_series.name.as_ref().expect("literal name");
-        assert_eq!(name.raw.text, r#""Inline Name""#);
+        assert_eq!(name.raw.text, r#""Inline ""A&B <Q>""""#);
         assert_eq!(
             name.resolved.as_ref(),
             Some(&ReferenceTarget::Value(CellValue::Text(
-                "Inline Name".to_string()
+                "Inline \"A&B <Q>\"".to_string()
             )))
         );
         let x_values = model_series.x_values.as_ref().expect("literal x values");
-        assert_eq!(x_values.raw.text, r#"{"North","South"}"#);
+        assert_eq!(x_values.raw.text, r#"{"North & East","South <West>"}"#);
         let Some(ReferenceTarget::Array(array)) = x_values.resolved.as_ref() else {
             panic!("expected literal category source to resolve to array");
         };
         assert_eq!(array.rows, 1);
         assert_eq!(array.cols, 2);
-        assert_eq!(array.values[0], OmValue::Text("North".to_string()));
-        assert_eq!(array.values[1], OmValue::Text("South".to_string()));
+        assert_eq!(array.values[0], OmValue::Text("North & East".to_string()));
+        assert_eq!(array.values[1], OmValue::Text("South <West>".to_string()));
 
         let values = model_series.values.as_ref().expect("literal values");
         assert_eq!(values.raw.text, "{10,20}");

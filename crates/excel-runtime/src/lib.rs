@@ -121734,7 +121734,7 @@ mod tests {
             .dispatch_set(
                 series,
                 "Name",
-                OmValue::Text("Inline Name".to_string()),
+                OmValue::Text("Inline \"A&B <Q>\"".to_string()),
                 &[],
             )
             .expect("set Series.Name from plain literal text");
@@ -121742,7 +121742,7 @@ mod tests {
             runtime
                 .dispatch_get(series, "Name", &[])
                 .expect("Series.Name after literal setter"),
-            OmValue::Text(r#"="Inline Name""#.to_string())
+            OmValue::Text(r#"="Inline ""A&B <Q>""""#.to_string())
         );
 
         let x_values = OmArray::new(
@@ -121815,7 +121815,7 @@ mod tests {
                 .as_slice(),
         )
         .expect("saved chart xml utf8");
-        assert!(saved_chart_xml.contains(r#"<c:tx><c:v>Inline Name</c:v></c:tx>"#));
+        assert!(saved_chart_xml.contains(r#"<c:tx><c:v>Inline "A&amp;B &lt;Q&gt;"</c:v></c:tx>"#));
         assert!(saved_chart_xml.contains(
             r#"<c:cat><c:strLit><c:ptCount val="2"/><c:pt idx="0"><c:v>North</c:v></c:pt><c:pt idx="1"><c:v>South</c:v></c:pt></c:strLit></c:cat>"#
         ));
@@ -121870,7 +121870,7 @@ mod tests {
             reopened_runtime
                 .dispatch_get(reopened_series, "Name", &[])
                 .expect("reopened Series.Name"),
-            OmValue::Text(r#"="Inline Name""#.to_string())
+            OmValue::Text(r#"="Inline ""A&B <Q>""""#.to_string())
         );
         assert_eq!(
             reopened_runtime
