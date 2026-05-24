@@ -24210,6 +24210,48 @@ mod tests {
     }
 
     #[test]
+    fn parse_chart_part_summary_decodes_text_entity_references() {
+        let chart_xml = br##"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <c:chart>
+    <c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue &amp; Trend &lt;2026&gt;</a:t></a:r></a:p></c:rich></c:tx></c:title>
+    <c:plotArea>
+      <c:barChart>
+        <c:ser>
+          <c:idx val="0"/><c:order val="0"/>
+          <c:dLbls><c:separator> &amp; &lt;sep&gt; </c:separator></c:dLbls>
+        </c:ser>
+      </c:barChart>
+      <c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Category &amp; Axis</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx>
+      <c:valAx><c:axId val="20"/><c:dispUnits><c:builtInUnit val="millions"/><c:dispUnitsLbl><c:tx><c:rich><a:p><a:r><a:t>Millions &quot;MM&quot; &amp; More</a:t></a:r></a:p></c:rich></c:tx></c:dispUnitsLbl></c:dispUnits></c:valAx>
+    </c:plotArea>
+  </c:chart>
+</c:chartSpace>"##;
+        let summary = super::parse_chart_part_summary(chart_xml).expect("chart summary");
+        assert_eq!(
+            summary.title_text.as_deref(),
+            Some("Revenue & Trend <2026>")
+        );
+        assert_eq!(
+            summary
+                .series
+                .first()
+                .and_then(|series| series.data_labels.as_ref())
+                .and_then(|labels| labels.separator.as_deref()),
+            Some(" & <sep> ")
+        );
+        assert_eq!(summary.axes.len(), 2);
+        assert_eq!(
+            summary.axes[0].title_text.as_deref(),
+            Some("Category & Axis")
+        );
+        assert_eq!(
+            summary.axes[1].display_unit_label_text.as_deref(),
+            Some("Millions \"MM\" & More")
+        );
+    }
+
+    #[test]
     fn load_resolves_chart_source_defined_names_into_overlay_ranges() {
         let codec = XlsxCodec;
         let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
