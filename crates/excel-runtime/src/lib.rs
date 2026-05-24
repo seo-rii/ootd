@@ -21,7 +21,7 @@ use office_common::{
 use office_idl::{AccessMode, SupportState};
 use office_opc::{CompressionMethod, OpcPackage, OpcPart};
 use quick_xml::escape::partial_escape;
-use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
+use quick_xml::events::{BytesEnd, BytesRef, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
 use regex::{Regex, RegexBuilder};
 use std::cmp::Ordering;
@@ -33151,6 +33151,50 @@ fn patch_loaded_chart_model_xml(
             _ => None,
         }
     };
+    let decode_general_ref_text = |reference: &BytesRef<'_>| -> OmResult<String> {
+        let reference = reference.decode().map_err(runtime_xml_error)?;
+        let text_value = if let Some(number) = reference.strip_prefix("#x") {
+            let codepoint = u32::from_str_radix(number, 16).map_err(runtime_xml_error)?;
+            char::from_u32(codepoint)
+                .ok_or_else(|| {
+                    OmError::new(
+                        OmErrorCode::Parse,
+                        format!("invalid XML character reference: &{reference};"),
+                    )
+                })?
+                .to_string()
+        } else if let Some(number) = reference.strip_prefix("#X") {
+            let codepoint = u32::from_str_radix(number, 16).map_err(runtime_xml_error)?;
+            char::from_u32(codepoint)
+                .ok_or_else(|| {
+                    OmError::new(
+                        OmErrorCode::Parse,
+                        format!("invalid XML character reference: &{reference};"),
+                    )
+                })?
+                .to_string()
+        } else if let Some(number) = reference.strip_prefix('#') {
+            let codepoint = number.parse::<u32>().map_err(runtime_xml_error)?;
+            char::from_u32(codepoint)
+                .ok_or_else(|| {
+                    OmError::new(
+                        OmErrorCode::Parse,
+                        format!("invalid XML character reference: &{reference};"),
+                    )
+                })?
+                .to_string()
+        } else {
+            match reference.as_ref() {
+                "amp" => "&".to_string(),
+                "lt" => "<".to_string(),
+                "gt" => ">".to_string(),
+                "quot" => "\"".to_string(),
+                "apos" => "'".to_string(),
+                _ => format!("&{reference};"),
+            }
+        };
+        Ok(text_value)
+    };
     let mut loaded_series_signatures = Vec::<[Option<String>; 4]>::new();
     {
         let mut signature_reader = Reader::from_reader(Cursor::new(existing_chart_xml));
@@ -33186,6 +33230,11 @@ fn patch_loaded_chart_model_xml(
                 Ok(Event::CData(data)) => {
                     if let Some((_, formula, _)) = signature_formula.as_mut() {
                         formula.push_str(&data.xml_content().map_err(runtime_xml_error)?);
+                    }
+                }
+                Ok(Event::GeneralRef(reference)) => {
+                    if let Some((_, formula, _)) = signature_formula.as_mut() {
+                        formula.push_str(&decode_general_ref_text(&reference)?);
                     }
                 }
                 Ok(Event::End(element)) => {
@@ -36808,6 +36857,83 @@ fn patch_loaded_chart_model_xml(
                 } else {
                     writer
                         .write_event(Event::CData(data.into_owned()))
+                        .map_err(runtime_xml_error)?;
+                }
+            }
+            Ok(Event::GeneralRef(reference)) => {
+                if let Some((target, written)) = current_text_target.as_mut() {
+                    match target {
+                        ChartTextXmlTarget::ChartTitle => {
+                            if let Some(title) = chart.title.as_ref() {
+                                if !chart_title_text_written {
+                                    writer
+                                        .write_event(Event::Text(BytesText::from_escaped(
+                                            partial_escape(&title.text),
+                                        )))
+                                        .map_err(runtime_xml_error)?;
+                                    chart_title_text_written = true;
+                                }
+                                *written = true;
+                            } else {
+                                writer
+                                    .write_event(Event::GeneralRef(reference.into_owned()))
+                                    .map_err(runtime_xml_error)?;
+                            }
+                        }
+                        ChartTextXmlTarget::AxisTitle(axis_index) => {
+                            if let Some(title) = chart
+                                .axes
+                                .get(*axis_index)
+                                .and_then(|axis| axis.title.as_ref())
+                            {
+                                if !axis_title_text_written
+                                    .get(*axis_index)
+                                    .copied()
+                                    .unwrap_or(false)
+                                {
+                                    writer
+                                        .write_event(Event::Text(BytesText::from_escaped(
+                                            partial_escape(&title.text),
+                                        )))
+                                        .map_err(runtime_xml_error)?;
+                                    if let Some(written) =
+                                        axis_title_text_written.get_mut(*axis_index)
+                                    {
+                                        *written = true;
+                                    }
+                                }
+                                *written = true;
+                            } else {
+                                if let Some(axis_title_text) = axis_title_texts
+                                    .get_mut(*axis_index)
+                                    .and_then(Option::as_mut)
+                                {
+                                    axis_title_text.push_str(&decode_general_ref_text(&reference)?);
+                                }
+                                writer
+                                    .write_event(Event::GeneralRef(reference.into_owned()))
+                                    .map_err(runtime_xml_error)?;
+                            }
+                        }
+                    }
+                } else if let Some((slot, written)) = current_formula.as_mut()
+                    && let Some(series_index) = current_series_index
+                    && let Some(source) = source_for_slot(series_index, *slot)
+                    && source.dirty
+                {
+                    if !*written {
+                        let replacement = source.raw.text.trim_start_matches('=').to_string();
+                        writer
+                            .write_event(Event::Text(BytesText::from_escaped(partial_escape(
+                                &replacement,
+                            ))))
+                            .map_err(runtime_xml_error)?;
+                        *written = true;
+                        patched_sources += 1;
+                    }
+                } else {
+                    writer
+                        .write_event(Event::GeneralRef(reference.into_owned()))
                         .map_err(runtime_xml_error)?;
                 }
             }
@@ -102465,6 +102591,133 @@ mod tests {
                 .dispatch_get(reopened_chart, "HasDataTable", &[])
                 .expect("reopened Chart.HasDataTable"),
             OmValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn loaded_chart_dirty_save_preserves_entity_title_without_duplication() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace("Revenue Trend", "Revenue &amp; Trend &lt;2026&gt;");
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_title = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartTitle", &[])
+                .expect("Chart.ChartTitle"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_title, "Text", &[])
+                .expect("ChartTitle.Text"),
+            OmValue::Text("Revenue & Trend <2026>".to_string())
+        );
+
+        runtime
+            .dispatch_set(chart, "PlotVisibleOnly", OmValue::Bool(false), &[])
+            .expect("set Chart.PlotVisibleOnly");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after chart edit");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+
+        assert!(saved_chart_xml.contains("<a:t>Revenue &amp; Trend &lt;2026&gt;</a:t>"));
+        assert!(!saved_chart_xml.contains("Revenue &amp; Trend &lt;2026&gt;&amp;&lt;&gt;"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after chart edit");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_chart_title = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "ChartTitle", &[])
+                .expect("reopened Chart.ChartTitle"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart_title, "Text", &[])
+                .expect("reopened ChartTitle.Text"),
+            OmValue::Text("Revenue & Trend <2026>".to_string())
         );
     }
 
