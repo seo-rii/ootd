@@ -26699,21 +26699,16 @@ impl ExcelRuntime {
                 "cannot modify a read-only workbook",
             ));
         }
-        let Some(worksheet) = runtime
+        if !runtime
             .loaded
             .state
             .worksheets
             .iter()
-            .find(|worksheet| worksheet.id == host_sheet_id)
-        else {
+            .any(|worksheet| worksheet.id == host_sheet_id)
+        {
             return Err(OmError::new(
                 OmErrorCode::NotFound,
                 "chart object host worksheet was not found",
-            ));
-        };
-        if worksheet.kind != SheetKind::Worksheet {
-            return Err(OmError::unsupported(
-                "ChartObject.Duplicate is only available for embedded chart objects",
             ));
         }
         let Some(drawing_id) =
@@ -94945,6 +94940,19 @@ mod tests {
             ),
             "Nested Revenue Chart"
         );
+        let duplicated_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(embedded_chart_object, "Duplicate", &[])
+                .expect("duplicate chart sheet embedded ChartObject"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(duplicated_chart_object, "Name", &[])
+                    .expect("duplicated chart sheet embedded ChartObject.Name")
+            ),
+            "Chart 3"
+        );
         let chart_handle_chart_objects = expect_object_handle(
             runtime
                 .dispatch_get(chart, "ChartObjects", &[])
@@ -94954,9 +94962,9 @@ mod tests {
             expect_number(
                 runtime
                     .dispatch_get(chart_handle_chart_objects, "Count", &[])
-                    .expect("Chart.ChartObjects.Count after Add")
+                    .expect("Chart.ChartObjects.Count after Add and Duplicate")
             ),
-            1.0
+            2.0
         );
         assert_eq!(
             expect_number(
@@ -94981,6 +94989,7 @@ mod tests {
             OpcPackage::from_bytes(&saved).expect("saved chart sheet ChartObjects.Add package");
         assert!(saved_package.contains("xl/charts/chart1.xml"));
         assert!(saved_package.contains("xl/charts/chart2.xml"));
+        assert!(saved_package.contains("xl/charts/chart3.xml"));
         let drawing_xml = String::from_utf8(
             saved_package
                 .part("xl/drawings/drawing1.xml")
@@ -94991,6 +95000,7 @@ mod tests {
         .expect("drawing xml utf8");
         assert!(drawing_xml.contains(r#"name="Chart 1""#));
         assert!(drawing_xml.contains(r#"name="Nested Revenue Chart""#));
+        assert!(drawing_xml.contains(r#"name="Chart 3""#));
         let drawing_rels_xml = String::from_utf8(
             saved_package
                 .part("xl/drawings/_rels/drawing1.xml.rels")
@@ -95001,6 +95011,7 @@ mod tests {
         .expect("drawing rels utf8");
         assert!(drawing_rels_xml.contains("charts/chart1.xml"));
         assert!(drawing_rels_xml.contains("charts/chart2.xml"));
+        assert!(drawing_rels_xml.contains("charts/chart3.xml"));
 
         let mut reopened_runtime = ExcelRuntime::new();
         let reopened_workbook = reopened_runtime
@@ -95040,7 +95051,7 @@ mod tests {
                     .dispatch_get(reopened_chart_objects, "Count", &[])
                     .expect("reopened Chart.ChartObjects.Count")
             ),
-            1.0
+            2.0
         );
         let reopened_chart_object = expect_object_handle(
             reopened_runtime
@@ -95080,6 +95091,19 @@ mod tests {
                     .expect("reopened chart sheet embedded Chart.Parent.Name")
             ),
             "Nested Revenue Chart"
+        );
+        let reopened_duplicated_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(2.0)])
+                .expect("reopened ChartObjects.Item(2)"),
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(reopened_duplicated_chart_object, "Name", &[])
+                    .expect("reopened duplicated ChartObject.Name")
+            ),
+            "Chart 3"
         );
     }
 
