@@ -3174,12 +3174,18 @@ impl ExcelRuntime {
                         let host_sheet_id = self
                             .chart_object_model(workbook, chart_object_id)?
                             .host_sheet_id;
-                        if self
-                            .chart_object_entries_for_sheet(workbook, host_sheet_id)?
-                            .into_iter()
-                            .any(|(candidate_id, candidate_name)| {
-                                candidate_id != chart_object_id
-                                    && candidate_name.eq_ignore_ascii_case(new_name.as_str())
+                        let state = &self.runtime_workbook(workbook)?.loaded.state;
+                        if state
+                            .drawings
+                            .values()
+                            .filter(|drawing| drawing.host_sheet_id == host_sheet_id)
+                            .flat_map(|drawing| drawing.objects.iter())
+                            .any(|object| match object {
+                                DrawingObjectModel::ChartFrame(candidate) => {
+                                    candidate.id != chart_object_id
+                                        && candidate.name.eq_ignore_ascii_case(new_name.as_str())
+                                }
+                                DrawingObjectModel::UnsupportedRaw { .. } => false,
                             })
                         {
                             return Err(OmError::invalid_argument(format!(
@@ -94963,6 +94969,16 @@ mod tests {
             ),
             1.0
         );
+        let duplicate_primary_name = runtime
+            .dispatch_set(
+                embedded_chart,
+                "Name",
+                OmValue::Text("Chart 1".to_string()),
+                &[],
+            )
+            .expect_err("chart sheet embedded Chart.Name rejects primary frame duplicate");
+        assert_eq!(duplicate_primary_name.code, OmErrorCode::InvalidArgument);
+        assert!(duplicate_primary_name.message.contains("already in use"));
         runtime
             .dispatch_set(
                 embedded_chart,
