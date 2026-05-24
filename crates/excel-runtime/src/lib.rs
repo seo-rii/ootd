@@ -121716,6 +121716,21 @@ mod tests {
             .expect_err("Series.Name should reject array values");
         assert_eq!(name_array_error.code, OmErrorCode::TypeMismatch);
 
+        runtime
+            .dispatch_set(
+                series,
+                "Name",
+                OmValue::Text(r#"="Inline Name""#.to_string()),
+                &[],
+            )
+            .expect("set Series.Name from literal text");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Name", &[])
+                .expect("Series.Name after literal setter"),
+            OmValue::Text(r#"="Inline Name""#.to_string())
+        );
+
         let x_values = OmArray::new(
             1,
             2,
@@ -121786,6 +121801,7 @@ mod tests {
                 .as_slice(),
         )
         .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:tx><c:v>Inline Name</c:v></c:tx>"#));
         assert!(saved_chart_xml.contains(
             r#"<c:cat><c:strLit><c:ptCount val="2"/><c:pt idx="0"><c:v>North</c:v></c:pt><c:pt idx="1"><c:v>South</c:v></c:pt></c:strLit></c:cat>"#
         ));
@@ -121793,6 +121809,7 @@ mod tests {
             r#"<c:val><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>10</c:v></c:pt><c:pt idx="1"><c:v>20</c:v></c:pt></c:numLit></c:val>"#
         ));
         assert!(!saved_chart_xml.contains("<c:f>{10,20}</c:f>"));
+        assert!(!saved_chart_xml.contains("<c:f>Sheet1!$C$1</c:f>"));
         assert!(!saved_chart_xml.contains("<c:f>Sheet1!$A$1:$B$1</c:f>"));
         assert!(!saved_chart_xml.contains("<c:f>Sheet1!$A$1:$C$1</c:f>"));
 
@@ -121834,6 +121851,12 @@ mod tests {
             reopened_runtime
                 .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
                 .expect("reopened SeriesCollection.Item(1)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_series, "Name", &[])
+                .expect("reopened Series.Name"),
+            OmValue::Text(r#"="Inline Name""#.to_string())
         );
         assert_eq!(
             reopened_runtime

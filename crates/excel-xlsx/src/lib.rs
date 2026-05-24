@@ -3748,7 +3748,41 @@ fn chart_series_from_summary(
         dirty: false,
     };
     let source_from_literal = |literal: &ChartSourceLiteralSummary,
-                               cache: Option<&ChartCacheSummary>| {
+                               cache: Option<&ChartCacheSummary>,
+                               scalar_source: bool| {
+        if scalar_source && let Some(point) = literal.points.first() {
+            let (raw_text, value) = match literal.kind {
+                ChartCacheKindSummary::Number => {
+                    if let Ok(number) = point.value.trim().parse::<f64>()
+                        && number.is_finite()
+                    {
+                        (point.value.clone(), CellValue::Number(number))
+                    } else {
+                        (
+                            format!("\"{}\"", point.value.replace('"', "\"\"")),
+                            CellValue::Text(point.value.clone()),
+                        )
+                    }
+                }
+                ChartCacheKindSummary::String
+                | ChartCacheKindSummary::MultiLevelString
+                | ChartCacheKindSummary::Literal
+                | ChartCacheKindSummary::Unknown => (
+                    format!("\"{}\"", point.value.replace('"', "\"\"")),
+                    CellValue::Text(point.value.clone()),
+                ),
+            };
+            return Some(ChartSourceExpr {
+                raw: FormulaSource {
+                    text: raw_text,
+                    is_r1c1: false,
+                },
+                resolved: Some(ReferenceTarget::Value(value)),
+                cache: cache.map(cache_snapshot_from_summary),
+                dirty: false,
+            });
+        }
+
         let mut values = Vec::with_capacity(literal.points.len());
         let mut raw_values = Vec::with_capacity(literal.points.len());
         for point in &literal.points {
@@ -3784,19 +3818,19 @@ fn chart_series_from_summary(
             dirty: false,
         })
     };
-    let source_from_ref_or_literal =
-        |reference: &Option<String>,
-         literal: &Option<ChartSourceLiteralSummary>,
-         cache: Option<&ChartCacheSummary>| {
-            reference
-                .as_ref()
-                .map(|reference| source_from_ref(reference, cache))
-                .or_else(|| {
-                    literal
-                        .as_ref()
-                        .and_then(|literal| source_from_literal(literal, cache))
-                })
-        };
+    let source_from_ref_or_literal = |reference: &Option<String>,
+                                      literal: &Option<ChartSourceLiteralSummary>,
+                                      cache: Option<&ChartCacheSummary>,
+                                      scalar_source: bool| {
+        reference
+            .as_ref()
+            .map(|reference| source_from_ref(reference, cache))
+            .or_else(|| {
+                literal
+                    .as_ref()
+                    .and_then(|literal| source_from_literal(literal, cache, scalar_source))
+            })
+    };
 
     if !summary.series.is_empty() {
         return summary
@@ -3808,21 +3842,25 @@ fn chart_series_from_summary(
                     &series.name_ref,
                     &series.name_literal,
                     series.name_cache.as_ref(),
+                    true,
                 ),
                 x_values: source_from_ref_or_literal(
                     &series.category_ref,
                     &series.category_literal,
                     series.category_cache.as_ref(),
+                    false,
                 ),
                 values: source_from_ref_or_literal(
                     &series.values_ref,
                     &series.values_literal,
                     series.values_cache.as_ref(),
+                    false,
                 ),
                 bubble_size: source_from_ref_or_literal(
                     &series.bubble_size_ref,
                     &series.bubble_size_literal,
                     series.bubble_size_cache.as_ref(),
+                    false,
                 ),
                 bar_shape: series.bar_shape,
                 smooth: series.smooth,
@@ -17514,6 +17552,20 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                                     .map(|(_, _, points)| points.len() as u32)
                             });
                 }
+                if active_cache_depth == 0
+                    && active_literal.is_none()
+                    && local_name == b"v"
+                    && active_series.is_some()
+                    && detect_series_formula_slot(&element_path)
+                        == Some(ChartSeriesFormulaSlot::Name)
+                {
+                    active_literal = Some((
+                        ChartSeriesFormulaSlot::Name,
+                        ChartCacheKindSummary::String,
+                        Vec::new(),
+                    ));
+                    active_literal_point_index = Some(0);
+                }
                 if active_literal.is_some()
                     && active_literal_point_index.is_some()
                     && local_name == b"v"
@@ -18460,6 +18512,25 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         }
                     }
                     active_cache_depth = active_cache_depth.saturating_sub(1);
+                }
+                if active_cache_depth == 0
+                    && local_name == b"tx"
+                    && let Some((slot, kind, points)) = active_literal.take()
+                    && let Some(active_series) = active_series.as_mut()
+                {
+                    let literal = ChartSourceLiteralSummary { kind, points };
+                    match slot {
+                        ChartSeriesFormulaSlot::Name => active_series.name_literal = Some(literal),
+                        ChartSeriesFormulaSlot::Category => {
+                            active_series.category_literal = Some(literal)
+                        }
+                        ChartSeriesFormulaSlot::Values => {
+                            active_series.values_literal = Some(literal)
+                        }
+                        ChartSeriesFormulaSlot::BubbleSize => {
+                            active_series.bubble_size_literal = Some(literal)
+                        }
+                    }
                 }
                 if local_name == b"pt" && active_literal.is_some() {
                     active_literal_point_index = None;
@@ -23956,6 +24027,7 @@ mod tests {
       <c:barChart>
         <c:ser>
           <c:idx val="0"/><c:order val="0"/>
+          <c:tx><c:v>Inline Name</c:v></c:tx>
           <c:cat><c:strLit><c:ptCount val="2"/><c:pt idx="0"><c:v>North</c:v></c:pt><c:pt idx="1"><c:v>South</c:v></c:pt></c:strLit></c:cat>
           <c:val><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>10</c:v></c:pt><c:pt idx="1"><c:v>20</c:v></c:pt></c:numLit></c:val>
         </c:ser>
@@ -23965,6 +24037,16 @@ mod tests {
 </c:chartSpace>"#;
         let summary = super::parse_chart_part_summary(chart_xml).expect("chart summary");
         let series = summary.series.first().expect("series summary");
+        assert_eq!(
+            series.name_literal,
+            Some(ChartSourceLiteralSummary {
+                kind: ChartCacheKindSummary::String,
+                points: vec![ChartSourceLiteralPointSummary {
+                    index: 0,
+                    value: "Inline Name".to_string(),
+                }],
+            })
+        );
         assert_eq!(
             series.category_cache,
             Some(ChartCacheSummary {
@@ -24029,6 +24111,14 @@ mod tests {
             Some(SheetId(1)),
         );
         let model_series = model_series.first().expect("model series");
+        let name = model_series.name.as_ref().expect("literal name");
+        assert_eq!(name.raw.text, r#""Inline Name""#);
+        assert_eq!(
+            name.resolved.as_ref(),
+            Some(&ReferenceTarget::Value(CellValue::Text(
+                "Inline Name".to_string()
+            )))
+        );
         let x_values = model_series.x_values.as_ref().expect("literal x values");
         assert_eq!(x_values.raw.text, r#"{"North","South"}"#);
         let Some(ReferenceTarget::Array(array)) = x_values.resolved.as_ref() else {
