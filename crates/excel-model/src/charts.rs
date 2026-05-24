@@ -691,6 +691,7 @@ pub fn resolve_chart_source_reference_with_names(
     current_sheet: Option<SheetId>,
 ) -> Option<ReferenceTarget> {
     resolve_chart_source_reference(reference, workbook_id, workbook_display_name, worksheets)
+        .or_else(|| resolve_chart_source_literal(reference))
         .or_else(|| {
             resolve_chart_source_defined_name(
                 reference,
@@ -761,78 +762,7 @@ fn parse_chart_source_sheet_name(
     Some(sheet_name)
 }
 
-fn resolve_chart_source_defined_name(
-    reference: &str,
-    workbook_id: WorkbookId,
-    workbook_display_name: Option<&str>,
-    worksheets: &[WorksheetModel],
-    defined_names: &DefinedNameTable,
-    current_sheet: Option<SheetId>,
-) -> Option<ReferenceTarget> {
-    let reference = reference.trim();
-    let mut reference = reference.strip_prefix('=').unwrap_or(reference).trim();
-    if reference.is_empty() || reference.contains(',') || reference.contains(':') {
-        return None;
-    }
-
-    let mut in_quote = false;
-    let mut separator = None;
-    let mut chars = reference.char_indices().peekable();
-    while let Some((index, ch)) = chars.next() {
-        match ch {
-            '\'' => {
-                if in_quote && chars.peek().is_some_and(|(_, next)| *next == '\'') {
-                    chars.next();
-                } else {
-                    in_quote = !in_quote;
-                }
-            }
-            '!' if !in_quote => separator = Some(index),
-            _ => {}
-        }
-    }
-    if in_quote {
-        return None;
-    }
-
-    let defined_name = if let Some(separator) = separator {
-        let sheet = reference[..separator].trim();
-        let name = reference[separator + 1..].trim();
-        if sheet.is_empty() || name.is_empty() {
-            return None;
-        }
-        let sheet_name = parse_chart_source_sheet_name(sheet, workbook_display_name)?;
-        let sheet_id = worksheets
-            .iter()
-            .find(|worksheet| worksheet.name.eq_ignore_ascii_case(&sheet_name))
-            .map(|worksheet| worksheet.id)?;
-        defined_names.lookup_in_scope(NameScope::Worksheet(sheet_id), name)?
-    } else {
-        if let Some(qualified) = reference.strip_prefix('[') {
-            let close_index = qualified.find(']')?;
-            let source_workbook_name = &qualified[..close_index];
-            let unqualified_name = qualified[close_index + 1..].trim();
-            if source_workbook_name.is_empty()
-                || unqualified_name.is_empty()
-                || !workbook_display_name
-                    .is_some_and(|name| name.eq_ignore_ascii_case(source_workbook_name))
-            {
-                return None;
-            }
-            reference = unqualified_name;
-        }
-        defined_names.lookup(current_sheet, reference)?
-    };
-
-    if let Some(target) = resolve_chart_source_reference(
-        &defined_name.refers_to.text,
-        workbook_id,
-        workbook_display_name,
-        worksheets,
-    ) {
-        return Some(target);
-    }
-
+fn resolve_chart_source_literal(reference: &str) -> Option<ReferenceTarget> {
     let parse_scalar_value = |text: &str| -> Option<CellValue> {
         let text = text.trim();
         if text.is_empty() {
@@ -947,6 +877,85 @@ fn resolve_chart_source_defined_name(
         OmArray::new(rows.len(), cols?, values).ok()
     };
 
+    let reference = reference.trim();
+    let reference = reference.strip_prefix('=').unwrap_or(reference).trim();
+    parse_scalar_value(reference)
+        .map(ReferenceTarget::Value)
+        .or_else(|| parse_array_value(reference).map(ReferenceTarget::Array))
+}
+
+fn resolve_chart_source_defined_name(
+    reference: &str,
+    workbook_id: WorkbookId,
+    workbook_display_name: Option<&str>,
+    worksheets: &[WorksheetModel],
+    defined_names: &DefinedNameTable,
+    current_sheet: Option<SheetId>,
+) -> Option<ReferenceTarget> {
+    let reference = reference.trim();
+    let mut reference = reference.strip_prefix('=').unwrap_or(reference).trim();
+    if reference.is_empty() || reference.contains(',') || reference.contains(':') {
+        return None;
+    }
+
+    let mut in_quote = false;
+    let mut separator = None;
+    let mut chars = reference.char_indices().peekable();
+    while let Some((index, ch)) = chars.next() {
+        match ch {
+            '\'' => {
+                if in_quote && chars.peek().is_some_and(|(_, next)| *next == '\'') {
+                    chars.next();
+                } else {
+                    in_quote = !in_quote;
+                }
+            }
+            '!' if !in_quote => separator = Some(index),
+            _ => {}
+        }
+    }
+    if in_quote {
+        return None;
+    }
+
+    let defined_name = if let Some(separator) = separator {
+        let sheet = reference[..separator].trim();
+        let name = reference[separator + 1..].trim();
+        if sheet.is_empty() || name.is_empty() {
+            return None;
+        }
+        let sheet_name = parse_chart_source_sheet_name(sheet, workbook_display_name)?;
+        let sheet_id = worksheets
+            .iter()
+            .find(|worksheet| worksheet.name.eq_ignore_ascii_case(&sheet_name))
+            .map(|worksheet| worksheet.id)?;
+        defined_names.lookup_in_scope(NameScope::Worksheet(sheet_id), name)?
+    } else {
+        if let Some(qualified) = reference.strip_prefix('[') {
+            let close_index = qualified.find(']')?;
+            let source_workbook_name = &qualified[..close_index];
+            let unqualified_name = qualified[close_index + 1..].trim();
+            if source_workbook_name.is_empty()
+                || unqualified_name.is_empty()
+                || !workbook_display_name
+                    .is_some_and(|name| name.eq_ignore_ascii_case(source_workbook_name))
+            {
+                return None;
+            }
+            reference = unqualified_name;
+        }
+        defined_names.lookup(current_sheet, reference)?
+    };
+
+    if let Some(target) = resolve_chart_source_reference(
+        &defined_name.refers_to.text,
+        workbook_id,
+        workbook_display_name,
+        worksheets,
+    ) {
+        return Some(target);
+    }
+
     let refers_to = defined_name
         .refers_to
         .text
@@ -954,11 +963,8 @@ fn resolve_chart_source_defined_name(
         .strip_prefix('=')
         .unwrap_or(defined_name.refers_to.text.trim())
         .trim();
-    if let Some(value) = parse_scalar_value(refers_to) {
-        return Some(ReferenceTarget::Value(value));
-    }
-    if let Some(array) = parse_array_value(refers_to) {
-        return Some(ReferenceTarget::Array(array));
+    if let Some(target) = resolve_chart_source_literal(refers_to) {
+        return Some(target);
     }
     if refers_to.starts_with('[') {
         return Some(ReferenceTarget::External(ExternalReference {
@@ -1322,8 +1328,59 @@ mod tests {
     }
 
     #[test]
-    fn resolve_chart_source_reference_with_names_resolves_array_formula_external_targets() {
+    fn resolve_chart_source_reference_with_names_resolves_direct_literal_targets() {
         let workbook_id = WorkbookId(10);
+        let worksheets = vec![worksheet(2, workbook_id, "Data")];
+        let defined_names = DefinedNameTable::default();
+
+        assert_eq!(
+            resolve_chart_source_reference_with_names(
+                "=\"Inline \"\"Name\"\"\"",
+                workbook_id,
+                None,
+                &worksheets,
+                &defined_names,
+                None,
+            ),
+            Some(ReferenceTarget::Value(CellValue::Text(
+                "Inline \"Name\"".to_string()
+            )))
+        );
+        assert_eq!(
+            resolve_chart_source_reference_with_names(
+                "=FALSE",
+                workbook_id,
+                None,
+                &worksheets,
+                &defined_names,
+                None,
+            ),
+            Some(ReferenceTarget::Value(CellValue::Bool(false)))
+        );
+
+        let target = resolve_chart_source_reference_with_names(
+            "={1,2;\"Q\"\"3\"\"\",#N/A}",
+            workbook_id,
+            None,
+            &worksheets,
+            &defined_names,
+            None,
+        )
+        .expect("array target");
+        let ReferenceTarget::Array(array) = target else {
+            panic!("expected array target");
+        };
+        assert_eq!(array.rows, 2);
+        assert_eq!(array.cols, 2);
+        assert_eq!(array.values[0], OmValue::Number(1.0));
+        assert_eq!(array.values[1], OmValue::Number(2.0));
+        assert_eq!(array.values[2], OmValue::Text("Q\"3\"".to_string()));
+        assert_eq!(array.values[3], OmValue::Error(CellError::NA));
+    }
+
+    #[test]
+    fn resolve_chart_source_reference_with_names_resolves_array_formula_external_targets() {
+        let workbook_id = WorkbookId(11);
         let worksheets = vec![worksheet(3, workbook_id, "Data")];
         let mut defined_names = DefinedNameTable::default();
         defined_names

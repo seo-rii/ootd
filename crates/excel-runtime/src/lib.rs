@@ -119380,6 +119380,31 @@ mod tests {
             .dispatch_set(
                 series,
                 "Values",
+                OmValue::Text("={5,6;7,8}".to_string()),
+                &[],
+            )
+            .expect("set Series.Values from inline array constant");
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after inline array source setter");
+            let chart = state.charts.values().next().expect("chart model");
+            let values = chart.series[0].values.as_ref().expect("series values");
+            let Some(ReferenceTarget::Array(array)) = values.resolved.as_ref() else {
+                panic!("inline array Series.Values should resolve to an array");
+            };
+            assert_eq!(array.rows, 2);
+            assert_eq!(array.cols, 2);
+            assert_eq!(array.values[0], OmValue::Number(5.0));
+            assert_eq!(array.values[1], OmValue::Number(6.0));
+            assert_eq!(array.values[2], OmValue::Number(7.0));
+            assert_eq!(array.values[3], OmValue::Number(8.0));
+            assert_eq!(values.raw.text, "{5,6;7,8}");
+        }
+        runtime
+            .dispatch_set(
+                series,
+                "Values",
                 OmValue::Text("=Sheet1!$B$1:$B$3".to_string()),
                 &[],
             )
