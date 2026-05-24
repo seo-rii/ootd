@@ -2901,6 +2901,7 @@ impl ExcelRuntime {
                                     chart_changed |= update_chart_source(&mut series.name)?;
                                     chart_changed |= update_chart_source(&mut series.x_values)?;
                                     chart_changed |= update_chart_source(&mut series.values)?;
+                                    chart_changed |= update_chart_source(&mut series.bubble_size)?;
                                 }
                                 if chart_changed {
                                     chart.dirty = true;
@@ -122328,6 +122329,28 @@ mod tests {
             ),
             "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1,Sheet1!$D$1:$D$3)"
         );
+        runtime
+            .dispatch_set(
+                worksheet,
+                "Name",
+                OmValue::Text("Data 2026".to_string()),
+                &[],
+            )
+            .expect("rename bubble chart source worksheet");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "BubbleSizes", &[])
+                .expect("Series.BubbleSizes after source sheet rename"),
+            OmValue::Text("='Data 2026'!$D$1:$D$3".to_string())
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Formula", &[])
+                    .expect("Series.Formula after source sheet rename")
+            ),
+            "=SERIES('Data 2026'!$C$1,'Data 2026'!$A$1:$A$3,'Data 2026'!$B$1:$B$3,1,'Data 2026'!$D$1:$D$3)"
+        );
 
         let saved = runtime
             .save_workbook(
@@ -122350,7 +122373,7 @@ mod tests {
         .expect("saved chart xml utf8");
         assert!(saved_chart_xml.contains("<c:bubbleChart>"));
         assert!(saved_chart_xml.contains(
-            "<c:bubbleSize><c:numRef><c:f>Sheet1!$D$1:$D$3</c:f></c:numRef></c:bubbleSize>"
+            "<c:bubbleSize><c:numRef><c:f>'Data 2026'!$D$1:$D$3</c:f></c:numRef></c:bubbleSize>"
         ));
 
         let mut reopened_runtime = ExcelRuntime::new();
@@ -122396,7 +122419,7 @@ mod tests {
             reopened_runtime
                 .dispatch_get(reopened_series, "BubbleSizes", &[])
                 .expect("reopened Series.BubbleSizes"),
-            OmValue::Text("=Sheet1!$D$1:$D$3".to_string())
+            OmValue::Text("='Data 2026'!$D$1:$D$3".to_string())
         );
         assert_eq!(
             expect_text(
@@ -122404,7 +122427,7 @@ mod tests {
                     .dispatch_get(reopened_series, "Formula", &[])
                     .expect("reopened Series.Formula")
             ),
-            "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1,Sheet1!$D$1:$D$3)"
+            "=SERIES('Data 2026'!$C$1,'Data 2026'!$A$1:$A$3,'Data 2026'!$B$1:$B$3,1,'Data 2026'!$D$1:$D$3)"
         );
     }
 
