@@ -6048,10 +6048,11 @@ impl ExcelRuntime {
                                     (binding.chart_id == chart_id).then_some(*sheet_id)
                                 });
                             let chart_object_id = state.drawings.values().find_map(|drawing| {
-                                if !state.worksheets.iter().any(|worksheet| {
-                                    worksheet.id == drawing.host_sheet_id
-                                        && worksheet.kind == SheetKind::Worksheet
-                                }) {
+                                if !state
+                                    .worksheets
+                                    .iter()
+                                    .any(|worksheet| worksheet.id == drawing.host_sheet_id)
+                                {
                                     return None;
                                 }
                                 drawing.objects.iter().find_map(|object| match object {
@@ -94915,6 +94916,22 @@ mod tests {
             ),
             1.0
         );
+        runtime
+            .dispatch_set(
+                embedded_chart,
+                "Name",
+                OmValue::Text("Nested Revenue Chart".to_string()),
+                &[],
+            )
+            .expect("rename chart sheet embedded Chart.Name");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(embedded_chart_object, "Name", &[])
+                    .expect("renamed embedded ChartObject.Name")
+            ),
+            "Nested Revenue Chart"
+        );
         let embedded_chart_parent = expect_object_handle(
             runtime
                 .dispatch_get(embedded_chart, "Parent", &[])
@@ -94926,7 +94943,7 @@ mod tests {
                     .dispatch_get(embedded_chart_parent, "Name", &[])
                     .expect("chart sheet embedded Chart.Parent.Name")
             ),
-            "Chart 2"
+            "Nested Revenue Chart"
         );
         let chart_handle_chart_objects = expect_object_handle(
             runtime
@@ -94973,7 +94990,7 @@ mod tests {
         )
         .expect("drawing xml utf8");
         assert!(drawing_xml.contains(r#"name="Chart 1""#));
-        assert!(drawing_xml.contains(r#"name="Chart 2""#));
+        assert!(drawing_xml.contains(r#"name="Nested Revenue Chart""#));
         let drawing_rels_xml = String::from_utf8(
             saved_package
                 .part("xl/drawings/_rels/drawing1.xml.rels")
@@ -95036,7 +95053,7 @@ mod tests {
                     .dispatch_get(reopened_chart_object, "Name", &[])
                     .expect("reopened embedded ChartObject.Name")
             ),
-            "Chart 2"
+            "Nested Revenue Chart"
         );
         let reopened_embedded_chart = expect_object_handle(
             reopened_runtime
@@ -95049,7 +95066,7 @@ mod tests {
                     .dispatch_get(reopened_embedded_chart, "Name", &[])
                     .expect("reopened chart sheet embedded Chart.Name")
             ),
-            "Chart 2"
+            "Nested Revenue Chart"
         );
         let reopened_embedded_parent = expect_object_handle(
             reopened_runtime
@@ -95062,7 +95079,7 @@ mod tests {
                     .dispatch_get(reopened_embedded_parent, "Name", &[])
                     .expect("reopened chart sheet embedded Chart.Parent.Name")
             ),
-            "Chart 2"
+            "Nested Revenue Chart"
         );
     }
 
