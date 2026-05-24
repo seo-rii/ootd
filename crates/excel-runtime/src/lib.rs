@@ -14656,11 +14656,13 @@ impl ExcelRuntime {
                             | "Activate"
                             | "Select"
                             | "BringToFront"
+                            | "BringForward"
                             | "Copy"
                             | "Cut"
                             | "Duplicate"
                             | "CopyPicture"
                             | "Delete"
+                            | "SendBackward"
                             | "SendToBack"
                     )
                     | (
@@ -91462,6 +91464,16 @@ mod tests {
             missing.expect_err("missing member should fail").code,
             OmErrorCode::NotFound
         );
+    }
+
+    #[test]
+    fn focus_surface_includes_chartobject_z_order_methods() {
+        let runtime = ExcelRuntime::new();
+        for member in ["BringToFront", "BringForward", "SendBackward", "SendToBack"] {
+            runtime
+                .focus_member_supported("ChartObject", member, false)
+                .expect("ChartObject z-order member should be in focus surface");
+        }
     }
 
     #[test]
