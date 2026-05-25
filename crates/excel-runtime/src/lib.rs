@@ -15000,6 +15000,7 @@ impl ExcelRuntime {
                         "ChartObjects",
                         "Count"
                             | "Item"
+                            | "Add"
                             | "Creator"
                             | "Application"
                             | "Parent"

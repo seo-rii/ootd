@@ -5450,6 +5450,66 @@
           ]
         },
         {
+          "name": "Add",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "Add"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartObject",
+                "aliasOf": "Excel.ChartObject"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartObject",
+            "aliasOf": "Excel.ChartObject"
+          },
+          "params": [
+            {
+              "name": "Left",
+              "type": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            },
+            {
+              "name": "Top",
+              "type": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            },
+            {
+              "name": "Width",
+              "type": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            },
+            {
+              "name": "Height",
+              "type": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          ]
+        },
+        {
           "name": "Creator",
           "memberKind": "property",
           "support": "stub",

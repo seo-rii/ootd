@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 9);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 270);
-    assert_eq!(summary.stub_member_count, 270);
+    assert_eq!(summary.member_count, 271);
+    assert_eq!(summary.stub_member_count, 271);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1429,7 +1429,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(workbook.member_count, 21);
     assert_eq!(worksheet.member_count, 20);
     assert_eq!(range.member_count, 50);
-    assert_eq!(chart_objects.member_count, 22);
+    assert_eq!(chart_objects.member_count, 23);
     assert_eq!(chart_object.member_count, 30);
     assert_eq!(chart.member_count, 75);
     assert_eq!(
@@ -2514,8 +2514,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 270);
-    assert_eq!(coverage.support_counts.stub, 270);
+    assert_eq!(coverage.member_count, 271);
+    assert_eq!(coverage.support_counts.stub, 271);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -2718,13 +2718,14 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(chart_objects_coverage.member_count, 22);
-    assert_eq!(chart_objects_coverage.support_counts.stub, 22);
+    assert_eq!(chart_objects_coverage.member_count, 23);
+    assert_eq!(chart_objects_coverage.support_counts.stub, 23);
     assert_eq!(
         chart_objects_coverage.stub_members,
         vec![
             "Count".to_string(),
             "Item".to_string(),
+            "Add".to_string(),
             "Creator".to_string(),
             "Application".to_string(),
             "Parent".to_string(),
