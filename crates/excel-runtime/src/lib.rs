@@ -605,46 +605,56 @@ enum ChartFormatParent {
     Axis {
         chart_id: ChartId,
         axis_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     AxisTitle {
         chart_id: ChartId,
         axis_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     DisplayUnitLabel {
         chart_id: ChartId,
         axis_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     TickLabels {
         chart_id: ChartId,
         axis_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     Gridlines {
         chart_id: ChartId,
         axis_index: usize,
         major: bool,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     Series {
         chart_id: ChartId,
         series_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     DataLabels {
         chart_id: ChartId,
         series_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     DataLabel {
         chart_id: ChartId,
         series_index: usize,
         point_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     Point {
         chart_id: ChartId,
         series_index: usize,
         point_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     ChartGroupLines {
         chart_id: ChartId,
         group_index: usize,
         kind: ChartGroupLineKind,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
 }
 
@@ -853,12 +863,14 @@ enum RuntimeObjectKind {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         series_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     DataLabel {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         series_index: usize,
         point_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     ChartGroups {
         workbook: WorkbookHandle,
@@ -869,18 +881,21 @@ enum RuntimeObjectKind {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         group_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     ChartGroupLines {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         group_index: usize,
         kind: ChartGroupLineKind,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     CategoryCollection {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         group_index: usize,
         full: bool,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     ChartCategory {
         workbook: WorkbookHandle,
@@ -888,6 +903,7 @@ enum RuntimeObjectKind {
         group_index: usize,
         category_index: usize,
         full: bool,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     Axes {
         workbook: WorkbookHandle,
@@ -898,27 +914,32 @@ enum RuntimeObjectKind {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         axis_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     TickLabels {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         axis_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     AxisTitle {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         axis_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     DisplayUnitLabel {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         axis_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     Gridlines {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         axis_index: usize,
         major: bool,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     SeriesCollection {
         workbook: WorkbookHandle,
@@ -929,17 +950,20 @@ enum RuntimeObjectKind {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         series_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     Points {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         series_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     Point {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         series_index: usize,
         point_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
 }
 
@@ -2464,17 +2488,27 @@ impl ExcelRuntime {
                 workbook,
                 chart_id,
                 series_index,
-            } => self.dispatch_get_data_labels(workbook, chart_id, series_index, member, args),
+                chart_object_parent,
+            } => self.dispatch_get_data_labels(
+                workbook,
+                chart_id,
+                series_index,
+                chart_object_parent,
+                member,
+                args,
+            ),
             RuntimeObjectKind::DataLabel {
                 workbook,
                 chart_id,
                 series_index,
                 point_index,
+                chart_object_parent,
             } => self.dispatch_get_data_label(
                 workbook,
                 chart_id,
                 series_index,
                 point_index,
+                chart_object_parent,
                 member,
                 args,
             ),
@@ -2493,17 +2527,27 @@ impl ExcelRuntime {
                 workbook,
                 chart_id,
                 group_index,
-            } => self.dispatch_get_chart_group(workbook, chart_id, group_index, member, args),
+                chart_object_parent,
+            } => self.dispatch_get_chart_group(
+                workbook,
+                chart_id,
+                group_index,
+                chart_object_parent,
+                member,
+                args,
+            ),
             RuntimeObjectKind::ChartGroupLines {
                 workbook,
                 chart_id,
                 group_index,
                 kind,
+                chart_object_parent,
             } => self.dispatch_get_chart_group_lines(
                 workbook,
                 chart_id,
                 group_index,
                 kind,
+                chart_object_parent,
                 member,
                 args,
             ),
@@ -2512,11 +2556,13 @@ impl ExcelRuntime {
                 chart_id,
                 group_index,
                 full,
+                chart_object_parent,
             } => self.dispatch_get_category_collection(
                 workbook,
                 chart_id,
                 group_index,
                 full,
+                chart_object_parent,
                 member,
                 args,
             ),
@@ -2526,12 +2572,14 @@ impl ExcelRuntime {
                 group_index,
                 category_index,
                 full,
+                chart_object_parent,
             } => self.dispatch_get_chart_category(
                 workbook,
                 chart_id,
                 group_index,
                 category_index,
                 full,
+                chart_object_parent,
                 member,
                 args,
             ),
@@ -2544,28 +2592,69 @@ impl ExcelRuntime {
                 workbook,
                 chart_id,
                 axis_index,
-            } => self.dispatch_get_axis(workbook, chart_id, axis_index, member, args),
+                chart_object_parent,
+            } => self.dispatch_get_axis(
+                workbook,
+                chart_id,
+                axis_index,
+                chart_object_parent,
+                member,
+                args,
+            ),
             RuntimeObjectKind::TickLabels {
                 workbook,
                 chart_id,
                 axis_index,
-            } => self.dispatch_get_tick_labels(workbook, chart_id, axis_index, member, args),
+                chart_object_parent,
+            } => self.dispatch_get_tick_labels(
+                workbook,
+                chart_id,
+                axis_index,
+                chart_object_parent,
+                member,
+                args,
+            ),
             RuntimeObjectKind::AxisTitle {
                 workbook,
                 chart_id,
                 axis_index,
-            } => self.dispatch_get_axis_title(workbook, chart_id, axis_index, member, args),
+                chart_object_parent,
+            } => self.dispatch_get_axis_title(
+                workbook,
+                chart_id,
+                axis_index,
+                chart_object_parent,
+                member,
+                args,
+            ),
             RuntimeObjectKind::DisplayUnitLabel {
                 workbook,
                 chart_id,
                 axis_index,
-            } => self.dispatch_get_display_unit_label(workbook, chart_id, axis_index, member, args),
+                chart_object_parent,
+            } => self.dispatch_get_display_unit_label(
+                workbook,
+                chart_id,
+                axis_index,
+                chart_object_parent,
+                member,
+                args,
+            ),
             RuntimeObjectKind::Gridlines {
                 workbook,
                 chart_id,
                 axis_index,
                 major,
-            } => self.dispatch_get_gridlines(workbook, chart_id, axis_index, major, member, args),
+                chart_object_parent,
+            } => self.dispatch_get_gridlines(
+                workbook,
+                chart_id,
+                axis_index,
+                major,
+                chart_object_parent,
+                member,
+                args,
+            ),
             RuntimeObjectKind::SeriesCollection {
                 workbook,
                 chart_id,
@@ -2581,20 +2670,43 @@ impl ExcelRuntime {
                 workbook,
                 chart_id,
                 series_index,
-            } => self.dispatch_get_series(workbook, chart_id, series_index, member, args),
+                chart_object_parent,
+            } => self.dispatch_get_series(
+                workbook,
+                chart_id,
+                series_index,
+                chart_object_parent,
+                member,
+                args,
+            ),
             RuntimeObjectKind::Points {
                 workbook,
                 chart_id,
                 series_index,
-            } => self.dispatch_get_points(workbook, chart_id, series_index, member, args),
+                chart_object_parent,
+            } => self.dispatch_get_points(
+                workbook,
+                chart_id,
+                series_index,
+                chart_object_parent,
+                member,
+                args,
+            ),
             RuntimeObjectKind::Point {
                 workbook,
                 chart_id,
                 series_index,
                 point_index,
-            } => {
-                self.dispatch_get_point(workbook, chart_id, series_index, point_index, member, args)
-            }
+                chart_object_parent,
+            } => self.dispatch_get_point(
+                workbook,
+                chart_id,
+                series_index,
+                point_index,
+                chart_object_parent,
+                member,
+                args,
+            ),
         }
     }
 
@@ -4044,6 +4156,7 @@ impl ExcelRuntime {
                 workbook,
                 chart_id,
                 series_index,
+                chart_object_parent,
             } => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(format!(
@@ -4088,7 +4201,11 @@ impl ExcelRuntime {
                 match member {
                     "ChartType" => {
                         self.series_model(workbook, chart_id, series_index)?;
-                        let chart = self.register_chart_handle(workbook, chart_id);
+                        let chart = self.register_chart_handle_with_chart_object_parent_origin(
+                            workbook,
+                            chart_id,
+                            chart_object_parent,
+                        );
                         self.dispatch_set(chart, "ChartType", value, &[])
                     }
                     "AxisGroup" => {
@@ -5227,6 +5344,7 @@ impl ExcelRuntime {
                 chart_id,
                 series_index,
                 point_index,
+                ..
             } => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(format!(
@@ -5330,6 +5448,7 @@ impl ExcelRuntime {
                 chart_id,
                 series_index,
                 point_index,
+                ..
             } => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(format!(
@@ -5649,6 +5768,7 @@ impl ExcelRuntime {
                 workbook,
                 chart_id,
                 group_index,
+                chart_object_parent,
             } => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(format!(
@@ -5664,7 +5784,11 @@ impl ExcelRuntime {
                                 "chart group not found",
                             ));
                         }
-                        let chart = self.register_chart_handle(workbook, chart_id);
+                        let chart = self.register_chart_handle_with_chart_object_parent_origin(
+                            workbook,
+                            chart_id,
+                            chart_object_parent,
+                        );
                         self.dispatch_set(chart, "ChartType", value, &[])
                     }
                     "AxisGroup" => {
@@ -7202,6 +7326,7 @@ impl ExcelRuntime {
                 workbook,
                 chart_id,
                 series_index,
+                ..
             } => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(format!(
@@ -7485,6 +7610,7 @@ impl ExcelRuntime {
                 workbook,
                 chart_id,
                 axis_index,
+                ..
             } => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(format!(
@@ -8482,6 +8608,7 @@ impl ExcelRuntime {
                 workbook,
                 chart_id,
                 axis_index,
+                ..
             } => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(format!(
@@ -8585,6 +8712,7 @@ impl ExcelRuntime {
                 workbook,
                 chart_id,
                 axis_index,
+                ..
             } => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(format!(
@@ -8637,6 +8765,7 @@ impl ExcelRuntime {
                 workbook,
                 chart_id,
                 axis_index,
+                ..
             } => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(format!(
@@ -13683,26 +13812,46 @@ impl ExcelRuntime {
                 ))),
             },
             RuntimeObjectKind::Axes {
-                workbook, chart_id, ..
-            } => self.dispatch_invoke_axes(workbook, chart_id, member, args),
+                workbook,
+                chart_id,
+                chart_object_parent,
+            } => self.dispatch_invoke_axes(workbook, chart_id, chart_object_parent, member, args),
             RuntimeObjectKind::ChartGroups {
-                workbook, chart_id, ..
-            } => self.dispatch_invoke_chart_groups(workbook, chart_id, member, args),
+                workbook,
+                chart_id,
+                chart_object_parent,
+            } => self.dispatch_invoke_chart_groups(
+                workbook,
+                chart_id,
+                chart_object_parent,
+                member,
+                args,
+            ),
             RuntimeObjectKind::ChartGroup {
                 workbook,
                 chart_id,
                 group_index,
-            } => self.dispatch_invoke_chart_group(workbook, chart_id, group_index, member, args),
+                chart_object_parent,
+            } => self.dispatch_invoke_chart_group(
+                workbook,
+                chart_id,
+                group_index,
+                chart_object_parent,
+                member,
+                args,
+            ),
             RuntimeObjectKind::ChartGroupLines {
                 workbook,
                 chart_id,
                 group_index,
                 kind,
+                chart_object_parent,
             } => self.dispatch_invoke_chart_group_lines(
                 workbook,
                 chart_id,
                 group_index,
                 kind,
+                chart_object_parent,
                 member,
                 args,
             ),
@@ -13711,11 +13860,13 @@ impl ExcelRuntime {
                 chart_id,
                 group_index,
                 full,
+                chart_object_parent,
             } => self.dispatch_invoke_category_collection(
                 workbook,
                 chart_id,
                 group_index,
                 full,
+                chart_object_parent,
                 member,
                 args,
             ),
@@ -13723,12 +13874,21 @@ impl ExcelRuntime {
                 "ChartCategory.{member} is not implemented as a method"
             ))),
             RuntimeObjectKind::SeriesCollection {
-                workbook, chart_id, ..
-            } => self.dispatch_invoke_series_collection(workbook, chart_id, member, args),
+                workbook,
+                chart_id,
+                chart_object_parent,
+            } => self.dispatch_invoke_series_collection(
+                workbook,
+                chart_id,
+                chart_object_parent,
+                member,
+                args,
+            ),
             RuntimeObjectKind::Series {
                 workbook,
                 chart_id,
                 series_index,
+                chart_object_parent,
             } => match member {
                 "ApplyDataLabels" => {
                     let data_labels = parse_chart_data_labels_args(args, "Series")?;
@@ -13755,12 +13915,22 @@ impl ExcelRuntime {
                     runtime.dirty = true;
                     Ok(OmValue::Empty)
                 }
-                "DataLabels" => {
-                    self.dispatch_get_series(workbook, chart_id, series_index, member, args)
-                }
-                "Points" => {
-                    self.dispatch_get_series(workbook, chart_id, series_index, member, args)
-                }
+                "DataLabels" => self.dispatch_get_series(
+                    workbook,
+                    chart_id,
+                    series_index,
+                    chart_object_parent,
+                    member,
+                    args,
+                ),
+                "Points" => self.dispatch_get_series(
+                    workbook,
+                    chart_id,
+                    series_index,
+                    chart_object_parent,
+                    member,
+                    args,
+                ),
                 "ClearFormats" => {
                     if !args.is_empty() {
                         return Err(OmError::invalid_argument(
@@ -13822,7 +13992,11 @@ impl ExcelRuntime {
                         ));
                     }
                     self.series_model(workbook, chart_id, series_index)?;
-                    let chart = self.register_chart_handle(workbook, chart_id);
+                    let chart = self.register_chart_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        chart_object_parent,
+                    );
                     self.dispatch_invoke(chart, "Select", &[])
                 }
                 "Delete" => {
@@ -13869,12 +14043,21 @@ impl ExcelRuntime {
                 workbook,
                 chart_id,
                 series_index,
-            } => self.dispatch_invoke_points(workbook, chart_id, series_index, member, args),
+                chart_object_parent,
+            } => self.dispatch_invoke_points(
+                workbook,
+                chart_id,
+                series_index,
+                chart_object_parent,
+                member,
+                args,
+            ),
             RuntimeObjectKind::Point {
                 workbook,
                 chart_id,
                 series_index,
                 point_index,
+                chart_object_parent,
             } => match member {
                 "ApplyDataLabels" => {
                     let data_labels = parse_chart_data_labels_args(args, "Point")?;
@@ -13913,7 +14096,11 @@ impl ExcelRuntime {
                         ));
                     }
                     self.validate_point_index(workbook, chart_id, series_index, point_index)?;
-                    let chart = self.register_chart_handle(workbook, chart_id);
+                    let chart = self.register_chart_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        chart_object_parent,
+                    );
                     self.dispatch_invoke(chart, "Select", &[])
                 }
                 "Copy" => {
@@ -14043,6 +14230,7 @@ impl ExcelRuntime {
                 workbook,
                 chart_id,
                 axis_index,
+                chart_object_parent,
             } => {
                 match member {
                     "Select" => {
@@ -14052,7 +14240,11 @@ impl ExcelRuntime {
                             ));
                         }
                         self.axis_model(workbook, chart_id, axis_index)?;
-                        let chart = self.register_chart_handle(workbook, chart_id);
+                        let chart = self.register_chart_handle_with_chart_object_parent_origin(
+                            workbook,
+                            chart_id,
+                            chart_object_parent,
+                        );
                         self.dispatch_invoke(chart, "Select", &[])
                     }
                     "Delete" => {
@@ -14283,10 +14475,16 @@ impl ExcelRuntime {
                 workbook,
                 chart_id,
                 series_index,
+                chart_object_parent,
             } => match member {
-                "Item" => {
-                    self.dispatch_invoke_data_labels(workbook, chart_id, series_index, member, args)
-                }
+                "Item" => self.dispatch_invoke_data_labels(
+                    workbook,
+                    chart_id,
+                    series_index,
+                    chart_object_parent,
+                    member,
+                    args,
+                ),
                 "Delete" => {
                     if !args.is_empty() {
                         return Err(OmError::invalid_argument(
@@ -14419,6 +14617,7 @@ impl ExcelRuntime {
                 chart_id,
                 series_index,
                 point_index,
+                chart_object_parent,
             } => match member {
                 "Delete" => {
                     if !args.is_empty() {
@@ -14462,7 +14661,11 @@ impl ExcelRuntime {
                         ));
                     }
                     self.validate_data_label_index(workbook, chart_id, series_index, point_index)?;
-                    let chart = self.register_chart_handle(workbook, chart_id);
+                    let chart = self.register_chart_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        chart_object_parent,
+                    );
                     self.dispatch_invoke(chart, "Select", &[])
                 }
                 "ClearFormats" => {
@@ -14483,6 +14686,7 @@ impl ExcelRuntime {
                 chart_id,
                 axis_index,
                 major,
+                chart_object_parent,
             } => {
                 match member {
                     "Select" => {
@@ -14500,7 +14704,11 @@ impl ExcelRuntime {
                         if has_gridlines != Some(true) {
                             return Err(OmError::new(OmErrorCode::NotFound, "gridlines not found"));
                         }
-                        let chart = self.register_chart_handle(workbook, chart_id);
+                        let chart = self.register_chart_handle_with_chart_object_parent_origin(
+                            workbook,
+                            chart_id,
+                            chart_object_parent,
+                        );
                         self.dispatch_invoke(chart, "Select", &[])
                     }
                     "Delete" => {
@@ -14550,6 +14758,7 @@ impl ExcelRuntime {
                 workbook,
                 chart_id,
                 axis_index,
+                chart_object_parent,
             } => {
                 match member {
                     "Select" => {
@@ -14568,7 +14777,11 @@ impl ExcelRuntime {
                                 "axis title not found",
                             ));
                         }
-                        let chart = self.register_chart_handle(workbook, chart_id);
+                        let chart = self.register_chart_handle_with_chart_object_parent_origin(
+                            workbook,
+                            chart_id,
+                            chart_object_parent,
+                        );
                         self.dispatch_invoke(chart, "Select", &[])
                     }
                     "Delete" => {
@@ -14612,6 +14825,7 @@ impl ExcelRuntime {
                 workbook,
                 chart_id,
                 axis_index,
+                chart_object_parent,
             } => {
                 match member {
                     "Select" => {
@@ -14630,7 +14844,11 @@ impl ExcelRuntime {
                                 "display unit label not found",
                             ));
                         }
-                        let chart = self.register_chart_handle(workbook, chart_id);
+                        let chart = self.register_chart_handle_with_chart_object_parent_origin(
+                            workbook,
+                            chart_id,
+                            chart_object_parent,
+                        );
                         self.dispatch_invoke(chart, "Select", &[])
                     }
                     "Delete" => {
@@ -14681,6 +14899,7 @@ impl ExcelRuntime {
                 workbook,
                 chart_id,
                 axis_index,
+                chart_object_parent,
             } => match member {
                 "Select" => {
                     if !args.is_empty() {
@@ -14689,7 +14908,11 @@ impl ExcelRuntime {
                         ));
                     }
                     self.axis_model(workbook, chart_id, axis_index)?;
-                    let chart = self.register_chart_handle(workbook, chart_id);
+                    let chart = self.register_chart_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        chart_object_parent,
+                    );
                     self.dispatch_invoke(chart, "Select", &[])
                 }
                 _ => Err(OmError::unsupported(format!(
@@ -19697,17 +19920,20 @@ impl ExcelRuntime {
             ChartFormatParent::Axis {
                 chart_id,
                 axis_index,
+                chart_object_parent,
             } => {
                 self.axis_model(workbook, chart_id, axis_index)?;
                 Ok(RuntimeObjectKind::Axis {
                     workbook,
                     chart_id,
                     axis_index,
+                    chart_object_parent,
                 })
             }
             ChartFormatParent::AxisTitle {
                 chart_id,
                 axis_index,
+                chart_object_parent,
             } => {
                 if self
                     .axis_model(workbook, chart_id, axis_index)?
@@ -19720,11 +19946,13 @@ impl ExcelRuntime {
                     workbook,
                     chart_id,
                     axis_index,
+                    chart_object_parent,
                 })
             }
             ChartFormatParent::DisplayUnitLabel {
                 chart_id,
                 axis_index,
+                chart_object_parent,
             } => {
                 let axis = self.axis_model(workbook, chart_id, axis_index)?;
                 if axis.kind != ChartAxisKind::Value {
@@ -19742,23 +19970,27 @@ impl ExcelRuntime {
                     workbook,
                     chart_id,
                     axis_index,
+                    chart_object_parent,
                 })
             }
             ChartFormatParent::TickLabels {
                 chart_id,
                 axis_index,
+                chart_object_parent,
             } => {
                 self.axis_model(workbook, chart_id, axis_index)?;
                 Ok(RuntimeObjectKind::TickLabels {
                     workbook,
                     chart_id,
                     axis_index,
+                    chart_object_parent,
                 })
             }
             ChartFormatParent::Gridlines {
                 chart_id,
                 axis_index,
                 major,
+                chart_object_parent,
             } => {
                 let axis = self.axis_model(workbook, chart_id, axis_index)?;
                 let has_gridlines = if major {
@@ -19774,34 +20006,40 @@ impl ExcelRuntime {
                     chart_id,
                     axis_index,
                     major,
+                    chart_object_parent,
                 })
             }
             ChartFormatParent::Series {
                 chart_id,
                 series_index,
+                chart_object_parent,
             } => {
                 self.series_model(workbook, chart_id, series_index)?;
                 Ok(RuntimeObjectKind::Series {
                     workbook,
                     chart_id,
                     series_index,
+                    chart_object_parent,
                 })
             }
             ChartFormatParent::DataLabels {
                 chart_id,
                 series_index,
+                chart_object_parent,
             } => {
                 self.series_model(workbook, chart_id, series_index)?;
                 Ok(RuntimeObjectKind::DataLabels {
                     workbook,
                     chart_id,
                     series_index,
+                    chart_object_parent,
                 })
             }
             ChartFormatParent::DataLabel {
                 chart_id,
                 series_index,
                 point_index,
+                chart_object_parent,
             } => {
                 self.validate_data_label_index(workbook, chart_id, series_index, point_index)?;
                 Ok(RuntimeObjectKind::DataLabel {
@@ -19809,12 +20047,14 @@ impl ExcelRuntime {
                     chart_id,
                     series_index,
                     point_index,
+                    chart_object_parent,
                 })
             }
             ChartFormatParent::Point {
                 chart_id,
                 series_index,
                 point_index,
+                chart_object_parent,
             } => {
                 self.validate_point_index(workbook, chart_id, series_index, point_index)?;
                 Ok(RuntimeObjectKind::Point {
@@ -19822,12 +20062,14 @@ impl ExcelRuntime {
                     chart_id,
                     series_index,
                     point_index,
+                    chart_object_parent,
                 })
             }
             ChartFormatParent::ChartGroupLines {
                 chart_id,
                 group_index,
                 kind,
+                chart_object_parent,
             } => {
                 self.chart_group_model(workbook, chart_id, group_index)?;
                 Ok(RuntimeObjectKind::ChartGroupLines {
@@ -19835,6 +20077,7 @@ impl ExcelRuntime {
                     chart_id,
                     group_index,
                     kind,
+                    chart_object_parent,
                 })
             }
         }
@@ -20092,7 +20335,13 @@ impl ExcelRuntime {
                 self.chart_model(workbook, chart_id)?;
                 Ok(OmValue::Number(1.0))
             }
-            "Item" => self.dispatch_invoke_chart_groups(workbook, chart_id, member, args),
+            "Item" => self.dispatch_invoke_chart_groups(
+                workbook,
+                chart_id,
+                chart_object_parent,
+                member,
+                args,
+            ),
             "Creator" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(
@@ -20135,6 +20384,7 @@ impl ExcelRuntime {
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -20152,11 +20402,14 @@ impl ExcelRuntime {
                     ));
                 }
                 self.chart_model(workbook, chart_id)?;
-                Ok(OmValue::Object(self.register_chart_group_handle(
-                    workbook,
-                    chart_id,
-                    index - 1,
-                )))
+                Ok(OmValue::Object(
+                    self.register_chart_group_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        index - 1,
+                        chart_object_parent,
+                    ),
+                ))
             }
             _ => Err(OmError::unsupported(format!(
                 "ChartGroups.{member} is not implemented as a method"
@@ -20169,13 +20422,19 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         group_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
         match member {
             "SeriesCollection" => {
                 self.chart_group_model(workbook, chart_id, group_index)?;
-                let handle = self.register_series_collection_handle(workbook, chart_id);
+                let handle = self
+                    .register_series_collection_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        chart_object_parent,
+                    );
                 if args.is_empty() {
                     Ok(OmValue::Object(handle))
                 } else {
@@ -20185,8 +20444,14 @@ impl ExcelRuntime {
             "CategoryCollection" | "FullCategoryCollection" => {
                 self.chart_group_model(workbook, chart_id, group_index)?;
                 let full = member == "FullCategoryCollection";
-                let handle =
-                    self.register_category_collection_handle(workbook, chart_id, group_index, full);
+                let handle = self
+                    .register_category_collection_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        group_index,
+                        full,
+                        chart_object_parent,
+                    );
                 if args.is_empty() {
                     Ok(OmValue::Object(handle))
                 } else {
@@ -20229,6 +20494,7 @@ impl ExcelRuntime {
                                 chart_id,
                                 group_index,
                                 kind,
+                                chart_object_parent,
                             },
                         )))
                     }
@@ -20240,6 +20506,7 @@ impl ExcelRuntime {
                                 workbook,
                                 chart_id,
                                 axis_index,
+                                chart_object_parent,
                             },
                         )))
                     }
@@ -20303,7 +20570,11 @@ impl ExcelRuntime {
                     "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
                     "Application" => Ok(OmValue::Object(self.root_application())),
                     "Parent" => Ok(OmValue::Object(
-                        self.register_chart_handle(workbook, chart_id),
+                        self.register_chart_handle_with_chart_object_parent_origin(
+                            workbook,
+                            chart_id,
+                            chart_object_parent,
+                        ),
                     )),
                     _ => Err(OmError::unsupported(format!(
                         "ChartGroup.{member} is not implemented"
@@ -20318,13 +20589,20 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         group_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
         match member {
-            "SeriesCollection" | "CategoryCollection" | "FullCategoryCollection" => {
-                self.dispatch_get_chart_group(workbook, chart_id, group_index, member, args)
-            }
+            "SeriesCollection" | "CategoryCollection" | "FullCategoryCollection" => self
+                .dispatch_get_chart_group(
+                    workbook,
+                    chart_id,
+                    group_index,
+                    chart_object_parent,
+                    member,
+                    args,
+                ),
             _ => Err(OmError::unsupported(format!(
                 "ChartGroup.{member} is not implemented as a method"
             ))),
@@ -20337,6 +20615,7 @@ impl ExcelRuntime {
         chart_id: ChartId,
         group_index: usize,
         kind: ChartGroupLineKind,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -20356,16 +20635,20 @@ impl ExcelRuntime {
                         chart_id,
                         group_index,
                         kind,
+                        chart_object_parent,
                     },
                 },
             ))),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
-            "Parent" => Ok(OmValue::Object(self.register_chart_group_handle(
-                workbook,
-                chart_id,
-                group_index,
-            ))),
+            "Parent" => Ok(OmValue::Object(
+                self.register_chart_group_handle_with_chart_object_parent_origin(
+                    workbook,
+                    chart_id,
+                    group_index,
+                    chart_object_parent,
+                ),
+            )),
             _ => Err(OmError::unsupported(format!(
                 "{surface}.{member} is not implemented"
             ))),
@@ -20378,6 +20661,7 @@ impl ExcelRuntime {
         chart_id: ChartId,
         group_index: usize,
         kind: ChartGroupLineKind,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -20390,7 +20674,11 @@ impl ExcelRuntime {
                     )));
                 }
                 self.chart_group_model(workbook, chart_id, group_index)?;
-                let chart = self.register_chart_handle(workbook, chart_id);
+                let chart = self.register_chart_handle_with_chart_object_parent_origin(
+                    workbook,
+                    chart_id,
+                    chart_object_parent,
+                );
                 self.dispatch_invoke(chart, "Select", &[])
             }
             "Delete" => {
@@ -20454,6 +20742,7 @@ impl ExcelRuntime {
         chart_id: ChartId,
         group_index: usize,
         full: bool,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -20475,6 +20764,7 @@ impl ExcelRuntime {
                 chart_id,
                 group_index,
                 full,
+                chart_object_parent,
                 member,
                 args,
             ),
@@ -20503,11 +20793,14 @@ impl ExcelRuntime {
                     ));
                 }
                 self.chart_group_model(workbook, chart_id, group_index)?;
-                Ok(OmValue::Object(self.register_chart_group_handle(
-                    workbook,
-                    chart_id,
-                    group_index,
-                )))
+                Ok(OmValue::Object(
+                    self.register_chart_group_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        group_index,
+                        chart_object_parent,
+                    ),
+                ))
             }
             _ => Err(OmError::unsupported(format!(
                 "CategoryCollection.{member} is not implemented"
@@ -20521,6 +20814,7 @@ impl ExcelRuntime {
         chart_id: ChartId,
         group_index: usize,
         full: bool,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -20573,13 +20867,16 @@ impl ExcelRuntime {
                         ));
                     }
                 };
-                Ok(OmValue::Object(self.register_chart_category_handle(
-                    workbook,
-                    chart_id,
-                    group_index,
-                    category_index,
-                    full,
-                )))
+                Ok(OmValue::Object(
+                    self.register_chart_category_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        group_index,
+                        category_index,
+                        full,
+                        chart_object_parent,
+                    ),
+                ))
             }
             _ => Err(OmError::unsupported(format!(
                 "CategoryCollection.{member} is not implemented as a method"
@@ -20594,6 +20891,7 @@ impl ExcelRuntime {
         group_index: usize,
         category_index: usize,
         full: bool,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -20621,12 +20919,15 @@ impl ExcelRuntime {
             "IsFiltered" => Ok(OmValue::Bool(false)),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
-            "Parent" => Ok(OmValue::Object(self.register_category_collection_handle(
-                workbook,
-                chart_id,
-                group_index,
-                full,
-            ))),
+            "Parent" => Ok(OmValue::Object(
+                self.register_category_collection_handle_with_chart_object_parent_origin(
+                    workbook,
+                    chart_id,
+                    group_index,
+                    full,
+                    chart_object_parent,
+                ),
+            )),
             _ => Err(OmError::unsupported(format!(
                 "ChartCategory.{member} is not implemented"
             ))),
@@ -20652,7 +20953,9 @@ impl ExcelRuntime {
                     self.chart_model(workbook, chart_id)?.axes.len() as f64,
                 ))
             }
-            "Item" => self.dispatch_invoke_axes(workbook, chart_id, member, args),
+            "Item" => {
+                self.dispatch_invoke_axes(workbook, chart_id, chart_object_parent, member, args)
+            }
             "Creator" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(
@@ -20694,6 +20997,7 @@ impl ExcelRuntime {
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -20730,13 +21034,14 @@ impl ExcelRuntime {
                     .ok_or_else(|| {
                         OmError::invalid_argument("Axes.Item axis type is not available")
                     })?;
-                Ok(OmValue::Object(self.register_object(
-                    RuntimeObjectKind::Axis {
+                Ok(OmValue::Object(
+                    self.register_axis_handle_with_chart_object_parent_origin(
                         workbook,
                         chart_id,
                         axis_index,
-                    },
-                )))
+                        chart_object_parent,
+                    ),
+                ))
             }
             _ => Err(OmError::unsupported(format!(
                 "Axes.{member} is not implemented as a method"
@@ -20775,6 +21080,7 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         axis_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -20792,6 +21098,7 @@ impl ExcelRuntime {
                     parent: ChartFormatParent::Axis {
                         chart_id,
                         axis_index,
+                        chart_object_parent,
                     },
                 },
             ))),
@@ -20888,6 +21195,7 @@ impl ExcelRuntime {
                         workbook,
                         chart_id,
                         axis_index,
+                        chart_object_parent,
                     },
                 )))
             }
@@ -20978,6 +21286,7 @@ impl ExcelRuntime {
                     workbook,
                     chart_id,
                     axis_index,
+                    chart_object_parent,
                 },
             ))),
             "TickLabelSpacing" => Ok(OmValue::Number(f64::from(
@@ -21023,6 +21332,7 @@ impl ExcelRuntime {
                         chart_id,
                         axis_index,
                         major,
+                        chart_object_parent,
                     },
                 )))
             }
@@ -21035,13 +21345,18 @@ impl ExcelRuntime {
                         workbook,
                         chart_id,
                         axis_index,
+                        chart_object_parent,
                     },
                 )))
             }
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(
-                self.register_chart_handle(workbook, chart_id),
+                self.register_chart_handle_with_chart_object_parent_origin(
+                    workbook,
+                    chart_id,
+                    chart_object_parent,
+                ),
             )),
             _ => Err(OmError::unsupported(format!(
                 "Axis.{member} is not implemented"
@@ -21054,6 +21369,7 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         axis_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -21072,6 +21388,7 @@ impl ExcelRuntime {
                     parent: ChartFormatParent::TickLabels {
                         chart_id,
                         axis_index,
+                        chart_object_parent,
                     },
                 },
             ))),
@@ -21090,6 +21407,7 @@ impl ExcelRuntime {
                     workbook,
                     chart_id,
                     axis_index,
+                    chart_object_parent,
                 },
             ))),
             _ => Err(OmError::unsupported(format!(
@@ -21103,6 +21421,7 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         axis_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -21125,6 +21444,7 @@ impl ExcelRuntime {
                     parent: ChartFormatParent::AxisTitle {
                         chart_id,
                         axis_index,
+                        chart_object_parent,
                     },
                 },
             ))),
@@ -21136,6 +21456,7 @@ impl ExcelRuntime {
                     workbook,
                     chart_id,
                     axis_index,
+                    chart_object_parent,
                 },
             ))),
             _ => Err(OmError::unsupported(format!(
@@ -21149,6 +21470,7 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         axis_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -21178,6 +21500,7 @@ impl ExcelRuntime {
                     parent: ChartFormatParent::DisplayUnitLabel {
                         chart_id,
                         axis_index,
+                        chart_object_parent,
                     },
                 },
             ))),
@@ -21189,6 +21512,7 @@ impl ExcelRuntime {
                     workbook,
                     chart_id,
                     axis_index,
+                    chart_object_parent,
                 },
             ))),
             _ => Err(OmError::unsupported(format!(
@@ -21203,6 +21527,7 @@ impl ExcelRuntime {
         chart_id: ChartId,
         axis_index: usize,
         major: bool,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -21234,6 +21559,7 @@ impl ExcelRuntime {
                         chart_id,
                         axis_index,
                         major,
+                        chart_object_parent,
                     },
                 },
             ))),
@@ -21244,6 +21570,7 @@ impl ExcelRuntime {
                     workbook,
                     chart_id,
                     axis_index,
+                    chart_object_parent,
                 },
             ))),
             _ => Err(OmError::unsupported(format!(
@@ -21317,7 +21644,13 @@ impl ExcelRuntime {
                     self.chart_model(workbook, chart_id)?.series.len() as f64,
                 ))
             }
-            "Item" => self.dispatch_invoke_series_collection(workbook, chart_id, member, args),
+            "Item" => self.dispatch_invoke_series_collection(
+                workbook,
+                chart_id,
+                chart_object_parent,
+                member,
+                args,
+            ),
             "Creator" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(
@@ -21359,6 +21692,7 @@ impl ExcelRuntime {
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -21422,7 +21756,12 @@ impl ExcelRuntime {
                     }
                 };
                 Ok(OmValue::Object(
-                    self.register_series_handle(workbook, chart_id, index),
+                    self.register_series_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        index,
+                        chart_object_parent,
+                    ),
                 ))
             }
             "NewSeries" => {
@@ -21471,11 +21810,14 @@ impl ExcelRuntime {
                     runtime.dirty = true;
                     series_index
                 };
-                Ok(OmValue::Object(self.register_series_handle(
-                    workbook,
-                    chart_id,
-                    series_index,
-                )))
+                Ok(OmValue::Object(
+                    self.register_series_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        series_index,
+                        chart_object_parent,
+                    ),
+                ))
             }
             _ => Err(OmError::unsupported(format!(
                 "SeriesCollection.{member} is not implemented as a method"
@@ -21488,6 +21830,7 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         series_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -21513,6 +21856,7 @@ impl ExcelRuntime {
                         parent: ChartFormatParent::Series {
                             chart_id,
                             series_index,
+                            chart_object_parent,
                         },
                     },
                 )))
@@ -21633,7 +21977,12 @@ impl ExcelRuntime {
             )),
             "DataLabels" => {
                 self.series_model(workbook, chart_id, series_index)?;
-                let handle = self.register_data_labels_handle(workbook, chart_id, series_index);
+                let handle = self.register_data_labels_handle_with_chart_object_parent_origin(
+                    workbook,
+                    chart_id,
+                    series_index,
+                    chart_object_parent,
+                );
                 if args.is_empty() {
                     Ok(OmValue::Object(handle))
                 } else {
@@ -21642,7 +21991,12 @@ impl ExcelRuntime {
             }
             "Points" => {
                 self.series_model(workbook, chart_id, series_index)?;
-                let handle = self.register_points_handle(workbook, chart_id, series_index);
+                let handle = self.register_points_handle_with_chart_object_parent_origin(
+                    workbook,
+                    chart_id,
+                    series_index,
+                    chart_object_parent,
+                );
                 if args.is_empty() {
                     Ok(OmValue::Object(handle))
                 } else {
@@ -21656,7 +22010,11 @@ impl ExcelRuntime {
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(
-                self.register_series_collection_handle(workbook, chart_id),
+                self.register_series_collection_handle_with_chart_object_parent_origin(
+                    workbook,
+                    chart_id,
+                    chart_object_parent,
+                ),
             )),
             _ => Err(OmError::unsupported(format!(
                 "Series.{member} is not implemented"
@@ -21669,6 +22027,7 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         series_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -21679,9 +22038,14 @@ impl ExcelRuntime {
         }
 
         match member {
-            "Item" => {
-                self.dispatch_invoke_data_labels(workbook, chart_id, series_index, member, args)
-            }
+            "Item" => self.dispatch_invoke_data_labels(
+                workbook,
+                chart_id,
+                series_index,
+                chart_object_parent,
+                member,
+                args,
+            ),
             "Name" => Ok(OmValue::Text("Data Labels".to_string())),
             "Format" => {
                 self.series_model(workbook, chart_id, series_index)?;
@@ -21691,6 +22055,7 @@ impl ExcelRuntime {
                         parent: ChartFormatParent::DataLabels {
                             chart_id,
                             series_index,
+                            chart_object_parent,
                         },
                     },
                 )))
@@ -21801,11 +22166,14 @@ impl ExcelRuntime {
             .unwrap_or(OmValue::Empty)),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
-            "Parent" => Ok(OmValue::Object(self.register_series_handle(
-                workbook,
-                chart_id,
-                series_index,
-            ))),
+            "Parent" => Ok(OmValue::Object(
+                self.register_series_handle_with_chart_object_parent_origin(
+                    workbook,
+                    chart_id,
+                    series_index,
+                    chart_object_parent,
+                ),
+            )),
             _ => Err(OmError::unsupported(format!(
                 "DataLabels.{member} is not implemented"
             ))),
@@ -21817,6 +22185,7 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         series_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -21838,12 +22207,15 @@ impl ExcelRuntime {
                         "DataLabels.Item index is out of bounds",
                     ));
                 }
-                Ok(OmValue::Object(self.register_data_label_handle(
-                    workbook,
-                    chart_id,
-                    series_index,
-                    index - 1,
-                )))
+                Ok(OmValue::Object(
+                    self.register_data_label_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        series_index,
+                        index - 1,
+                        chart_object_parent,
+                    ),
+                ))
             }
             _ => Err(OmError::unsupported(format!(
                 "DataLabels.{member} is not implemented as a method"
@@ -21857,6 +22229,7 @@ impl ExcelRuntime {
         chart_id: ChartId,
         series_index: usize,
         point_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -21878,6 +22251,7 @@ impl ExcelRuntime {
                         chart_id,
                         series_index,
                         point_index,
+                        chart_object_parent,
                     },
                 },
             ))),
@@ -21954,11 +22328,14 @@ impl ExcelRuntime {
                 .unwrap_or(OmValue::Empty)),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
-            "Parent" => Ok(OmValue::Object(self.register_data_labels_handle(
-                workbook,
-                chart_id,
-                series_index,
-            ))),
+            "Parent" => Ok(OmValue::Object(
+                self.register_data_labels_handle_with_chart_object_parent_origin(
+                    workbook,
+                    chart_id,
+                    series_index,
+                    chart_object_parent,
+                ),
+            )),
             _ => Err(OmError::unsupported(format!(
                 "DataLabel.{member} is not implemented"
             ))),
@@ -21970,6 +22347,7 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         series_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -21986,7 +22364,14 @@ impl ExcelRuntime {
                     series_index,
                 )?) as f64))
             }
-            "Item" => self.dispatch_invoke_points(workbook, chart_id, series_index, member, args),
+            "Item" => self.dispatch_invoke_points(
+                workbook,
+                chart_id,
+                series_index,
+                chart_object_parent,
+                member,
+                args,
+            ),
             "Creator" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(
@@ -22012,11 +22397,14 @@ impl ExcelRuntime {
                     ));
                 }
                 self.series_model(workbook, chart_id, series_index)?;
-                Ok(OmValue::Object(self.register_series_handle(
-                    workbook,
-                    chart_id,
-                    series_index,
-                )))
+                Ok(OmValue::Object(
+                    self.register_series_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        series_index,
+                        chart_object_parent,
+                    ),
+                ))
             }
             _ => Err(OmError::unsupported(format!(
                 "Points.{member} is not implemented"
@@ -22029,6 +22417,7 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         series_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -22050,12 +22439,15 @@ impl ExcelRuntime {
                         "Points.Item index is out of bounds",
                     ));
                 }
-                Ok(OmValue::Object(self.register_point_handle(
-                    workbook,
-                    chart_id,
-                    series_index,
-                    index - 1,
-                )))
+                Ok(OmValue::Object(
+                    self.register_point_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        series_index,
+                        index - 1,
+                        chart_object_parent,
+                    ),
+                ))
             }
             _ => Err(OmError::unsupported(format!(
                 "Points.{member} is not implemented as a method"
@@ -22069,6 +22461,7 @@ impl ExcelRuntime {
         chart_id: ChartId,
         series_index: usize,
         point_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -22088,6 +22481,7 @@ impl ExcelRuntime {
                         chart_id,
                         series_index,
                         point_index,
+                        chart_object_parent,
                     },
                 },
             ))),
@@ -22117,20 +22511,26 @@ impl ExcelRuntime {
             }
             "DataLabel" => {
                 self.validate_data_label_index(workbook, chart_id, series_index, point_index)?;
-                Ok(OmValue::Object(self.register_data_label_handle(
-                    workbook,
-                    chart_id,
-                    series_index,
-                    point_index,
-                )))
+                Ok(OmValue::Object(
+                    self.register_data_label_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        series_index,
+                        point_index,
+                        chart_object_parent,
+                    ),
+                ))
             }
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
-            "Parent" => Ok(OmValue::Object(self.register_points_handle(
-                workbook,
-                chart_id,
-                series_index,
-            ))),
+            "Parent" => Ok(OmValue::Object(
+                self.register_points_handle_with_chart_object_parent_origin(
+                    workbook,
+                    chart_id,
+                    series_index,
+                    chart_object_parent,
+                ),
+            )),
             _ => Err(OmError::unsupported(format!(
                 "Point.{member} is not implemented"
             ))),
@@ -26173,31 +26573,35 @@ impl ExcelRuntime {
         })
     }
 
-    fn register_data_labels_handle(
+    fn register_data_labels_handle_with_chart_object_parent_origin(
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
         series_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     ) -> ObjectHandle {
         self.register_object(RuntimeObjectKind::DataLabels {
             workbook,
             chart_id,
             series_index,
+            chart_object_parent,
         })
     }
 
-    fn register_data_label_handle(
+    fn register_data_label_handle_with_chart_object_parent_origin(
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
         series_index: usize,
         point_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     ) -> ObjectHandle {
         self.register_object(RuntimeObjectKind::DataLabel {
             workbook,
             chart_id,
             series_index,
             point_index,
+            chart_object_parent,
         })
     }
 
@@ -26214,41 +26618,46 @@ impl ExcelRuntime {
         })
     }
 
-    fn register_chart_group_handle(
+    fn register_chart_group_handle_with_chart_object_parent_origin(
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
         group_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     ) -> ObjectHandle {
         self.register_object(RuntimeObjectKind::ChartGroup {
             workbook,
             chart_id,
             group_index,
+            chart_object_parent,
         })
     }
 
-    fn register_category_collection_handle(
+    fn register_category_collection_handle_with_chart_object_parent_origin(
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
         group_index: usize,
         full: bool,
+        chart_object_parent: Option<ChartObjectsParent>,
     ) -> ObjectHandle {
         self.register_object(RuntimeObjectKind::CategoryCollection {
             workbook,
             chart_id,
             group_index,
             full,
+            chart_object_parent,
         })
     }
 
-    fn register_chart_category_handle(
+    fn register_chart_category_handle_with_chart_object_parent_origin(
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
         group_index: usize,
         category_index: usize,
         full: bool,
+        chart_object_parent: Option<ChartObjectsParent>,
     ) -> ObjectHandle {
         self.register_object(RuntimeObjectKind::ChartCategory {
             workbook,
@@ -26256,6 +26665,7 @@ impl ExcelRuntime {
             group_index,
             category_index,
             full,
+            chart_object_parent,
         })
     }
 
@@ -26272,14 +26682,19 @@ impl ExcelRuntime {
         })
     }
 
-    fn register_series_collection_handle(
+    fn register_axis_handle_with_chart_object_parent_origin(
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
+        axis_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     ) -> ObjectHandle {
-        self.register_series_collection_handle_with_chart_object_parent_origin(
-            workbook, chart_id, None,
-        )
+        self.register_object(RuntimeObjectKind::Axis {
+            workbook,
+            chart_id,
+            axis_index,
+            chart_object_parent,
+        })
     }
 
     fn register_series_collection_handle_with_chart_object_parent_origin(
@@ -26295,44 +26710,50 @@ impl ExcelRuntime {
         })
     }
 
-    fn register_series_handle(
+    fn register_series_handle_with_chart_object_parent_origin(
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
         series_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     ) -> ObjectHandle {
         self.register_object(RuntimeObjectKind::Series {
             workbook,
             chart_id,
             series_index,
+            chart_object_parent,
         })
     }
 
-    fn register_points_handle(
+    fn register_points_handle_with_chart_object_parent_origin(
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
         series_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     ) -> ObjectHandle {
         self.register_object(RuntimeObjectKind::Points {
             workbook,
             chart_id,
             series_index,
+            chart_object_parent,
         })
     }
 
-    fn register_point_handle(
+    fn register_point_handle_with_chart_object_parent_origin(
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
         series_index: usize,
         point_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
     ) -> ObjectHandle {
         self.register_object(RuntimeObjectKind::Point {
             workbook,
             chart_id,
             series_index,
             point_index,
+            chart_object_parent,
         })
     }
 
@@ -28127,6 +28548,7 @@ impl ExcelRuntime {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
                     axis_index: object_axis_index,
+                    ..
                 }
                 | RuntimeObjectKind::ChartFormat {
                     workbook: object_workbook,
@@ -28134,6 +28556,7 @@ impl ExcelRuntime {
                         ChartFormatParent::AxisTitle {
                             chart_id: object_chart_id,
                             axis_index: object_axis_index,
+                            ..
                         },
                 }
                 | RuntimeObjectKind::Adjustments {
@@ -28142,6 +28565,7 @@ impl ExcelRuntime {
                         ChartFormatParent::AxisTitle {
                             chart_id: object_chart_id,
                             axis_index: object_axis_index,
+                            ..
                         },
                 }
                 | RuntimeObjectKind::ChartFormatChild {
@@ -28150,6 +28574,7 @@ impl ExcelRuntime {
                         ChartFormatParent::AxisTitle {
                             chart_id: object_chart_id,
                             axis_index: object_axis_index,
+                            ..
                         },
                     ..
                 } if *object_workbook == workbook
@@ -28181,6 +28606,7 @@ impl ExcelRuntime {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
                     axis_index: object_axis_index,
+                    ..
                 }
                 | RuntimeObjectKind::ChartFormat {
                     workbook: object_workbook,
@@ -28188,6 +28614,7 @@ impl ExcelRuntime {
                         ChartFormatParent::DisplayUnitLabel {
                             chart_id: object_chart_id,
                             axis_index: object_axis_index,
+                            ..
                         },
                 }
                 | RuntimeObjectKind::Adjustments {
@@ -28196,6 +28623,7 @@ impl ExcelRuntime {
                         ChartFormatParent::DisplayUnitLabel {
                             chart_id: object_chart_id,
                             axis_index: object_axis_index,
+                            ..
                         },
                 }
                 | RuntimeObjectKind::ChartFormatChild {
@@ -28204,6 +28632,7 @@ impl ExcelRuntime {
                         ChartFormatParent::DisplayUnitLabel {
                             chart_id: object_chart_id,
                             axis_index: object_axis_index,
+                            ..
                         },
                     ..
                 } if *object_workbook == workbook
@@ -28237,6 +28666,7 @@ impl ExcelRuntime {
                     chart_id: object_chart_id,
                     axis_index: object_axis_index,
                     major: object_major,
+                    ..
                 }
                 | RuntimeObjectKind::ChartFormat {
                     workbook: object_workbook,
@@ -28245,6 +28675,7 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                             axis_index: object_axis_index,
                             major: object_major,
+                            ..
                         },
                 }
                 | RuntimeObjectKind::Adjustments {
@@ -28254,6 +28685,7 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                             axis_index: object_axis_index,
                             major: object_major,
+                            ..
                         },
                 }
                 | RuntimeObjectKind::ChartFormatChild {
@@ -28263,6 +28695,7 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                             axis_index: object_axis_index,
                             major: object_major,
+                            ..
                         },
                     ..
                 } if *object_workbook == workbook
@@ -28297,6 +28730,7 @@ impl ExcelRuntime {
                     chart_id: object_chart_id,
                     group_index: object_group_index,
                     kind: object_kind,
+                    ..
                 }
                 | RuntimeObjectKind::ChartFormat {
                     workbook: object_workbook,
@@ -28305,6 +28739,7 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                             group_index: object_group_index,
                             kind: object_kind,
+                            ..
                         },
                 }
                 | RuntimeObjectKind::Adjustments {
@@ -28314,6 +28749,7 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                             group_index: object_group_index,
                             kind: object_kind,
+                            ..
                         },
                 }
                 | RuntimeObjectKind::ChartFormatChild {
@@ -28323,6 +28759,7 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                             group_index: object_group_index,
                             kind: object_kind,
+                            ..
                         },
                     ..
                 } if *object_workbook == workbook
@@ -95706,6 +96143,150 @@ mod tests {
                     })
             );
         }
+
+        let assert_chart_origin = |runtime: &mut ExcelRuntime,
+                                   handle: ObjectHandle,
+                                   surface: &str,
+                                   parent_hops: usize| {
+            let mut current = handle;
+            for hop in 0..parent_hops {
+                current = expect_object_handle(
+                    runtime
+                        .dispatch_get(current, "Parent", &[])
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "chart-origin {surface} parent hop {} failed: {error:?}",
+                                hop + 1
+                            )
+                        }),
+                );
+            }
+            assert_eq!(
+                runtime
+                    .dispatch_get(current, "ChartType", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("chart-origin {surface} parent origin ChartType failed: {error:?}")
+                    }),
+                runtime
+                    .dispatch_get(chart, "ChartType", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("chart sheet Chart.ChartType after {surface} failed: {error:?}")
+                    })
+            );
+        };
+
+        let chart_groups = expect_object_handle(
+            runtime
+                .dispatch_get(chart_origin_embedded_chart, "ChartGroups", &[])
+                .expect("chart-origin embedded Chart.ChartGroups"),
+        );
+        let chart_group = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_groups, "Item", &[OmValue::Number(1.0)])
+                .expect("chart-origin ChartGroups.Item"),
+        );
+        assert_chart_origin(&mut runtime, chart_group, "ChartGroups.Item", 3);
+        let shortcut_chart_group = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart_origin_embedded_chart,
+                    "BarGroups",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("chart-origin embedded Chart.BarGroups(1)"),
+        );
+        assert_chart_origin(&mut runtime, shortcut_chart_group, "BarGroups(1)", 3);
+        let chart_group_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "SeriesCollection", &[])
+                .expect("chart-origin ChartGroup.SeriesCollection"),
+        );
+        assert_chart_origin(
+            &mut runtime,
+            chart_group_series_collection,
+            "ChartGroup.SeriesCollection",
+            3,
+        );
+        let chart_group_category_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "CategoryCollection", &[])
+                .expect("chart-origin ChartGroup.CategoryCollection"),
+        );
+        assert_chart_origin(
+            &mut runtime,
+            chart_group_category_collection,
+            "ChartGroup.CategoryCollection",
+            4,
+        );
+
+        let axes = expect_object_handle(
+            runtime
+                .dispatch_get(chart_origin_embedded_chart, "Axes", &[])
+                .expect("chart-origin embedded Chart.Axes"),
+        );
+        let axis = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    axes,
+                    "Item",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("chart-origin Axes.Item"),
+        );
+        assert_chart_origin(&mut runtime, axis, "Axes.Item", 3);
+        let axis_format = expect_object_handle(
+            runtime
+                .dispatch_get(axis, "Format", &[])
+                .expect("chart-origin Axis.Format"),
+        );
+        assert_chart_origin(&mut runtime, axis_format, "Axis.Format", 4);
+
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart_origin_embedded_chart, "SeriesCollection", &[])
+                .expect("chart-origin embedded Chart.SeriesCollection"),
+        );
+        let new_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("chart-origin SeriesCollection.NewSeries"),
+        );
+        assert_chart_origin(&mut runtime, new_series, "SeriesCollection.NewSeries", 4);
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("chart-origin SeriesCollection.Item"),
+        );
+        assert_chart_origin(&mut runtime, series, "SeriesCollection.Item", 4);
+        let series_format = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Format", &[])
+                .expect("chart-origin Series.Format"),
+        );
+        assert_chart_origin(&mut runtime, series_format, "Series.Format", 5);
+        let series_points = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Points", &[])
+                .expect("chart-origin Series.Points"),
+        );
+        assert_chart_origin(&mut runtime, series_points, "Series.Points", 5);
+        let series_data_labels = expect_object_handle(
+            runtime
+                .dispatch_get(series, "DataLabels", &[])
+                .expect("chart-origin Series.DataLabels"),
+        );
+        assert_chart_origin(&mut runtime, series_data_labels, "Series.DataLabels", 5);
+        let series_data_labels_format = expect_object_handle(
+            runtime
+                .dispatch_get(series_data_labels, "Format", &[])
+                .expect("chart-origin Series.DataLabels.Format"),
+        );
+        assert_chart_origin(
+            &mut runtime,
+            series_data_labels_format,
+            "Series.DataLabels.Format",
+            6,
+        );
 
         let chart_origin_shape_range = expect_object_handle(
             runtime
