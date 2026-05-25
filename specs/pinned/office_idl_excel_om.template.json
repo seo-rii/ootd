@@ -5376,6 +5376,3812 @@
           }
         }
       ]
+    },
+    {
+      "name": "ChartObjects",
+      "kind": "dispatch",
+      "metadata": {
+        "sourceInherits": [
+          "IDispatch"
+        ]
+      },
+      "members": [
+        {
+          "name": "Count",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "Count"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          }
+        },
+        {
+          "name": "Item",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "Item"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartObject",
+                "aliasOf": "Excel.ChartObject"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartObject",
+            "aliasOf": "Excel.ChartObject"
+          },
+          "params": [
+            {
+              "name": "Index",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Creator",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "Creator"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          }
+        },
+        {
+          "name": "Application",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          }
+        },
+        {
+          "name": "Parent",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "variant",
+            "name": "Variant",
+            "aliasOf": "VARIANT"
+          }
+        },
+        {
+          "name": "Left",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "Left"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          }
+        },
+        {
+          "name": "Top",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "Top"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          }
+        },
+        {
+          "name": "Width",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "Width"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          }
+        },
+        {
+          "name": "Height",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "Height"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          }
+        },
+        {
+          "name": "Placement",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "Placement"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlPlacement"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "XlPlacement"
+          }
+        },
+        {
+          "name": "Visible",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "Visible"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
+          "name": "ProtectChartObject",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "ProtectChartObject"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
+          "name": "PrintObject",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "PrintObject"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
+          "name": "Locked",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "Locked"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
+          "name": "RoundedCorners",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "RoundedCorners"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
+          "name": "ShapeRange",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "ShapeRange"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ShapeRange",
+                "aliasOf": "Excel.ShapeRange"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "ShapeRange",
+            "aliasOf": "Excel.ShapeRange"
+          }
+        },
+        {
+          "name": "Select",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "Select"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Replace",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "Copy",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "Copy"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cut",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "Cut"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Duplicate",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "Duplicate"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartObject",
+                "aliasOf": "Excel.ChartObject"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartObject",
+            "aliasOf": "Excel.ChartObject"
+          }
+        },
+        {
+          "name": "CopyPicture",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "CopyPicture"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Appearance",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Format",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "Delete",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "Delete"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "ChartObject",
+      "kind": "dispatch",
+      "metadata": {
+        "sourceInherits": [
+          "IDispatch"
+        ]
+      },
+      "members": [
+        {
+          "name": "Name",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "Name"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "string",
+                "aliasOf": "BSTR"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "primitive",
+            "name": "string",
+            "aliasOf": "BSTR"
+          }
+        },
+        {
+          "name": "Chart",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "Chart"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Chart",
+                "aliasOf": "Excel.Chart"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "Chart",
+            "aliasOf": "Excel.Chart"
+          }
+        },
+        {
+          "name": "Index",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "Index"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          }
+        },
+        {
+          "name": "ZOrder",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "ZOrder"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          }
+        },
+        {
+          "name": "Placement",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "Placement"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlPlacement"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "XlPlacement"
+          }
+        },
+        {
+          "name": "Left",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "Left"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          }
+        },
+        {
+          "name": "Top",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "Top"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          }
+        },
+        {
+          "name": "Width",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "Width"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          }
+        },
+        {
+          "name": "Height",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "Height"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          }
+        },
+        {
+          "name": "Visible",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "Visible"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
+          "name": "OnAction",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "OnAction"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "string",
+                "aliasOf": "BSTR"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "string",
+            "aliasOf": "BSTR"
+          }
+        },
+        {
+          "name": "PrintObject",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "PrintObject"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
+          "name": "Locked",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "Locked"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
+          "name": "ProtectChartObject",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "ProtectChartObject"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
+          "name": "RoundedCorners",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "RoundedCorners"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
+          "name": "ShapeRange",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "ShapeRange"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ShapeRange",
+                "aliasOf": "Excel.ShapeRange"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "ShapeRange",
+            "aliasOf": "Excel.ShapeRange"
+          }
+        },
+        {
+          "name": "TopLeftCell",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "TopLeftCell"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "Range",
+            "aliasOf": "Excel.Range"
+          }
+        },
+        {
+          "name": "BottomRightCell",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "BottomRightCell"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "Range",
+            "aliasOf": "Excel.Range"
+          }
+        },
+        {
+          "name": "Creator",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "Creator"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          }
+        },
+        {
+          "name": "Application",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          }
+        },
+        {
+          "name": "Parent",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "variant",
+            "name": "Variant",
+            "aliasOf": "VARIANT"
+          }
+        },
+        {
+          "name": "Activate",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "Activate"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Select",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "Select"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Replace",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "BringToFront",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "BringToFront"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Copy",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "Copy"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cut",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "Cut"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Duplicate",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "Duplicate"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartObject",
+                "aliasOf": "Excel.ChartObject"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartObject",
+            "aliasOf": "Excel.ChartObject"
+          }
+        },
+        {
+          "name": "CopyPicture",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "CopyPicture"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Appearance",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Format",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "Delete",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "Delete"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "SendToBack",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "SendToBack"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Chart",
+      "kind": "dispatch",
+      "metadata": {
+        "sourceInherits": [
+          "IDispatch"
+        ]
+      },
+      "members": [
+        {
+          "name": "ChartType",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "ChartType"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlChartType"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "XlChartType"
+          }
+        },
+        {
+          "name": "ChartStyle",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "ChartStyle"
+                }
+              ],
+              "typeInfo": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "variant",
+            "name": "Variant",
+            "aliasOf": "VARIANT"
+          }
+        },
+        {
+          "name": "Index",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Index"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          }
+        },
+        {
+          "name": "BarShape",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "BarShape"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlBarShape"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "XlBarShape"
+          }
+        },
+        {
+          "name": "Elevation",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Elevation"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          }
+        },
+        {
+          "name": "HeightPercent",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "HeightPercent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          }
+        },
+        {
+          "name": "Rotation",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Rotation"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          }
+        },
+        {
+          "name": "DepthPercent",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "DepthPercent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          }
+        },
+        {
+          "name": "GapDepth",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "GapDepth"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          }
+        },
+        {
+          "name": "Perspective",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Perspective"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          }
+        },
+        {
+          "name": "RightAngleAxes",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "RightAngleAxes"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
+          "name": "DisplayBlanksAs",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "DisplayBlanksAs"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlDisplayBlanksAs"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "XlDisplayBlanksAs"
+          }
+        },
+        {
+          "name": "PlotVisibleOnly",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "PlotVisibleOnly"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
+          "name": "ShowDataLabelsOverMaximum",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "ShowDataLabelsOverMaximum"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
+          "name": "ProtectContents",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "ProtectContents"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
+          "name": "ProtectDrawingObjects",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "ProtectDrawingObjects"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
+          "name": "ProtectData",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "ProtectData"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
+          "name": "ProtectFormatting",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "ProtectFormatting"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
+          "name": "ProtectSelection",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "ProtectSelection"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
+          "name": "ChartArea",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "ChartArea"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartArea",
+                "aliasOf": "Excel.ChartArea"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartArea",
+            "aliasOf": "Excel.ChartArea"
+          }
+        },
+        {
+          "name": "PlotArea",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "PlotArea"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "PlotArea",
+                "aliasOf": "Excel.PlotArea"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "PlotArea",
+            "aliasOf": "Excel.PlotArea"
+          }
+        },
+        {
+          "name": "HasTitle",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "HasTitle"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
+          "name": "ChartTitle",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "ChartTitle"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartTitle",
+                "aliasOf": "Excel.ChartTitle"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartTitle",
+            "aliasOf": "Excel.ChartTitle"
+          }
+        },
+        {
+          "name": "HasDataTable",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "HasDataTable"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
+          "name": "DataTable",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "DataTable"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "DataTable",
+                "aliasOf": "Excel.DataTable"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "DataTable",
+            "aliasOf": "Excel.DataTable"
+          }
+        },
+        {
+          "name": "HasAxis",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "HasAxis"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          },
+          "params": [
+            {
+              "name": "Index1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Index2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "HasLegend",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "HasLegend"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
+          "name": "Legend",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Legend"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Legend",
+                "aliasOf": "Excel.Legend"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "Legend",
+            "aliasOf": "Excel.Legend"
+          }
+        },
+        {
+          "name": "ChartGroups",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "ChartGroups"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartGroups",
+                "aliasOf": "Excel.ChartGroups"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartGroups",
+            "aliasOf": "Excel.ChartGroups"
+          },
+          "params": [
+            {
+              "name": "Index",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "AreaGroups",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "AreaGroups"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartGroups",
+                "aliasOf": "Excel.ChartGroups"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartGroups",
+            "aliasOf": "Excel.ChartGroups"
+          },
+          "params": [
+            {
+              "name": "Index",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "BarGroups",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "BarGroups"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartGroups",
+                "aliasOf": "Excel.ChartGroups"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartGroups",
+            "aliasOf": "Excel.ChartGroups"
+          },
+          "params": [
+            {
+              "name": "Index",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "ColumnGroups",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "ColumnGroups"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartGroups",
+                "aliasOf": "Excel.ChartGroups"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartGroups",
+            "aliasOf": "Excel.ChartGroups"
+          },
+          "params": [
+            {
+              "name": "Index",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "DoughnutGroups",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "DoughnutGroups"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartGroups",
+                "aliasOf": "Excel.ChartGroups"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartGroups",
+            "aliasOf": "Excel.ChartGroups"
+          },
+          "params": [
+            {
+              "name": "Index",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "LineGroups",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "LineGroups"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartGroups",
+                "aliasOf": "Excel.ChartGroups"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartGroups",
+            "aliasOf": "Excel.ChartGroups"
+          },
+          "params": [
+            {
+              "name": "Index",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "PieGroups",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "PieGroups"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartGroups",
+                "aliasOf": "Excel.ChartGroups"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartGroups",
+            "aliasOf": "Excel.ChartGroups"
+          },
+          "params": [
+            {
+              "name": "Index",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "RadarGroups",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "RadarGroups"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartGroups",
+                "aliasOf": "Excel.ChartGroups"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartGroups",
+            "aliasOf": "Excel.ChartGroups"
+          },
+          "params": [
+            {
+              "name": "Index",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "SurfaceGroups",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "SurfaceGroups"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartGroups",
+                "aliasOf": "Excel.ChartGroups"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartGroups",
+            "aliasOf": "Excel.ChartGroups"
+          },
+          "params": [
+            {
+              "name": "Index",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "XYGroups",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "XYGroups"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartGroups",
+                "aliasOf": "Excel.ChartGroups"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartGroups",
+            "aliasOf": "Excel.ChartGroups"
+          },
+          "params": [
+            {
+              "name": "Index",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "Axes",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Axes"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Axes",
+                "aliasOf": "Excel.Axes"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "Axes",
+            "aliasOf": "Excel.Axes"
+          },
+          "params": [
+            {
+              "name": "Index",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "SeriesCollection",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "SeriesCollection"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "SeriesCollection",
+                "aliasOf": "Excel.SeriesCollection"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "SeriesCollection",
+            "aliasOf": "Excel.SeriesCollection"
+          }
+        },
+        {
+          "name": "FullSeriesCollection",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "FullSeriesCollection"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "SeriesCollection",
+                "aliasOf": "Excel.SeriesCollection"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "SeriesCollection",
+            "aliasOf": "Excel.SeriesCollection"
+          }
+        },
+        {
+          "name": "ChartObjects",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "ChartObjects"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartObjects",
+                "aliasOf": "Excel.ChartObjects"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartObjects",
+            "aliasOf": "Excel.ChartObjects"
+          }
+        },
+        {
+          "name": "Creator",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Creator"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          }
+        },
+        {
+          "name": "Application",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          }
+        },
+        {
+          "name": "Parent",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "variant",
+            "name": "Variant",
+            "aliasOf": "VARIANT"
+          }
+        },
+        {
+          "name": "Next",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Next"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Chart",
+                "aliasOf": "Excel.Chart",
+                "nullable": true
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "Chart",
+            "aliasOf": "Excel.Chart",
+            "nullable": true
+          }
+        },
+        {
+          "name": "Previous",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Previous"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Chart",
+                "aliasOf": "Excel.Chart",
+                "nullable": true
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "interface",
+            "name": "Chart",
+            "aliasOf": "Excel.Chart",
+            "nullable": true
+          }
+        },
+        {
+          "name": "Visible",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Visible"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
+          "name": "Activate",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Activate"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Select",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Select"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Copy",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Copy"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Move",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Move"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Before",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "After",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "Protect",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Protect"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Password",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "Unprotect",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Unprotect"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Password",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "Refresh",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Refresh"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "CheckSpelling",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "CheckSpelling"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Deselect",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Deselect"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "ClearToMatchColorStyle",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "ClearToMatchColorStyle"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "ClearToMatchStyle",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "ClearToMatchStyle"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "ApplyLayout",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "ApplyLayout"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Layout",
+              "type": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            },
+            {
+              "name": "ChartType",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "ChartWizard",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "ChartWizard"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Source",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Gallery",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Format",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "PlotBy",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "CategoryLabels",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "SeriesLabels",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "HasLegend",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Title",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "CategoryTitle",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "ValueTitle",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "ExtraTitle",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "ApplyDataLabels",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "ApplyDataLabels"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Type",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "LegendKey",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "AutoText",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "HasLeaderLines",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "ShowSeriesName",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "ShowCategoryName",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "ShowValue",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "ShowPercentage",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "ShowBubbleSize",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Separator",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "ApplyChartTemplate",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "ApplyChartTemplate"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Filename",
+              "type": {
+                "kind": "primitive",
+                "name": "string",
+                "aliasOf": "BSTR"
+              }
+            }
+          ]
+        },
+        {
+          "name": "SaveChartTemplate",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "SaveChartTemplate"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Filename",
+              "type": {
+                "kind": "primitive",
+                "name": "string",
+                "aliasOf": "BSTR"
+              }
+            }
+          ]
+        },
+        {
+          "name": "SetDefaultChart",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "SetDefaultChart"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Name",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ]
+        },
+        {
+          "name": "SetBackgroundPicture",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "SetBackgroundPicture"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Filename",
+              "type": {
+                "kind": "primitive",
+                "name": "string",
+                "aliasOf": "BSTR"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Paste",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Paste"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Type",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "Evaluate",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Evaluate"
+                }
+              ],
+              "typeInfo": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "variant",
+            "name": "Variant",
+            "aliasOf": "VARIANT"
+          },
+          "params": [
+            {
+              "name": "Name",
+              "type": {
+                "kind": "primitive",
+                "name": "string",
+                "aliasOf": "BSTR"
+              }
+            }
+          ]
+        },
+        {
+          "name": "CopyPicture",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "CopyPicture"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Appearance",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Format",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Size",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "SetElement",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "SetElement"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Element",
+              "type": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "MsoChartElementType"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Export",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Export"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          },
+          "params": [
+            {
+              "name": "Filename",
+              "type": {
+                "kind": "primitive",
+                "name": "string",
+                "aliasOf": "BSTR"
+              }
+            },
+            {
+              "name": "FilterName",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Interactive",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "ExportAsFixedFormat",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "ExportAsFixedFormat"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Type",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Filename",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Quality",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "IncludeDocProperties",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "IgnorePrintAreas",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "From",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "To",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "OpenAfterPublish",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "FixedFormatExtClassPtr",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "PrintPreview",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "PrintPreview"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "EnableChanges",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "PrintOut",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "PrintOut"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "From",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "To",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Copies",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Preview",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "ActivePrinter",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "PrintToFile",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Collate",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "PrToFileName",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "Delete",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Delete"
+                }
+              ]
+            }
+          }
+        }
+      ]
     }
   ],
   "classes": [

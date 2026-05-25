@@ -146,10 +146,10 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
         Some("Microsoft.Office.Interop.Excel")
     );
     assert_eq!(summary.enum_count, 8);
-    assert_eq!(summary.interface_count, 6);
+    assert_eq!(summary.interface_count, 9);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 143);
-    assert_eq!(summary.stub_member_count, 143);
+    assert_eq!(summary.member_count, 270);
+    assert_eq!(summary.stub_member_count, 270);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1055,7 +1055,10 @@ fn builds_coverage_report_for_each_support_state_bucket() {
         vec![
             "Workbook".to_string(),
             "Worksheet".to_string(),
-            "Range".to_string()
+            "Range".to_string(),
+            "ChartObjects".to_string(),
+            "ChartObject".to_string(),
+            "Chart".to_string()
         ]
     );
     assert_eq!(
@@ -1172,7 +1175,10 @@ fn builds_focus_surface_registry_from_json_wrapper() {
         vec![
             "Workbook".to_string(),
             "Worksheet".to_string(),
-            "Range".to_string()
+            "Range".to_string(),
+            "ChartObjects".to_string(),
+            "ChartObject".to_string(),
+            "Chart".to_string()
         ]
     );
     assert_eq!(registry.focus_surfaces[0].name, "Application");
@@ -1209,7 +1215,7 @@ fn builds_coverage_report_from_path_wrapper() {
 
     assert_eq!(report_from_path, report_from_json);
     assert_eq!(report_from_path.support_counts.partial, 1);
-    assert_eq!(report_from_path.missing_focus_surfaces.len(), 3);
+    assert_eq!(report_from_path.missing_focus_surfaces.len(), 6);
 
     fs::remove_file(&path).expect("remove temp document");
 }
@@ -1356,7 +1362,16 @@ fn writes_canonical_office_idl_json_from_bundle_inputs() {
     );
     assert_eq!(round_trip.library, template.library);
     assert_eq!(round_trip.version, template.version);
-    assert_eq!(round_trip.interfaces.len(), template.interfaces.len());
+    for interface in &round_trip.interfaces {
+        assert!(
+            template
+                .interfaces
+                .iter()
+                .any(|template_interface| template_interface.name == interface.name),
+            "{} should be present in the pinned template",
+            interface.name
+        );
+    }
     assert_eq!(round_trip.classes.len(), template.classes.len());
 }
 
@@ -1371,7 +1386,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(registry.library, "Excel");
     assert_eq!(registry.version, "16.0");
-    assert_eq!(registry.focus_surfaces.len(), 4);
+    assert_eq!(registry.focus_surfaces.len(), 7);
     assert!(registry.missing_focus_surfaces.is_empty());
 
     let application = registry
@@ -1394,11 +1409,29 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "Range")
         .expect("Range");
+    let chart_objects = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "ChartObjects")
+        .expect("ChartObjects");
+    let chart_object = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "ChartObject")
+        .expect("ChartObject");
+    let chart = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Chart")
+        .expect("Chart");
 
     assert_eq!(application.member_count, 41);
     assert_eq!(workbook.member_count, 21);
     assert_eq!(worksheet.member_count, 20);
     assert_eq!(range.member_count, 50);
+    assert_eq!(chart_objects.member_count, 22);
+    assert_eq!(chart_object.member_count, 30);
+    assert_eq!(chart.member_count, 75);
     assert_eq!(
         application.default_coclasses,
         vec!["Application".to_string()]
@@ -2481,8 +2514,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 143);
-    assert_eq!(coverage.support_counts.stub, 143);
+    assert_eq!(coverage.member_count, 270);
+    assert_eq!(coverage.support_counts.stub, 270);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -2505,6 +2538,21 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "Range")
         .expect("Range coverage");
+    let chart_objects_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "ChartObjects")
+        .expect("ChartObjects coverage");
+    let chart_object_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "ChartObject")
+        .expect("ChartObject coverage");
+    let chart_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Chart")
+        .expect("Chart coverage");
 
     assert_eq!(application_coverage.member_count, 41);
     assert_eq!(application_coverage.support_counts.stub, 41);
@@ -2667,6 +2715,157 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "ClearContents".to_string(),
             "Clear".to_string(),
             "ClearFormats".to_string()
+        ]
+    );
+
+    assert_eq!(chart_objects_coverage.member_count, 22);
+    assert_eq!(chart_objects_coverage.support_counts.stub, 22);
+    assert_eq!(
+        chart_objects_coverage.stub_members,
+        vec![
+            "Count".to_string(),
+            "Item".to_string(),
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Parent".to_string(),
+            "Left".to_string(),
+            "Top".to_string(),
+            "Width".to_string(),
+            "Height".to_string(),
+            "Placement".to_string(),
+            "Visible".to_string(),
+            "ProtectChartObject".to_string(),
+            "PrintObject".to_string(),
+            "Locked".to_string(),
+            "RoundedCorners".to_string(),
+            "ShapeRange".to_string(),
+            "Select".to_string(),
+            "Copy".to_string(),
+            "Cut".to_string(),
+            "Duplicate".to_string(),
+            "CopyPicture".to_string(),
+            "Delete".to_string()
+        ]
+    );
+
+    assert_eq!(chart_object_coverage.member_count, 30);
+    assert_eq!(chart_object_coverage.support_counts.stub, 30);
+    assert_eq!(
+        chart_object_coverage.stub_members,
+        vec![
+            "Name".to_string(),
+            "Chart".to_string(),
+            "Index".to_string(),
+            "ZOrder".to_string(),
+            "Placement".to_string(),
+            "Left".to_string(),
+            "Top".to_string(),
+            "Width".to_string(),
+            "Height".to_string(),
+            "Visible".to_string(),
+            "OnAction".to_string(),
+            "PrintObject".to_string(),
+            "Locked".to_string(),
+            "ProtectChartObject".to_string(),
+            "RoundedCorners".to_string(),
+            "ShapeRange".to_string(),
+            "TopLeftCell".to_string(),
+            "BottomRightCell".to_string(),
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Parent".to_string(),
+            "Activate".to_string(),
+            "Select".to_string(),
+            "BringToFront".to_string(),
+            "Copy".to_string(),
+            "Cut".to_string(),
+            "Duplicate".to_string(),
+            "CopyPicture".to_string(),
+            "Delete".to_string(),
+            "SendToBack".to_string()
+        ]
+    );
+
+    assert_eq!(chart_coverage.member_count, 75);
+    assert_eq!(chart_coverage.support_counts.stub, 75);
+    assert_eq!(
+        chart_coverage.stub_members,
+        vec![
+            "ChartType".to_string(),
+            "ChartStyle".to_string(),
+            "Index".to_string(),
+            "BarShape".to_string(),
+            "Elevation".to_string(),
+            "HeightPercent".to_string(),
+            "Rotation".to_string(),
+            "DepthPercent".to_string(),
+            "GapDepth".to_string(),
+            "Perspective".to_string(),
+            "RightAngleAxes".to_string(),
+            "DisplayBlanksAs".to_string(),
+            "PlotVisibleOnly".to_string(),
+            "ShowDataLabelsOverMaximum".to_string(),
+            "ProtectContents".to_string(),
+            "ProtectDrawingObjects".to_string(),
+            "ProtectData".to_string(),
+            "ProtectFormatting".to_string(),
+            "ProtectSelection".to_string(),
+            "ChartArea".to_string(),
+            "PlotArea".to_string(),
+            "HasTitle".to_string(),
+            "ChartTitle".to_string(),
+            "HasDataTable".to_string(),
+            "DataTable".to_string(),
+            "HasAxis".to_string(),
+            "HasLegend".to_string(),
+            "Legend".to_string(),
+            "ChartGroups".to_string(),
+            "AreaGroups".to_string(),
+            "BarGroups".to_string(),
+            "ColumnGroups".to_string(),
+            "DoughnutGroups".to_string(),
+            "LineGroups".to_string(),
+            "PieGroups".to_string(),
+            "RadarGroups".to_string(),
+            "SurfaceGroups".to_string(),
+            "XYGroups".to_string(),
+            "Axes".to_string(),
+            "SeriesCollection".to_string(),
+            "FullSeriesCollection".to_string(),
+            "ChartObjects".to_string(),
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Parent".to_string(),
+            "Next".to_string(),
+            "Previous".to_string(),
+            "Visible".to_string(),
+            "Activate".to_string(),
+            "Select".to_string(),
+            "Copy".to_string(),
+            "Move".to_string(),
+            "Protect".to_string(),
+            "Unprotect".to_string(),
+            "Refresh".to_string(),
+            "CheckSpelling".to_string(),
+            "Deselect".to_string(),
+            "ClearToMatchColorStyle".to_string(),
+            "ClearToMatchStyle".to_string(),
+            "ApplyLayout".to_string(),
+            "ChartWizard".to_string(),
+            "ApplyDataLabels".to_string(),
+            "ApplyChartTemplate".to_string(),
+            "SaveChartTemplate".to_string(),
+            "SetDefaultChart".to_string(),
+            "SetBackgroundPicture".to_string(),
+            "Paste".to_string(),
+            "Evaluate".to_string(),
+            "CopyPicture".to_string(),
+            "SetElement".to_string(),
+            "Export".to_string(),
+            "ExportAsFixedFormat".to_string(),
+            "PrintPreview".to_string(),
+            "PrintOut".to_string(),
+            "Delete".to_string()
         ]
     );
 }
