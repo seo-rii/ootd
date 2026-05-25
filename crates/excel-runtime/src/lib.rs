@@ -997,7 +997,7 @@ pub struct ExcelRuntime {
     next_object_handle: u64,
     next_created_workbook_index: u64,
     active_workbook: Option<WorkbookHandle>,
-    active_chart: Option<(WorkbookHandle, ChartId)>,
+    active_chart: Option<(WorkbookHandle, ChartId, Option<ChartObjectsParent>)>,
     selection: Option<RuntimeSelection>,
     workbooks: BTreeMap<u64, RuntimeWorkbook>,
     objects: BTreeMap<u64, RuntimeObjectKind>,
@@ -2101,7 +2101,7 @@ impl ExcelRuntime {
         }
         if self
             .active_chart
-            .is_some_and(|(chart_workbook, _)| chart_workbook == workbook)
+            .is_some_and(|(chart_workbook, _, _)| chart_workbook == workbook)
         {
             self.active_chart = None;
         }
@@ -12368,7 +12368,7 @@ impl ExcelRuntime {
                         chart_object.host_sheet_id,
                         Rect::single_cell(1, 1),
                     );
-                    self.active_chart = Some((workbook, chart_object.chart_id));
+                    self.active_chart = Some((workbook, chart_object.chart_id, parent));
                     Ok(OmValue::Empty)
                 }
                 _ => Err(OmError::unsupported(format!(
@@ -12431,7 +12431,7 @@ impl ExcelRuntime {
                     let operation = format!("Chart.{member}");
                     self.ensure_worksheet_visible(workbook, sheet_id, operation.as_str())?;
                     self.set_selection(workbook, sheet_id, Rect::single_cell(1, 1));
-                    self.active_chart = Some((workbook, chart_id));
+                    self.active_chart = Some((workbook, chart_id, chart_object_parent));
                     Ok(OmValue::Empty)
                 }
                 "Copy" => {
@@ -12564,7 +12564,12 @@ impl ExcelRuntime {
                         ));
                     }
                     self.chart_model(workbook, chart_id)?;
-                    if self.active_chart == Some((workbook, chart_id)) {
+                    if self
+                        .active_chart
+                        .is_some_and(|(active_workbook, active_chart_id, _)| {
+                            active_workbook == workbook && active_chart_id == chart_id
+                        })
+                    {
                         self.active_chart = None;
                     }
                     Ok(OmValue::Empty)
@@ -15673,12 +15678,16 @@ impl ExcelRuntime {
                 let Some(active_workbook) = self.active_workbook else {
                     return Ok(OmValue::Empty);
                 };
-                if let Some((chart_workbook, chart_id)) = self.active_chart {
+                if let Some((chart_workbook, chart_id, chart_object_parent)) = self.active_chart {
                     if chart_workbook == active_workbook
                         && self.chart_model(chart_workbook, chart_id).is_ok()
                     {
                         return Ok(OmValue::Object(
-                            self.register_chart_handle(chart_workbook, chart_id),
+                            self.register_chart_handle_with_chart_object_parent_origin(
+                                chart_workbook,
+                                chart_id,
+                                chart_object_parent,
+                            ),
                         ));
                     }
                     self.active_chart = None;
@@ -15723,12 +15732,16 @@ impl ExcelRuntime {
                 let Some(active_workbook) = self.active_workbook else {
                     return Ok(OmValue::Empty);
                 };
-                if let Some((chart_workbook, chart_id)) = self.active_chart {
+                if let Some((chart_workbook, chart_id, chart_object_parent)) = self.active_chart {
                     if chart_workbook == active_workbook
                         && self.chart_model(chart_workbook, chart_id).is_ok()
                     {
                         return Ok(OmValue::Object(
-                            self.register_chart_handle(chart_workbook, chart_id),
+                            self.register_chart_handle_with_chart_object_parent_origin(
+                                chart_workbook,
+                                chart_id,
+                                chart_object_parent,
+                            ),
                         ));
                     }
                     self.active_chart = None;
@@ -17834,7 +17847,7 @@ impl ExcelRuntime {
                 self.chart_model(workbook, chart_object.chart_id)?;
                 self.ensure_worksheet_visible(workbook, sheet_id, "ChartObjects.Select")?;
                 self.set_selection(workbook, sheet_id, Rect::single_cell(1, 1));
-                self.active_chart = Some((workbook, chart_object.chart_id));
+                self.active_chart = Some((workbook, chart_object.chart_id, Some(parent)));
                 Ok(OmValue::Empty)
             }
             "Add" => {
@@ -18194,7 +18207,7 @@ impl ExcelRuntime {
                     chart_object.host_sheet_id,
                     Rect::single_cell(1, 1),
                 );
-                self.active_chart = Some((workbook, chart_object.chart_id));
+                self.active_chart = Some((workbook, chart_object.chart_id, Some(source.parent())));
                 Ok(OmValue::Empty)
             }
             "Delete" => {
@@ -23830,7 +23843,7 @@ impl ExcelRuntime {
                 };
                 self.ensure_worksheet_visible(workbook, sheet_id, "Charts.Select")?;
                 self.set_selection(workbook, sheet_id, Rect::single_cell(1, 1));
-                self.active_chart = Some((workbook, chart_id));
+                self.active_chart = Some((workbook, chart_id, None));
                 Ok(OmValue::Empty)
             }
             "Item" => self.resolve_sheet_collection_item(workbook, collection_kind, args),
@@ -26248,7 +26261,7 @@ impl ExcelRuntime {
         if deleted_was_active {
             self.set_selection(workbook, replacement_sheet_id, Rect::single_cell(1, 1));
         }
-        if let Some((chart_workbook, chart_id)) = self.active_chart
+        if let Some((chart_workbook, chart_id, _)) = self.active_chart
             && chart_workbook == workbook
             && self.chart_model(workbook, chart_id).is_err()
         {
@@ -27561,7 +27574,12 @@ impl ExcelRuntime {
         self.stale_chart_object_handles_for_id(workbook, chart_object_id);
         if chart_was_removed {
             self.stale_chart_handles_for_chart(workbook, chart_object.chart_id);
-            if self.active_chart == Some((workbook, chart_object.chart_id)) {
+            if self
+                .active_chart
+                .is_some_and(|(active_workbook, active_chart_id, _)| {
+                    active_workbook == workbook && active_chart_id == chart_object.chart_id
+                })
+            {
                 self.active_chart = None;
             }
         }
@@ -96287,6 +96305,21 @@ mod tests {
             "Series.DataLabels.Format",
             6,
         );
+        runtime
+            .dispatch_invoke(series, "Select", &[])
+            .expect("chart-origin Series.Select");
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveChart", &[])
+                .expect("chart-origin Application.ActiveChart after Series.Select"),
+        );
+        assert_chart_origin(&mut runtime, active_chart, "Application.ActiveChart", 2);
+        let selection = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("chart-origin Application.Selection after Series.Select"),
+        );
+        assert_chart_origin(&mut runtime, selection, "Application.Selection", 2);
 
         let chart_origin_shape_range = expect_object_handle(
             runtime
