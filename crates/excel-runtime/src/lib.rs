@@ -592,12 +592,15 @@ enum ChartFormatParent {
     },
     ChartTitle {
         chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     Legend {
         chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     DataTable {
         chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     Axis {
         chart_id: ChartId,
@@ -821,14 +824,17 @@ enum RuntimeObjectKind {
     ChartTitle {
         workbook: WorkbookHandle,
         chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     Legend {
         workbook: WorkbookHandle,
         chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     DataTable {
         workbook: WorkbookHandle,
         chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     ChartFormat {
         workbook: WorkbookHandle,
@@ -2329,14 +2335,24 @@ impl ExcelRuntime {
                 member,
                 args,
             ),
-            RuntimeObjectKind::ChartTitle { workbook, chart_id } => {
-                self.dispatch_get_chart_title(workbook, chart_id, member, args)
+            RuntimeObjectKind::ChartTitle {
+                workbook,
+                chart_id,
+                chart_object_parent,
+            } => {
+                self.dispatch_get_chart_title(workbook, chart_id, chart_object_parent, member, args)
             }
-            RuntimeObjectKind::Legend { workbook, chart_id } => {
-                self.dispatch_get_legend(workbook, chart_id, member, args)
-            }
-            RuntimeObjectKind::DataTable { workbook, chart_id } => {
-                self.dispatch_get_data_table(workbook, chart_id, member, args)
+            RuntimeObjectKind::Legend {
+                workbook,
+                chart_id,
+                chart_object_parent,
+            } => self.dispatch_get_legend(workbook, chart_id, chart_object_parent, member, args),
+            RuntimeObjectKind::DataTable {
+                workbook,
+                chart_id,
+                chart_object_parent,
+            } => {
+                self.dispatch_get_data_table(workbook, chart_id, chart_object_parent, member, args)
             }
             RuntimeObjectKind::ChartFormat { workbook, parent } => {
                 if !args.is_empty() {
@@ -6951,7 +6967,9 @@ impl ExcelRuntime {
                     ))),
                 }
             }
-            RuntimeObjectKind::ChartTitle { workbook, chart_id } => {
+            RuntimeObjectKind::ChartTitle {
+                workbook, chart_id, ..
+            } => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(format!(
                         "ChartTitle.{member} does not accept index arguments"
@@ -6995,7 +7013,9 @@ impl ExcelRuntime {
                     ))),
                 }
             }
-            RuntimeObjectKind::Legend { workbook, chart_id } => {
+            RuntimeObjectKind::Legend {
+                workbook, chart_id, ..
+            } => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(format!(
                         "Legend.{member} does not accept index arguments"
@@ -7101,7 +7121,9 @@ impl ExcelRuntime {
                     ))),
                 }
             }
-            RuntimeObjectKind::DataTable { workbook, chart_id } => {
+            RuntimeObjectKind::DataTable {
+                workbook, chart_id, ..
+            } => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(format!(
                         "DataTable.{member} does not accept index arguments"
@@ -14039,7 +14061,11 @@ impl ExcelRuntime {
                     ))),
                 }
             }
-            RuntimeObjectKind::ChartTitle { workbook, chart_id } => {
+            RuntimeObjectKind::ChartTitle {
+                workbook,
+                chart_id,
+                chart_object_parent,
+            } => {
                 match member {
                     "Select" => {
                         if !args.is_empty() {
@@ -14053,7 +14079,11 @@ impl ExcelRuntime {
                                 "chart title not found",
                             ));
                         }
-                        let chart = self.register_chart_handle(workbook, chart_id);
+                        let chart = self.register_chart_handle_with_chart_object_parent_origin(
+                            workbook,
+                            chart_id,
+                            chart_object_parent,
+                        );
                         self.dispatch_invoke(chart, "Select", &[])
                     }
                     "Delete" => {
@@ -14090,7 +14120,11 @@ impl ExcelRuntime {
                     ))),
                 }
             }
-            RuntimeObjectKind::Legend { workbook, chart_id } => {
+            RuntimeObjectKind::Legend {
+                workbook,
+                chart_id,
+                chart_object_parent,
+            } => {
                 match member {
                     "Select" => {
                         if !args.is_empty() {
@@ -14109,7 +14143,11 @@ impl ExcelRuntime {
                                 "chart legend not found",
                             ));
                         }
-                        let chart = self.register_chart_handle(workbook, chart_id);
+                        let chart = self.register_chart_handle_with_chart_object_parent_origin(
+                            workbook,
+                            chart_id,
+                            chart_object_parent,
+                        );
                         self.dispatch_invoke(chart, "Select", &[])
                     }
                     "Clear" | "Delete" => {
@@ -14147,7 +14185,11 @@ impl ExcelRuntime {
                     ))),
                 }
             }
-            RuntimeObjectKind::DataTable { workbook, chart_id } => {
+            RuntimeObjectKind::DataTable {
+                workbook,
+                chart_id,
+                chart_object_parent,
+            } => {
                 match member {
                     "Select" => {
                         if !args.is_empty() {
@@ -14161,7 +14203,11 @@ impl ExcelRuntime {
                                 "chart data table not found",
                             ));
                         }
-                        let chart = self.register_chart_handle(workbook, chart_id);
+                        let chart = self.register_chart_handle_with_chart_object_parent_origin(
+                            workbook,
+                            chart_id,
+                            chart_object_parent,
+                        );
                         self.dispatch_invoke(chart, "Select", &[])
                     }
                     "Delete" => {
@@ -19246,7 +19292,11 @@ impl ExcelRuntime {
                     return Err(OmError::new(OmErrorCode::NotFound, "chart title not found"));
                 }
                 Ok(OmValue::Object(
-                    self.register_chart_title_handle(workbook, chart_id),
+                    self.register_chart_title_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        chart_object_parent,
+                    ),
                 ))
             }
             "HasDataTable" => {
@@ -19272,7 +19322,11 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Object(
-                    self.register_data_table_handle(workbook, chart_id),
+                    self.register_data_table_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        chart_object_parent,
+                    ),
                 ))
             }
             "HasLegend" => {
@@ -19336,7 +19390,11 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Object(
-                    self.register_legend_handle(workbook, chart_id),
+                    self.register_legend_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        chart_object_parent,
+                    ),
                 ))
             }
             "ChartGroups" => {
@@ -19537,13 +19595,23 @@ impl ExcelRuntime {
                     chart_object_parent,
                 })
             }
-            ChartFormatParent::ChartTitle { chart_id } => {
+            ChartFormatParent::ChartTitle {
+                chart_id,
+                chart_object_parent,
+            } => {
                 if self.chart_model(workbook, chart_id)?.title.is_none() {
                     return Err(OmError::new(OmErrorCode::NotFound, "chart title not found"));
                 }
-                Ok(RuntimeObjectKind::ChartTitle { workbook, chart_id })
+                Ok(RuntimeObjectKind::ChartTitle {
+                    workbook,
+                    chart_id,
+                    chart_object_parent,
+                })
             }
-            ChartFormatParent::Legend { chart_id } => {
+            ChartFormatParent::Legend {
+                chart_id,
+                chart_object_parent,
+            } => {
                 if !self
                     .chart_model(workbook, chart_id)?
                     .legend
@@ -19555,16 +19623,27 @@ impl ExcelRuntime {
                         "chart legend not found",
                     ));
                 }
-                Ok(RuntimeObjectKind::Legend { workbook, chart_id })
+                Ok(RuntimeObjectKind::Legend {
+                    workbook,
+                    chart_id,
+                    chart_object_parent,
+                })
             }
-            ChartFormatParent::DataTable { chart_id } => {
+            ChartFormatParent::DataTable {
+                chart_id,
+                chart_object_parent,
+            } => {
                 if self.chart_model(workbook, chart_id)?.data_table.is_none() {
                     return Err(OmError::new(
                         OmErrorCode::NotFound,
                         "chart data table not found",
                     ));
                 }
-                Ok(RuntimeObjectKind::DataTable { workbook, chart_id })
+                Ok(RuntimeObjectKind::DataTable {
+                    workbook,
+                    chart_id,
+                    chart_object_parent,
+                })
             }
             ChartFormatParent::Axis {
                 chart_id,
@@ -19716,6 +19795,7 @@ impl ExcelRuntime {
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -19736,7 +19816,10 @@ impl ExcelRuntime {
             "Format" => Ok(OmValue::Object(self.register_object(
                 RuntimeObjectKind::ChartFormat {
                     workbook,
-                    parent: ChartFormatParent::Legend { chart_id },
+                    parent: ChartFormatParent::Legend {
+                        chart_id,
+                        chart_object_parent,
+                    },
                 },
             ))),
             "IncludeInLayout" => Ok(OmValue::Bool(legend.include_in_layout.unwrap_or(true))),
@@ -19756,7 +19839,11 @@ impl ExcelRuntime {
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(
-                self.register_chart_handle(workbook, chart_id),
+                self.register_chart_handle_with_chart_object_parent_origin(
+                    workbook,
+                    chart_id,
+                    chart_object_parent,
+                ),
             )),
             _ => Err(OmError::unsupported(format!(
                 "Legend.{member} is not implemented"
@@ -19768,6 +19855,7 @@ impl ExcelRuntime {
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -19790,7 +19878,10 @@ impl ExcelRuntime {
             "Format" => Ok(OmValue::Object(self.register_object(
                 RuntimeObjectKind::ChartFormat {
                     workbook,
-                    parent: ChartFormatParent::DataTable { chart_id },
+                    parent: ChartFormatParent::DataTable {
+                        chart_id,
+                        chart_object_parent,
+                    },
                 },
             ))),
             "HasBorderHorizontal" => Ok(OmValue::Bool(has_border_horizontal.unwrap_or(true))),
@@ -19800,7 +19891,11 @@ impl ExcelRuntime {
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(
-                self.register_chart_handle(workbook, chart_id),
+                self.register_chart_handle_with_chart_object_parent_origin(
+                    workbook,
+                    chart_id,
+                    chart_object_parent,
+                ),
             )),
             _ => Err(OmError::unsupported(format!(
                 "DataTable.{member} is not implemented"
@@ -21097,6 +21192,7 @@ impl ExcelRuntime {
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -21116,14 +21212,21 @@ impl ExcelRuntime {
             "Format" => Ok(OmValue::Object(self.register_object(
                 RuntimeObjectKind::ChartFormat {
                     workbook,
-                    parent: ChartFormatParent::ChartTitle { chart_id },
+                    parent: ChartFormatParent::ChartTitle {
+                        chart_id,
+                        chart_object_parent,
+                    },
                 },
             ))),
             "Text" | "Caption" => Ok(OmValue::Text(title.text.clone())),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(
-                self.register_chart_handle(workbook, chart_id),
+                self.register_chart_handle_with_chart_object_parent_origin(
+                    workbook,
+                    chart_id,
+                    chart_object_parent,
+                ),
             )),
             _ => Err(OmError::unsupported(format!(
                 "ChartTitle.{member} is not implemented"
@@ -25962,28 +26065,43 @@ impl ExcelRuntime {
         })
     }
 
-    fn register_chart_title_handle(
+    fn register_chart_title_handle_with_chart_object_parent_origin(
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
     ) -> ObjectHandle {
-        self.register_object(RuntimeObjectKind::ChartTitle { workbook, chart_id })
+        self.register_object(RuntimeObjectKind::ChartTitle {
+            workbook,
+            chart_id,
+            chart_object_parent,
+        })
     }
 
-    fn register_legend_handle(
+    fn register_legend_handle_with_chart_object_parent_origin(
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
     ) -> ObjectHandle {
-        self.register_object(RuntimeObjectKind::Legend { workbook, chart_id })
+        self.register_object(RuntimeObjectKind::Legend {
+            workbook,
+            chart_id,
+            chart_object_parent,
+        })
     }
 
-    fn register_data_table_handle(
+    fn register_data_table_handle_with_chart_object_parent_origin(
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
     ) -> ObjectHandle {
-        self.register_object(RuntimeObjectKind::DataTable { workbook, chart_id })
+        self.register_object(RuntimeObjectKind::DataTable {
+            workbook,
+            chart_id,
+            chart_object_parent,
+        })
     }
 
     fn register_data_labels_handle(
@@ -27609,14 +27727,17 @@ impl ExcelRuntime {
                 | RuntimeObjectKind::ChartTitle {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
+                    ..
                 }
                 | RuntimeObjectKind::Legend {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
+                    ..
                 }
                 | RuntimeObjectKind::DataTable {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
+                    ..
                 }
                 | RuntimeObjectKind::ChartFormat {
                     workbook: object_workbook,
@@ -27631,12 +27752,15 @@ impl ExcelRuntime {
                         }
                         | ChartFormatParent::ChartTitle {
                             chart_id: object_chart_id,
+                            ..
                         }
                         | ChartFormatParent::Legend {
                             chart_id: object_chart_id,
+                            ..
                         }
                         | ChartFormatParent::DataTable {
                             chart_id: object_chart_id,
+                            ..
                         }
                         | ChartFormatParent::Axis {
                             chart_id: object_chart_id,
@@ -27692,12 +27816,15 @@ impl ExcelRuntime {
                         }
                         | ChartFormatParent::ChartTitle {
                             chart_id: object_chart_id,
+                            ..
                         }
                         | ChartFormatParent::Legend {
                             chart_id: object_chart_id,
+                            ..
                         }
                         | ChartFormatParent::DataTable {
                             chart_id: object_chart_id,
+                            ..
                         }
                         | ChartFormatParent::Axis {
                             chart_id: object_chart_id,
@@ -27753,12 +27880,15 @@ impl ExcelRuntime {
                         }
                         | ChartFormatParent::ChartTitle {
                             chart_id: object_chart_id,
+                            ..
                         }
                         | ChartFormatParent::Legend {
                             chart_id: object_chart_id,
+                            ..
                         }
                         | ChartFormatParent::DataTable {
                             chart_id: object_chart_id,
+                            ..
                         }
                         | ChartFormatParent::Axis {
                             chart_id: object_chart_id,
@@ -28126,12 +28256,14 @@ impl ExcelRuntime {
                 RuntimeObjectKind::ChartTitle {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
+                    ..
                 }
                 | RuntimeObjectKind::ChartFormat {
                     workbook: object_workbook,
                     parent:
                         ChartFormatParent::ChartTitle {
                             chart_id: object_chart_id,
+                            ..
                         },
                 }
                 | RuntimeObjectKind::Adjustments {
@@ -28139,6 +28271,7 @@ impl ExcelRuntime {
                     parent:
                         ChartFormatParent::ChartTitle {
                             chart_id: object_chart_id,
+                            ..
                         },
                 }
                 | RuntimeObjectKind::ChartFormatChild {
@@ -28146,6 +28279,7 @@ impl ExcelRuntime {
                     parent:
                         ChartFormatParent::ChartTitle {
                             chart_id: object_chart_id,
+                            ..
                         },
                     ..
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
@@ -28168,12 +28302,14 @@ impl ExcelRuntime {
                 RuntimeObjectKind::Legend {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
+                    ..
                 }
                 | RuntimeObjectKind::ChartFormat {
                     workbook: object_workbook,
                     parent:
                         ChartFormatParent::Legend {
                             chart_id: object_chart_id,
+                            ..
                         },
                 }
                 | RuntimeObjectKind::Adjustments {
@@ -28181,6 +28317,7 @@ impl ExcelRuntime {
                     parent:
                         ChartFormatParent::Legend {
                             chart_id: object_chart_id,
+                            ..
                         },
                 }
                 | RuntimeObjectKind::ChartFormatChild {
@@ -28188,6 +28325,7 @@ impl ExcelRuntime {
                     parent:
                         ChartFormatParent::Legend {
                             chart_id: object_chart_id,
+                            ..
                         },
                     ..
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
@@ -28210,6 +28348,7 @@ impl ExcelRuntime {
                 RuntimeObjectKind::DataTable {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
+                    ..
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
                 }
@@ -28218,6 +28357,7 @@ impl ExcelRuntime {
                     parent:
                         ChartFormatParent::DataTable {
                             chart_id: object_chart_id,
+                            ..
                         },
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
@@ -28227,6 +28367,7 @@ impl ExcelRuntime {
                     parent:
                         ChartFormatParent::DataTable {
                             chart_id: object_chart_id,
+                            ..
                         },
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
@@ -28236,6 +28377,7 @@ impl ExcelRuntime {
                     parent:
                         ChartFormatParent::DataTable {
                             chart_id: object_chart_id,
+                            ..
                         },
                     ..
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
@@ -95299,6 +95441,125 @@ mod tests {
                 .dispatch_get(chart, "ChartType", &[])
                 .expect("chart sheet Chart.ChartType after ChartArea.Format")
         );
+        runtime
+            .dispatch_set(
+                chart_origin_embedded_chart,
+                "HasTitle",
+                OmValue::Bool(true),
+                &[],
+            )
+            .expect("enable chart-origin embedded Chart.HasTitle");
+        runtime
+            .dispatch_set(
+                chart_origin_embedded_chart,
+                "HasLegend",
+                OmValue::Bool(true),
+                &[],
+            )
+            .expect("enable chart-origin embedded Chart.HasLegend");
+        runtime
+            .dispatch_set(
+                chart_origin_embedded_chart,
+                "HasDataTable",
+                OmValue::Bool(true),
+                &[],
+            )
+            .expect("enable chart-origin embedded Chart.HasDataTable");
+        for surface in ["ChartTitle", "Legend", "DataTable"] {
+            let surface_handle = expect_object_handle(
+                runtime
+                    .dispatch_get(chart_origin_embedded_chart, surface, &[])
+                    .unwrap_or_else(|error| {
+                        panic!("chart-origin embedded Chart.{surface} failed: {error:?}")
+                    }),
+            );
+            let surface_parent = expect_object_handle(
+                runtime
+                    .dispatch_get(surface_handle, "Parent", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("chart-origin {surface}.Parent failed: {error:?}")
+                    }),
+            );
+            let surface_grandparent = expect_object_handle(
+                runtime
+                    .dispatch_get(surface_parent, "Parent", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("chart-origin {surface}.Parent.Parent failed: {error:?}")
+                    }),
+            );
+            let surface_origin = expect_object_handle(
+                runtime
+                    .dispatch_get(surface_grandparent, "Parent", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("chart-origin {surface} parent origin failed: {error:?}")
+                    }),
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(surface_origin, "ChartType", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("chart-origin {surface} parent origin ChartType failed: {error:?}")
+                    }),
+                runtime
+                    .dispatch_get(chart, "ChartType", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("chart sheet Chart.ChartType after {surface} failed: {error:?}")
+                    })
+            );
+            let surface_format = expect_object_handle(
+                runtime
+                    .dispatch_get(surface_handle, "Format", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("chart-origin {surface}.Format failed: {error:?}")
+                    }),
+            );
+            let format_surface = expect_object_handle(
+                runtime
+                    .dispatch_get(surface_format, "Parent", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("chart-origin {surface}.Format.Parent failed: {error:?}")
+                    }),
+            );
+            let format_chart = expect_object_handle(
+                runtime
+                    .dispatch_get(format_surface, "Parent", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("chart-origin {surface}.Format.Parent.Parent failed: {error:?}")
+                    }),
+            );
+            let format_chart_object = expect_object_handle(
+                runtime
+                    .dispatch_get(format_chart, "Parent", &[])
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "chart-origin {surface}.Format.Parent.Parent.Parent failed: {error:?}"
+                        )
+                    }),
+            );
+            let format_origin = expect_object_handle(
+                runtime
+                    .dispatch_get(format_chart_object, "Parent", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("chart-origin {surface}.Format parent origin failed: {error:?}")
+                    }),
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(format_origin, "ChartType", &[])
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "chart-origin {surface}.Format parent origin ChartType failed: {error:?}"
+                        )
+                    }),
+                runtime
+                    .dispatch_get(chart, "ChartType", &[])
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "chart sheet Chart.ChartType after {surface}.Format failed: {error:?}"
+                        )
+                    })
+            );
+        }
 
         let chart_origin_shape_range = expect_object_handle(
             runtime
