@@ -804,6 +804,7 @@ enum RuntimeObjectKind {
     Chart {
         workbook: WorkbookHandle,
         chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
     },
     ChartArea {
         workbook: WorkbookHandle,
@@ -2295,9 +2296,11 @@ impl ExcelRuntime {
             RuntimeObjectKind::ShapeRange { workbook, source } => {
                 self.dispatch_get_shape_range(workbook, source, member, args)
             }
-            RuntimeObjectKind::Chart { workbook, chart_id } => {
-                self.dispatch_get_chart(workbook, chart_id, member, args)
-            }
+            RuntimeObjectKind::Chart {
+                workbook,
+                chart_id,
+                chart_object_parent,
+            } => self.dispatch_get_chart(workbook, chart_id, chart_object_parent, member, args),
             RuntimeObjectKind::ChartArea { workbook, chart_id } => self
                 .dispatch_get_chart_child_container("ChartArea", workbook, chart_id, member, args),
             RuntimeObjectKind::PlotArea { workbook, chart_id } => self
@@ -6058,7 +6061,9 @@ impl ExcelRuntime {
                 "{}.{member} is not writable",
                 kind.surface_name()
             ))),
-            RuntimeObjectKind::Chart { workbook, chart_id } => {
+            RuntimeObjectKind::Chart {
+                workbook, chart_id, ..
+            } => {
                 if member != "HasAxis" && !args.is_empty() {
                     return Err(OmError::invalid_argument(format!(
                         "Chart.{member} does not accept index arguments"
@@ -12175,7 +12180,11 @@ impl ExcelRuntime {
             RuntimeObjectKind::ShapeRange { workbook, source } => {
                 self.dispatch_invoke_shape_range(workbook, source, member, args)
             }
-            RuntimeObjectKind::Chart { workbook, chart_id } => match member {
+            RuntimeObjectKind::Chart {
+                workbook,
+                chart_id,
+                chart_object_parent,
+            } => match member {
                 "Activate" | "Select" => {
                     if member == "Activate" && !args.is_empty() {
                         return Err(OmError::invalid_argument(format!(
@@ -12751,8 +12760,7 @@ impl ExcelRuntime {
                             clipboard.sheet_id,
                             clipboard.rect,
                         );
-                        let chart =
-                            self.register_object(RuntimeObjectKind::Chart { workbook, chart_id });
+                        let chart = self.register_chart_handle(workbook, chart_id);
                         self.dispatch_invoke(chart, "SetSourceData", &[OmValue::Object(source.0)])?;
                     }
                     self.cut_copy_mode = None;
@@ -13587,12 +13595,14 @@ impl ExcelRuntime {
                     self.stale_series_handles_for_chart(workbook, chart_id);
                     Ok(OmValue::Empty)
                 }
-                "Axes" | "ChartGroups" => self.dispatch_get_chart(workbook, chart_id, member, args),
+                "Axes" | "ChartGroups" => {
+                    self.dispatch_get_chart(workbook, chart_id, chart_object_parent, member, args)
+                }
                 member if is_chart_group_shortcut_member(member) => {
                     self.dispatch_get_chart_group_shortcut(workbook, chart_id, member, args)
                 }
                 "SeriesCollection" | "FullSeriesCollection" => {
-                    self.dispatch_get_chart(workbook, chart_id, member, args)
+                    self.dispatch_get_chart(workbook, chart_id, chart_object_parent, member, args)
                 }
                 _ => Err(OmError::unsupported(format!(
                     "Chart.{member} is not implemented as a method"
@@ -18264,9 +18274,16 @@ impl ExcelRuntime {
                     .clone(),
             )),
             "Chart" => {
-                let chart_id = self.chart_object_model(workbook, chart_object_id)?.chart_id;
+                let chart_object = self.chart_object_model(workbook, chart_object_id)?;
+                let chart_id = chart_object.chart_id;
+                let host_sheet_id = chart_object.host_sheet_id;
+                let parent = parent.unwrap_or(ChartObjectsParent::Worksheet(host_sheet_id));
                 Ok(OmValue::Object(
-                    self.register_chart_handle(workbook, chart_id),
+                    self.register_chart_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        Some(parent),
+                    ),
                 ))
             }
             "ShapeRange" => {
@@ -18850,6 +18867,7 @@ impl ExcelRuntime {
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
@@ -19337,11 +19355,17 @@ impl ExcelRuntime {
                         "Chart.Parent does not accept arguments",
                     ));
                 }
-                if let Some((_, chart_object_id, _)) =
+                if let Some((host_sheet_id, chart_object_id, _)) =
                     self.embedded_chart_object_for_chart(workbook, chart_id)?
                 {
+                    let parent =
+                        chart_object_parent.unwrap_or(ChartObjectsParent::Worksheet(host_sheet_id));
                     return Ok(OmValue::Object(
-                        self.register_chart_object_handle(workbook, chart_object_id),
+                        self.register_chart_object_handle_with_parent_origin(
+                            workbook,
+                            chart_object_id,
+                            Some(parent),
+                        ),
                     ));
                 }
                 Ok(OmValue::Object(workbook.0))
@@ -23452,7 +23476,9 @@ impl ExcelRuntime {
     ) -> OmResult<(WorkbookHandle, SheetId)> {
         match self.runtime_object(handle)? {
             RuntimeObjectKind::Worksheet { workbook, sheet_id } => Ok((workbook, sheet_id)),
-            RuntimeObjectKind::Chart { workbook, chart_id } => {
+            RuntimeObjectKind::Chart {
+                workbook, chart_id, ..
+            } => {
                 let Some(sheet_id) = self.chart_sheet_id_for_chart(workbook, chart_id)? else {
                     return Err(OmError::type_mismatch(format!(
                         "{operation} {position_label} expects a Worksheet or chart sheet object, numeric index, or worksheet name when provided"
@@ -25845,7 +25871,20 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         chart_id: ChartId,
     ) -> ObjectHandle {
-        self.register_object(RuntimeObjectKind::Chart { workbook, chart_id })
+        self.register_chart_handle_with_chart_object_parent_origin(workbook, chart_id, None)
+    }
+
+    fn register_chart_handle_with_chart_object_parent_origin(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
+    ) -> ObjectHandle {
+        self.register_object(RuntimeObjectKind::Chart {
+            workbook,
+            chart_id,
+            chart_object_parent,
+        })
     }
 
     fn register_chart_title_handle(
@@ -27480,6 +27519,7 @@ impl ExcelRuntime {
                 RuntimeObjectKind::Chart {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
+                    ..
                 }
                 | RuntimeObjectKind::ChartArea {
                     workbook: object_workbook,
@@ -95092,6 +95132,29 @@ mod tests {
                 .dispatch_get(chart, "ChartType", &[])
                 .expect("chart sheet Chart.ChartType")
         );
+        let chart_origin_embedded_chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_origin_chart_object, "Chart", &[])
+                .expect("chart-origin ChartObject.Chart"),
+        );
+        let chart_origin_embedded_chart_parent = expect_object_handle(
+            runtime
+                .dispatch_get(chart_origin_embedded_chart, "Parent", &[])
+                .expect("chart-origin embedded Chart.Parent"),
+        );
+        let chart_origin_embedded_chart_grandparent = expect_object_handle(
+            runtime
+                .dispatch_get(chart_origin_embedded_chart_parent, "Parent", &[])
+                .expect("chart-origin embedded Chart.Parent.Parent"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_origin_embedded_chart_grandparent, "ChartType", &[])
+                .expect("chart-origin embedded Chart.Parent.Parent.ChartType"),
+            runtime
+                .dispatch_get(chart, "ChartType", &[])
+                .expect("chart sheet Chart.ChartType after Chart.Parent")
+        );
 
         let chart_origin_shape_range = expect_object_handle(
             runtime
@@ -95183,6 +95246,29 @@ mod tests {
                 runtime
                     .dispatch_get(sheet_origin_shape_parent, "Type", &[])
                     .expect("sheet-origin ShapeRange.Parent.Type")
+            ),
+            f64::from(super::XL_SHEET_TYPE_CHART)
+        );
+        let sheet_origin_embedded_chart = expect_object_handle(
+            runtime
+                .dispatch_get(sheet_origin_item, "Chart", &[])
+                .expect("sheet-origin ChartObject.Chart"),
+        );
+        let sheet_origin_embedded_chart_parent = expect_object_handle(
+            runtime
+                .dispatch_get(sheet_origin_embedded_chart, "Parent", &[])
+                .expect("sheet-origin embedded Chart.Parent"),
+        );
+        let sheet_origin_embedded_chart_grandparent = expect_object_handle(
+            runtime
+                .dispatch_get(sheet_origin_embedded_chart_parent, "Parent", &[])
+                .expect("sheet-origin embedded Chart.Parent.Parent"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheet_origin_embedded_chart_grandparent, "Type", &[])
+                    .expect("sheet-origin embedded Chart.Parent.Parent.Type")
             ),
             f64::from(super::XL_SHEET_TYPE_CHART)
         );
