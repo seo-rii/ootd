@@ -14526,7 +14526,11 @@ impl ExcelRuntime {
                         ));
                     }
                     self.series_model(workbook, chart_id, series_index)?;
-                    let chart = self.register_chart_handle(workbook, chart_id);
+                    let chart = self.register_chart_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        chart_object_parent,
+                    );
                     self.dispatch_invoke(chart, "Select", &[])
                 }
                 "ClearFormats" => {
@@ -96276,6 +96280,38 @@ mod tests {
                 .expect("chart-origin SeriesCollection.Item"),
         );
         assert_chart_origin(&mut runtime, series, "SeriesCollection.Item", 4);
+        let x_values = OmArray::new(
+            1,
+            2,
+            vec![
+                OmValue::Text("North".to_string()),
+                OmValue::Text("South".to_string()),
+            ],
+        )
+        .expect("chart-origin category source array");
+        let values = OmArray::new(1, 2, vec![OmValue::Number(10.0), OmValue::Number(20.0)])
+            .expect("chart-origin value source array");
+        runtime
+            .dispatch_set(series, "XValues", OmValue::Array(x_values), &[])
+            .expect("chart-origin Series.XValues");
+        runtime
+            .dispatch_set(series, "Values", OmValue::Array(values), &[])
+            .expect("chart-origin Series.Values");
+        let chart_group_category = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_group_category_collection,
+                    "Item",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("chart-origin CategoryCollection.Item"),
+        );
+        assert_chart_origin(
+            &mut runtime,
+            chart_group_category,
+            "CategoryCollection.Item",
+            5,
+        );
         let series_format = expect_object_handle(
             runtime
                 .dispatch_get(series, "Format", &[])
@@ -96288,12 +96324,50 @@ mod tests {
                 .expect("chart-origin Series.Points"),
         );
         assert_chart_origin(&mut runtime, series_points, "Series.Points", 5);
+        let first_point = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_points, "Item", &[OmValue::Number(1.0)])
+                .expect("chart-origin Points.Item"),
+        );
+        assert_chart_origin(&mut runtime, first_point, "Points.Item", 6);
+        let first_point_format = expect_object_handle(
+            runtime
+                .dispatch_get(first_point, "Format", &[])
+                .expect("chart-origin Point.Format"),
+        );
+        assert_chart_origin(&mut runtime, first_point_format, "Point.Format", 7);
         let series_data_labels = expect_object_handle(
             runtime
                 .dispatch_get(series, "DataLabels", &[])
                 .expect("chart-origin Series.DataLabels"),
         );
         assert_chart_origin(&mut runtime, series_data_labels, "Series.DataLabels", 5);
+        runtime
+            .dispatch_set(series, "HasDataLabels", OmValue::Bool(true), &[])
+            .expect("chart-origin Series.HasDataLabels");
+        let second_data_label = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_data_labels, "Item", &[OmValue::Number(2.0)])
+                .expect("chart-origin DataLabels.Item"),
+        );
+        assert_chart_origin(&mut runtime, second_data_label, "DataLabels.Item", 6);
+        let first_point_data_label = expect_object_handle(
+            runtime
+                .dispatch_get(first_point, "DataLabel", &[])
+                .expect("chart-origin Point.DataLabel"),
+        );
+        assert_chart_origin(&mut runtime, first_point_data_label, "Point.DataLabel", 6);
+        let first_point_data_label_format = expect_object_handle(
+            runtime
+                .dispatch_get(first_point_data_label, "Format", &[])
+                .expect("chart-origin Point.DataLabel.Format"),
+        );
+        assert_chart_origin(
+            &mut runtime,
+            first_point_data_label_format,
+            "Point.DataLabel.Format",
+            7,
+        );
         let series_data_labels_format = expect_object_handle(
             runtime
                 .dispatch_get(series_data_labels, "Format", &[])
@@ -96305,6 +96379,39 @@ mod tests {
             "Series.DataLabels.Format",
             6,
         );
+        runtime
+            .dispatch_invoke(series_data_labels, "Select", &[])
+            .expect("chart-origin DataLabels.Select");
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveChart", &[])
+                .expect("chart-origin Application.ActiveChart after DataLabels.Select"),
+        );
+        assert_chart_origin(&mut runtime, active_chart, "Application.ActiveChart", 2);
+        let selection = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("chart-origin Application.Selection after DataLabels.Select"),
+        );
+        assert_chart_origin(&mut runtime, selection, "Application.Selection", 2);
+        runtime
+            .dispatch_invoke(first_point, "Select", &[])
+            .expect("chart-origin Point.Select");
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveChart", &[])
+                .expect("chart-origin Application.ActiveChart after Point.Select"),
+        );
+        assert_chart_origin(&mut runtime, active_chart, "Application.ActiveChart", 2);
+        runtime
+            .dispatch_invoke(second_data_label, "Select", &[])
+            .expect("chart-origin DataLabel.Select");
+        let selection = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("chart-origin Application.Selection after DataLabel.Select"),
+        );
+        assert_chart_origin(&mut runtime, selection, "Application.Selection", 2);
         runtime
             .dispatch_invoke(series, "Select", &[])
             .expect("chart-origin Series.Select");
