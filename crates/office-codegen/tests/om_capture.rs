@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 9);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 271);
-    assert_eq!(summary.stub_member_count, 271);
+    assert_eq!(summary.member_count, 273);
+    assert_eq!(summary.stub_member_count, 273);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -208,6 +208,40 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
         assert_eq!(workbooks_open.params[index].name, *expected_name);
         assert_eq!(workbooks_open.params[index].optional, index != 0);
     }
+    let application = document
+        .interfaces
+        .iter()
+        .find(|interface| interface.name == "Application")
+        .expect("Application");
+    let worksheet = document
+        .interfaces
+        .iter()
+        .find(|interface| interface.name == "Worksheet")
+        .expect("Worksheet");
+    assert_eq!(
+        application
+            .members
+            .iter()
+            .find(|member| member.name == "ActiveChart")
+            .and_then(|member| member.return_type.as_ref())
+            .and_then(|type_ref| type_ref.alias_of.as_deref()),
+        Some("Excel.Chart")
+    );
+    let worksheet_chart_objects = worksheet
+        .members
+        .iter()
+        .find(|member| member.name == "ChartObjects")
+        .expect("Worksheet.ChartObjects");
+    assert_eq!(worksheet_chart_objects.access, AccessMode::Read);
+    assert_eq!(worksheet_chart_objects.params.len(), 1);
+    assert!(worksheet_chart_objects.params[0].optional);
+    assert_eq!(
+        worksheet_chart_objects
+            .return_type
+            .as_ref()
+            .and_then(|type_ref| type_ref.alias_of.as_deref()),
+        Some("Excel.ChartObjects")
+    );
 }
 
 #[test]
@@ -1425,9 +1459,9 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|entry| entry.name == "Chart")
         .expect("Chart");
 
-    assert_eq!(application.member_count, 41);
+    assert_eq!(application.member_count, 42);
     assert_eq!(workbook.member_count, 21);
-    assert_eq!(worksheet.member_count, 20);
+    assert_eq!(worksheet.member_count, 21);
     assert_eq!(range.member_count, 50);
     assert_eq!(chart_objects.member_count, 23);
     assert_eq!(chart_object.member_count, 30);
@@ -2514,8 +2548,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 271);
-    assert_eq!(coverage.support_counts.stub, 271);
+    assert_eq!(coverage.member_count, 273);
+    assert_eq!(coverage.support_counts.stub, 273);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -2554,8 +2588,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|entry| entry.name == "Chart")
         .expect("Chart coverage");
 
-    assert_eq!(application_coverage.member_count, 41);
-    assert_eq!(application_coverage.support_counts.stub, 41);
+    assert_eq!(application_coverage.member_count, 42);
+    assert_eq!(application_coverage.support_counts.stub, 42);
     assert_eq!(
         application_coverage.stub_members,
         vec![
@@ -2567,6 +2601,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "ActiveSheet".to_string(),
             "ActiveCell".to_string(),
             "Selection".to_string(),
+            "ActiveChart".to_string(),
             "Name".to_string(),
             "Version".to_string(),
             "UserName".to_string(),
@@ -2632,8 +2667,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(worksheet_coverage.member_count, 20);
-    assert_eq!(worksheet_coverage.support_counts.stub, 20);
+    assert_eq!(worksheet_coverage.member_count, 21);
+    assert_eq!(worksheet_coverage.support_counts.stub, 21);
     assert_eq!(
         worksheet_coverage.stub_members,
         vec![
@@ -2650,6 +2685,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Cells".to_string(),
             "Rows".to_string(),
             "Columns".to_string(),
+            "ChartObjects".to_string(),
             "Activate".to_string(),
             "Select".to_string(),
             "Calculate".to_string(),

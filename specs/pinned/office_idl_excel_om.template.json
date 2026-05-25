@@ -370,6 +370,34 @@
           }
         },
         {
+          "name": "ActiveChart",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Chart",
+            "nullable": true,
+            "aliasOf": "Excel.Chart"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Application",
+                  "sourceMember": "ActiveChart"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Chart",
+                "nullable": true,
+                "aliasOf": "Excel.Chart"
+              }
+            }
+          }
+        },
+        {
           "name": "Name",
           "memberKind": "property",
           "returnType": {
@@ -3428,6 +3456,43 @@
                 "kind": "interface",
                 "name": "Range",
                 "aliasOf": "Excel.Range"
+              }
+            }
+          }
+        },
+        {
+          "name": "ChartObjects",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartObjects",
+            "aliasOf": "Excel.ChartObjects"
+          },
+          "params": [
+            {
+              "name": "Index",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "ChartObjects"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartObjects",
+                "aliasOf": "Excel.ChartObjects"
               }
             }
           }
