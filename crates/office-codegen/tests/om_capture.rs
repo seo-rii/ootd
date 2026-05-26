@@ -146,10 +146,10 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
         Some("Microsoft.Office.Interop.Excel")
     );
     assert_eq!(summary.enum_count, 8);
-    assert_eq!(summary.interface_count, 24);
+    assert_eq!(summary.interface_count, 33);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 365);
-    assert_eq!(summary.stub_member_count, 365);
+    assert_eq!(summary.member_count, 449);
+    assert_eq!(summary.stub_member_count, 449);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1107,7 +1107,16 @@ fn builds_coverage_report_for_each_support_state_bucket() {
             "ShadowFormat".to_string(),
             "SoftEdgeFormat".to_string(),
             "TextFrame2".to_string(),
-            "ThreeDFormat".to_string()
+            "ThreeDFormat".to_string(),
+            "ChartGroups".to_string(),
+            "ChartGroup".to_string(),
+            "CategoryCollection".to_string(),
+            "ChartCategory".to_string(),
+            "SeriesLines".to_string(),
+            "DropLines".to_string(),
+            "HiLoLines".to_string(),
+            "UpBars".to_string(),
+            "DownBars".to_string()
         ]
     );
     assert_eq!(
@@ -1242,7 +1251,16 @@ fn builds_focus_surface_registry_from_json_wrapper() {
             "ShadowFormat".to_string(),
             "SoftEdgeFormat".to_string(),
             "TextFrame2".to_string(),
-            "ThreeDFormat".to_string()
+            "ThreeDFormat".to_string(),
+            "ChartGroups".to_string(),
+            "ChartGroup".to_string(),
+            "CategoryCollection".to_string(),
+            "ChartCategory".to_string(),
+            "SeriesLines".to_string(),
+            "DropLines".to_string(),
+            "HiLoLines".to_string(),
+            "UpBars".to_string(),
+            "DownBars".to_string()
         ]
     );
     assert_eq!(registry.focus_surfaces[0].name, "Application");
@@ -1279,7 +1297,7 @@ fn builds_coverage_report_from_path_wrapper() {
 
     assert_eq!(report_from_path, report_from_json);
     assert_eq!(report_from_path.support_counts.partial, 1);
-    assert_eq!(report_from_path.missing_focus_surfaces.len(), 21);
+    assert_eq!(report_from_path.missing_focus_surfaces.len(), 30);
 
     fs::remove_file(&path).expect("remove temp document");
 }
@@ -1450,7 +1468,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(registry.library, "Excel");
     assert_eq!(registry.version, "16.0");
-    assert_eq!(registry.focus_surfaces.len(), 22);
+    assert_eq!(registry.focus_surfaces.len(), 31);
     assert!(registry.missing_focus_surfaces.is_empty());
 
     let application = registry
@@ -1563,6 +1581,51 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "ThreeDFormat")
         .expect("ThreeDFormat");
+    let chart_groups = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "ChartGroups")
+        .expect("ChartGroups");
+    let chart_group = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "ChartGroup")
+        .expect("ChartGroup");
+    let category_collection = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "CategoryCollection")
+        .expect("CategoryCollection");
+    let chart_category = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "ChartCategory")
+        .expect("ChartCategory");
+    let series_lines = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "SeriesLines")
+        .expect("SeriesLines");
+    let drop_lines = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "DropLines")
+        .expect("DropLines");
+    let hi_lo_lines = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "HiLoLines")
+        .expect("HiLoLines");
+    let up_bars = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "UpBars")
+        .expect("UpBars");
+    let down_bars = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "DownBars")
+        .expect("DownBars");
 
     assert_eq!(application.member_count, 42);
     assert_eq!(workbook.member_count, 21);
@@ -1586,6 +1649,15 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(soft_edge_format.member_count, 3);
     assert_eq!(text_frame2.member_count, 3);
     assert_eq!(three_d_format.member_count, 3);
+    assert_eq!(chart_groups.member_count, 5);
+    assert_eq!(chart_group.member_count, 33);
+    assert_eq!(category_collection.member_count, 5);
+    assert_eq!(chart_category.member_count, 6);
+    assert_eq!(series_lines.member_count, 7);
+    assert_eq!(drop_lines.member_count, 7);
+    assert_eq!(hi_lo_lines.member_count, 7);
+    assert_eq!(up_bars.member_count, 7);
+    assert_eq!(down_bars.member_count, 7);
     assert_eq!(
         application.default_coclasses,
         vec!["Application".to_string()]
@@ -2668,8 +2740,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 365);
-    assert_eq!(coverage.support_counts.stub, 365);
+    assert_eq!(coverage.member_count, 449);
+    assert_eq!(coverage.support_counts.stub, 449);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -2782,6 +2854,51 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "ThreeDFormat")
         .expect("ThreeDFormat coverage");
+    let chart_groups_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "ChartGroups")
+        .expect("ChartGroups coverage");
+    let chart_group_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "ChartGroup")
+        .expect("ChartGroup coverage");
+    let category_collection_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "CategoryCollection")
+        .expect("CategoryCollection coverage");
+    let chart_category_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "ChartCategory")
+        .expect("ChartCategory coverage");
+    let series_lines_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "SeriesLines")
+        .expect("SeriesLines coverage");
+    let drop_lines_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "DropLines")
+        .expect("DropLines coverage");
+    let hi_lo_lines_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "HiLoLines")
+        .expect("HiLoLines coverage");
+    let up_bars_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "UpBars")
+        .expect("UpBars coverage");
+    let down_bars_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "DownBars")
+        .expect("DownBars coverage");
 
     assert_eq!(application_coverage.member_count, 42);
     assert_eq!(application_coverage.support_counts.stub, 42);
@@ -3243,6 +3360,110 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
                 "Creator".to_string(),
                 "Application".to_string(),
                 "Parent".to_string()
+            ]
+        );
+    }
+
+    assert_eq!(chart_groups_coverage.member_count, 5);
+    assert_eq!(chart_groups_coverage.support_counts.stub, 5);
+    assert_eq!(
+        chart_groups_coverage.stub_members,
+        vec![
+            "Count".to_string(),
+            "Item".to_string(),
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Parent".to_string()
+        ]
+    );
+
+    assert_eq!(chart_group_coverage.member_count, 33);
+    assert_eq!(chart_group_coverage.support_counts.stub, 33);
+    assert_eq!(
+        chart_group_coverage.stub_members,
+        vec![
+            "ChartType".to_string(),
+            "Index".to_string(),
+            "AxisGroup".to_string(),
+            "SeriesLines".to_string(),
+            "DropLines".to_string(),
+            "HiLoLines".to_string(),
+            "UpBars".to_string(),
+            "DownBars".to_string(),
+            "RadarAxisLabels".to_string(),
+            "VaryByCategories".to_string(),
+            "GapWidth".to_string(),
+            "Overlap".to_string(),
+            "HasRadarAxisLabels".to_string(),
+            "HasSeriesLines".to_string(),
+            "HasDropLines".to_string(),
+            "HasHiLoLines".to_string(),
+            "HasUpDownBars".to_string(),
+            "FirstSliceAngle".to_string(),
+            "Explosion".to_string(),
+            "BubbleScale".to_string(),
+            "ShowNegativeBubbles".to_string(),
+            "Has3DShading".to_string(),
+            "DoughnutHoleSize".to_string(),
+            "SecondPlotSize".to_string(),
+            "SizeRepresents".to_string(),
+            "SplitType".to_string(),
+            "SplitValue".to_string(),
+            "SeriesCollection".to_string(),
+            "CategoryCollection".to_string(),
+            "FullCategoryCollection".to_string(),
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Parent".to_string()
+        ]
+    );
+
+    assert_eq!(category_collection_coverage.member_count, 5);
+    assert_eq!(category_collection_coverage.support_counts.stub, 5);
+    assert_eq!(
+        category_collection_coverage.stub_members,
+        vec![
+            "Count".to_string(),
+            "Item".to_string(),
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Parent".to_string()
+        ]
+    );
+
+    assert_eq!(chart_category_coverage.member_count, 6);
+    assert_eq!(chart_category_coverage.support_counts.stub, 6);
+    assert_eq!(
+        chart_category_coverage.stub_members,
+        vec![
+            "Name".to_string(),
+            "Index".to_string(),
+            "IsFiltered".to_string(),
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Parent".to_string()
+        ]
+    );
+
+    for coverage_entry in [
+        series_lines_coverage,
+        drop_lines_coverage,
+        hi_lo_lines_coverage,
+        up_bars_coverage,
+        down_bars_coverage,
+    ] {
+        assert_eq!(coverage_entry.member_count, 7);
+        assert_eq!(coverage_entry.support_counts.stub, 7);
+        assert_eq!(
+            coverage_entry.stub_members,
+            vec![
+                "Name".to_string(),
+                "Format".to_string(),
+                "Creator".to_string(),
+                "Application".to_string(),
+                "Parent".to_string(),
+                "Select".to_string(),
+                "Delete".to_string()
             ]
         );
     }
