@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 48);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 698);
-    assert_eq!(summary.stub_member_count, 698);
+    assert_eq!(summary.member_count, 699);
+    assert_eq!(summary.stub_member_count, 699);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -208,6 +208,20 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
         assert_eq!(workbooks_open.params[index].name, *expected_name);
         assert_eq!(workbooks_open.params[index].optional, index != 0);
     }
+    let workbooks_item_member = workbooks
+        .members
+        .iter()
+        .find(|member| member.name == "Item")
+        .expect("Workbooks.Item");
+    assert_eq!(workbooks_item_member.params.len(), 1);
+    assert_eq!(workbooks_item_member.params[0].name, "Index");
+    assert_eq!(
+        workbooks_item_member
+            .return_type
+            .as_ref()
+            .and_then(|type_ref| type_ref.alias_of.as_deref()),
+        Some("Excel.Workbook")
+    );
     let application = document
         .interfaces
         .iter()
@@ -2930,8 +2944,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 698);
-    assert_eq!(coverage.support_counts.stub, 698);
+    assert_eq!(coverage.member_count, 699);
+    assert_eq!(coverage.support_counts.stub, 699);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage

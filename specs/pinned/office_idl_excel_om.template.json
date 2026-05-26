@@ -2035,6 +2035,43 @@
           }
         },
         {
+          "name": "Item",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "interface",
+            "name": "Workbook",
+            "aliasOf": "Excel.Workbook"
+          },
+          "params": [
+            {
+              "name": "Index",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Workbooks",
+                  "sourceMember": "Item",
+                  "dispId": 0
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Workbook",
+                "aliasOf": "Excel.Workbook"
+              }
+            }
+          }
+        },
+        {
           "name": "Add",
           "memberKind": "method",
           "returnType": {
