@@ -146,10 +146,10 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
         Some("Microsoft.Office.Interop.Excel")
     );
     assert_eq!(summary.enum_count, 8);
-    assert_eq!(summary.interface_count, 48);
+    assert_eq!(summary.interface_count, 49);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 699);
-    assert_eq!(summary.stub_member_count, 699);
+    assert_eq!(summary.member_count, 703);
+    assert_eq!(summary.stub_member_count, 703);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1174,6 +1174,7 @@ fn builds_coverage_report_for_each_support_state_bucket() {
             "Workbook".to_string(),
             "Worksheet".to_string(),
             "Range".to_string(),
+            "Areas".to_string(),
             "Names".to_string(),
             "Name".to_string(),
             "ChartObjects".to_string(),
@@ -1333,6 +1334,7 @@ fn builds_focus_surface_registry_from_json_wrapper() {
             "Workbook".to_string(),
             "Worksheet".to_string(),
             "Range".to_string(),
+            "Areas".to_string(),
             "Names".to_string(),
             "Name".to_string(),
             "ChartObjects".to_string(),
@@ -1411,7 +1413,7 @@ fn builds_coverage_report_from_path_wrapper() {
 
     assert_eq!(report_from_path, report_from_json);
     assert_eq!(report_from_path.support_counts.partial, 1);
-    assert_eq!(report_from_path.missing_focus_surfaces.len(), 45);
+    assert_eq!(report_from_path.missing_focus_surfaces.len(), 46);
 
     fs::remove_file(&path).expect("remove temp document");
 }
@@ -1582,7 +1584,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(registry.library, "Excel");
     assert_eq!(registry.version, "16.0");
-    assert_eq!(registry.focus_surfaces.len(), 46);
+    assert_eq!(registry.focus_surfaces.len(), 47);
     assert!(registry.missing_focus_surfaces.is_empty());
 
     let application = registry
@@ -1605,6 +1607,11 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "Range")
         .expect("Range");
+    let areas = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Areas")
+        .expect("Areas");
     let names = registry
         .focus_surfaces
         .iter()
@@ -1820,6 +1827,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(workbook.member_count, 26);
     assert_eq!(worksheet.member_count, 28);
     assert_eq!(range.member_count, 51);
+    assert_eq!(areas.member_count, 4);
     assert_eq!(names.member_count, 5);
     assert_eq!(name.member_count, 6);
     assert_eq!(chart_objects.member_count, 23);
@@ -2944,8 +2952,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 699);
-    assert_eq!(coverage.support_counts.stub, 699);
+    assert_eq!(coverage.member_count, 703);
+    assert_eq!(coverage.support_counts.stub, 703);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -2968,6 +2976,11 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "Range")
         .expect("Range coverage");
+    let areas_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Areas")
+        .expect("Areas coverage");
     let names_coverage = coverage
         .focus_surfaces
         .iter()
@@ -3356,6 +3369,18 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "ClearContents".to_string(),
             "Clear".to_string(),
             "ClearFormats".to_string()
+        ]
+    );
+
+    assert_eq!(areas_coverage.member_count, 4);
+    assert_eq!(areas_coverage.support_counts.stub, 4);
+    assert_eq!(
+        areas_coverage.stub_members,
+        vec![
+            "Count".to_string(),
+            "Item".to_string(),
+            "Application".to_string(),
+            "Parent".to_string()
         ]
     );
 

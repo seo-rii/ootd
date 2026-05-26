@@ -6490,6 +6490,132 @@
       ]
     },
     {
+      "name": "Areas",
+      "kind": "dispatch",
+      "metadata": {
+        "sourceInherits": [
+          "IDispatch"
+        ]
+      },
+      "members": [
+        {
+          "name": "Count",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Areas",
+                  "sourceMember": "Count"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          }
+        },
+        {
+          "name": "Item",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "interface",
+            "name": "Range",
+            "aliasOf": "Excel.Range"
+          },
+          "params": [
+            {
+              "name": "Index",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Areas",
+                  "sourceMember": "Item",
+                  "dispId": 0
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              }
+            }
+          }
+        },
+        {
+          "name": "Application",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Areas",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          }
+        },
+        {
+          "name": "Parent",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Range",
+            "aliasOf": "Excel.Range"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Areas",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "ChartObjects",
       "kind": "dispatch",
       "metadata": {
