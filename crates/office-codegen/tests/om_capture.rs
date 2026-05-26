@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 48);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 690);
-    assert_eq!(summary.stub_member_count, 690);
+    assert_eq!(summary.member_count, 698);
+    assert_eq!(summary.stub_member_count, 698);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -218,6 +218,11 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
         .iter()
         .find(|interface| interface.name == "Worksheet")
         .expect("Worksheet");
+    let worksheets = document
+        .interfaces
+        .iter()
+        .find(|interface| interface.name == "Worksheets")
+        .expect("Worksheets");
     assert_eq!(
         application
             .members
@@ -242,6 +247,71 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
             .and_then(|type_ref| type_ref.alias_of.as_deref()),
         Some("Excel.ChartObjects")
     );
+    let worksheets_creator_member = worksheets
+        .members
+        .iter()
+        .find(|member| member.name == "Creator")
+        .expect("Worksheets.Creator");
+    assert_eq!(
+        worksheets_creator_member
+            .return_type
+            .as_ref()
+            .and_then(|type_ref| type_ref.alias_of.as_deref()),
+        Some("Int32")
+    );
+    let worksheets_visible_member = worksheets
+        .members
+        .iter()
+        .find(|member| member.name == "Visible")
+        .expect("Worksheets.Visible");
+    assert_eq!(worksheets_visible_member.access, AccessMode::Readwrite);
+    assert_eq!(
+        worksheets_visible_member
+            .return_type
+            .as_ref()
+            .and_then(|type_ref| type_ref.alias_of.as_deref()),
+        Some("XlSheetVisibility")
+    );
+    let worksheets_delete_member = worksheets
+        .members
+        .iter()
+        .find(|member| member.name == "Delete")
+        .expect("Worksheets.Delete");
+    assert_eq!(
+        worksheets_delete_member
+            .return_type
+            .as_ref()
+            .and_then(|type_ref| type_ref.alias_of.as_deref()),
+        Some("VARIANT_BOOL")
+    );
+    for member_name in ["Copy", "Move"] {
+        let member = worksheets
+            .members
+            .iter()
+            .find(|member| member.name == member_name)
+            .expect(member_name);
+        assert_eq!(member.params.len(), 2, "{member_name}");
+        assert!(member.params.iter().all(|param| param.optional));
+    }
+    let worksheets_print_out_member = worksheets
+        .members
+        .iter()
+        .find(|member| member.name == "PrintOut")
+        .expect("Worksheets.PrintOut");
+    assert_eq!(worksheets_print_out_member.params.len(), 8);
+    assert!(
+        worksheets_print_out_member
+            .params
+            .iter()
+            .all(|param| param.optional)
+    );
+    let worksheets_select_member = worksheets
+        .members
+        .iter()
+        .find(|member| member.name == "Select")
+        .expect("Worksheets.Select");
+    assert_eq!(worksheets_select_member.params.len(), 1);
+    assert!(worksheets_select_member.params[0].optional);
 }
 
 #[test]
@@ -2860,8 +2930,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 690);
-    assert_eq!(coverage.support_counts.stub, 690);
+    assert_eq!(coverage.member_count, 698);
+    assert_eq!(coverage.support_counts.stub, 698);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
