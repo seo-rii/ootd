@@ -146,10 +146,10 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
         Some("Microsoft.Office.Interop.Excel")
     );
     assert_eq!(summary.enum_count, 8);
-    assert_eq!(summary.interface_count, 45);
+    assert_eq!(summary.interface_count, 48);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 617);
-    assert_eq!(summary.stub_member_count, 617);
+    assert_eq!(summary.member_count, 672);
+    assert_eq!(summary.stub_member_count, 672);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1090,8 +1090,11 @@ fn builds_coverage_report_for_each_support_state_bucket() {
             "Workbook".to_string(),
             "Worksheet".to_string(),
             "Range".to_string(),
+            "Names".to_string(),
+            "Name".to_string(),
             "ChartObjects".to_string(),
             "ChartObject".to_string(),
+            "ShapeRange".to_string(),
             "Chart".to_string(),
             "ChartArea".to_string(),
             "PlotArea".to_string(),
@@ -1246,8 +1249,11 @@ fn builds_focus_surface_registry_from_json_wrapper() {
             "Workbook".to_string(),
             "Worksheet".to_string(),
             "Range".to_string(),
+            "Names".to_string(),
+            "Name".to_string(),
             "ChartObjects".to_string(),
             "ChartObject".to_string(),
+            "ShapeRange".to_string(),
             "Chart".to_string(),
             "ChartArea".to_string(),
             "PlotArea".to_string(),
@@ -1321,7 +1327,7 @@ fn builds_coverage_report_from_path_wrapper() {
 
     assert_eq!(report_from_path, report_from_json);
     assert_eq!(report_from_path.support_counts.partial, 1);
-    assert_eq!(report_from_path.missing_focus_surfaces.len(), 42);
+    assert_eq!(report_from_path.missing_focus_surfaces.len(), 45);
 
     fs::remove_file(&path).expect("remove temp document");
 }
@@ -1492,7 +1498,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(registry.library, "Excel");
     assert_eq!(registry.version, "16.0");
-    assert_eq!(registry.focus_surfaces.len(), 43);
+    assert_eq!(registry.focus_surfaces.len(), 46);
     assert!(registry.missing_focus_surfaces.is_empty());
 
     let application = registry
@@ -1515,6 +1521,16 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "Range")
         .expect("Range");
+    let names = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Names")
+        .expect("Names");
+    let name = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Name")
+        .expect("Name");
     let chart_objects = registry
         .focus_surfaces
         .iter()
@@ -1525,6 +1541,11 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "ChartObject")
         .expect("ChartObject");
+    let shape_range = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "ShapeRange")
+        .expect("ShapeRange");
     let chart = registry
         .focus_surfaces
         .iter()
@@ -1715,8 +1736,11 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(workbook.member_count, 21);
     assert_eq!(worksheet.member_count, 21);
     assert_eq!(range.member_count, 50);
+    assert_eq!(names.member_count, 5);
+    assert_eq!(name.member_count, 6);
     assert_eq!(chart_objects.member_count, 23);
     assert_eq!(chart_object.member_count, 30);
+    assert_eq!(shape_range.member_count, 44);
     assert_eq!(chart.member_count, 75);
     assert_eq!(chart_area.member_count, 14);
     assert_eq!(plot_area.member_count, 7);
@@ -2836,8 +2860,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 617);
-    assert_eq!(coverage.support_counts.stub, 617);
+    assert_eq!(coverage.member_count, 672);
+    assert_eq!(coverage.support_counts.stub, 672);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -2860,6 +2884,16 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "Range")
         .expect("Range coverage");
+    let names_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Names")
+        .expect("Names coverage");
+    let name_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Name")
+        .expect("Name coverage");
     let chart_objects_coverage = coverage
         .focus_surfaces
         .iter()
@@ -2870,6 +2904,11 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "ChartObject")
         .expect("ChartObject coverage");
+    let shape_range_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "ShapeRange")
+        .expect("ShapeRange coverage");
     let chart_coverage = coverage
         .focus_surfaces
         .iter()
@@ -3222,6 +3261,33 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
+    assert_eq!(names_coverage.member_count, 5);
+    assert_eq!(names_coverage.support_counts.stub, 5);
+    assert_eq!(
+        names_coverage.stub_members,
+        vec![
+            "Count".to_string(),
+            "Item".to_string(),
+            "Add".to_string(),
+            "Application".to_string(),
+            "Parent".to_string()
+        ]
+    );
+
+    assert_eq!(name_coverage.member_count, 6);
+    assert_eq!(name_coverage.support_counts.stub, 6);
+    assert_eq!(
+        name_coverage.stub_members,
+        vec![
+            "Name".to_string(),
+            "RefersTo".to_string(),
+            "RefersToRange".to_string(),
+            "Application".to_string(),
+            "Parent".to_string(),
+            "Delete".to_string()
+        ]
+    );
+
     assert_eq!(chart_objects_coverage.member_count, 23);
     assert_eq!(chart_objects_coverage.support_counts.stub, 23);
     assert_eq!(
@@ -3288,6 +3354,58 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "CopyPicture".to_string(),
             "Delete".to_string(),
             "SendToBack".to_string()
+        ]
+    );
+
+    assert_eq!(shape_range_coverage.member_count, 44);
+    assert_eq!(shape_range_coverage.support_counts.stub, 44);
+    assert_eq!(
+        shape_range_coverage.stub_members,
+        vec![
+            "Count".to_string(),
+            "Item".to_string(),
+            "Name".to_string(),
+            "Chart".to_string(),
+            "Index".to_string(),
+            "ID".to_string(),
+            "Type".to_string(),
+            "AutoShapeType".to_string(),
+            "AlternativeText".to_string(),
+            "Title".to_string(),
+            "HasChart".to_string(),
+            "HasSmartArt".to_string(),
+            "LockAspectRatio".to_string(),
+            "Rotation".to_string(),
+            "HorizontalFlip".to_string(),
+            "VerticalFlip".to_string(),
+            "ZOrder".to_string(),
+            "ZOrderPosition".to_string(),
+            "Placement".to_string(),
+            "Left".to_string(),
+            "Top".to_string(),
+            "Width".to_string(),
+            "Height".to_string(),
+            "Visible".to_string(),
+            "OnAction".to_string(),
+            "PrintObject".to_string(),
+            "Locked".to_string(),
+            "ProtectChartObject".to_string(),
+            "RoundedCorners".to_string(),
+            "TopLeftCell".to_string(),
+            "BottomRightCell".to_string(),
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Parent".to_string(),
+            "Copy".to_string(),
+            "Cut".to_string(),
+            "Duplicate".to_string(),
+            "CopyPicture".to_string(),
+            "Delete".to_string(),
+            "Flip".to_string(),
+            "Select".to_string(),
+            "IncrementRotation".to_string(),
+            "ScaleWidth".to_string(),
+            "ScaleHeight".to_string()
         ]
     );
 
