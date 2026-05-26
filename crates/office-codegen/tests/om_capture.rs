@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 48);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 674);
-    assert_eq!(summary.stub_member_count, 674);
+    assert_eq!(summary.member_count, 677);
+    assert_eq!(summary.stub_member_count, 677);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1734,8 +1734,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(application.member_count, 42);
     assert_eq!(workbook.member_count, 21);
-    assert_eq!(worksheet.member_count, 21);
-    assert_eq!(range.member_count, 50);
+    assert_eq!(worksheet.member_count, 23);
+    assert_eq!(range.member_count, 51);
     assert_eq!(names.member_count, 5);
     assert_eq!(name.member_count, 6);
     assert_eq!(chart_objects.member_count, 23);
@@ -2860,8 +2860,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 674);
-    assert_eq!(coverage.support_counts.stub, 674);
+    assert_eq!(coverage.member_count, 677);
+    assert_eq!(coverage.support_counts.stub, 677);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -3174,8 +3174,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(worksheet_coverage.member_count, 21);
-    assert_eq!(worksheet_coverage.support_counts.stub, 21);
+    assert_eq!(worksheet_coverage.member_count, 23);
+    assert_eq!(worksheet_coverage.support_counts.stub, 23);
     assert_eq!(
         worksheet_coverage.stub_members,
         vec![
@@ -3197,14 +3197,16 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Select".to_string(),
             "Calculate".to_string(),
             "Evaluate".to_string(),
+            "Paste".to_string(),
+            "PasteSpecial".to_string(),
             "Delete".to_string(),
             "Move".to_string(),
             "Copy".to_string()
         ]
     );
 
-    assert_eq!(range_coverage.member_count, 50);
-    assert_eq!(range_coverage.support_counts.stub, 50);
+    assert_eq!(range_coverage.member_count, 51);
+    assert_eq!(range_coverage.support_counts.stub, 51);
     assert_eq!(
         range_coverage.stub_members,
         vec![
@@ -3248,6 +3250,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Insert".to_string(),
             "Copy".to_string(),
             "Cut".to_string(),
+            "CopyPicture".to_string(),
             "PasteSpecial".to_string(),
             "FillDown".to_string(),
             "FillRight".to_string(),
