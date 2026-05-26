@@ -4,7 +4,9 @@
   "metadata": {
     "namespace": "Microsoft.Office.Interop.Excel",
     "typeLibraryGuid": "{00020813-0000-0000-C000-000000000046}",
-    "sourceInherits": ["IDispatch"]
+    "sourceInherits": [
+      "IDispatch"
+    ]
   },
   "enums": [
     {
@@ -146,7 +148,9 @@
       "kind": "dispatch",
       "metadata": {
         "iid": "{000208D5-0000-0000-C000-000000000046}",
-        "sourceInherits": ["IDispatch"]
+        "sourceInherits": [
+          "IDispatch"
+        ]
       },
       "members": [
         {
@@ -1921,7 +1925,9 @@
       "kind": "dispatch",
       "metadata": {
         "iid": "{000208DB-0000-0000-C000-000000000046}",
-        "sourceInherits": ["IDispatch"]
+        "sourceInherits": [
+          "IDispatch"
+        ]
       },
       "members": [
         {
@@ -2225,7 +2231,9 @@
       "kind": "dispatch",
       "metadata": {
         "iid": "{000208DA-0000-0000-C000-000000000046}",
-        "sourceInherits": ["IDispatch"]
+        "sourceInherits": [
+          "IDispatch"
+        ]
       },
       "members": [
         {
@@ -2890,7 +2898,9 @@
       "kind": "dispatch",
       "metadata": {
         "iid": "{000208B1-0000-0000-C000-000000000046}",
-        "sourceInherits": ["IDispatch"]
+        "sourceInherits": [
+          "IDispatch"
+        ]
       },
       "members": [
         {
@@ -3079,7 +3089,10 @@
       "kind": "dispatch",
       "metadata": {
         "iid": "{000208D8-0000-0000-C000-000000000046}",
-        "sourceInherits": ["IDispatch", "Excel._Worksheet"]
+        "sourceInherits": [
+          "IDispatch",
+          "Excel._Worksheet"
+        ]
       },
       "members": [
         {
@@ -3696,7 +3709,9 @@
       "name": "Range",
       "kind": "dispatch",
       "metadata": {
-        "sourceInherits": ["IDispatch"]
+        "sourceInherits": [
+          "IDispatch"
+        ]
       },
       "members": [
         {
@@ -10556,6 +10571,1259 @@
               ]
             }
           }
+        }
+      ]
+    },
+    {
+      "name": "ChartFormat",
+      "kind": "dispatch",
+      "metadata": {
+        "sourceInherits": [
+          "IDispatch"
+        ]
+      },
+      "members": [
+        {
+          "name": "Creator",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartFormat",
+                  "sourceMember": "Creator"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Application",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartFormat",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Adjustments",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartFormat",
+                  "sourceMember": "Adjustments"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Adjustments",
+                "aliasOf": "Excel.Adjustments"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Adjustments",
+            "aliasOf": "Excel.Adjustments"
+          },
+          "access": "read"
+        },
+        {
+          "name": "AutoShapeType",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartFormat",
+                  "sourceMember": "AutoShapeType"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Parent",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartFormat",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "variant",
+            "name": "Variant",
+            "aliasOf": "VARIANT"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Fill",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartFormat",
+                  "sourceMember": "Fill"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "FillFormat",
+                "aliasOf": "Excel.FillFormat"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "FillFormat",
+            "aliasOf": "Excel.FillFormat"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Glow",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartFormat",
+                  "sourceMember": "Glow"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "GlowFormat",
+                "aliasOf": "Excel.GlowFormat"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "GlowFormat",
+            "aliasOf": "Excel.GlowFormat"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Line",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartFormat",
+                  "sourceMember": "Line"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "LineFormat",
+                "aliasOf": "Excel.LineFormat"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "LineFormat",
+            "aliasOf": "Excel.LineFormat"
+          },
+          "access": "read"
+        },
+        {
+          "name": "PictureFormat",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartFormat",
+                  "sourceMember": "PictureFormat"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "PictureFormat",
+                "aliasOf": "Excel.PictureFormat"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "PictureFormat",
+            "aliasOf": "Excel.PictureFormat"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Shadow",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartFormat",
+                  "sourceMember": "Shadow"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ShadowFormat",
+                "aliasOf": "Excel.ShadowFormat"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "ShadowFormat",
+            "aliasOf": "Excel.ShadowFormat"
+          },
+          "access": "read"
+        },
+        {
+          "name": "SoftEdge",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartFormat",
+                  "sourceMember": "SoftEdge"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "SoftEdgeFormat",
+                "aliasOf": "Excel.SoftEdgeFormat"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "SoftEdgeFormat",
+            "aliasOf": "Excel.SoftEdgeFormat"
+          },
+          "access": "read"
+        },
+        {
+          "name": "TextFrame2",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartFormat",
+                  "sourceMember": "TextFrame2"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "TextFrame2",
+                "aliasOf": "Excel.TextFrame2"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "TextFrame2",
+            "aliasOf": "Excel.TextFrame2"
+          },
+          "access": "read"
+        },
+        {
+          "name": "ThreeD",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartFormat",
+                  "sourceMember": "ThreeD"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ThreeDFormat",
+                "aliasOf": "Excel.ThreeDFormat"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "ThreeDFormat",
+            "aliasOf": "Excel.ThreeDFormat"
+          },
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "name": "Adjustments",
+      "kind": "dispatch",
+      "metadata": {
+        "sourceInherits": [
+          "IDispatch"
+        ]
+      },
+      "members": [
+        {
+          "name": "Application",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Adjustments",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Count",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Adjustments",
+                  "sourceMember": "Count"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Creator",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Adjustments",
+                  "sourceMember": "Creator"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Item",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Adjustments",
+                  "sourceMember": "Item"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Index",
+              "type": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Parent",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Adjustments",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartFormat",
+                "aliasOf": "Excel.ChartFormat"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartFormat",
+            "aliasOf": "Excel.ChartFormat"
+          },
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "name": "FillFormat",
+      "kind": "dispatch",
+      "metadata": {
+        "sourceInherits": [
+          "IDispatch"
+        ]
+      },
+      "members": [
+        {
+          "name": "Creator",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "FillFormat",
+                  "sourceMember": "Creator"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Application",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "FillFormat",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Parent",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "FillFormat",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartFormat",
+                "aliasOf": "Excel.ChartFormat"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartFormat",
+            "aliasOf": "Excel.ChartFormat"
+          },
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "name": "GlowFormat",
+      "kind": "dispatch",
+      "metadata": {
+        "sourceInherits": [
+          "IDispatch"
+        ]
+      },
+      "members": [
+        {
+          "name": "Creator",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "GlowFormat",
+                  "sourceMember": "Creator"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Application",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "GlowFormat",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Parent",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "GlowFormat",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartFormat",
+                "aliasOf": "Excel.ChartFormat"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartFormat",
+            "aliasOf": "Excel.ChartFormat"
+          },
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "name": "LineFormat",
+      "kind": "dispatch",
+      "metadata": {
+        "sourceInherits": [
+          "IDispatch"
+        ]
+      },
+      "members": [
+        {
+          "name": "Creator",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "LineFormat",
+                  "sourceMember": "Creator"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Application",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "LineFormat",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Parent",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "LineFormat",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartFormat",
+                "aliasOf": "Excel.ChartFormat"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartFormat",
+            "aliasOf": "Excel.ChartFormat"
+          },
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "name": "PictureFormat",
+      "kind": "dispatch",
+      "metadata": {
+        "sourceInherits": [
+          "IDispatch"
+        ]
+      },
+      "members": [
+        {
+          "name": "Creator",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "PictureFormat",
+                  "sourceMember": "Creator"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Application",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "PictureFormat",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Parent",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "PictureFormat",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartFormat",
+                "aliasOf": "Excel.ChartFormat"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartFormat",
+            "aliasOf": "Excel.ChartFormat"
+          },
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "name": "ShadowFormat",
+      "kind": "dispatch",
+      "metadata": {
+        "sourceInherits": [
+          "IDispatch"
+        ]
+      },
+      "members": [
+        {
+          "name": "Creator",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ShadowFormat",
+                  "sourceMember": "Creator"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Application",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ShadowFormat",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Parent",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ShadowFormat",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartFormat",
+                "aliasOf": "Excel.ChartFormat"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartFormat",
+            "aliasOf": "Excel.ChartFormat"
+          },
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "name": "SoftEdgeFormat",
+      "kind": "dispatch",
+      "metadata": {
+        "sourceInherits": [
+          "IDispatch"
+        ]
+      },
+      "members": [
+        {
+          "name": "Creator",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "SoftEdgeFormat",
+                  "sourceMember": "Creator"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Application",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "SoftEdgeFormat",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Parent",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "SoftEdgeFormat",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartFormat",
+                "aliasOf": "Excel.ChartFormat"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartFormat",
+            "aliasOf": "Excel.ChartFormat"
+          },
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "name": "TextFrame2",
+      "kind": "dispatch",
+      "metadata": {
+        "sourceInherits": [
+          "IDispatch"
+        ]
+      },
+      "members": [
+        {
+          "name": "Creator",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "TextFrame2",
+                  "sourceMember": "Creator"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Application",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "TextFrame2",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Parent",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "TextFrame2",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartFormat",
+                "aliasOf": "Excel.ChartFormat"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartFormat",
+            "aliasOf": "Excel.ChartFormat"
+          },
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "name": "ThreeDFormat",
+      "kind": "dispatch",
+      "metadata": {
+        "sourceInherits": [
+          "IDispatch"
+        ]
+      },
+      "members": [
+        {
+          "name": "Creator",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ThreeDFormat",
+                  "sourceMember": "Creator"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Application",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ThreeDFormat",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Parent",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ThreeDFormat",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartFormat",
+                "aliasOf": "Excel.ChartFormat"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartFormat",
+            "aliasOf": "Excel.ChartFormat"
+          },
+          "access": "read"
         }
       ]
     }

@@ -146,10 +146,10 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
         Some("Microsoft.Office.Interop.Excel")
     );
     assert_eq!(summary.enum_count, 8);
-    assert_eq!(summary.interface_count, 14);
+    assert_eq!(summary.interface_count, 24);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 323);
-    assert_eq!(summary.stub_member_count, 323);
+    assert_eq!(summary.member_count, 365);
+    assert_eq!(summary.stub_member_count, 365);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1097,7 +1097,17 @@ fn builds_coverage_report_for_each_support_state_bucket() {
             "PlotArea".to_string(),
             "ChartTitle".to_string(),
             "Legend".to_string(),
-            "DataTable".to_string()
+            "DataTable".to_string(),
+            "ChartFormat".to_string(),
+            "Adjustments".to_string(),
+            "FillFormat".to_string(),
+            "GlowFormat".to_string(),
+            "LineFormat".to_string(),
+            "PictureFormat".to_string(),
+            "ShadowFormat".to_string(),
+            "SoftEdgeFormat".to_string(),
+            "TextFrame2".to_string(),
+            "ThreeDFormat".to_string()
         ]
     );
     assert_eq!(
@@ -1222,7 +1232,17 @@ fn builds_focus_surface_registry_from_json_wrapper() {
             "PlotArea".to_string(),
             "ChartTitle".to_string(),
             "Legend".to_string(),
-            "DataTable".to_string()
+            "DataTable".to_string(),
+            "ChartFormat".to_string(),
+            "Adjustments".to_string(),
+            "FillFormat".to_string(),
+            "GlowFormat".to_string(),
+            "LineFormat".to_string(),
+            "PictureFormat".to_string(),
+            "ShadowFormat".to_string(),
+            "SoftEdgeFormat".to_string(),
+            "TextFrame2".to_string(),
+            "ThreeDFormat".to_string()
         ]
     );
     assert_eq!(registry.focus_surfaces[0].name, "Application");
@@ -1259,7 +1279,7 @@ fn builds_coverage_report_from_path_wrapper() {
 
     assert_eq!(report_from_path, report_from_json);
     assert_eq!(report_from_path.support_counts.partial, 1);
-    assert_eq!(report_from_path.missing_focus_surfaces.len(), 11);
+    assert_eq!(report_from_path.missing_focus_surfaces.len(), 21);
 
     fs::remove_file(&path).expect("remove temp document");
 }
@@ -1430,7 +1450,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(registry.library, "Excel");
     assert_eq!(registry.version, "16.0");
-    assert_eq!(registry.focus_surfaces.len(), 12);
+    assert_eq!(registry.focus_surfaces.len(), 22);
     assert!(registry.missing_focus_surfaces.is_empty());
 
     let application = registry
@@ -1493,6 +1513,56 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "DataTable")
         .expect("DataTable");
+    let chart_format = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "ChartFormat")
+        .expect("ChartFormat");
+    let adjustments = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Adjustments")
+        .expect("Adjustments");
+    let fill_format = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "FillFormat")
+        .expect("FillFormat");
+    let glow_format = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "GlowFormat")
+        .expect("GlowFormat");
+    let line_format = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "LineFormat")
+        .expect("LineFormat");
+    let picture_format = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "PictureFormat")
+        .expect("PictureFormat");
+    let shadow_format = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "ShadowFormat")
+        .expect("ShadowFormat");
+    let soft_edge_format = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "SoftEdgeFormat")
+        .expect("SoftEdgeFormat");
+    let text_frame2 = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "TextFrame2")
+        .expect("TextFrame2");
+    let three_d_format = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "ThreeDFormat")
+        .expect("ThreeDFormat");
 
     assert_eq!(application.member_count, 42);
     assert_eq!(workbook.member_count, 21);
@@ -1506,6 +1576,16 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(chart_title.member_count, 9);
     assert_eq!(legend.member_count, 10);
     assert_eq!(data_table.member_count, 10);
+    assert_eq!(chart_format.member_count, 13);
+    assert_eq!(adjustments.member_count, 5);
+    assert_eq!(fill_format.member_count, 3);
+    assert_eq!(glow_format.member_count, 3);
+    assert_eq!(line_format.member_count, 3);
+    assert_eq!(picture_format.member_count, 3);
+    assert_eq!(shadow_format.member_count, 3);
+    assert_eq!(soft_edge_format.member_count, 3);
+    assert_eq!(text_frame2.member_count, 3);
+    assert_eq!(three_d_format.member_count, 3);
     assert_eq!(
         application.default_coclasses,
         vec!["Application".to_string()]
@@ -2588,8 +2668,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 323);
-    assert_eq!(coverage.support_counts.stub, 323);
+    assert_eq!(coverage.member_count, 365);
+    assert_eq!(coverage.support_counts.stub, 365);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -2652,6 +2732,56 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "DataTable")
         .expect("DataTable coverage");
+    let chart_format_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "ChartFormat")
+        .expect("ChartFormat coverage");
+    let adjustments_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Adjustments")
+        .expect("Adjustments coverage");
+    let fill_format_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "FillFormat")
+        .expect("FillFormat coverage");
+    let glow_format_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "GlowFormat")
+        .expect("GlowFormat coverage");
+    let line_format_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "LineFormat")
+        .expect("LineFormat coverage");
+    let picture_format_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "PictureFormat")
+        .expect("PictureFormat coverage");
+    let shadow_format_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "ShadowFormat")
+        .expect("ShadowFormat coverage");
+    let soft_edge_format_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "SoftEdgeFormat")
+        .expect("SoftEdgeFormat coverage");
+    let text_frame2_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "TextFrame2")
+        .expect("TextFrame2 coverage");
+    let three_d_format_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "ThreeDFormat")
+        .expect("ThreeDFormat coverage");
 
     assert_eq!(application_coverage.member_count, 42);
     assert_eq!(application_coverage.support_counts.stub, 42);
@@ -3060,4 +3190,60 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Delete".to_string()
         ]
     );
+
+    assert_eq!(chart_format_coverage.member_count, 13);
+    assert_eq!(chart_format_coverage.support_counts.stub, 13);
+    assert_eq!(
+        chart_format_coverage.stub_members,
+        vec![
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Adjustments".to_string(),
+            "AutoShapeType".to_string(),
+            "Parent".to_string(),
+            "Fill".to_string(),
+            "Glow".to_string(),
+            "Line".to_string(),
+            "PictureFormat".to_string(),
+            "Shadow".to_string(),
+            "SoftEdge".to_string(),
+            "TextFrame2".to_string(),
+            "ThreeD".to_string()
+        ]
+    );
+
+    assert_eq!(adjustments_coverage.member_count, 5);
+    assert_eq!(adjustments_coverage.support_counts.stub, 5);
+    assert_eq!(
+        adjustments_coverage.stub_members,
+        vec![
+            "Application".to_string(),
+            "Count".to_string(),
+            "Creator".to_string(),
+            "Item".to_string(),
+            "Parent".to_string()
+        ]
+    );
+
+    for coverage_entry in [
+        fill_format_coverage,
+        glow_format_coverage,
+        line_format_coverage,
+        picture_format_coverage,
+        shadow_format_coverage,
+        soft_edge_format_coverage,
+        text_frame2_coverage,
+        three_d_format_coverage,
+    ] {
+        assert_eq!(coverage_entry.member_count, 3);
+        assert_eq!(coverage_entry.support_counts.stub, 3);
+        assert_eq!(
+            coverage_entry.stub_members,
+            vec![
+                "Creator".to_string(),
+                "Application".to_string(),
+                "Parent".to_string()
+            ]
+        );
+    }
 }
