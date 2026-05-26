@@ -69,7 +69,7 @@ pub struct CanonicalOmGenerationResult {
     pub summary: OmCaptureBundleSummary,
 }
 
-pub const PRIORITY_OM_SURFACES: [&str; 31] = [
+pub const PRIORITY_OM_SURFACES: [&str; 37] = [
     "Application",
     "Workbook",
     "Worksheet",
@@ -101,6 +101,12 @@ pub const PRIORITY_OM_SURFACES: [&str; 31] = [
     "HiLoLines",
     "UpBars",
     "DownBars",
+    "Axes",
+    "Axis",
+    "TickLabels",
+    "Gridlines",
+    "DisplayUnitLabel",
+    "AxisTitle",
 ];
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

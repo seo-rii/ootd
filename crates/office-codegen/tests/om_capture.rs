@@ -146,10 +146,10 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
         Some("Microsoft.Office.Interop.Excel")
     );
     assert_eq!(summary.enum_count, 8);
-    assert_eq!(summary.interface_count, 33);
+    assert_eq!(summary.interface_count, 39);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 449);
-    assert_eq!(summary.stub_member_count, 449);
+    assert_eq!(summary.member_count, 524);
+    assert_eq!(summary.stub_member_count, 524);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1116,7 +1116,13 @@ fn builds_coverage_report_for_each_support_state_bucket() {
             "DropLines".to_string(),
             "HiLoLines".to_string(),
             "UpBars".to_string(),
-            "DownBars".to_string()
+            "DownBars".to_string(),
+            "Axes".to_string(),
+            "Axis".to_string(),
+            "TickLabels".to_string(),
+            "Gridlines".to_string(),
+            "DisplayUnitLabel".to_string(),
+            "AxisTitle".to_string()
         ]
     );
     assert_eq!(
@@ -1260,7 +1266,13 @@ fn builds_focus_surface_registry_from_json_wrapper() {
             "DropLines".to_string(),
             "HiLoLines".to_string(),
             "UpBars".to_string(),
-            "DownBars".to_string()
+            "DownBars".to_string(),
+            "Axes".to_string(),
+            "Axis".to_string(),
+            "TickLabels".to_string(),
+            "Gridlines".to_string(),
+            "DisplayUnitLabel".to_string(),
+            "AxisTitle".to_string()
         ]
     );
     assert_eq!(registry.focus_surfaces[0].name, "Application");
@@ -1297,7 +1309,7 @@ fn builds_coverage_report_from_path_wrapper() {
 
     assert_eq!(report_from_path, report_from_json);
     assert_eq!(report_from_path.support_counts.partial, 1);
-    assert_eq!(report_from_path.missing_focus_surfaces.len(), 30);
+    assert_eq!(report_from_path.missing_focus_surfaces.len(), 36);
 
     fs::remove_file(&path).expect("remove temp document");
 }
@@ -1468,7 +1480,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(registry.library, "Excel");
     assert_eq!(registry.version, "16.0");
-    assert_eq!(registry.focus_surfaces.len(), 31);
+    assert_eq!(registry.focus_surfaces.len(), 37);
     assert!(registry.missing_focus_surfaces.is_empty());
 
     let application = registry
@@ -1626,6 +1638,36 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "DownBars")
         .expect("DownBars");
+    let axes = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Axes")
+        .expect("Axes");
+    let axis = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Axis")
+        .expect("Axis");
+    let tick_labels = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "TickLabels")
+        .expect("TickLabels");
+    let gridlines = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Gridlines")
+        .expect("Gridlines");
+    let display_unit_label = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "DisplayUnitLabel")
+        .expect("DisplayUnitLabel");
+    let axis_title = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "AxisTitle")
+        .expect("AxisTitle");
 
     assert_eq!(application.member_count, 42);
     assert_eq!(workbook.member_count, 21);
@@ -1658,6 +1700,12 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(hi_lo_lines.member_count, 7);
     assert_eq!(up_bars.member_count, 7);
     assert_eq!(down_bars.member_count, 7);
+    assert_eq!(axes.member_count, 5);
+    assert_eq!(axis.member_count, 36);
+    assert_eq!(tick_labels.member_count, 9);
+    assert_eq!(gridlines.member_count, 7);
+    assert_eq!(display_unit_label.member_count, 9);
+    assert_eq!(axis_title.member_count, 9);
     assert_eq!(
         application.default_coclasses,
         vec!["Application".to_string()]
@@ -2740,8 +2788,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 449);
-    assert_eq!(coverage.support_counts.stub, 449);
+    assert_eq!(coverage.member_count, 524);
+    assert_eq!(coverage.support_counts.stub, 524);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -2899,6 +2947,36 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "DownBars")
         .expect("DownBars coverage");
+    let axes_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Axes")
+        .expect("Axes coverage");
+    let axis_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Axis")
+        .expect("Axis coverage");
+    let tick_labels_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "TickLabels")
+        .expect("TickLabels coverage");
+    let gridlines_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Gridlines")
+        .expect("Gridlines coverage");
+    let display_unit_label_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "DisplayUnitLabel")
+        .expect("DisplayUnitLabel coverage");
+    let axis_title_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "AxisTitle")
+        .expect("AxisTitle coverage");
 
     assert_eq!(application_coverage.member_count, 42);
     assert_eq!(application_coverage.support_counts.stub, 42);
@@ -3459,6 +3537,114 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             vec![
                 "Name".to_string(),
                 "Format".to_string(),
+                "Creator".to_string(),
+                "Application".to_string(),
+                "Parent".to_string(),
+                "Select".to_string(),
+                "Delete".to_string()
+            ]
+        );
+    }
+
+    assert_eq!(axes_coverage.member_count, 5);
+    assert_eq!(axes_coverage.support_counts.stub, 5);
+    assert_eq!(
+        axes_coverage.stub_members,
+        vec![
+            "Count".to_string(),
+            "Item".to_string(),
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Parent".to_string()
+        ]
+    );
+
+    assert_eq!(axis_coverage.member_count, 36);
+    assert_eq!(axis_coverage.support_counts.stub, 36);
+    assert_eq!(
+        axis_coverage.stub_members,
+        vec![
+            "Type".to_string(),
+            "Format".to_string(),
+            "AxisGroup".to_string(),
+            "AxisBetweenCategories".to_string(),
+            "CategoryType".to_string(),
+            "DisplayUnit".to_string(),
+            "DisplayUnitCustom".to_string(),
+            "HasDisplayUnitLabel".to_string(),
+            "DisplayUnitLabel".to_string(),
+            "BaseUnit".to_string(),
+            "BaseUnitIsAuto".to_string(),
+            "HasTitle".to_string(),
+            "HasMajorGridlines".to_string(),
+            "HasMinorGridlines".to_string(),
+            "MajorGridlines".to_string(),
+            "MinorGridlines".to_string(),
+            "AxisTitle".to_string(),
+            "ReversePlotOrder".to_string(),
+            "ScaleType".to_string(),
+            "LogBase".to_string(),
+            "Crosses".to_string(),
+            "CrossesAt".to_string(),
+            "MajorUnitScale".to_string(),
+            "MinorUnitScale".to_string(),
+            "MajorTickMark".to_string(),
+            "MinorTickMark".to_string(),
+            "TickLabelPosition".to_string(),
+            "TickLabels".to_string(),
+            "TickLabelSpacing".to_string(),
+            "TickLabelSpacingIsAuto".to_string(),
+            "TickMarkSpacing".to_string(),
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Parent".to_string(),
+            "Select".to_string(),
+            "Delete".to_string()
+        ]
+    );
+
+    assert_eq!(tick_labels_coverage.member_count, 9);
+    assert_eq!(tick_labels_coverage.support_counts.stub, 9);
+    assert_eq!(
+        tick_labels_coverage.stub_members,
+        vec![
+            "Name".to_string(),
+            "Format".to_string(),
+            "NumberFormat".to_string(),
+            "NumberFormatLocal".to_string(),
+            "NumberFormatLinked".to_string(),
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Parent".to_string(),
+            "Select".to_string()
+        ]
+    );
+
+    assert_eq!(gridlines_coverage.member_count, 7);
+    assert_eq!(gridlines_coverage.support_counts.stub, 7);
+    assert_eq!(
+        gridlines_coverage.stub_members,
+        vec![
+            "Name".to_string(),
+            "Format".to_string(),
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Parent".to_string(),
+            "Select".to_string(),
+            "Delete".to_string()
+        ]
+    );
+
+    for coverage_entry in [display_unit_label_coverage, axis_title_coverage] {
+        assert_eq!(coverage_entry.member_count, 9);
+        assert_eq!(coverage_entry.support_counts.stub, 9);
+        assert_eq!(
+            coverage_entry.stub_members,
+            vec![
+                "Name".to_string(),
+                "Format".to_string(),
+                "Text".to_string(),
+                "Caption".to_string(),
                 "Creator".to_string(),
                 "Application".to_string(),
                 "Parent".to_string(),
