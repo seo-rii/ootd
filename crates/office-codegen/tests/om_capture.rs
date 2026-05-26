@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 48);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 677);
-    assert_eq!(summary.stub_member_count, 677);
+    assert_eq!(summary.member_count, 690);
+    assert_eq!(summary.stub_member_count, 690);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1732,16 +1732,16 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|entry| entry.name == "Point")
         .expect("Point");
 
-    assert_eq!(application.member_count, 42);
-    assert_eq!(workbook.member_count, 21);
-    assert_eq!(worksheet.member_count, 23);
+    assert_eq!(application.member_count, 43);
+    assert_eq!(workbook.member_count, 26);
+    assert_eq!(worksheet.member_count, 28);
     assert_eq!(range.member_count, 51);
     assert_eq!(names.member_count, 5);
     assert_eq!(name.member_count, 6);
     assert_eq!(chart_objects.member_count, 23);
     assert_eq!(chart_object.member_count, 30);
     assert_eq!(shape_range.member_count, 46);
-    assert_eq!(chart.member_count, 75);
+    assert_eq!(chart.member_count, 77);
     assert_eq!(chart_area.member_count, 14);
     assert_eq!(plot_area.member_count, 7);
     assert_eq!(chart_title.member_count, 9);
@@ -2860,8 +2860,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 677);
-    assert_eq!(coverage.support_counts.stub, 677);
+    assert_eq!(coverage.member_count, 690);
+    assert_eq!(coverage.support_counts.stub, 690);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -3095,8 +3095,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .find(|entry| entry.name == "Point")
         .expect("Point coverage");
 
-    assert_eq!(application_coverage.member_count, 42);
-    assert_eq!(application_coverage.support_counts.stub, 42);
+    assert_eq!(application_coverage.member_count, 43);
+    assert_eq!(application_coverage.support_counts.stub, 43);
     assert_eq!(
         application_coverage.stub_members,
         vec![
@@ -3104,6 +3104,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Worksheets".to_string(),
             "Sheets".to_string(),
             "Charts".to_string(),
+            "Names".to_string(),
             "ActiveWorkbook".to_string(),
             "ActiveSheet".to_string(),
             "ActiveCell".to_string(),
@@ -3145,14 +3146,15 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(workbook_coverage.member_count, 21);
-    assert_eq!(workbook_coverage.support_counts.stub, 21);
+    assert_eq!(workbook_coverage.member_count, 26);
+    assert_eq!(workbook_coverage.support_counts.stub, 26);
     assert_eq!(
         workbook_coverage.stub_members,
         vec![
             "Worksheets".to_string(),
             "Sheets".to_string(),
             "Charts".to_string(),
+            "Names".to_string(),
             "ActiveSheet".to_string(),
             "Activate".to_string(),
             "Name".to_string(),
@@ -3170,18 +3172,23 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "SaveAs".to_string(),
             "SaveCopyAs".to_string(),
             "RefreshAll".to_string(),
+            "CheckSpelling".to_string(),
+            "ExportAsFixedFormat".to_string(),
+            "PrintPreview".to_string(),
+            "PrintOut".to_string(),
             "Close".to_string()
         ]
     );
 
-    assert_eq!(worksheet_coverage.member_count, 23);
-    assert_eq!(worksheet_coverage.support_counts.stub, 23);
+    assert_eq!(worksheet_coverage.member_count, 28);
+    assert_eq!(worksheet_coverage.support_counts.stub, 28);
     assert_eq!(
         worksheet_coverage.stub_members,
         vec![
             "Name".to_string(),
             "Parent".to_string(),
             "Application".to_string(),
+            "Names".to_string(),
             "Index".to_string(),
             "Next".to_string(),
             "Previous".to_string(),
@@ -3199,6 +3206,10 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Evaluate".to_string(),
             "Paste".to_string(),
             "PasteSpecial".to_string(),
+            "CheckSpelling".to_string(),
+            "ExportAsFixedFormat".to_string(),
+            "PrintPreview".to_string(),
+            "PrintOut".to_string(),
             "Delete".to_string(),
             "Move".to_string(),
             "Copy".to_string()
@@ -3414,8 +3425,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(chart_coverage.member_count, 75);
-    assert_eq!(chart_coverage.support_counts.stub, 75);
+    assert_eq!(chart_coverage.member_count, 77);
+    assert_eq!(chart_coverage.support_counts.stub, 77);
     assert_eq!(
         chart_coverage.stub_members,
         vec![
@@ -3479,6 +3490,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "ClearToMatchColorStyle".to_string(),
             "ClearToMatchStyle".to_string(),
             "ApplyLayout".to_string(),
+            "ApplyCustomType".to_string(),
+            "SetSourceData".to_string(),
             "ChartWizard".to_string(),
             "ApplyDataLabels".to_string(),
             "ApplyChartTemplate".to_string(),

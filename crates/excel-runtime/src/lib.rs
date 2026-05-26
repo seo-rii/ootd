@@ -15166,6 +15166,8 @@ impl ExcelRuntime {
                             | "ClearToMatchColorStyle"
                             | "ClearToMatchStyle"
                             | "ApplyLayout"
+                            | "ApplyCustomType"
+                            | "SetSourceData"
                             | "ChartWizard"
                             | "ApplyDataLabels"
                             | "ApplyChartTemplate"

@@ -260,6 +260,32 @@
           }
         },
         {
+          "name": "Names",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Names",
+            "aliasOf": "Excel.Names"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Application",
+                  "sourceMember": "Names"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Names",
+                "aliasOf": "Excel.Names"
+              }
+            }
+          }
+        },
+        {
           "name": "ActiveWorkbook",
           "memberKind": "property",
           "returnType": {
@@ -2316,6 +2342,32 @@
           }
         },
         {
+          "name": "Names",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Names",
+            "aliasOf": "Excel.Names"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "Names"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Names",
+                "aliasOf": "Excel.Names"
+              }
+            }
+          }
+        },
+        {
           "name": "ActiveSheet",
           "memberKind": "property",
           "returnType": {
@@ -2846,6 +2898,238 @@
           }
         },
         {
+          "name": "CheckSpelling",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "CheckSpelling"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "ExportAsFixedFormat",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "ExportAsFixedFormat"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Type",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Filename",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Quality",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "IncludeDocProperties",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "IgnorePrintAreas",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "From",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "To",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "OpenAfterPublish",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "FixedFormatExtClassPtr",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "PrintPreview",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "PrintPreview"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "EnableChanges",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "PrintOut",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Workbook",
+                  "sourceMember": "PrintOut"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "From",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "To",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Copies",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Preview",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "ActivePrinter",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "PrintToFile",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Collate",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "PrToFileName",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
           "name": "Close",
           "memberKind": "method",
           "params": [
@@ -3177,6 +3461,32 @@
                 "kind": "interface",
                 "name": "Application",
                 "aliasOf": "Excel.Application"
+              }
+            }
+          }
+        },
+        {
+          "name": "Names",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Names",
+            "aliasOf": "Excel.Names"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "Names"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Names",
+                "aliasOf": "Excel.Names"
               }
             }
           }
@@ -3713,6 +4023,238 @@
             },
             {
               "name": "NoHTMLFormatting",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "CheckSpelling",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "CheckSpelling"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "ExportAsFixedFormat",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "ExportAsFixedFormat"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Type",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Filename",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Quality",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "IncludeDocProperties",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "IgnorePrintAreas",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "From",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "To",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "OpenAfterPublish",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "FixedFormatExtClassPtr",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "PrintPreview",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "PrintPreview"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "EnableChanges",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "PrintOut",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Worksheet",
+                  "sourceMember": "PrintOut"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "From",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "To",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Copies",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Preview",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "ActivePrinter",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "PrintToFile",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Collate",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "PrToFileName",
               "type": {
                 "kind": "variant",
                 "name": "Variant",
@@ -8716,6 +9258,76 @@
             },
             {
               "name": "ChartType",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "ApplyCustomType",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "ApplyCustomType"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "ChartType",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "TypeName",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "SetSourceData",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "SetSourceData"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Source",
+              "type": {
+                "kind": "interface",
+                "name": "Range",
+                "aliasOf": "Excel.Range"
+              }
+            },
+            {
+              "name": "PlotBy",
               "type": {
                 "kind": "variant",
                 "name": "Variant",
