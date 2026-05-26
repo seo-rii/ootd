@@ -146,10 +146,10 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
         Some("Microsoft.Office.Interop.Excel")
     );
     assert_eq!(summary.enum_count, 8);
-    assert_eq!(summary.interface_count, 39);
+    assert_eq!(summary.interface_count, 45);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 524);
-    assert_eq!(summary.stub_member_count, 524);
+    assert_eq!(summary.member_count, 617);
+    assert_eq!(summary.stub_member_count, 617);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1122,7 +1122,13 @@ fn builds_coverage_report_for_each_support_state_bucket() {
             "TickLabels".to_string(),
             "Gridlines".to_string(),
             "DisplayUnitLabel".to_string(),
-            "AxisTitle".to_string()
+            "AxisTitle".to_string(),
+            "SeriesCollection".to_string(),
+            "Series".to_string(),
+            "DataLabels".to_string(),
+            "DataLabel".to_string(),
+            "Points".to_string(),
+            "Point".to_string()
         ]
     );
     assert_eq!(
@@ -1272,7 +1278,13 @@ fn builds_focus_surface_registry_from_json_wrapper() {
             "TickLabels".to_string(),
             "Gridlines".to_string(),
             "DisplayUnitLabel".to_string(),
-            "AxisTitle".to_string()
+            "AxisTitle".to_string(),
+            "SeriesCollection".to_string(),
+            "Series".to_string(),
+            "DataLabels".to_string(),
+            "DataLabel".to_string(),
+            "Points".to_string(),
+            "Point".to_string()
         ]
     );
     assert_eq!(registry.focus_surfaces[0].name, "Application");
@@ -1309,7 +1321,7 @@ fn builds_coverage_report_from_path_wrapper() {
 
     assert_eq!(report_from_path, report_from_json);
     assert_eq!(report_from_path.support_counts.partial, 1);
-    assert_eq!(report_from_path.missing_focus_surfaces.len(), 36);
+    assert_eq!(report_from_path.missing_focus_surfaces.len(), 42);
 
     fs::remove_file(&path).expect("remove temp document");
 }
@@ -1480,7 +1492,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(registry.library, "Excel");
     assert_eq!(registry.version, "16.0");
-    assert_eq!(registry.focus_surfaces.len(), 37);
+    assert_eq!(registry.focus_surfaces.len(), 43);
     assert!(registry.missing_focus_surfaces.is_empty());
 
     let application = registry
@@ -1668,6 +1680,36 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "AxisTitle")
         .expect("AxisTitle");
+    let series_collection = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "SeriesCollection")
+        .expect("SeriesCollection");
+    let series = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Series")
+        .expect("Series");
+    let data_labels = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "DataLabels")
+        .expect("DataLabels");
+    let data_label = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "DataLabel")
+        .expect("DataLabel");
+    let points = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Points")
+        .expect("Points");
+    let point = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Point")
+        .expect("Point");
 
     assert_eq!(application.member_count, 42);
     assert_eq!(workbook.member_count, 21);
@@ -1706,6 +1748,12 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(gridlines.member_count, 7);
     assert_eq!(display_unit_label.member_count, 9);
     assert_eq!(axis_title.member_count, 9);
+    assert_eq!(series_collection.member_count, 6);
+    assert_eq!(series.member_count, 23);
+    assert_eq!(data_labels.member_count, 24);
+    assert_eq!(data_label.member_count, 22);
+    assert_eq!(points.member_count, 5);
+    assert_eq!(point.member_count, 13);
     assert_eq!(
         application.default_coclasses,
         vec!["Application".to_string()]
@@ -2788,8 +2836,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 524);
-    assert_eq!(coverage.support_counts.stub, 524);
+    assert_eq!(coverage.member_count, 617);
+    assert_eq!(coverage.support_counts.stub, 617);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -2977,6 +3025,36 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "AxisTitle")
         .expect("AxisTitle coverage");
+    let series_collection_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "SeriesCollection")
+        .expect("SeriesCollection coverage");
+    let series_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Series")
+        .expect("Series coverage");
+    let data_labels_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "DataLabels")
+        .expect("DataLabels coverage");
+    let data_label_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "DataLabel")
+        .expect("DataLabel coverage");
+    let points_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Points")
+        .expect("Points coverage");
+    let point_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Point")
+        .expect("Point coverage");
 
     assert_eq!(application_coverage.member_count, 42);
     assert_eq!(application_coverage.support_counts.stub, 42);
@@ -3653,4 +3731,145 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             ]
         );
     }
+
+    assert_eq!(series_collection_coverage.member_count, 6);
+    assert_eq!(series_collection_coverage.support_counts.stub, 6);
+    assert_eq!(
+        series_collection_coverage.stub_members,
+        vec![
+            "Count".to_string(),
+            "Item".to_string(),
+            "NewSeries".to_string(),
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Parent".to_string()
+        ]
+    );
+
+    assert_eq!(series_coverage.member_count, 23);
+    assert_eq!(series_coverage.support_counts.stub, 23);
+    assert_eq!(
+        series_coverage.stub_members,
+        vec![
+            "Name".to_string(),
+            "Format".to_string(),
+            "ChartType".to_string(),
+            "Values".to_string(),
+            "XValues".to_string(),
+            "BubbleSizes".to_string(),
+            "Formula".to_string(),
+            "AxisGroup".to_string(),
+            "HasDataLabels".to_string(),
+            "HasLeaderLines".to_string(),
+            "DataLabels".to_string(),
+            "Points".to_string(),
+            "PlotOrder".to_string(),
+            "InvertIfNegative".to_string(),
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Parent".to_string(),
+            "Select".to_string(),
+            "ApplyDataLabels".to_string(),
+            "ClearFormats".to_string(),
+            "Copy".to_string(),
+            "Paste".to_string(),
+            "Delete".to_string()
+        ]
+    );
+
+    assert_eq!(data_labels_coverage.member_count, 24);
+    assert_eq!(data_labels_coverage.support_counts.stub, 24);
+    assert_eq!(
+        data_labels_coverage.stub_members,
+        vec![
+            "Name".to_string(),
+            "Format".to_string(),
+            "Count".to_string(),
+            "Item".to_string(),
+            "Type".to_string(),
+            "ShowLegendKey".to_string(),
+            "HasLeaderLines".to_string(),
+            "ShowSeriesName".to_string(),
+            "ShowCategoryName".to_string(),
+            "ShowValue".to_string(),
+            "ShowPercentage".to_string(),
+            "ShowBubbleSize".to_string(),
+            "NumberFormat".to_string(),
+            "NumberFormatLocal".to_string(),
+            "NumberFormatLinked".to_string(),
+            "Position".to_string(),
+            "Separator".to_string(),
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Parent".to_string(),
+            "Delete".to_string(),
+            "Propagate".to_string(),
+            "Select".to_string(),
+            "ClearFormats".to_string()
+        ]
+    );
+
+    assert_eq!(data_label_coverage.member_count, 22);
+    assert_eq!(data_label_coverage.support_counts.stub, 22);
+    assert_eq!(
+        data_label_coverage.stub_members,
+        vec![
+            "Name".to_string(),
+            "Format".to_string(),
+            "Index".to_string(),
+            "Type".to_string(),
+            "ShowLegendKey".to_string(),
+            "HasLeaderLines".to_string(),
+            "ShowSeriesName".to_string(),
+            "ShowCategoryName".to_string(),
+            "ShowValue".to_string(),
+            "ShowPercentage".to_string(),
+            "ShowBubbleSize".to_string(),
+            "NumberFormat".to_string(),
+            "NumberFormatLocal".to_string(),
+            "NumberFormatLinked".to_string(),
+            "Position".to_string(),
+            "Separator".to_string(),
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Parent".to_string(),
+            "Delete".to_string(),
+            "Select".to_string(),
+            "ClearFormats".to_string()
+        ]
+    );
+
+    assert_eq!(points_coverage.member_count, 5);
+    assert_eq!(points_coverage.support_counts.stub, 5);
+    assert_eq!(
+        points_coverage.stub_members,
+        vec![
+            "Count".to_string(),
+            "Item".to_string(),
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Parent".to_string()
+        ]
+    );
+
+    assert_eq!(point_coverage.member_count, 13);
+    assert_eq!(point_coverage.support_counts.stub, 13);
+    assert_eq!(
+        point_coverage.stub_members,
+        vec![
+            "Name".to_string(),
+            "Format".to_string(),
+            "Index".to_string(),
+            "Explosion".to_string(),
+            "HasDataLabel".to_string(),
+            "DataLabel".to_string(),
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Parent".to_string(),
+            "ApplyDataLabels".to_string(),
+            "Copy".to_string(),
+            "Select".to_string(),
+            "ClearFormats".to_string()
+        ]
+    );
 }
