@@ -15098,6 +15098,8 @@ impl ExcelRuntime {
                             | "Delete"
                             | "Flip"
                             | "Select"
+                            | "IncrementLeft"
+                            | "IncrementTop"
                             | "IncrementRotation"
                             | "ScaleWidth"
                             | "ScaleHeight"

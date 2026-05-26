@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 48);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 672);
-    assert_eq!(summary.stub_member_count, 672);
+    assert_eq!(summary.member_count, 674);
+    assert_eq!(summary.stub_member_count, 674);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1740,7 +1740,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(name.member_count, 6);
     assert_eq!(chart_objects.member_count, 23);
     assert_eq!(chart_object.member_count, 30);
-    assert_eq!(shape_range.member_count, 44);
+    assert_eq!(shape_range.member_count, 46);
     assert_eq!(chart.member_count, 75);
     assert_eq!(chart_area.member_count, 14);
     assert_eq!(plot_area.member_count, 7);
@@ -2860,8 +2860,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 672);
-    assert_eq!(coverage.support_counts.stub, 672);
+    assert_eq!(coverage.member_count, 674);
+    assert_eq!(coverage.support_counts.stub, 674);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -3357,8 +3357,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(shape_range_coverage.member_count, 44);
-    assert_eq!(shape_range_coverage.support_counts.stub, 44);
+    assert_eq!(shape_range_coverage.member_count, 46);
+    assert_eq!(shape_range_coverage.support_counts.stub, 46);
     assert_eq!(
         shape_range_coverage.stub_members,
         vec![
@@ -3403,6 +3403,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Delete".to_string(),
             "Flip".to_string(),
             "Select".to_string(),
+            "IncrementLeft".to_string(),
+            "IncrementTop".to_string(),
             "IncrementRotation".to_string(),
             "ScaleWidth".to_string(),
             "ScaleHeight".to_string()

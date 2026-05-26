@@ -19930,6 +19930,58 @@
           }
         },
         {
+          "name": "IncrementLeft",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ShapeRange",
+                  "sourceMember": "IncrementLeft"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Increment",
+              "type": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          ]
+        },
+        {
+          "name": "IncrementTop",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ShapeRange",
+                  "sourceMember": "IncrementTop"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Increment",
+              "type": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          ]
+        },
+        {
           "name": "IncrementRotation",
           "memberKind": "method",
           "support": "stub",
