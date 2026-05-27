@@ -1171,7 +1171,9 @@ fn builds_coverage_report_for_each_support_state_bucket() {
     assert_eq!(
         coverage.missing_focus_surfaces,
         vec![
+            "Workbooks".to_string(),
             "Workbook".to_string(),
+            "Worksheets".to_string(),
             "Worksheet".to_string(),
             "Range".to_string(),
             "Areas".to_string(),
@@ -1331,7 +1333,9 @@ fn builds_focus_surface_registry_from_json_wrapper() {
     assert_eq!(
         registry.missing_focus_surfaces,
         vec![
+            "Workbooks".to_string(),
             "Workbook".to_string(),
+            "Worksheets".to_string(),
             "Worksheet".to_string(),
             "Range".to_string(),
             "Areas".to_string(),
@@ -1413,7 +1417,7 @@ fn builds_coverage_report_from_path_wrapper() {
 
     assert_eq!(report_from_path, report_from_json);
     assert_eq!(report_from_path.support_counts.partial, 1);
-    assert_eq!(report_from_path.missing_focus_surfaces.len(), 46);
+    assert_eq!(report_from_path.missing_focus_surfaces.len(), 48);
 
     fs::remove_file(&path).expect("remove temp document");
 }
@@ -1584,7 +1588,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(registry.library, "Excel");
     assert_eq!(registry.version, "16.0");
-    assert_eq!(registry.focus_surfaces.len(), 47);
+    assert_eq!(registry.focus_surfaces.len(), 49);
     assert!(registry.missing_focus_surfaces.is_empty());
 
     let application = registry
@@ -1592,11 +1596,21 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "Application")
         .expect("Application");
+    let workbooks = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Workbooks")
+        .expect("Workbooks");
     let workbook = registry
         .focus_surfaces
         .iter()
         .find(|entry| entry.name == "Workbook")
         .expect("Workbook");
+    let worksheets = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Worksheets")
+        .expect("Worksheets");
     let worksheet = registry
         .focus_surfaces
         .iter()
@@ -1824,7 +1838,9 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .expect("Point");
 
     assert_eq!(application.member_count, 43);
+    assert_eq!(workbooks.member_count, 7);
     assert_eq!(workbook.member_count, 26);
+    assert_eq!(worksheets.member_count, 13);
     assert_eq!(worksheet.member_count, 28);
     assert_eq!(range.member_count, 51);
     assert_eq!(areas.member_count, 4);
@@ -2961,11 +2977,21 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "Application")
         .expect("Application coverage");
+    let workbooks_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Workbooks")
+        .expect("Workbooks coverage");
     let workbook_coverage = coverage
         .focus_surfaces
         .iter()
         .find(|entry| entry.name == "Workbook")
         .expect("Workbook coverage");
+    let worksheets_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Worksheets")
+        .expect("Worksheets coverage");
     let worksheet_coverage = coverage
         .focus_surfaces
         .iter()
@@ -3243,6 +3269,21 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
+    assert_eq!(workbooks_coverage.member_count, 7);
+    assert_eq!(workbooks_coverage.support_counts.stub, 7);
+    assert_eq!(
+        workbooks_coverage.stub_members,
+        vec![
+            "Count".to_string(),
+            "Parent".to_string(),
+            "Application".to_string(),
+            "Item".to_string(),
+            "Add".to_string(),
+            "Open".to_string(),
+            "Close".to_string()
+        ]
+    );
+
     assert_eq!(workbook_coverage.member_count, 26);
     assert_eq!(workbook_coverage.support_counts.stub, 26);
     assert_eq!(
@@ -3274,6 +3315,27 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "PrintPreview".to_string(),
             "PrintOut".to_string(),
             "Close".to_string()
+        ]
+    );
+
+    assert_eq!(worksheets_coverage.member_count, 13);
+    assert_eq!(worksheets_coverage.support_counts.stub, 13);
+    assert_eq!(
+        worksheets_coverage.stub_members,
+        vec![
+            "Count".to_string(),
+            "Parent".to_string(),
+            "Application".to_string(),
+            "Creator".to_string(),
+            "Visible".to_string(),
+            "Add".to_string(),
+            "Item".to_string(),
+            "Delete".to_string(),
+            "Copy".to_string(),
+            "Move".to_string(),
+            "PrintPreview".to_string(),
+            "PrintOut".to_string(),
+            "Select".to_string()
         ]
     );
 
