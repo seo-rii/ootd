@@ -80205,6 +80205,27 @@ mod tests {
             2.0
         );
         assert_eq!(
+            expect_object_handle(
+                runtime
+                    .dispatch_get(areas, "Application", &[])
+                    .expect("Areas.Application")
+            ),
+            runtime.root_application()
+        );
+        let areas_parent = expect_object_handle(
+            runtime
+                .dispatch_get(areas, "Parent", &[])
+                .expect("Areas.Parent"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(areas_parent, "Address", &[])
+                    .expect("Areas.Parent address")
+            ),
+            "$C$1,$A$1:$B$1"
+        );
+        assert_eq!(
             expect_text(
                 runtime
                     .dispatch_get(first_area, "Address", &[])
