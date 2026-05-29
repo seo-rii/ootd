@@ -17157,6 +17157,8 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        self.focus_member_supported("Areas", member, false)?;
+
         match member {
             "Count" => {
                 if !args.is_empty() {
@@ -17198,6 +17200,8 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        self.focus_member_supported("Areas", member, false)?;
+
         match member {
             "Item" => {
                 let [index] = args else {
@@ -17229,6 +17233,8 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        self.focus_member_supported("Names", member, false)?;
+
         match member {
             "Count" => {
                 if !args.is_empty() {
@@ -17275,6 +17281,8 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        self.focus_member_supported("Names", member, false)?;
+
         match member {
             "Item" => {
                 let [index] = args else {
@@ -17373,6 +17381,8 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        self.focus_member_supported("Name", member, false)?;
+
         if !args.is_empty() {
             return Err(OmError::invalid_argument(format!(
                 "Name.{member} does not accept arguments"
@@ -17424,6 +17434,8 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        self.focus_member_supported("Name", member, false)?;
+
         match member {
             "Delete" => {
                 if !args.is_empty() {
