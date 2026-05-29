@@ -16151,6 +16151,8 @@ impl ExcelRuntime {
     }
 
     fn dispatch_get_workbooks(&mut self, member: &str, args: &[OmValue]) -> OmResult<OmValue> {
+        self.focus_member_supported("Workbooks", member, false)?;
+
         match member {
             "Count" => {
                 if !args.is_empty() {
@@ -16190,6 +16192,8 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        self.focus_member_supported("Worksheets", member, false)?;
+
         let collection_name = collection_kind.member_name();
         match member {
             "Count" => {
@@ -23383,6 +23387,8 @@ impl ExcelRuntime {
     }
 
     fn dispatch_invoke_workbooks(&mut self, member: &str, args: &[OmValue]) -> OmResult<OmValue> {
+        self.focus_member_supported("Workbooks", member, false)?;
+
         match member {
             "Add" => {
                 if args.len() > 1 {
@@ -23526,6 +23532,8 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        self.focus_member_supported("Worksheets", member, false)?;
+
         let collection_name = collection_kind.member_name();
         match member {
             "Add" if collection_kind != RuntimeSheetCollectionKind::Charts => {
