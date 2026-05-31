@@ -20469,6 +20469,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("ChartGroups", member) {
+            self.focus_member_supported("ChartGroups", member, false)?;
+        }
+
         match member {
             "Count" => {
                 if !args.is_empty() {
@@ -20532,6 +20536,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("ChartGroups", member) {
+            self.focus_member_supported("ChartGroups", member, false)?;
+        }
+
         match member {
             "Item" => {
                 let [index] = args else {
@@ -20570,6 +20578,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("ChartGroup", member) {
+            self.focus_member_supported("ChartGroup", member, false)?;
+        }
+
         match member {
             "SeriesCollection" => {
                 self.chart_group_model(workbook, chart_id, group_index)?;
@@ -20737,6 +20749,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("ChartGroup", member) {
+            self.focus_member_supported("ChartGroup", member, false)?;
+        }
+
         match member {
             "SeriesCollection" | "CategoryCollection" | "FullCategoryCollection" => self
                 .dispatch_get_chart_group(
@@ -20764,6 +20780,9 @@ impl ExcelRuntime {
         args: &[OmValue],
     ) -> OmResult<OmValue> {
         let surface = kind.surface_name();
+        if self.focus_member_declared(surface, member) {
+            self.focus_member_supported(surface, member, false)?;
+        }
         if !args.is_empty() {
             return Err(OmError::invalid_argument(format!(
                 "{surface}.{member} does not accept arguments"
@@ -20810,6 +20829,9 @@ impl ExcelRuntime {
         args: &[OmValue],
     ) -> OmResult<OmValue> {
         let surface = kind.surface_name();
+        if self.focus_member_declared(surface, member) {
+            self.focus_member_supported(surface, member, false)?;
+        }
         match member {
             "Select" => {
                 if !args.is_empty() {
@@ -20890,6 +20912,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("CategoryCollection", member) {
+            self.focus_member_supported("CategoryCollection", member, false)?;
+        }
+
         match member {
             "Count" => {
                 if !args.is_empty() {
@@ -20962,6 +20988,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("CategoryCollection", member) {
+            self.focus_member_supported("CategoryCollection", member, false)?;
+        }
+
         match member {
             "Item" => {
                 let [selector] = args else {
@@ -21039,6 +21069,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("ChartCategory", member) {
+            self.focus_member_supported("ChartCategory", member, false)?;
+        }
+
         if !args.is_empty() {
             return Err(OmError::invalid_argument(format!(
                 "ChartCategory.{member} does not accept arguments"
@@ -21086,6 +21120,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("Axes", member) {
+            self.focus_member_supported("Axes", member, false)?;
+        }
+
         match member {
             "Count" => {
                 if !args.is_empty() {
@@ -21145,6 +21183,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("Axes", member) {
+            self.focus_member_supported("Axes", member, false)?;
+        }
+
         match member {
             "Item" => {
                 if args.is_empty() || args.len() > 2 {
@@ -21228,6 +21270,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("Axis", member) {
+            self.focus_member_supported("Axis", member, false)?;
+        }
+
         if !args.is_empty() {
             return Err(OmError::invalid_argument(format!(
                 "Axis.{member} does not accept arguments"
@@ -21517,6 +21563,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("TickLabels", member) {
+            self.focus_member_supported("TickLabels", member, false)?;
+        }
+
         if !args.is_empty() {
             return Err(OmError::invalid_argument(format!(
                 "TickLabels.{member} does not accept arguments"
@@ -21569,6 +21619,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("AxisTitle", member) {
+            self.focus_member_supported("AxisTitle", member, false)?;
+        }
+
         if !args.is_empty() {
             return Err(OmError::invalid_argument(format!(
                 "AxisTitle.{member} does not accept arguments"
@@ -21618,6 +21672,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("DisplayUnitLabel", member) {
+            self.focus_member_supported("DisplayUnitLabel", member, false)?;
+        }
+
         if !args.is_empty() {
             return Err(OmError::invalid_argument(format!(
                 "DisplayUnitLabel.{member} does not accept arguments"
@@ -21675,6 +21733,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("Gridlines", member) {
+            self.focus_member_supported("Gridlines", member, false)?;
+        }
+
         if !args.is_empty() {
             return Err(OmError::invalid_argument(format!(
                 "Gridlines.{member} does not accept arguments"
@@ -21777,6 +21839,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("SeriesCollection", member) {
+            self.focus_member_supported("SeriesCollection", member, false)?;
+        }
+
         match member {
             "Count" => {
                 if !args.is_empty() {
@@ -21840,6 +21906,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("SeriesCollection", member) {
+            self.focus_member_supported("SeriesCollection", member, false)?;
+        }
+
         match member {
             "Item" => {
                 let [index] = args else {
@@ -21978,6 +22048,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("Series", member) {
+            self.focus_member_supported("Series", member, false)?;
+        }
+
         if !args.is_empty() && member != "DataLabels" && member != "Points" {
             return Err(OmError::invalid_argument(format!(
                 "Series.{member} does not accept arguments"
@@ -22175,6 +22249,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("DataLabels", member) {
+            self.focus_member_supported("DataLabels", member, false)?;
+        }
+
         if !args.is_empty() && member != "Item" {
             return Err(OmError::invalid_argument(format!(
                 "DataLabels.{member} does not accept arguments"
@@ -22333,6 +22411,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("DataLabels", member) {
+            self.focus_member_supported("DataLabels", member, false)?;
+        }
+
         match member {
             "Item" => {
                 let [index] = args else {
@@ -22377,6 +22459,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("DataLabel", member) {
+            self.focus_member_supported("DataLabel", member, false)?;
+        }
+
         if !args.is_empty() {
             return Err(OmError::invalid_argument(format!(
                 "DataLabel.{member} does not accept arguments"
@@ -22495,6 +22581,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("Points", member) {
+            self.focus_member_supported("Points", member, false)?;
+        }
+
         match member {
             "Count" => {
                 if !args.is_empty() {
@@ -22565,6 +22655,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("Points", member) {
+            self.focus_member_supported("Points", member, false)?;
+        }
+
         match member {
             "Item" => {
                 let [index] = args else {
@@ -22609,6 +22703,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("Point", member) {
+            self.focus_member_supported("Point", member, false)?;
+        }
+
         if !args.is_empty() {
             return Err(OmError::invalid_argument(format!(
                 "Point.{member} does not accept arguments"
