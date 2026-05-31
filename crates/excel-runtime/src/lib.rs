@@ -8871,7 +8871,14 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
-        match self.runtime_object(handle)? {
+        let object = self.runtime_object(handle)?;
+        if matches!(&object, RuntimeObjectKind::Chart { .. })
+            && self.focus_member_declared("Chart", member)
+        {
+            self.focus_member_supported("Chart", member, false)?;
+        }
+
+        match object {
             RuntimeObjectKind::Application => self.dispatch_invoke_application(member, args),
             RuntimeObjectKind::WorkbooksCollection => self.dispatch_invoke_workbooks(member, args),
             RuntimeObjectKind::Workbook { workbook } => {
@@ -15001,6 +15008,14 @@ impl ExcelRuntime {
         self.clipboard = None;
     }
 
+    fn focus_member_declared(&self, surface: &str, member: &str) -> bool {
+        self.dispatch_registry
+            .focus_surfaces
+            .iter()
+            .find(|entry| entry.name == surface)
+            .is_some_and(|entry| entry.members.iter().any(|entry| entry.name == member))
+    }
+
     fn focus_member_supported(&self, surface: &str, member: &str, write: bool) -> OmResult<()> {
         if !write
             && matches!(
@@ -19325,6 +19340,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("Chart", member) {
+            self.focus_member_supported("Chart", member, false)?;
+        }
+
         match member {
             "Name" => {
                 if !args.is_empty() {
