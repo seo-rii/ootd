@@ -12273,108 +12273,131 @@ impl ExcelRuntime {
                 workbook,
                 chart_object_id,
                 parent,
-            } => match member {
-                "Copy" => {
-                    if !args.is_empty() {
-                        return Err(OmError::invalid_argument(
-                            "ChartObject.Copy does not accept arguments",
-                        ));
-                    }
-                    let chart_object = self.chart_object_model(workbook, chart_object_id)?;
-                    self.chart_model(workbook, chart_object.chart_id)?;
-                    self.set_headless_copy_mode();
-                    Ok(OmValue::Empty)
+            } => {
+                if matches!(
+                    member,
+                    "Activate"
+                        | "Select"
+                        | "BringToFront"
+                        | "Copy"
+                        | "Cut"
+                        | "Duplicate"
+                        | "CopyPicture"
+                        | "Delete"
+                        | "SendToBack"
+                ) {
+                    self.focus_member_supported("ChartObject", member, false)?;
                 }
-                "Cut" => {
-                    if !args.is_empty() {
-                        return Err(OmError::invalid_argument(
-                            "ChartObject.Cut does not accept arguments",
-                        ));
-                    }
-                    let chart_object = self.chart_object_model(workbook, chart_object_id)?;
-                    self.chart_model(workbook, chart_object.chart_id)?;
-                    self.set_headless_cut_mode();
-                    Ok(OmValue::Empty)
-                }
-                "Duplicate" => {
-                    if !args.is_empty() {
-                        return Err(OmError::invalid_argument(
-                            "ChartObject.Duplicate does not accept arguments",
-                        ));
-                    }
-                    let duplicate_id = self.duplicate_chart_object(workbook, chart_object_id)?;
-                    Ok(OmValue::Object(
-                        self.register_chart_object_handle_with_parent_origin(
-                            workbook,
-                            duplicate_id,
-                            parent,
-                        ),
-                    ))
-                }
-                "BringToFront" | "SendToBack" => {
-                    if !args.is_empty() {
-                        return Err(OmError::invalid_argument(format!(
-                            "ChartObject.{member} does not accept arguments"
-                        )));
-                    }
-                    self.move_chart_objects_z_order(workbook, &[chart_object_id], member)?;
-                    Ok(OmValue::Empty)
-                }
-                "CopyPicture" => {
-                    validate_copy_picture_args(args, 2, "ChartObject.CopyPicture")?;
-                    let chart_object = self.chart_object_model(workbook, chart_object_id)?;
-                    self.chart_model(workbook, chart_object.chart_id)?;
-                    self.set_headless_copy_mode();
-                    Ok(OmValue::Empty)
-                }
-                "Delete" => {
-                    if !args.is_empty() {
-                        return Err(OmError::invalid_argument(
-                            "ChartObject.Delete does not accept arguments",
-                        ));
-                    }
-                    Ok(OmValue::Bool(
-                        self.delete_chart_object(workbook, chart_object_id)?,
-                    ))
-                }
-                "Activate" | "Select" => {
-                    if member == "Activate" && !args.is_empty() {
-                        return Err(OmError::invalid_argument(format!(
-                            "ChartObject.{member} does not accept arguments"
-                        )));
-                    }
-                    if member == "Select" {
-                        if args.len() > 1 {
+
+                match member {
+                    "Copy" => {
+                        if !args.is_empty() {
                             return Err(OmError::invalid_argument(
-                                "ChartObject.Select accepts at most a Replace argument",
+                                "ChartObject.Copy does not accept arguments",
                             ));
                         }
-                        if let Some(value) = args.first()
-                            && !om_value_is_omitted(value)
-                        {
-                            coerce_optional_bool_arg(value, true, "ChartObject.Select Replace")?;
-                        }
+                        let chart_object = self.chart_object_model(workbook, chart_object_id)?;
+                        self.chart_model(workbook, chart_object.chart_id)?;
+                        self.set_headless_copy_mode();
+                        Ok(OmValue::Empty)
                     }
-                    let chart_object = self.chart_object_model(workbook, chart_object_id)?.clone();
-                    self.chart_model(workbook, chart_object.chart_id)?;
-                    let operation = format!("ChartObject.{member}");
-                    self.ensure_worksheet_visible(
-                        workbook,
-                        chart_object.host_sheet_id,
-                        operation.as_str(),
-                    )?;
-                    self.set_selection(
-                        workbook,
-                        chart_object.host_sheet_id,
-                        Rect::single_cell(1, 1),
-                    );
-                    self.active_chart = Some((workbook, chart_object.chart_id, parent));
-                    Ok(OmValue::Empty)
+                    "Cut" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "ChartObject.Cut does not accept arguments",
+                            ));
+                        }
+                        let chart_object = self.chart_object_model(workbook, chart_object_id)?;
+                        self.chart_model(workbook, chart_object.chart_id)?;
+                        self.set_headless_cut_mode();
+                        Ok(OmValue::Empty)
+                    }
+                    "Duplicate" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "ChartObject.Duplicate does not accept arguments",
+                            ));
+                        }
+                        let duplicate_id =
+                            self.duplicate_chart_object(workbook, chart_object_id)?;
+                        Ok(OmValue::Object(
+                            self.register_chart_object_handle_with_parent_origin(
+                                workbook,
+                                duplicate_id,
+                                parent,
+                            ),
+                        ))
+                    }
+                    "BringToFront" | "SendToBack" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(format!(
+                                "ChartObject.{member} does not accept arguments"
+                            )));
+                        }
+                        self.move_chart_objects_z_order(workbook, &[chart_object_id], member)?;
+                        Ok(OmValue::Empty)
+                    }
+                    "CopyPicture" => {
+                        validate_copy_picture_args(args, 2, "ChartObject.CopyPicture")?;
+                        let chart_object = self.chart_object_model(workbook, chart_object_id)?;
+                        self.chart_model(workbook, chart_object.chart_id)?;
+                        self.set_headless_copy_mode();
+                        Ok(OmValue::Empty)
+                    }
+                    "Delete" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "ChartObject.Delete does not accept arguments",
+                            ));
+                        }
+                        Ok(OmValue::Bool(
+                            self.delete_chart_object(workbook, chart_object_id)?,
+                        ))
+                    }
+                    "Activate" | "Select" => {
+                        if member == "Activate" && !args.is_empty() {
+                            return Err(OmError::invalid_argument(format!(
+                                "ChartObject.{member} does not accept arguments"
+                            )));
+                        }
+                        if member == "Select" {
+                            if args.len() > 1 {
+                                return Err(OmError::invalid_argument(
+                                    "ChartObject.Select accepts at most a Replace argument",
+                                ));
+                            }
+                            if let Some(value) = args.first()
+                                && !om_value_is_omitted(value)
+                            {
+                                coerce_optional_bool_arg(
+                                    value,
+                                    true,
+                                    "ChartObject.Select Replace",
+                                )?;
+                            }
+                        }
+                        let chart_object =
+                            self.chart_object_model(workbook, chart_object_id)?.clone();
+                        self.chart_model(workbook, chart_object.chart_id)?;
+                        let operation = format!("ChartObject.{member}");
+                        self.ensure_worksheet_visible(
+                            workbook,
+                            chart_object.host_sheet_id,
+                            operation.as_str(),
+                        )?;
+                        self.set_selection(
+                            workbook,
+                            chart_object.host_sheet_id,
+                            Rect::single_cell(1, 1),
+                        );
+                        self.active_chart = Some((workbook, chart_object.chart_id, parent));
+                        Ok(OmValue::Empty)
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "ChartObject.{member} is not implemented as a method"
+                    ))),
                 }
-                _ => Err(OmError::unsupported(format!(
-                    "ChartObject.{member} is not implemented as a method"
-                ))),
-            },
+            }
             RuntimeObjectKind::ShapeRange { workbook, source } => {
                 self.dispatch_invoke_shape_range(workbook, source, member, args)
             }
@@ -17469,6 +17492,28 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if matches!(
+            member,
+            "Count"
+                | "Item"
+                | "Application"
+                | "Parent"
+                | "Creator"
+                | "ShapeRange"
+                | "Left"
+                | "Top"
+                | "Width"
+                | "Height"
+                | "Visible"
+                | "Placement"
+                | "PrintObject"
+                | "Locked"
+                | "ProtectChartObject"
+                | "RoundedCorners"
+        ) {
+            self.focus_member_supported("ChartObjects", member, false)?;
+        }
+
         match member {
             "Count" => {
                 if !args.is_empty() {
@@ -17687,6 +17732,13 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if matches!(
+            member,
+            "Item" | "Add" | "Delete" | "Copy" | "Cut" | "Duplicate" | "CopyPicture" | "Select"
+        ) {
+            self.focus_member_supported("ChartObjects", member, false)?;
+        }
+
         match member {
             "Item" => {
                 let [index] = args else {
@@ -18636,6 +18688,33 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if matches!(
+            member,
+            "Name"
+                | "Chart"
+                | "Index"
+                | "ZOrder"
+                | "Placement"
+                | "Left"
+                | "Top"
+                | "Width"
+                | "Height"
+                | "Visible"
+                | "OnAction"
+                | "PrintObject"
+                | "Locked"
+                | "ProtectChartObject"
+                | "RoundedCorners"
+                | "ShapeRange"
+                | "TopLeftCell"
+                | "BottomRightCell"
+                | "Creator"
+                | "Application"
+                | "Parent"
+        ) {
+            self.focus_member_supported("ChartObject", member, false)?;
+        }
+
         if !args.is_empty() {
             return Err(OmError::invalid_argument(format!(
                 "ChartObject.{member} does not accept arguments"
