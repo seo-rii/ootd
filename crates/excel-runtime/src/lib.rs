@@ -8,7 +8,10 @@ use excel_model::{
     DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
     resolve_chart_source_reference_with_names,
 };
-use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml};
+use excel_xlsx::{
+    ChartSupportRelationshipBinding, LoadedXlsxWorkbook, SheetDrawingSupportParts,
+    WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml,
+};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
 use office_common::{
     AbsoluteAnchor, CellError, CellValue, ChartId, ChartObjectId, DefinedNameId, DrawingAnchor,
@@ -25296,7 +25299,7 @@ impl ExcelRuntime {
     ) -> OmResult<WorksheetHandle> {
         if self.worksheet_model(workbook, sheet_id)?.kind == SheetKind::ChartSheet {
             let result = (|| {
-                let (source_name, source_visibility, source_chart) = {
+                let (source_name, source_visibility, source_chart, source_chart_support_parts) = {
                     let runtime = self.runtime_workbook(workbook)?;
                     let worksheet = runtime
                         .loaded
@@ -25325,7 +25328,55 @@ impl ExcelRuntime {
                             OmError::new(OmErrorCode::InvalidState, "chart sheet chart is missing")
                         })?
                         .clone();
-                    (worksheet.name.clone(), worksheet.visibility, chart)
+                    let source_chart_support_parts = chart
+                        .raw_part_uri
+                        .as_deref()
+                        .and_then(|chart_part_uri| {
+                            runtime
+                                .loaded
+                                .sheet_drawing_support_parts
+                                .get(&sheet_id)
+                                .and_then(|support_parts| {
+                                    support_parts.chart_summaries.get(chart_part_uri)
+                                })
+                        })
+                        .map(|summary| {
+                            summary
+                                .support_relationships
+                                .iter()
+                                .map(|relationship| {
+                                    let support_part = runtime
+                                        .loaded
+                                        .package
+                                        .part(&relationship.target)
+                                        .ok_or_else(|| {
+                                            OmError::new(
+                                                OmErrorCode::InvalidState,
+                                                format!(
+                                                    "chart support part is missing: {}",
+                                                    relationship.target
+                                                ),
+                                            )
+                                        })?;
+                                    Ok((
+                                        relationship.relationship_id.clone(),
+                                        relationship.relationship_type.clone(),
+                                        relationship.target.clone(),
+                                        support_part.bytes.clone(),
+                                        support_part.content_type.clone(),
+                                        support_part.compression,
+                                    ))
+                                })
+                                .collect::<OmResult<Vec<_>>>()
+                        })
+                        .transpose()?
+                        .unwrap_or_default();
+                    (
+                        worksheet.name.clone(),
+                        worksheet.visibility,
+                        chart,
+                        source_chart_support_parts,
+                    )
                 };
 
                 let placement_args = {
@@ -25392,6 +25443,189 @@ impl ExcelRuntime {
                         .charts
                         .get(&chart_binding.chart_id)
                         .and_then(|chart| chart.raw_part_uri.clone());
+                    let target_sheet_part_uri = runtime
+                        .loaded
+                        .state
+                        .worksheets
+                        .iter()
+                        .find(|worksheet| worksheet.id == added_sheet_id)
+                        .and_then(|worksheet| worksheet.part_uri.clone());
+                    if let Some(target_chart_part_uri) = target_chart_raw_part_uri.as_deref()
+                        && !source_chart_support_parts.is_empty()
+                    {
+                        let chart_rels_part_uri =
+                            worksheet_relationships_part_uri_for(target_chart_part_uri);
+                        let mut used_part_names = runtime
+                            .loaded
+                            .package
+                            .parts()
+                            .iter()
+                            .map(|part| part.name.clone())
+                            .collect::<BTreeSet<_>>();
+                        used_part_names.insert(chart_rels_part_uri.clone());
+                        let mut content_types_xml = runtime
+                            .loaded
+                            .package
+                            .part(CONTENT_TYPES_PART_NAME)
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::Parse,
+                                    format!(
+                                        "workbook package is missing {CONTENT_TYPES_PART_NAME}"
+                                    ),
+                                )
+                            })?
+                            .bytes
+                            .clone();
+                        let mut content_types_dirty = false;
+                        let mut relationship_xml = String::from(
+                            r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+                        );
+                        let mut target_support_relationships = Vec::new();
+                        let mut target_support_part_bytes = BTreeMap::new();
+                        for (
+                            relationship_id,
+                            relationship_type,
+                            source_part_uri,
+                            source_bytes,
+                            source_content_type,
+                            source_compression,
+                        ) in &source_chart_support_parts
+                        {
+                            let file_name = source_part_uri
+                                .rsplit('/')
+                                .next()
+                                .unwrap_or(source_part_uri.as_str());
+                            let target_part_uri = if relationship_type
+                                == "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle"
+                                || file_name.starts_with("colors")
+                            {
+                                next_available_sequential_part_uri(
+                                    &mut used_part_names,
+                                    "xl/charts/colors",
+                                    ".xml",
+                                )
+                            } else {
+                                next_available_sequential_part_uri(
+                                    &mut used_part_names,
+                                    "xl/charts/style",
+                                    ".xml",
+                                )
+                            };
+                            runtime.loaded.package.add_part(OpcPart {
+                                name: target_part_uri.clone(),
+                                content_type: source_content_type.clone(),
+                                compression: *source_compression,
+                                bytes: source_bytes.clone(),
+                            })?;
+                            if let Some(content_type) = source_content_type.as_deref() {
+                                content_types_xml = append_content_type_override_if_missing(
+                                    content_types_xml.as_slice(),
+                                    target_part_uri.as_str(),
+                                    content_type,
+                                )?;
+                                content_types_dirty = true;
+                            }
+                            let relationship_target = relative_relationship_target(
+                                target_chart_part_uri,
+                                &target_part_uri,
+                            );
+                            let escaped_relationship_id =
+                                partial_escape(relationship_id.as_str()).to_string();
+                            let escaped_relationship_type =
+                                partial_escape(relationship_type.as_str()).to_string();
+                            let escaped_relationship_target =
+                                partial_escape(relationship_target.as_str()).to_string();
+                            relationship_xml.push_str(&format!(
+                                r#"
+  <Relationship Id="{escaped_relationship_id}" Type="{escaped_relationship_type}" Target="{escaped_relationship_target}"/>"#
+                            ));
+                            target_support_relationships.push(ChartSupportRelationshipBinding {
+                                relationship_id: relationship_id.clone(),
+                                relationship_type: relationship_type.clone(),
+                                target: target_part_uri.clone(),
+                            });
+                            target_support_part_bytes
+                                .insert(target_part_uri.clone(), source_bytes.clone());
+                        }
+                        relationship_xml.push_str("\n</Relationships>");
+                        let relationship_bytes = relationship_xml.into_bytes();
+                        if runtime.loaded.package.contains(&chart_rels_part_uri) {
+                            runtime.loaded.package.replace_part_bytes(
+                                &chart_rels_part_uri,
+                                relationship_bytes.clone(),
+                            )?;
+                        } else {
+                            runtime.loaded.package.add_part(OpcPart {
+                                name: chart_rels_part_uri.clone(),
+                                content_type: Some(RELATIONSHIPS_PART_CONTENT_TYPE.to_string()),
+                                compression: CompressionMethod::Stored,
+                                bytes: relationship_bytes.clone(),
+                            })?;
+                        }
+                        if content_types_dirty {
+                            runtime
+                                .loaded
+                                .package
+                                .replace_part_bytes(CONTENT_TYPES_PART_NAME, content_types_xml)?;
+                        }
+                        let support_parts = runtime
+                            .loaded
+                            .sheet_drawing_support_parts
+                            .entry(added_sheet_id)
+                            .or_insert_with(SheetDrawingSupportParts::default);
+                        support_parts.sheet_part_uri = target_sheet_part_uri.clone();
+                        if support_parts
+                            .chart_part_uris
+                            .iter()
+                            .all(|part_uri| part_uri != target_chart_part_uri)
+                        {
+                            support_parts
+                                .chart_part_uris
+                                .push(target_chart_part_uri.to_string());
+                        }
+                        if let Some(target_chart_part) =
+                            runtime.loaded.package.part(target_chart_part_uri)
+                        {
+                            support_parts.chart_part_source_bytes.insert(
+                                target_chart_part_uri.to_string(),
+                                target_chart_part.bytes.clone(),
+                            );
+                        }
+                        if support_parts
+                            .chart_relationships_part_uris
+                            .iter()
+                            .all(|part_uri| part_uri != &chart_rels_part_uri)
+                        {
+                            support_parts
+                                .chart_relationships_part_uris
+                                .push(chart_rels_part_uri.clone());
+                        }
+                        support_parts
+                            .chart_relationships_part_source_bytes
+                            .insert(chart_rels_part_uri.clone(), relationship_bytes);
+                        for (target_part_uri, bytes) in target_support_part_bytes {
+                            if support_parts
+                                .chart_support_part_uris
+                                .iter()
+                                .all(|part_uri| part_uri != &target_part_uri)
+                            {
+                                support_parts
+                                    .chart_support_part_uris
+                                    .push(target_part_uri.clone());
+                            }
+                            support_parts
+                                .chart_support_part_source_bytes
+                                .insert(target_part_uri, bytes);
+                        }
+                        let chart_summary = support_parts
+                            .chart_summaries
+                            .entry(target_chart_part_uri.to_string())
+                            .or_default();
+                        chart_summary.relationships_part_uri = Some(chart_rels_part_uri);
+                        chart_summary.support_relationships = target_support_relationships;
+                    }
                     let mut copied_chart = source_chart;
                     copied_chart.id = chart_binding.chart_id;
                     copied_chart.workbook_id = runtime.loaded.state.model.id;
@@ -97087,6 +97321,212 @@ mod tests {
                     .expect("sheet-origin PlotArea parent origin Type")
             ),
             f64::from(super::XL_SHEET_TYPE_CHART)
+        );
+    }
+
+    #[test]
+    fn chart_sheet_copy_preserves_chart_support_parts() {
+        let mut package =
+            OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("base package");
+        let content_types_xml = std::str::from_utf8(
+            package
+                .part("[Content_Types].xml")
+                .expect("content types")
+                .bytes
+                .as_slice(),
+        )
+        .expect("content types utf8")
+        .replace(
+            r#"<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>"#,
+            r#"<Override PartName="/xl/chartsheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml"/>
+  <Override PartName="/xl/drawings/drawing2.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>
+  <Override PartName="/xl/charts/chart2.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>
+  <Override PartName="/xl/charts/style2.xml" ContentType="application/vnd.ms-office.chartstyle+xml"/>
+  <Override PartName="/xl/charts/colors2.xml" ContentType="application/vnd.ms-office.chartcolorstyle+xml"/>"#,
+        );
+        package
+            .replace_part_bytes("[Content_Types].xml", content_types_xml.into_bytes())
+            .expect("replace content types");
+        let workbook_rels_xml = std::str::from_utf8(
+            package
+                .part("xl/_rels/workbook.xml.rels")
+                .expect("workbook rels")
+                .bytes
+                .as_slice(),
+        )
+        .expect("workbook rels utf8")
+        .replace(
+            r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml""#,
+            r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet" Target="chartsheets/sheet1.xml""#,
+        );
+        package
+            .replace_part_bytes("xl/_rels/workbook.xml.rels", workbook_rels_xml.into_bytes())
+            .expect("replace workbook rels");
+        package
+            .add_part(OpcPart {
+                name: "xl/chartsheets/sheet1.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <drawing r:id="rIdChartSheetDrawing"/>
+</chartsheet>"#
+                    .to_vec(),
+            })
+            .expect("add chartsheet part");
+        package
+            .add_part(OpcPart {
+                name: "xl/chartsheets/_rels/sheet1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdChartSheetDrawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing2.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            })
+            .expect("add chartsheet rels");
+        package
+            .add_part(OpcPart {
+                name: "xl/drawings/drawing2.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <xdr:absoluteAnchor>
+    <xdr:pos x="0" y="0"/>
+    <xdr:ext cx="5486400" cy="3200400"/>
+    <xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart Sheet Chart"/></xdr:nvGraphicFramePr><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart2"/></a:graphicData></a:graphic></xdr:graphicFrame>
+    <xdr:clientData/>
+  </xdr:absoluteAnchor>
+</xdr:wsDr>"#
+                    .to_vec(),
+            })
+            .expect("add drawing");
+        package
+            .add_part(OpcPart {
+                name: "xl/drawings/_rels/drawing2.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdChart2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart2.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            })
+            .expect("add drawing rels");
+        package
+            .add_part(OpcPart {
+                name: "xl/charts/chart2.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart><c:plotArea><c:barChart><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numRef><c:f>Sheet1!$A$1:$A$3</c:f></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart>
+</c:chartSpace>"#
+                    .to_vec(),
+            })
+            .expect("add chart");
+        package
+            .add_part(OpcPart {
+                name: "xl/charts/_rels/chart2.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdStyle2" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="style2.xml"/>
+  <Relationship Id="rIdColors2" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="colors2.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            })
+            .expect("add chart rels");
+        package
+            .add_part(OpcPart {
+                name: "xl/charts/style2.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<cs:chartStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" id="303"/>"#
+                    .to_vec(),
+            })
+            .expect("add chart style");
+        package
+            .add_part(OpcPart {
+                name: "xl/charts/colors2.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<cs:colorStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" id="303"/>"#
+                    .to_vec(),
+            })
+            .expect("add chart colors");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open chart sheet workbook");
+        let application = runtime.root_application();
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+
+        runtime
+            .dispatch_invoke(charts, "Copy", &[])
+            .expect("Charts.Copy to new workbook");
+        let copied_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after Charts.Copy"),
+        );
+        let saved = runtime
+            .save_workbook(
+                super::WorkbookHandle(copied_workbook),
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save copied chart sheet workbook");
+        let saved_package =
+            OpcPackage::from_bytes(&saved).expect("saved copied chart sheet package");
+        let saved_chart_rels = saved_package
+            .parts()
+            .iter()
+            .find(|part| {
+                part.name.starts_with("xl/charts/_rels/chart") && part.name.ends_with(".xml.rels")
+            })
+            .expect("saved copied chart rels");
+        let saved_chart_rels_xml =
+            String::from_utf8(saved_chart_rels.bytes.clone()).expect("saved chart rels utf8");
+        assert!(saved_chart_rels_xml.contains(
+            r#"Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle""#
+        ));
+        assert!(saved_chart_rels_xml.contains(
+            r#"Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle""#
+        ));
+        assert!(
+            saved_package.parts().iter().any(|part| {
+                part.name.starts_with("xl/charts/style")
+                    && part.name.ends_with(".xml")
+                    && String::from_utf8_lossy(&part.bytes).contains(r#"id="303""#)
+            }),
+            "copied chart style support part should be preserved"
+        );
+        assert!(
+            saved_package.parts().iter().any(|part| {
+                part.name.starts_with("xl/charts/colors")
+                    && part.name.ends_with(".xml")
+                    && String::from_utf8_lossy(&part.bytes).contains(r#"id="303""#)
+            }),
+            "copied chart color support part should be preserved"
         );
     }
 
