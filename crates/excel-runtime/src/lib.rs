@@ -2286,7 +2286,25 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
-        match self.runtime_object(handle)? {
+        let object = self.runtime_object(handle)?;
+        let focus_surface = match &object {
+            RuntimeObjectKind::ChartArea { .. } => Some("ChartArea"),
+            RuntimeObjectKind::PlotArea { .. } => Some("PlotArea"),
+            RuntimeObjectKind::ChartTitle { .. } => Some("ChartTitle"),
+            RuntimeObjectKind::Legend { .. } => Some("Legend"),
+            RuntimeObjectKind::DataTable { .. } => Some("DataTable"),
+            RuntimeObjectKind::ChartFormat { .. } => Some("ChartFormat"),
+            RuntimeObjectKind::Adjustments { .. } => Some("Adjustments"),
+            RuntimeObjectKind::ChartFormatChild { kind, .. } => Some(kind.surface_name()),
+            _ => None,
+        };
+        if let Some(surface) = focus_surface
+            && self.focus_member_declared(surface, member)
+        {
+            self.focus_member_supported(surface, member, false)?;
+        }
+
+        match object {
             RuntimeObjectKind::Application => self.dispatch_get_application(member, args),
             RuntimeObjectKind::WorkbooksCollection => self.dispatch_get_workbooks(member, args),
             RuntimeObjectKind::Workbook { workbook } => {
