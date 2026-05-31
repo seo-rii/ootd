@@ -26394,7 +26394,6 @@ impl ExcelRuntime {
                 Ok(OmValue::Empty)
             }
             "Evaluate" => {
-                self.ensure_grid_worksheet(workbook, sheet_id, "Worksheet.Evaluate")?;
                 let expression = coerce_evaluate_expression_arg(args, "Worksheet.Evaluate")?;
                 self.evaluate_formula_expression(
                     workbook,
@@ -96284,9 +96283,29 @@ mod tests {
             runtime.dispatch_invoke(chart_sheet, "Calculate", &[]),
             "chart sheet Calculate should be unsupported"
         );
-        assert_unsupported!(
-            runtime.dispatch_invoke(chart_sheet, "Evaluate", &[OmValue::Text("1+1".to_string())]),
-            "chart sheet Evaluate should be unsupported"
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        chart_sheet,
+                        "Evaluate",
+                        &[OmValue::Text("=1+1".to_string())]
+                    )
+                    .expect("chart sheet Evaluate scalar formula")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        chart_sheet,
+                        "Evaluate",
+                        &[OmValue::Text("=Sheet1!A1+1".to_string())]
+                    )
+                    .expect("chart sheet Evaluate sheet-qualified formula")
+            ),
+            43.0
         );
         assert_unsupported!(
             runtime.dispatch_invoke(chart_sheet, "Paste", &[]),
