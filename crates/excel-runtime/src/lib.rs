@@ -6344,14 +6344,18 @@ impl ExcelRuntime {
                         Err(OmError::new(OmErrorCode::NotFound, "chart not found"))
                     }
                     "Visible" => {
-                        let Some(sheet_id) = self.chart_sheet_id_for_chart(workbook, chart_id)?
-                        else {
-                            return Err(OmError::unsupported(
-                                "Chart.Visible is only available for chart sheets",
-                            ));
-                        };
-                        let sheet_handle = self.register_worksheet_handle(workbook, sheet_id).0;
-                        self.dispatch_set(sheet_handle, "Visible", value, &[])
+                        if let Some(sheet_id) = self.chart_sheet_id_for_chart(workbook, chart_id)? {
+                            let sheet_handle = self.register_worksheet_handle(workbook, sheet_id).0;
+                            return self.dispatch_set(sheet_handle, "Visible", value, &[]);
+                        }
+                        if let Some((_, chart_object_id, _)) =
+                            self.embedded_chart_object_for_chart(workbook, chart_id)?
+                        {
+                            let chart_object_handle =
+                                self.register_chart_object_handle(workbook, chart_object_id);
+                            return self.dispatch_set(chart_object_handle, "Visible", value, &[]);
+                        }
+                        Err(OmError::new(OmErrorCode::NotFound, "chart not found"))
                     }
                     "ChartType" => {
                         let OmValue::Number(number) = value else {
@@ -19676,13 +19680,18 @@ impl ExcelRuntime {
                         "Chart.Visible does not accept arguments",
                     ));
                 }
-                let Some(sheet_id) = self.chart_sheet_id_for_chart(workbook, chart_id)? else {
-                    return Err(OmError::unsupported(
-                        "Chart.Visible is only available for chart sheets",
-                    ));
-                };
-                let sheet_handle = self.register_worksheet_handle(workbook, sheet_id).0;
-                self.dispatch_get(sheet_handle, "Visible", &[])
+                if let Some(sheet_id) = self.chart_sheet_id_for_chart(workbook, chart_id)? {
+                    let sheet_handle = self.register_worksheet_handle(workbook, sheet_id).0;
+                    return self.dispatch_get(sheet_handle, "Visible", &[]);
+                }
+                if let Some((_, chart_object_id, _)) =
+                    self.embedded_chart_object_for_chart(workbook, chart_id)?
+                {
+                    let chart_object_handle =
+                        self.register_chart_object_handle(workbook, chart_object_id);
+                    return self.dispatch_get(chart_object_handle, "Visible", &[]);
+                }
+                Err(OmError::new(OmErrorCode::NotFound, "chart not found"))
             }
             "ChartArea" => {
                 if !args.is_empty() {
@@ -101461,9 +101470,44 @@ mod tests {
         assert_eq!(
             runtime
                 .dispatch_get(chart_for_name, "Visible", &[])
-                .expect_err("embedded Chart.Visible should be unsupported")
+                .expect("embedded Chart.Visible"),
+            runtime
+                .dispatch_get(chart_object, "Visible", &[])
+                .expect("embedded ChartObject.Visible")
+        );
+        runtime
+            .dispatch_set(chart_for_name, "Visible", OmValue::Bool(false), &[])
+            .expect("set embedded Chart.Visible false");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "Visible", &[])
+                .expect("ChartObject.Visible after Chart.Visible false"),
+            OmValue::Bool(false)
+        );
+        runtime
+            .dispatch_set(chart_for_name, "Visible", OmValue::Bool(true), &[])
+            .expect("set embedded Chart.Visible true");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_for_name, "Visible", &[])
+                .expect("Chart.Visible after true"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(chart_for_name, "Visible", OmValue::Number(1.0), &[])
+                .expect_err("embedded Chart.Visible rejects non-bool")
                 .code,
-            OmErrorCode::Unsupported
+            OmErrorCode::TypeMismatch
+        );
+        runtime
+            .dispatch_set(chart_for_name, "Visible", OmValue::Bool(false), &[])
+            .expect("restore embedded Chart.Visible false");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_for_name, "Visible", &[])
+                .expect("Chart.Visible after restore false"),
+            OmValue::Bool(false)
         );
         runtime
             .dispatch_set(
