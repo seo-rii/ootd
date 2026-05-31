@@ -2288,6 +2288,10 @@ impl ExcelRuntime {
     ) -> OmResult<OmValue> {
         let object = self.runtime_object(handle)?;
         let focus_surface = match &object {
+            RuntimeObjectKind::ChartObjects { .. } => Some("ChartObjects"),
+            RuntimeObjectKind::ChartObject { .. } => Some("ChartObject"),
+            RuntimeObjectKind::ShapeRange { .. } => Some("ShapeRange"),
+            RuntimeObjectKind::Chart { .. } => Some("Chart"),
             RuntimeObjectKind::ChartArea { .. } => Some("ChartArea"),
             RuntimeObjectKind::PlotArea { .. } => Some("PlotArea"),
             RuntimeObjectKind::ChartTitle { .. } => Some("ChartTitle"),
@@ -2296,6 +2300,23 @@ impl ExcelRuntime {
             RuntimeObjectKind::ChartFormat { .. } => Some("ChartFormat"),
             RuntimeObjectKind::Adjustments { .. } => Some("Adjustments"),
             RuntimeObjectKind::ChartFormatChild { kind, .. } => Some(kind.surface_name()),
+            RuntimeObjectKind::DataLabels { .. } => Some("DataLabels"),
+            RuntimeObjectKind::DataLabel { .. } => Some("DataLabel"),
+            RuntimeObjectKind::ChartGroups { .. } => Some("ChartGroups"),
+            RuntimeObjectKind::ChartGroup { .. } => Some("ChartGroup"),
+            RuntimeObjectKind::ChartGroupLines { kind, .. } => Some(kind.surface_name()),
+            RuntimeObjectKind::CategoryCollection { .. } => Some("CategoryCollection"),
+            RuntimeObjectKind::ChartCategory { .. } => Some("ChartCategory"),
+            RuntimeObjectKind::Axes { .. } => Some("Axes"),
+            RuntimeObjectKind::Axis { .. } => Some("Axis"),
+            RuntimeObjectKind::TickLabels { .. } => Some("TickLabels"),
+            RuntimeObjectKind::AxisTitle { .. } => Some("AxisTitle"),
+            RuntimeObjectKind::DisplayUnitLabel { .. } => Some("DisplayUnitLabel"),
+            RuntimeObjectKind::Gridlines { .. } => Some("Gridlines"),
+            RuntimeObjectKind::SeriesCollection { .. } => Some("SeriesCollection"),
+            RuntimeObjectKind::Series { .. } => Some("Series"),
+            RuntimeObjectKind::Points { .. } => Some("Points"),
+            RuntimeObjectKind::Point { .. } => Some("Point"),
             _ => None,
         };
         if let Some(surface) = focus_surface
