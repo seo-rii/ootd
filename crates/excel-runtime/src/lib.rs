@@ -8872,10 +8872,32 @@ impl ExcelRuntime {
         args: &[OmValue],
     ) -> OmResult<OmValue> {
         let object = self.runtime_object(handle)?;
-        if matches!(&object, RuntimeObjectKind::Chart { .. })
-            && self.focus_member_declared("Chart", member)
+        let focus_surface = match &object {
+            RuntimeObjectKind::Chart { .. } => Some("Chart"),
+            RuntimeObjectKind::ChartArea { .. } => Some("ChartArea"),
+            RuntimeObjectKind::PlotArea { .. } => Some("PlotArea"),
+            RuntimeObjectKind::ChartTitle { .. } => Some("ChartTitle"),
+            RuntimeObjectKind::Legend { .. } => Some("Legend"),
+            RuntimeObjectKind::DataTable { .. } => Some("DataTable"),
+            RuntimeObjectKind::ChartFormat { .. } => Some("ChartFormat"),
+            RuntimeObjectKind::Adjustments { .. } => Some("Adjustments"),
+            RuntimeObjectKind::ChartFormatChild { kind, .. } => Some(kind.surface_name()),
+            RuntimeObjectKind::DataLabels { .. } => Some("DataLabels"),
+            RuntimeObjectKind::DataLabel { .. } => Some("DataLabel"),
+            RuntimeObjectKind::ChartGroupLines { kind, .. } => Some(kind.surface_name()),
+            RuntimeObjectKind::Axis { .. } => Some("Axis"),
+            RuntimeObjectKind::AxisTitle { .. } => Some("AxisTitle"),
+            RuntimeObjectKind::DisplayUnitLabel { .. } => Some("DisplayUnitLabel"),
+            RuntimeObjectKind::TickLabels { .. } => Some("TickLabels"),
+            RuntimeObjectKind::Gridlines { .. } => Some("Gridlines"),
+            RuntimeObjectKind::Series { .. } => Some("Series"),
+            RuntimeObjectKind::Point { .. } => Some("Point"),
+            _ => None,
+        };
+        if let Some(surface) = focus_surface
+            && self.focus_member_declared(surface, member)
         {
-            self.focus_member_supported("Chart", member, false)?;
+            self.focus_member_supported(surface, member, false)?;
         }
 
         match object {
