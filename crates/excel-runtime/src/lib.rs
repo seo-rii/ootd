@@ -2735,7 +2735,54 @@ impl ExcelRuntime {
         value: OmValue,
         args: &[OmValue],
     ) -> OmResult<()> {
-        match self.runtime_object(handle)? {
+        let object = self.runtime_object(handle)?;
+        let focus_surface = match &object {
+            RuntimeObjectKind::ChartObjects { .. } => Some("ChartObjects"),
+            RuntimeObjectKind::ChartObject { .. } => Some("ChartObject"),
+            RuntimeObjectKind::ShapeRange { .. } => Some("ShapeRange"),
+            RuntimeObjectKind::Chart { .. } => Some("Chart"),
+            RuntimeObjectKind::ChartArea { .. } => Some("ChartArea"),
+            RuntimeObjectKind::ChartTitle { .. } => Some("ChartTitle"),
+            RuntimeObjectKind::Legend { .. } => Some("Legend"),
+            RuntimeObjectKind::DataTable { .. } => Some("DataTable"),
+            RuntimeObjectKind::DataLabels { .. } => Some("DataLabels"),
+            RuntimeObjectKind::DataLabel { .. } => Some("DataLabel"),
+            RuntimeObjectKind::ChartGroup { .. } => Some("ChartGroup"),
+            RuntimeObjectKind::ChartGroupLines { kind, .. } => Some(kind.surface_name()),
+            RuntimeObjectKind::Axis { .. } => Some("Axis"),
+            RuntimeObjectKind::TickLabels { .. } => Some("TickLabels"),
+            RuntimeObjectKind::AxisTitle { .. } => Some("AxisTitle"),
+            RuntimeObjectKind::DisplayUnitLabel { .. } => Some("DisplayUnitLabel"),
+            RuntimeObjectKind::Gridlines { .. } => Some("Gridlines"),
+            RuntimeObjectKind::Series { .. } => Some("Series"),
+            RuntimeObjectKind::Point { .. } => Some("Point"),
+            _ => None,
+        };
+        if let Some(surface) = focus_surface
+            && self.focus_member_declared(surface, member)
+            && !matches!(
+                (surface, member),
+                ("ChartObject", "Name")
+                    | (
+                        "ShapeRange",
+                        "Name" | "AlternativeText" | "Title" | "LockAspectRatio" | "OnAction"
+                    )
+                    | (
+                        "Chart",
+                        "HasAxis"
+                            | "ProtectContents"
+                            | "ProtectDrawingObjects"
+                            | "ProtectData"
+                            | "ProtectFormatting"
+                            | "ProtectSelection"
+                    )
+                    | ("ChartArea", "Left" | "Top" | "Width" | "Height")
+            )
+        {
+            self.focus_member_supported(surface, member, true)?;
+        }
+
+        match object {
             RuntimeObjectKind::Application => {
                 self.focus_member_supported("Application", member, true)?;
                 if !args.is_empty() {
@@ -101853,12 +101900,13 @@ mod tests {
                 .code,
             OmErrorCode::InvalidArgument
         );
-        assert_eq!(
-            runtime
-                .dispatch_set(chart_area, "Name", OmValue::Text("bad".to_string()), &[])
-                .expect_err("ChartArea.Name should not be writable")
-                .code,
-            OmErrorCode::Unsupported
+        let read_only_name = runtime
+            .dispatch_set(chart_area, "Name", OmValue::Text("bad".to_string()), &[])
+            .expect_err("ChartArea.Name should not be writable");
+        assert_eq!(read_only_name.code, OmErrorCode::Unsupported);
+        assert!(
+            read_only_name.message.contains("pinned OM registry"),
+            "{read_only_name:?}"
         );
         assert_eq!(
             expect_number(
