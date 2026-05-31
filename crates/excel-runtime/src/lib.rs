@@ -2742,19 +2742,29 @@ impl ExcelRuntime {
             RuntimeObjectKind::ShapeRange { .. } => Some("ShapeRange"),
             RuntimeObjectKind::Chart { .. } => Some("Chart"),
             RuntimeObjectKind::ChartArea { .. } => Some("ChartArea"),
+            RuntimeObjectKind::PlotArea { .. } => Some("PlotArea"),
             RuntimeObjectKind::ChartTitle { .. } => Some("ChartTitle"),
             RuntimeObjectKind::Legend { .. } => Some("Legend"),
             RuntimeObjectKind::DataTable { .. } => Some("DataTable"),
+            RuntimeObjectKind::ChartFormat { .. } => Some("ChartFormat"),
+            RuntimeObjectKind::Adjustments { .. } => Some("Adjustments"),
+            RuntimeObjectKind::ChartFormatChild { kind, .. } => Some(kind.surface_name()),
             RuntimeObjectKind::DataLabels { .. } => Some("DataLabels"),
             RuntimeObjectKind::DataLabel { .. } => Some("DataLabel"),
+            RuntimeObjectKind::ChartGroups { .. } => Some("ChartGroups"),
             RuntimeObjectKind::ChartGroup { .. } => Some("ChartGroup"),
             RuntimeObjectKind::ChartGroupLines { kind, .. } => Some(kind.surface_name()),
+            RuntimeObjectKind::CategoryCollection { .. } => Some("CategoryCollection"),
+            RuntimeObjectKind::ChartCategory { .. } => Some("ChartCategory"),
+            RuntimeObjectKind::Axes { .. } => Some("Axes"),
             RuntimeObjectKind::Axis { .. } => Some("Axis"),
             RuntimeObjectKind::TickLabels { .. } => Some("TickLabels"),
             RuntimeObjectKind::AxisTitle { .. } => Some("AxisTitle"),
             RuntimeObjectKind::DisplayUnitLabel { .. } => Some("DisplayUnitLabel"),
             RuntimeObjectKind::Gridlines { .. } => Some("Gridlines"),
+            RuntimeObjectKind::SeriesCollection { .. } => Some("SeriesCollection"),
             RuntimeObjectKind::Series { .. } => Some("Series"),
+            RuntimeObjectKind::Points { .. } => Some("Points"),
             RuntimeObjectKind::Point { .. } => Some("Point"),
             _ => None,
         };
@@ -101950,6 +101960,16 @@ mod tests {
             ),
             "Plot Area"
         );
+        let read_only_plot_area_name = runtime
+            .dispatch_set(plot_area, "Name", OmValue::Text("bad".to_string()), &[])
+            .expect_err("PlotArea.Name should not be writable");
+        assert_eq!(read_only_plot_area_name.code, OmErrorCode::Unsupported);
+        assert!(
+            read_only_plot_area_name
+                .message
+                .contains("pinned OM registry"),
+            "{read_only_plot_area_name:?}"
+        );
         assert_eq!(
             expect_number(
                 runtime
@@ -101983,6 +102003,14 @@ mod tests {
                     .expect("Axes.Count")
             ),
             2.0
+        );
+        let read_only_axes_count = runtime
+            .dispatch_set(axes, "Count", OmValue::Number(0.0), &[])
+            .expect_err("Axes.Count should not be writable");
+        assert_eq!(read_only_axes_count.code, OmErrorCode::Unsupported);
+        assert!(
+            read_only_axes_count.message.contains("pinned OM registry"),
+            "{read_only_axes_count:?}"
         );
         assert_eq!(
             expect_number(
