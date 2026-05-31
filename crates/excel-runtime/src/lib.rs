@@ -12491,12 +12491,197 @@ impl ExcelRuntime {
                     self.dispatch_invoke(sheet_handle.0, "Copy", args)
                 }
                 "Move" => {
-                    let Some(sheet_id) = self.chart_sheet_id_for_chart(workbook, chart_id)? else {
-                        return Err(OmError::unsupported(
-                            "Chart.Move is only supported for chart sheets",
+                    if args.len() > 2 {
+                        return Err(OmError::invalid_argument(
+                            "Chart.Move accepts at most Before and After arguments",
                         ));
+                    }
+                    if let Some(sheet_id) = self.chart_sheet_id_for_chart(workbook, chart_id)? {
+                        self.move_worksheet(workbook, sheet_id, args)?;
+                        return Ok(OmValue::Empty);
                     };
-                    self.move_worksheet(workbook, sheet_id, args)?;
+
+                    let Some((_, chart_object_id, chart_object_name)) =
+                        self.embedded_chart_object_for_chart(workbook, chart_id)?
+                    else {
+                        return Err(OmError::new(OmErrorCode::NotFound, "chart not found"));
+                    };
+                    let source_chart = self.chart_model(workbook, chart_id)?.clone();
+                    if self.runtime_workbook(workbook)?.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+
+                    let placement_target = self.worksheet_placement_target(
+                        workbook,
+                        args.first(),
+                        args.get(1),
+                        "Chart.Move",
+                    )?;
+                    let (target_workbook, insertion_index, default_sheet_to_delete) =
+                        if let Some((target_workbook, insertion_index)) = placement_target {
+                            (target_workbook, insertion_index, None)
+                        } else {
+                            let target_workbook = self.create_workbook()?;
+                            let runtime = self.runtime_workbook(target_workbook)?;
+                            let default_sheet_id = runtime
+                                .loaded
+                                .state
+                                .worksheets
+                                .first()
+                                .map(|worksheet| worksheet.id)
+                                .ok_or_else(|| {
+                                    OmError::new(
+                                        OmErrorCode::InvalidState,
+                                        "workbook has no worksheets",
+                                    )
+                                })?;
+                            (
+                                target_workbook,
+                                runtime.loaded.state.worksheets.len(),
+                                Some(default_sheet_id),
+                            )
+                        };
+
+                    let placement_args = {
+                        let worksheets = &self
+                            .runtime_workbook(target_workbook)?
+                            .loaded
+                            .state
+                            .worksheets;
+                        if insertion_index >= worksheets.len() {
+                            let last_sheet_id = worksheets
+                                .last()
+                                .map(|worksheet| worksheet.id)
+                                .ok_or_else(|| {
+                                    OmError::new(
+                                        OmErrorCode::InvalidState,
+                                        "workbook has no worksheets",
+                                    )
+                                })?;
+                            vec![
+                                OmValue::Missing,
+                                OmValue::Object(
+                                    self.register_worksheet_handle(target_workbook, last_sheet_id)
+                                        .0,
+                                ),
+                                OmValue::Missing,
+                                OmValue::Number(f64::from(XL_SHEET_TYPE_CHART)),
+                            ]
+                        } else {
+                            let before_sheet_id = worksheets[insertion_index].id;
+                            vec![
+                                OmValue::Object(
+                                    self.register_worksheet_handle(
+                                        target_workbook,
+                                        before_sheet_id,
+                                    )
+                                    .0,
+                                ),
+                                OmValue::Missing,
+                                OmValue::Missing,
+                                OmValue::Number(f64::from(XL_SHEET_TYPE_CHART)),
+                            ]
+                        }
+                    };
+                    let added_sheet = self.add_worksheet(target_workbook, &placement_args)?;
+                    let added_sheet_id = match self.runtime_object(added_sheet.0)? {
+                        RuntimeObjectKind::Worksheet { sheet_id, .. } => sheet_id,
+                        _ => unreachable!("worksheet handle should resolve to a worksheet object"),
+                    };
+                    let target_chart_id = {
+                        let runtime = self.runtime_workbook(target_workbook)?;
+                        runtime
+                            .loaded
+                            .state
+                            .chart_sheets
+                            .get(&added_sheet_id)
+                            .map(|binding| binding.chart_id)
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "moved chart sheet is missing a chart binding",
+                                )
+                            })?
+                    };
+                    {
+                        let runtime = self.runtime_workbook_mut(target_workbook)?;
+                        let target_chart_raw_part_uri = runtime
+                            .loaded
+                            .state
+                            .charts
+                            .get(&target_chart_id)
+                            .and_then(|chart| chart.raw_part_uri.clone());
+                        let mut moved_chart = source_chart;
+                        moved_chart.id = target_chart_id;
+                        moved_chart.workbook_id = runtime.loaded.state.model.id;
+                        moved_chart.raw_part_uri = target_chart_raw_part_uri;
+                        moved_chart.dirty = true;
+                        runtime
+                            .loaded
+                            .state
+                            .charts
+                            .insert(target_chart_id, moved_chart);
+                        runtime.dirty = true;
+                    }
+                    let moved_sheet_name = {
+                        let worksheets = &self
+                            .runtime_workbook(target_workbook)?
+                            .loaded
+                            .state
+                            .worksheets;
+                        let mut base = chart_object_name
+                            .chars()
+                            .map(|ch| {
+                                if matches!(ch, ':' | '\\' | '/' | '?' | '*' | '[' | ']')
+                                    || ch.is_control()
+                                {
+                                    ' '
+                                } else {
+                                    ch
+                                }
+                            })
+                            .collect::<String>()
+                            .trim()
+                            .chars()
+                            .take(31)
+                            .collect::<String>();
+                        if base.is_empty() {
+                            base = "Chart".to_string();
+                        }
+                        if !worksheets.iter().any(|worksheet| {
+                            worksheet.id != added_sheet_id
+                                && worksheet.name.eq_ignore_ascii_case(base.as_str())
+                        }) {
+                            base
+                        } else {
+                            let mut suffix = 2usize;
+                            loop {
+                                let suffix_text = format!(" ({suffix})");
+                                let base_len = 31usize.saturating_sub(suffix_text.chars().count());
+                                let candidate_base =
+                                    base.chars().take(base_len).collect::<String>();
+                                let candidate =
+                                    format!("{}{}", candidate_base.trim_end(), suffix_text);
+                                if !worksheets.iter().any(|worksheet| {
+                                    worksheet.id != added_sheet_id
+                                        && worksheet.name.eq_ignore_ascii_case(candidate.as_str())
+                                }) {
+                                    break candidate;
+                                }
+                                suffix += 1;
+                            }
+                        }
+                    };
+                    self.dispatch_set(added_sheet.0, "Name", OmValue::Text(moved_sheet_name), &[])?;
+                    if let Some(default_sheet_id) = default_sheet_to_delete {
+                        self.delete_worksheet(target_workbook, default_sheet_id, false)?;
+                    }
+                    self.delete_chart_object(workbook, chart_object_id)?;
+                    self.set_selection(target_workbook, added_sheet_id, Rect::single_cell(1, 1));
+                    self.active_chart = Some((target_workbook, target_chart_id, None));
                     Ok(OmValue::Empty)
                 }
                 "Protect" => {
@@ -98105,13 +98290,6 @@ mod tests {
         );
         assert_eq!(
             runtime
-                .dispatch_invoke(chart, "Move", &[])
-                .expect_err("embedded Chart.Move should be unsupported")
-                .code,
-            OmErrorCode::Unsupported
-        );
-        assert_eq!(
-            runtime
                 .dispatch_invoke(chart, "Delete", &[])
                 .expect("embedded Chart.Delete"),
             OmValue::Bool(true)
@@ -98136,6 +98314,322 @@ mod tests {
                 .expect_err("deleted embedded Chart handle should be stale")
                 .code,
             OmErrorCode::InvalidState
+        );
+    }
+
+    #[test]
+    fn embedded_chart_move_promotes_to_chart_sheet_in_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_LINE)),
+                &[],
+            )
+            .expect("set embedded chart type before Chart.Move");
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "Move",
+                    &[OmValue::Missing, OmValue::Object(worksheet)]
+                )
+                .expect("embedded Chart.Move after worksheet"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count after embedded Chart.Move")
+            ),
+            0.0
+        );
+        let sheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("Workbook.Sheets after embedded Chart.Move"),
+        );
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts after embedded Chart.Move"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheets, "Count", &[])
+                    .expect("Sheets.Count after embedded Chart.Move")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Count", &[])
+                    .expect("Charts.Count after embedded Chart.Move")
+            ),
+            1.0
+        );
+        let moved_chart = expect_object_handle(
+            runtime
+                .dispatch_get(charts, "Item", &[OmValue::Number(1.0)])
+                .expect("moved embedded chart sheet"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(moved_chart, "Name", &[])
+                    .expect("moved embedded Chart.Name")
+            ),
+            "Embedded Revenue Chart"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(moved_chart, "ChartType", &[])
+                    .expect("moved embedded Chart.ChartType")
+            ),
+            f64::from(super::XL_LINE)
+        );
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                .expect("ActiveChart after embedded Chart.Move"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_chart, "Name", &[])
+                    .expect("ActiveChart.Name after embedded Chart.Move")
+            ),
+            "Embedded Revenue Chart"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ChartType", &[])
+                .expect_err("moved embedded Chart handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after embedded Chart.Move");
+        let saved_package =
+            OpcPackage::from_bytes(&saved).expect("saved embedded Chart.Move package");
+        assert!(!saved_package.contains("xl/charts/chart1.xml"));
+        assert!(saved_package.contains("xl/charts/chart2.xml"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after embedded Chart.Move");
+        let reopened_worksheets = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[])
+                .expect("reopened Workbook.Worksheets"),
+        );
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened Worksheets.Item(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_objects, "Count", &[])
+                    .expect("reopened ChartObjects.Count")
+            ),
+            0.0
+        );
+        let reopened_charts = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Charts", &[])
+                .expect("reopened Workbook.Charts"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_charts, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened Charts.Item(1)"),
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(reopened_chart, "Name", &[])
+                    .expect("reopened moved Chart.Name")
+            ),
+            "Embedded Revenue Chart"
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart, "ChartType", &[])
+                    .expect("reopened moved Chart.ChartType")
+            ),
+            f64::from(super::XL_LINE)
+        );
+    }
+
+    #[test]
+    fn embedded_chart_move_without_targets_creates_chart_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_PIE)),
+                &[],
+            )
+            .expect("set embedded chart type before Chart.Move");
+
+        runtime
+            .dispatch_invoke(chart, "Move", &[])
+            .expect("embedded Chart.Move without targets");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("source ChartObjects.Count after embedded Chart.Move")
+            ),
+            0.0
+        );
+        let moved_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after embedded Chart.Move"),
+        );
+        assert_ne!(moved_workbook, workbook.0);
+        let moved_sheets = expect_object_handle(
+            runtime
+                .dispatch_get(moved_workbook, "Sheets", &[])
+                .expect("moved Workbook.Sheets"),
+        );
+        let moved_charts = expect_object_handle(
+            runtime
+                .dispatch_get(moved_workbook, "Charts", &[])
+                .expect("moved Workbook.Charts"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(moved_sheets, "Count", &[])
+                    .expect("moved Sheets.Count")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(moved_charts, "Count", &[])
+                    .expect("moved Charts.Count")
+            ),
+            1.0
+        );
+        let moved_chart = expect_object_handle(
+            runtime
+                .dispatch_get(moved_charts, "Item", &[OmValue::Number(1.0)])
+                .expect("moved chart workbook chart"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(moved_chart, "Name", &[])
+                    .expect("moved chart workbook Chart.Name")
+            ),
+            "Embedded Revenue Chart"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(moved_chart, "ChartType", &[])
+                    .expect("moved chart workbook Chart.ChartType")
+            ),
+            f64::from(super::XL_PIE)
         );
     }
 
