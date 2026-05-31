@@ -13204,14 +13204,13 @@ impl ExcelRuntime {
                 "Evaluate" => {
                     let expression = coerce_evaluate_expression_arg(args, "Chart.Evaluate")?;
                     self.chart_model(workbook, chart_id)?;
-                    if self.chart_sheet_id_for_chart(workbook, chart_id)?.is_some() {
-                        return Err(OmError::unsupported(
-                            "Chart.Evaluate is unsupported for chart sheets",
-                        ));
-                    }
-                    let host_sheet_id = {
+                    let context_sheet_id = if let Some(sheet_id) =
+                        self.chart_sheet_id_for_chart(workbook, chart_id)?
+                    {
+                        sheet_id
+                    } else {
                         let state = &self.runtime_workbook(workbook)?.loaded.state;
-                        state
+                        let host_sheet_id = state
                             .drawings
                             .values()
                             .find_map(|drawing| {
@@ -13226,12 +13225,15 @@ impl ExcelRuntime {
                                     })
                                     .then_some(drawing.host_sheet_id)
                             })
-                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?
+                            .ok_or_else(|| {
+                                OmError::new(OmErrorCode::NotFound, "chart not found")
+                            })?;
+                        self.ensure_grid_worksheet(workbook, host_sheet_id, "Chart.Evaluate")?;
+                        host_sheet_id
                     };
-                    self.ensure_grid_worksheet(workbook, host_sheet_id, "Chart.Evaluate")?;
                     self.evaluate_formula_expression(
                         workbook,
-                        host_sheet_id,
+                        context_sheet_id,
                         expression,
                         "Chart.Evaluate",
                     )
@@ -97935,6 +97937,26 @@ mod tests {
                     .expect("ActiveChart.Name")
             ),
             "Chart1"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(chart, "Evaluate", &[OmValue::Text("=1+1".to_string())])
+                    .expect("chart sheet Chart.Evaluate scalar formula")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        chart,
+                        "Evaluate",
+                        &[OmValue::Text("=Sheet1!A1+1".to_string())]
+                    )
+                    .expect("chart sheet Chart.Evaluate worksheet-qualified formula")
+            ),
+            43.0
         );
         runtime
             .dispatch_set(application, "DisplayAlerts", OmValue::Bool(false), &[])
