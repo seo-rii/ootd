@@ -18220,6 +18220,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("ShapeRange", member) {
+            self.focus_member_supported("ShapeRange", member, false)?;
+        }
+
         match member {
             "Item" => {
                 let [index] = args else {
@@ -18911,6 +18915,10 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        if self.focus_member_declared("ShapeRange", member) {
+            self.focus_member_supported("ShapeRange", member, false)?;
+        }
+
         match member {
             "Count" => {
                 if !args.is_empty() {
