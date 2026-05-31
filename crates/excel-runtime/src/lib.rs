@@ -23615,7 +23615,6 @@ impl ExcelRuntime {
                     return Err(OmError::invalid_state("application has no active workbook"));
                 };
                 let sheet_id = self.active_sheet_id(active_workbook)?;
-                self.ensure_grid_worksheet(active_workbook, sheet_id, "Application.Evaluate")?;
                 self.evaluate_formula_expression(
                     active_workbook,
                     sheet_id,
@@ -96317,9 +96316,29 @@ mod tests {
             runtime.dispatch_invoke(application, "Range", &[OmValue::Text("A1".to_string())]),
             "Application.Range should be unsupported on an active chart sheet"
         );
-        assert_unsupported!(
-            runtime.dispatch_invoke(application, "Evaluate", &[OmValue::Text("1+1".to_string())]),
-            "Application.Evaluate should be unsupported on an active chart sheet"
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        application,
+                        "Evaluate",
+                        &[OmValue::Text("=1+1".to_string())]
+                    )
+                    .expect("Application.Evaluate scalar formula on active chart sheet")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        application,
+                        "Evaluate",
+                        &[OmValue::Text("=Sheet1!A1+1".to_string())]
+                    )
+                    .expect("Application.Evaluate sheet-qualified formula on active chart sheet")
+            ),
+            43.0
         );
         assert_unsupported!(
             runtime.dispatch_invoke(application, "Goto", &[OmValue::Text("A1".to_string())]),
