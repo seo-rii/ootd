@@ -23084,6 +23084,41 @@ mod tests {
                 bytes: chart_xml.clone(),
             })
             .expect("add chart");
+        package
+            .add_part(OpcPart {
+                name: "xl/charts/_rels/chart2.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdStyle2" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="style2.xml"/>
+  <Relationship Id="rIdColors2" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="colors2.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            })
+            .expect("add chart rels");
+        let chart_style_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<cs:chartStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" id="202"/>"#
+            .to_vec();
+        let chart_colors_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<cs:colorStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" id="202"/>"#
+            .to_vec();
+        package
+            .add_part(OpcPart {
+                name: "xl/charts/style2.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: chart_style_xml.clone(),
+            })
+            .expect("add chart style");
+        package
+            .add_part(OpcPart {
+                name: "xl/charts/colors2.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: chart_colors_xml.clone(),
+            })
+            .expect("add chart colors");
         let bytes = package.to_bytes().expect("package bytes");
 
         let loaded = codec
@@ -23170,6 +23205,54 @@ mod tests {
             chart_summary.formula_refs,
             vec!["Sheet1!$A$1:$A$3".to_string()]
         );
+        assert_eq!(
+            chart_summary.relationships_part_uri.as_deref(),
+            Some("xl/charts/_rels/chart2.xml.rels")
+        );
+        assert_eq!(
+            chart_summary.support_relationships,
+            vec![
+                ChartSupportRelationshipBinding {
+                    relationship_id: "rIdStyle2".to_string(),
+                    relationship_type:
+                        "http://schemas.microsoft.com/office/2011/relationships/chartStyle"
+                            .to_string(),
+                    target: "xl/charts/style2.xml".to_string(),
+                },
+                ChartSupportRelationshipBinding {
+                    relationship_id: "rIdColors2".to_string(),
+                    relationship_type:
+                        "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle"
+                            .to_string(),
+                    target: "xl/charts/colors2.xml".to_string(),
+                },
+            ]
+        );
+        assert_eq!(
+            drawing_support.chart_relationships_part_uris,
+            vec!["xl/charts/_rels/chart2.xml.rels".to_string()]
+        );
+        assert_eq!(
+            drawing_support.chart_support_part_uris,
+            vec![
+                "xl/charts/style2.xml".to_string(),
+                "xl/charts/colors2.xml".to_string()
+            ]
+        );
+        assert_eq!(
+            drawing_support
+                .chart_support_part_source_bytes
+                .get("xl/charts/style2.xml")
+                .expect("chartsheet chart style bytes"),
+            &chart_style_xml
+        );
+        assert_eq!(
+            drawing_support
+                .chart_support_part_source_bytes
+                .get("xl/charts/colors2.xml")
+                .expect("chartsheet chart colors bytes"),
+            &chart_colors_xml
+        );
         assert_eq!(loaded.state.charts.len(), 1);
         let (chart_id, chart_model) = loaded.state.charts.iter().next().expect("chart model");
         assert_eq!(chart_model.chart_type, ChartType::Line);
@@ -23251,6 +23334,21 @@ mod tests {
         assert!(saved_package.contains("xl/chartsheets/_rels/sheet1.xml.rels"));
         assert!(saved_package.contains("xl/drawings/drawing2.xml"));
         assert!(saved_package.contains("xl/drawings/_rels/drawing2.xml.rels"));
+        assert!(saved_package.contains("xl/charts/_rels/chart2.xml.rels"));
+        assert_eq!(
+            saved_package
+                .part("xl/charts/style2.xml")
+                .expect("saved chartsheet chart style")
+                .bytes,
+            chart_style_xml
+        );
+        assert_eq!(
+            saved_package
+                .part("xl/charts/colors2.xml")
+                .expect("saved chartsheet chart colors")
+                .bytes,
+            chart_colors_xml
+        );
     }
 
     #[test]
