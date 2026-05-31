@@ -311,6 +311,7 @@ pub enum ChartLegendPosition {
 pub struct AxisModel {
     pub raw_id: Option<String>,
     pub kind: ChartAxisKind,
+    pub axis_group: ChartAxisGroup,
     pub title: Option<ChartText>,
     pub has_major_gridlines: Option<bool>,
     pub has_minor_gridlines: Option<bool>,
@@ -346,6 +347,13 @@ pub enum ChartAxisKind {
     Value,
     Date,
     Series,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ChartAxisGroup {
+    #[default]
+    Primary,
+    Secondary,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

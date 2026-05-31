@@ -11,14 +11,15 @@ mod charts;
 mod names;
 
 pub use charts::{
-    AxisModel, ChartAxisCrosses, ChartAxisDisplayUnit, ChartAxisKind, ChartAxisScaleType,
-    ChartAxisTimeUnit, ChartBarShape, ChartBuiltInDisplayUnit, ChartCacheKind, ChartCacheSnapshot,
-    ChartCellMarkerXmlAttrs, ChartDataLabelPosition, ChartDataLabelsModel, ChartDataTableModel,
-    ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerStyle, ChartMarkerXmlAttrs, ChartModel,
-    ChartObjectModel, ChartPointModel, ChartProtectionModel, ChartSheetBinding,
-    ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition,
-    ChartTickMark, ChartType, ChartView3DModel, DrawingModel, DrawingObjectModel, LegendModel,
-    SeriesModel, resolve_chart_source_reference, resolve_chart_source_reference_with_names,
+    AxisModel, ChartAxisCrosses, ChartAxisDisplayUnit, ChartAxisGroup, ChartAxisKind,
+    ChartAxisScaleType, ChartAxisTimeUnit, ChartBarShape, ChartBuiltInDisplayUnit, ChartCacheKind,
+    ChartCacheSnapshot, ChartCellMarkerXmlAttrs, ChartDataLabelPosition, ChartDataLabelsModel,
+    ChartDataTableModel, ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerStyle,
+    ChartMarkerXmlAttrs, ChartModel, ChartObjectModel, ChartPointModel, ChartProtectionModel,
+    ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText,
+    ChartTickLabelPosition, ChartTickMark, ChartType, ChartView3DModel, DrawingModel,
+    DrawingObjectModel, LegendModel, SeriesModel, resolve_chart_source_reference,
+    resolve_chart_source_reference_with_names,
 };
 pub use names::DefinedNameTable;
 

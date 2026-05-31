@@ -1,11 +1,12 @@
 use excel_model::{
-    AxisModel, ChartAxisCrosses, ChartAxisDisplayUnit, ChartAxisKind, ChartAxisScaleType,
-    ChartAxisTimeUnit, ChartBarShape, ChartBuiltInDisplayUnit, ChartDataLabelPosition,
-    ChartDataLabelsModel, ChartDataTableModel, ChartDisplayBlanksAs, ChartLegendPosition,
-    ChartMarkerStyle, ChartModel, ChartObjectModel, ChartProtectionModel, ChartSheetBinding,
-    ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition,
-    ChartTickMark, ChartType, ChartView3DModel, DrawingModel, DrawingObjectModel, LegendModel,
-    SeriesModel, WorkbookState, WorksheetData, resolve_chart_source_reference_with_names,
+    AxisModel, ChartAxisCrosses, ChartAxisDisplayUnit, ChartAxisGroup, ChartAxisKind,
+    ChartAxisScaleType, ChartAxisTimeUnit, ChartBarShape, ChartBuiltInDisplayUnit,
+    ChartDataLabelPosition, ChartDataLabelsModel, ChartDataTableModel, ChartDisplayBlanksAs,
+    ChartLegendPosition, ChartMarkerStyle, ChartModel, ChartObjectModel, ChartProtectionModel,
+    ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText,
+    ChartTickLabelPosition, ChartTickMark, ChartType, ChartView3DModel, DrawingModel,
+    DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
+    resolve_chart_source_reference_with_names,
 };
 use excel_xlsx::{LoadedXlsxWorkbook, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml};
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
@@ -6976,20 +6977,10 @@ impl ExcelRuntime {
                             .map(|value| coerce_u32_arg(value, "Chart.HasAxis axis group"))
                             .transpose()?
                             .unwrap_or(XL_PRIMARY);
-                        if !matches!(axis_group, XL_PRIMARY | XL_SECONDARY) {
-                            return Err(OmError::invalid_argument(
-                                "Chart.HasAxis axis group supports xlPrimary and xlSecondary",
-                            ));
-                        }
-                        if axis_group == XL_SECONDARY && !has_axis {
-                            self.chart_model(workbook, chart_id)?;
-                            return Ok(());
-                        }
-                        if axis_group == XL_SECONDARY {
-                            return Err(OmError::unsupported(
-                                "Chart.HasAxis secondary axes are not supported yet",
-                            ));
-                        }
+                        let axis_group = chart_axis_group_from_excel_value(
+                            axis_group,
+                            "Chart.HasAxis axis group",
+                        )?;
 
                         let changed = {
                             let runtime = self.runtime_workbook_mut(workbook)?;
@@ -7008,22 +6999,34 @@ impl ExcelRuntime {
                                 ));
                             }
                             let axis_index = chart.axes.iter().position(|axis| match axis_type {
-                                XL_CATEGORY => matches!(
-                                    axis.kind,
-                                    ChartAxisKind::Category | ChartAxisKind::Date
-                                ),
-                                XL_VALUE => axis.kind == ChartAxisKind::Value,
-                                XL_SERIES_AXIS => axis.kind == ChartAxisKind::Series,
+                                XL_CATEGORY => {
+                                    axis.axis_group == axis_group
+                                        && matches!(
+                                            axis.kind,
+                                            ChartAxisKind::Category | ChartAxisKind::Date
+                                        )
+                                }
+                                XL_VALUE => {
+                                    axis.axis_group == axis_group
+                                        && axis.kind == ChartAxisKind::Value
+                                }
+                                XL_SERIES_AXIS => {
+                                    axis.axis_group == axis_group
+                                        && axis.kind == ChartAxisKind::Series
+                                }
                                 _ => false,
                             });
                             let changed = if has_axis {
                                 if axis_index.is_some() {
                                     false
                                 } else {
-                                    let preferred_axis_id = match axis_type {
-                                        XL_CATEGORY => 10,
-                                        XL_VALUE => 20,
-                                        XL_SERIES_AXIS => 30,
+                                    let preferred_axis_id = match (axis_type, axis_group) {
+                                        (XL_CATEGORY, ChartAxisGroup::Primary) => 10,
+                                        (XL_VALUE, ChartAxisGroup::Primary) => 20,
+                                        (XL_SERIES_AXIS, ChartAxisGroup::Primary) => 30,
+                                        (XL_CATEGORY, ChartAxisGroup::Secondary) => 40,
+                                        (XL_VALUE, ChartAxisGroup::Secondary) => 50,
+                                        (XL_SERIES_AXIS, ChartAxisGroup::Secondary) => 60,
                                         _ => unreachable!("axis type validated above"),
                                     };
                                     let used_axis_ids = chart
@@ -7035,7 +7038,7 @@ impl ExcelRuntime {
                                     while used_axis_ids.contains(axis_id.to_string().as_str()) {
                                         axis_id += 10;
                                     }
-                                    chart.axes.push(default_chart_axis(
+                                    let mut axis = default_chart_axis(
                                         Some(axis_id.to_string()),
                                         match axis_type {
                                             XL_CATEGORY => ChartAxisKind::Category,
@@ -7043,7 +7046,9 @@ impl ExcelRuntime {
                                             XL_SERIES_AXIS => ChartAxisKind::Series,
                                             _ => unreachable!("axis type validated above"),
                                         },
-                                    ));
+                                    );
+                                    axis.axis_group = axis_group;
+                                    chart.axes.push(axis);
                                     true
                                 }
                             } else if let Some(axis_index) = axis_index {
@@ -19995,16 +20000,10 @@ impl ExcelRuntime {
                     .map(|value| coerce_u32_arg(value, "Chart.HasAxis axis group"))
                     .transpose()?
                     .unwrap_or(XL_PRIMARY);
-                if !matches!(axis_group, XL_PRIMARY | XL_SECONDARY) {
-                    return Err(OmError::invalid_argument(
-                        "Chart.HasAxis axis group supports xlPrimary and xlSecondary",
-                    ));
-                }
-                if axis_group == XL_SECONDARY {
-                    return Ok(OmValue::Bool(false));
-                }
+                let axis_group =
+                    chart_axis_group_from_excel_value(axis_group, "Chart.HasAxis axis group")?;
                 Ok(OmValue::Bool(
-                    self.chart_axis_index_for_type(workbook, chart_id, axis_type)?
+                    self.chart_axis_index_for_type(workbook, chart_id, axis_type, axis_group)?
                         .is_some(),
                 ))
             }
@@ -21448,18 +21447,10 @@ impl ExcelRuntime {
                     .map(|value| coerce_u32_arg(value, "Axes.Item axis group"))
                     .transpose()?
                     .unwrap_or(XL_PRIMARY);
-                if !matches!(axis_group, XL_PRIMARY | XL_SECONDARY) {
-                    return Err(OmError::invalid_argument(
-                        "Axes.Item axis group supports xlPrimary and xlSecondary",
-                    ));
-                }
-                if axis_group == XL_SECONDARY {
-                    return Err(OmError::invalid_argument(
-                        "Axes.Item axis group is not available",
-                    ));
-                }
+                let axis_group =
+                    chart_axis_group_from_excel_value(axis_group, "Axes.Item axis group")?;
                 let axis_index = self
-                    .chart_axis_index_for_type(workbook, chart_id, axis_type)?
+                    .chart_axis_index_for_type(workbook, chart_id, axis_type, axis_group)?
                     .ok_or_else(|| {
                         OmError::invalid_argument("Axes.Item axis type is not available")
                     })?;
@@ -21540,7 +21531,10 @@ impl ExcelRuntime {
                 ChartAxisKind::Value => XL_VALUE,
                 ChartAxisKind::Series => XL_SERIES_AXIS,
             }))),
-            "AxisGroup" => Ok(OmValue::Number(f64::from(XL_PRIMARY))),
+            "AxisGroup" => Ok(OmValue::Number(f64::from(match axis.axis_group {
+                ChartAxisGroup::Primary => XL_PRIMARY,
+                ChartAxisGroup::Secondary => XL_SECONDARY,
+            }))),
             "AxisBetweenCategories" => {
                 if !matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date) {
                     return Err(OmError::unsupported(
@@ -28543,15 +28537,21 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         axis_type: i32,
+        axis_group: ChartAxisGroup,
     ) -> OmResult<Option<usize>> {
         Ok(self
             .chart_model(workbook, chart_id)?
             .axes
             .iter()
             .position(|axis| match axis_type {
-                XL_CATEGORY => matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date),
-                XL_VALUE => axis.kind == ChartAxisKind::Value,
-                XL_SERIES_AXIS => axis.kind == ChartAxisKind::Series,
+                XL_CATEGORY => {
+                    axis.axis_group == axis_group
+                        && matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date)
+                }
+                XL_VALUE => axis.axis_group == axis_group && axis.kind == ChartAxisKind::Value,
+                XL_SERIES_AXIS => {
+                    axis.axis_group == axis_group && axis.kind == ChartAxisKind::Series
+                }
                 _ => false,
             }))
     }
@@ -41113,6 +41113,7 @@ fn default_chart_axis(raw_id: Option<String>, kind: ChartAxisKind) -> AxisModel 
     AxisModel {
         raw_id,
         kind,
+        axis_group: ChartAxisGroup::Primary,
         title: None,
         has_major_gridlines: None,
         has_minor_gridlines: None,
@@ -41341,6 +41342,16 @@ fn coerce_u32_arg(value: &OmValue, label: &str) -> OmResult<u32> {
     match value {
         OmValue::Number(number) => coerce_positive_index(*number, label),
         _ => Err(OmError::type_mismatch(format!("{label} must be numeric"))),
+    }
+}
+
+fn chart_axis_group_from_excel_value(value: u32, label: &str) -> OmResult<ChartAxisGroup> {
+    match value {
+        XL_PRIMARY => Ok(ChartAxisGroup::Primary),
+        XL_SECONDARY => Ok(ChartAxisGroup::Secondary),
+        _ => Err(OmError::invalid_argument(format!(
+            "{label} supports xlPrimary and xlSecondary"
+        ))),
     }
 }
 
@@ -123737,20 +123748,62 @@ mod tests {
                 .expect("Chart.HasAxis secondary value axis after no-op clear"),
             OmValue::Bool(false)
         );
+        runtime
+            .dispatch_set(
+                chart,
+                "HasAxis",
+                OmValue::Bool(true),
+                &[
+                    OmValue::Number(f64::from(super::XL_VALUE)),
+                    OmValue::Number(f64::from(super::XL_SECONDARY)),
+                ],
+            )
+            .expect("set secondary Chart.HasAxis(xlValue)");
         assert_eq!(
             runtime
-                .dispatch_set(
+                .dispatch_get(
                     chart,
                     "HasAxis",
-                    OmValue::Bool(true),
                     &[
                         OmValue::Number(f64::from(super::XL_VALUE)),
                         OmValue::Number(f64::from(super::XL_SECONDARY)),
                     ],
                 )
-                .expect_err("setting secondary Chart.HasAxis should fail")
-                .code,
-            OmErrorCode::Unsupported
+                .expect("Chart.HasAxis secondary value axis after set"),
+            OmValue::Bool(true)
+        );
+        let refreshed_axes = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Axes", &[])
+                .expect("Chart.Axes collection after secondary axis add"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(refreshed_axes, "Count", &[])
+                    .expect("Axes.Count after secondary axis add")
+            ),
+            3.0
+        );
+        let secondary_value_axis = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    refreshed_axes,
+                    "Item",
+                    &[
+                        OmValue::Number(f64::from(super::XL_VALUE)),
+                        OmValue::Number(f64::from(super::XL_SECONDARY)),
+                    ],
+                )
+                .expect("Axes.Item(xlValue, xlSecondary)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(secondary_value_axis, "AxisGroup", &[])
+                    .expect("secondary value Axis.AxisGroup")
+            ),
+            f64::from(super::XL_SECONDARY)
         );
 
         let saved = runtime
@@ -123763,6 +123816,16 @@ mod tests {
                 },
             )
             .expect("save workbook after Chart.HasAxis setter");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:axId val="50""#));
         let mut reopened_runtime = ExcelRuntime::new();
         let reopened_workbook = reopened_runtime
             .open_workbook(OpenWorkbookSpec {
@@ -123801,6 +123864,39 @@ mod tests {
                 )
                 .expect("reopened Chart.HasAxis(xlCategory)"),
             OmValue::Bool(true)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "HasAxis",
+                    &[
+                        OmValue::Number(f64::from(super::XL_VALUE)),
+                        OmValue::Number(f64::from(super::XL_SECONDARY)),
+                    ],
+                )
+                .expect("reopened Chart.HasAxis(xlValue, xlSecondary)"),
+            OmValue::Bool(true)
+        );
+        let reopened_secondary_axis = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "Axes",
+                    &[
+                        OmValue::Number(f64::from(super::XL_VALUE)),
+                        OmValue::Number(f64::from(super::XL_SECONDARY)),
+                    ],
+                )
+                .expect("reopened Chart.Axes(xlValue, xlSecondary)"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_secondary_axis, "AxisGroup", &[])
+                    .expect("reopened secondary Axis.AxisGroup")
+            ),
+            f64::from(super::XL_SECONDARY)
         );
     }
 

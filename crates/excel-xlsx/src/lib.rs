@@ -2,14 +2,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Write};
 
 use excel_model::{
-    AxisModel, CellData, ChartAxisCrosses, ChartAxisDisplayUnit, ChartAxisKind, ChartAxisScaleType,
-    ChartAxisTimeUnit, ChartBarShape, ChartBuiltInDisplayUnit, ChartCacheKind, ChartCacheSnapshot,
-    ChartCellMarkerXmlAttrs, ChartDataLabelPosition, ChartDataLabelsModel, ChartDataTableModel,
-    ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerStyle, ChartMarkerXmlAttrs, ChartModel,
-    ChartObjectModel, ChartPointModel, ChartProtectionModel, ChartSheetBinding,
-    ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition,
-    ChartTickMark, ChartType, ChartView3DModel, DefinedNameTable, DrawingModel, DrawingObjectModel,
-    LegendModel, SeriesModel, WorkbookState, WorksheetData,
+    AxisModel, CellData, ChartAxisCrosses, ChartAxisDisplayUnit, ChartAxisGroup, ChartAxisKind,
+    ChartAxisScaleType, ChartAxisTimeUnit, ChartBarShape, ChartBuiltInDisplayUnit, ChartCacheKind,
+    ChartCacheSnapshot, ChartCellMarkerXmlAttrs, ChartDataLabelPosition, ChartDataLabelsModel,
+    ChartDataTableModel, ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerStyle,
+    ChartMarkerXmlAttrs, ChartModel, ChartObjectModel, ChartPointModel, ChartProtectionModel,
+    ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText,
+    ChartTickLabelPosition, ChartTickMark, ChartType, ChartView3DModel, DefinedNameTable,
+    DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
     resolve_chart_source_reference_with_names,
 };
 use office_common::{
@@ -731,6 +731,7 @@ pub struct ChartDataTableSummary {
 pub struct ChartAxisSummary {
     pub raw_id: Option<String>,
     pub kind: ChartAxisKind,
+    pub axis_group: ChartAxisGroup,
     pub title_text: Option<String>,
     pub has_major_gridlines: Option<bool>,
     pub has_minor_gridlines: Option<bool>,
@@ -3324,6 +3325,7 @@ fn build_chart_model_overlay(
                         .map(|axis| AxisModel {
                             raw_id: axis.raw_id.clone(),
                             kind: axis.kind,
+                            axis_group: axis.axis_group,
                             title: axis
                                 .title_text
                                 .as_ref()
@@ -17315,6 +17317,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     axes.push(ChartAxisSummary {
                         raw_id: None,
                         kind,
+                        axis_group: ChartAxisGroup::Primary,
                         title_text: None,
                         has_major_gridlines: None,
                         has_minor_gridlines: None,
@@ -18702,6 +18705,23 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
             Err(error) => return Err(xml_error(error)),
         }
         buffer.clear();
+    }
+
+    let mut seen_category_axis = false;
+    let mut seen_value_axis = false;
+    let mut seen_series_axis = false;
+    for axis in &mut axes {
+        let seen = match axis.kind {
+            ChartAxisKind::Category | ChartAxisKind::Date => &mut seen_category_axis,
+            ChartAxisKind::Value => &mut seen_value_axis,
+            ChartAxisKind::Series => &mut seen_series_axis,
+        };
+        if *seen {
+            axis.axis_group = ChartAxisGroup::Secondary;
+        } else {
+            axis.axis_group = ChartAxisGroup::Primary;
+            *seen = true;
+        }
     }
 
     Ok(ChartPartSummary {
@@ -22256,13 +22276,13 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::{
-        BorderSummary, COMMENTS_RELATIONSHIP_TYPE, CellData, ChartAxisCrosses, ChartAxisKind,
-        ChartAxisScaleType, ChartAxisSummary, ChartCacheKindSummary, ChartCacheSummary,
-        ChartDataLabelPosition, ChartDataLabelsSummary, ChartLegendPosition, ChartSeriesSummary,
-        ChartSourceLiteralPointSummary, ChartSourceLiteralSummary, ChartSupportRelationshipBinding,
-        ChartTickLabelPosition, ChartTickMark, ChartView3DModel, CommentPartSummary,
-        DrawingAnchorKind, DrawingAnchorSummary, DrawingCellMarkerSummary, DrawingPointSummary,
-        DrawingSizeSummary, DxfSummary, FileFormat, FillSummary, FontSummary,
+        BorderSummary, COMMENTS_RELATIONSHIP_TYPE, CellData, ChartAxisCrosses, ChartAxisGroup,
+        ChartAxisKind, ChartAxisScaleType, ChartAxisSummary, ChartCacheKindSummary,
+        ChartCacheSummary, ChartDataLabelPosition, ChartDataLabelsSummary, ChartLegendPosition,
+        ChartSeriesSummary, ChartSourceLiteralPointSummary, ChartSourceLiteralSummary,
+        ChartSupportRelationshipBinding, ChartTickLabelPosition, ChartTickMark, ChartView3DModel,
+        CommentPartSummary, DrawingAnchorKind, DrawingAnchorSummary, DrawingCellMarkerSummary,
+        DrawingPointSummary, DrawingSizeSummary, DxfSummary, FileFormat, FillSummary, FontSummary,
         HYPERLINK_RELATIONSHIP_TYPE, OpcPackage, STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE,
         VML_DRAWING_RELATIONSHIP_TYPE, WORKBOOK_RELS_PART_NAME, WorksheetCommentSummary,
         WorksheetData, WorksheetHyperlinkBinding, WorksheetHyperlinkSummary,
@@ -23600,6 +23620,7 @@ mod tests {
                 ChartAxisSummary {
                     raw_id: Some("10".to_string()),
                     kind: ChartAxisKind::Category,
+                    axis_group: ChartAxisGroup::Primary,
                     title_text: Some("Quarter".to_string()),
                     has_major_gridlines: None,
                     has_minor_gridlines: None,
@@ -23631,6 +23652,7 @@ mod tests {
                 ChartAxisSummary {
                     raw_id: Some("20".to_string()),
                     kind: ChartAxisKind::Value,
+                    axis_group: ChartAxisGroup::Primary,
                     title_text: Some("Revenue".to_string()),
                     has_major_gridlines: Some(true),
                     has_minor_gridlines: Some(true),
