@@ -1600,7 +1600,11 @@ impl ExcelRuntime {
                         {
                             drawing_element_seen = true;
                             writer
-                                .write_event(Event::Start(element.into_owned()))
+                                .write_event(Event::Start(rewrite_drawing_relationship_id(
+                                    &element,
+                                    reader.decoder(),
+                                    worksheet_relationship_id.as_str(),
+                                )?))
                                 .map_err(runtime_xml_error)?;
                         }
                         Ok(Event::Empty(element))
@@ -1608,7 +1612,11 @@ impl ExcelRuntime {
                         {
                             drawing_element_seen = true;
                             writer
-                                .write_event(Event::Empty(element.into_owned()))
+                                .write_event(Event::Empty(rewrite_drawing_relationship_id(
+                                    &element,
+                                    reader.decoder(),
+                                    worksheet_relationship_id.as_str(),
+                                )?))
                                 .map_err(runtime_xml_error)?;
                         }
                         Ok(Event::End(element))
@@ -25919,6 +25927,10 @@ impl ExcelRuntime {
                 source_relationships_part,
                 source_comment_parts,
                 source_vml_parts,
+                source_drawings,
+                source_charts,
+                source_chart_raw_part_uris,
+                source_has_drawing_support,
             ) = {
                 let runtime = self.runtime_workbook(snapshot)?;
                 let worksheet = runtime
@@ -25944,12 +25956,21 @@ impl ExcelRuntime {
                             "worksheet support parts are missing",
                         )
                     })?;
+                let source_has_drawing_support = runtime
+                    .loaded
+                    .sheet_drawing_support_parts
+                    .get(&sheet_id)
+                    .is_some_and(|support_parts| {
+                        !support_parts.drawing_relationship_ids.is_empty()
+                            || !support_parts.drawing_part_uris.is_empty()
+                            || !support_parts.chart_part_uris.is_empty()
+                    });
                 let relationships_part = support_parts
                     .relationships_part_uri
                     .as_deref()
                     .map(|part_uri| {
                         let package_part = runtime.loaded.package.part(part_uri);
-                        let source_bytes = support_parts
+                        let mut source_bytes = support_parts
                             .relationships_part_source_bytes
                             .clone()
                             .or_else(|| package_part.map(|part| part.bytes.clone()))
@@ -25959,6 +25980,13 @@ impl ExcelRuntime {
                                     "worksheet relationships part is missing",
                                 )
                             })?;
+                        if source_has_drawing_support {
+                            source_bytes = strip_relationship_entries_by_type_or_target(
+                                source_bytes.as_slice(),
+                                &[DRAWING_RELATIONSHIP_TYPE],
+                                &[],
+                            )?;
+                        }
                         Ok((
                             source_bytes,
                             package_part
@@ -26021,6 +26049,37 @@ impl ExcelRuntime {
                         ))
                     })
                     .collect::<OmResult<BTreeMap<_, _>>>()?;
+                let source_drawings = runtime
+                    .loaded
+                    .state
+                    .drawings
+                    .values()
+                    .filter(|drawing| drawing.host_sheet_id == sheet_id)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let source_chart_ids = source_drawings
+                    .iter()
+                    .flat_map(|drawing| drawing.objects.iter())
+                    .filter_map(|object| match object {
+                        DrawingObjectModel::ChartFrame(chart_object) => Some(chart_object.chart_id),
+                        DrawingObjectModel::UnsupportedRaw { .. } => None,
+                    })
+                    .collect::<BTreeSet<_>>();
+                let mut source_charts = BTreeMap::new();
+                let mut source_chart_raw_part_uris = BTreeMap::new();
+                for chart_id in source_chart_ids {
+                    let chart = runtime
+                        .loaded
+                        .state
+                        .charts
+                        .get(&chart_id)
+                        .ok_or_else(|| {
+                            OmError::new(OmErrorCode::InvalidState, "worksheet chart is missing")
+                        })?
+                        .clone();
+                    source_chart_raw_part_uris.insert(chart_id, chart.raw_part_uri.clone());
+                    source_charts.insert(chart_id, chart);
+                }
                 (
                     worksheet.name.clone(),
                     worksheet.visibility,
@@ -26029,8 +26088,25 @@ impl ExcelRuntime {
                     relationships_part,
                     comment_parts,
                     vml_parts,
+                    source_drawings,
+                    source_charts,
+                    source_chart_raw_part_uris,
+                    source_has_drawing_support,
                 )
             };
+            let source_chart_support_part_sources = source_chart_raw_part_uris
+                .iter()
+                .map(|(chart_id, raw_part_uri)| {
+                    Ok((
+                        *chart_id,
+                        self.chart_support_part_sources_for_chart(
+                            snapshot,
+                            sheet_id,
+                            raw_part_uri.as_deref(),
+                        )?,
+                    ))
+                })
+                .collect::<OmResult<BTreeMap<_, _>>>()?;
 
             let placement_args = {
                 let worksheets = &self
@@ -26256,7 +26332,7 @@ impl ExcelRuntime {
                     .as_ref()
                     .map(|_| target_relationships_part_uri);
                 copied_support_parts.relationships_part_source_bytes = rewritten_relationships_part;
-                if !rewritten_relationship_targets.is_empty() {
+                if source_has_drawing_support || !rewritten_relationship_targets.is_empty() {
                     copied_support_parts.relationships_summary = None;
                 }
                 copied_support_parts.comment_part_uris = copied_support_parts
@@ -26370,6 +26446,110 @@ impl ExcelRuntime {
                     .loaded
                     .worksheet_support_parts
                     .insert(added_sheet_id, copied_support_parts);
+                if !source_drawings.is_empty() {
+                    let workbook_id = runtime.loaded.state.model.id;
+                    let mut next_drawing_id = runtime
+                        .loaded
+                        .state
+                        .drawings
+                        .keys()
+                        .map(|drawing_id| drawing_id.0)
+                        .max()
+                        .unwrap_or_default()
+                        + 1;
+                    let mut next_chart_id = runtime
+                        .loaded
+                        .state
+                        .charts
+                        .keys()
+                        .map(|chart_id| chart_id.0)
+                        .max()
+                        .unwrap_or_default()
+                        + 1;
+                    let mut next_chart_object_id = runtime
+                        .loaded
+                        .state
+                        .drawings
+                        .values()
+                        .flat_map(|drawing| drawing.objects.iter())
+                        .filter_map(|object| match object {
+                            DrawingObjectModel::ChartFrame(chart_object) => Some(chart_object.id.0),
+                            DrawingObjectModel::UnsupportedRaw { id, .. } => Some(id.0),
+                        })
+                        .max()
+                        .unwrap_or_default()
+                        + 1;
+                    let mut chart_id_map = BTreeMap::<ChartId, ChartId>::new();
+                    for source_drawing in &source_drawings {
+                        let drawing_id = DrawingId(next_drawing_id);
+                        next_drawing_id += 1;
+                        let mut copied_objects = Vec::new();
+                        for object in &source_drawing.objects {
+                            let DrawingObjectModel::ChartFrame(source_chart_object) = object else {
+                                continue;
+                            };
+                            let chart_id = if let Some(chart_id) =
+                                chart_id_map.get(&source_chart_object.chart_id)
+                            {
+                                *chart_id
+                            } else {
+                                let chart_id = ChartId(next_chart_id);
+                                next_chart_id += 1;
+                                let source_chart = source_charts
+                                    .get(&source_chart_object.chart_id)
+                                    .ok_or_else(|| {
+                                        OmError::new(
+                                            OmErrorCode::InvalidState,
+                                            "worksheet chart is missing",
+                                        )
+                                    })?;
+                                let mut copied_chart = source_chart.clone();
+                                copied_chart.id = chart_id;
+                                copied_chart.workbook_id = workbook_id;
+                                copied_chart.raw_part_uri = None;
+                                copied_chart.dirty = true;
+                                runtime.loaded.state.charts.insert(chart_id, copied_chart);
+                                if let Some(support_sources) = source_chart_support_part_sources
+                                    .get(&source_chart_object.chart_id)
+                                    && !support_sources.is_empty()
+                                {
+                                    runtime
+                                        .chart_support_part_sources
+                                        .insert(chart_id, support_sources.clone());
+                                }
+                                chart_id_map.insert(source_chart_object.chart_id, chart_id);
+                                chart_id
+                            };
+                            let chart_object_id = ChartObjectId(next_chart_object_id);
+                            next_chart_object_id += 1;
+                            let mut copied_chart_object = source_chart_object.clone();
+                            copied_chart_object.id = chart_object_id;
+                            copied_chart_object.workbook_id = workbook_id;
+                            copied_chart_object.host_sheet_id = added_sheet_id;
+                            copied_chart_object.chart_id = chart_id;
+                            copied_chart_object.non_visual_id =
+                                u32::try_from(chart_object_id.0).ok();
+                            copied_chart_object.raw_binding = None;
+                            copied_chart_object.dirty = true;
+                            copied_objects
+                                .push(DrawingObjectModel::ChartFrame(copied_chart_object));
+                        }
+                        if !copied_objects.is_empty() {
+                            let mut copied_drawing = source_drawing.clone();
+                            copied_drawing.id = drawing_id;
+                            copied_drawing.workbook_id = workbook_id;
+                            copied_drawing.host_sheet_id = added_sheet_id;
+                            copied_drawing.objects = copied_objects;
+                            copied_drawing.raw_part_uri = None;
+                            copied_drawing.dirty = true;
+                            runtime
+                                .loaded
+                                .state
+                                .drawings
+                                .insert(drawing_id, copied_drawing);
+                        }
+                    }
+                }
             }
 
             let copied_name = {
@@ -32114,6 +32294,34 @@ fn rewrite_relationship_target(
     }
     if !saw_target {
         rewritten.push_attribute(("Target", target.as_str()));
+    }
+    Ok(rewritten)
+}
+
+fn rewrite_drawing_relationship_id(
+    element: &BytesStart<'_>,
+    decoder: quick_xml::encoding::Decoder,
+    relationship_id: &str,
+) -> OmResult<BytesStart<'static>> {
+    let qualified_name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
+    let mut rewritten = BytesStart::new(qualified_name);
+    let mut saw_relationship_id = false;
+    for attr in element.attributes() {
+        let attr = attr.map_err(runtime_xml_error)?;
+        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+        let value = attr
+            .decode_and_unescape_value(decoder)
+            .map_err(runtime_xml_error)?
+            .into_owned();
+        if attr.key.as_ref() == b"r:id" {
+            saw_relationship_id = true;
+            rewritten.push_attribute((key.as_str(), relationship_id));
+        } else {
+            rewritten.push_attribute((key.as_str(), value.as_str()));
+        }
+    }
+    if !saw_relationship_id {
+        rewritten.push_attribute(("r:id", relationship_id));
     }
     Ok(rewritten)
 }
@@ -130294,6 +130502,109 @@ mod tests {
         assert_eq!(
             support_parts.hyperlink_bindings[0].target,
             "https://example.com"
+        );
+    }
+
+    #[test]
+    fn worksheet_copy_preserves_embedded_chart_support_parts_for_placement_copy() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_support_parts_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open embedded chart support workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheet1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(sheet1, "Copy", &[OmValue::Missing, OmValue::Number(1.0)])
+                .expect("Worksheet.Copy After:=1 on embedded chart sheet"),
+            OmValue::Empty
+        ));
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save copied embedded chart workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let copied_chart_rels = String::from_utf8(
+            saved_package
+                .part("xl/charts/_rels/chart2.xml.rels")
+                .expect("copied chart relationships")
+                .bytes
+                .clone(),
+        )
+        .expect("copied chart relationships utf8");
+        assert!(copied_chart_rels.contains(
+            r#"Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle""#
+        ));
+        assert!(copied_chart_rels.contains(
+            r#"Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle""#
+        ));
+        assert!(
+            saved_package
+                .part("xl/charts/style2.xml")
+                .map(|part| String::from_utf8_lossy(&part.bytes).contains(r#"id="404""#))
+                .unwrap_or(false),
+            "copied worksheet chart style support part should be copied"
+        );
+        assert!(
+            saved_package
+                .part("xl/charts/colors2.xml")
+                .map(|part| String::from_utf8_lossy(&part.bytes).contains(r#"id="404""#))
+                .unwrap_or(false),
+            "copied worksheet chart color support part should be copied"
+        );
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen copied embedded chart workbook");
+        let reopened_worksheets = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[])
+                .expect("reopened Workbook.Worksheets"),
+        );
+        let copied_sheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_worksheets, "Item", &[OmValue::Number(2.0)])
+                .expect("reopened copied worksheet"),
+        );
+        let copied_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(copied_sheet, "ChartObjects", &[])
+                .expect("reopened copied ChartObjects"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(copied_chart_objects, "Count", &[])
+                    .expect("reopened copied ChartObjects.Count")
+            ),
+            1.0
         );
     }
 
