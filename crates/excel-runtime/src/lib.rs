@@ -28251,6 +28251,9 @@ impl ExcelRuntime {
             {
                 chart_was_removed = true;
                 removed_chart_part_uri = removed_chart.raw_part_uri;
+                runtime
+                    .chart_support_part_sources
+                    .remove(&chart_object.chart_id);
             }
 
             if drawing_is_empty {
@@ -112364,6 +112367,119 @@ mod tests {
                 .map(|part| String::from_utf8_lossy(&part.bytes).contains(r#"id="404""#))
                 .unwrap_or(false),
             "duplicated chart color support part should be copied"
+        );
+    }
+
+    #[test]
+    fn chartobject_delete_clears_pending_support_parts_for_unsaved_duplicate() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_support_parts_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart support parts");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let duplicate_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_object, "Duplicate", &[])
+                .expect("ChartObject.Duplicate"),
+        );
+        let duplicate_chart = expect_object_handle(
+            runtime
+                .dispatch_get(duplicate_chart_object, "Chart", &[])
+                .expect("duplicate ChartObject.Chart"),
+        );
+        let duplicate_chart_id = match runtime
+            .runtime_object(duplicate_chart)
+            .expect("duplicate chart runtime object")
+        {
+            super::RuntimeObjectKind::Chart { chart_id, .. } => chart_id,
+            _ => panic!("duplicate ChartObject.Chart should return a Chart handle"),
+        };
+        assert!(
+            runtime
+                .runtime_workbook(workbook)
+                .expect("runtime workbook")
+                .chart_support_part_sources
+                .contains_key(&duplicate_chart_id),
+            "unsaved duplicated chart should have pending support part sources"
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(duplicate_chart_object, "Delete", &[])
+                .expect("duplicate ChartObject.Delete"),
+            OmValue::Bool(true)
+        );
+        assert!(
+            !runtime
+                .runtime_workbook(workbook)
+                .expect("runtime workbook after delete")
+                .chart_support_part_sources
+                .contains_key(&duplicate_chart_id),
+            "deleting unsaved duplicated chart should clear pending support part sources"
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after deleting unsaved duplicate");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        assert!(saved_package.contains("xl/charts/chart1.xml"));
+        assert!(saved_package.contains("xl/charts/style1.xml"));
+        assert!(saved_package.contains("xl/charts/colors1.xml"));
+        assert!(!saved_package.contains("xl/charts/chart2.xml"));
+        assert!(!saved_package.contains("xl/charts/style2.xml"));
+        assert!(!saved_package.contains("xl/charts/colors2.xml"));
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after deleting unsaved duplicate");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_objects, "Count", &[])
+                    .expect("reopened ChartObjects.Count")
+            ),
+            1.0
         );
     }
 
