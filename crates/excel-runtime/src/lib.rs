@@ -125585,6 +125585,96 @@ mod tests {
     }
 
     #[test]
+    fn chartobject_delete_removes_persisted_embedded_chart_support_parts() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_support_parts_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with embedded chart support parts");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_object, "Delete", &[])
+                .expect("ChartObject.Delete"),
+            OmValue::Bool(true)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after support-part ChartObject.Delete");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        assert!(!saved_package.contains("xl/charts/chart1.xml"));
+        assert!(!saved_package.contains("xl/charts/_rels/chart1.xml.rels"));
+        assert!(!saved_package.contains("xl/charts/style1.xml"));
+        assert!(!saved_package.contains("xl/charts/colors1.xml"));
+        let saved_content_types = String::from_utf8(
+            saved_package
+                .part("[Content_Types].xml")
+                .expect("saved content types")
+                .bytes
+                .clone(),
+        )
+        .expect("content types utf8");
+        assert!(!saved_content_types.contains("/xl/charts/chart1.xml"));
+        assert!(!saved_content_types.contains("/xl/charts/style1.xml"));
+        assert!(!saved_content_types.contains("/xl/charts/colors1.xml"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after support-part ChartObject.Delete");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_objects, "Count", &[])
+                    .expect("reopened ChartObjects.Count")
+            ),
+            0.0
+        );
+    }
+
+    #[test]
     fn chartobject_delete_preserves_chart_part_when_chart_is_still_referenced() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
