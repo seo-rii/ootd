@@ -130609,6 +130609,242 @@ mod tests {
     }
 
     #[test]
+    fn worksheet_copy_without_targets_preserves_embedded_chart_support_parts() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_support_parts_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open embedded chart support workbook");
+        let application = runtime.root_application();
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheet1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(sheet1, "Copy", &[])
+                .expect("Worksheet.Copy without placement args"),
+            OmValue::Empty
+        ));
+        let copied_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after chart sheet copy"),
+        );
+
+        let saved = runtime
+            .save_workbook(
+                super::WorkbookHandle(copied_workbook),
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save copied embedded chart workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        assert!(
+            saved_package.parts().iter().any(|part| {
+                part.name.starts_with("xl/charts/_rels/chart")
+                    && part.name.ends_with(".xml.rels")
+                    && String::from_utf8_lossy(&part.bytes).contains(
+                        r#"Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle""#,
+                    )
+                    && String::from_utf8_lossy(&part.bytes).contains(
+                        r#"Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle""#,
+                    )
+            }),
+            "copied workbook chart relationships should preserve chart style/color support"
+        );
+        assert!(
+            saved_package.parts().iter().any(|part| {
+                part.name.starts_with("xl/charts/style")
+                    && part.name.ends_with(".xml")
+                    && String::from_utf8_lossy(&part.bytes).contains(r#"id="404""#)
+            }),
+            "copied workbook chart style support part should be copied"
+        );
+        assert!(
+            saved_package.parts().iter().any(|part| {
+                part.name.starts_with("xl/charts/colors")
+                    && part.name.ends_with(".xml")
+                    && String::from_utf8_lossy(&part.bytes).contains(r#"id="404""#)
+            }),
+            "copied workbook chart color support part should be copied"
+        );
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen copied embedded chart workbook");
+        let reopened_worksheets = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[])
+                .expect("reopened Workbook.Worksheets"),
+        );
+        let copied_sheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened copied worksheet"),
+        );
+        let copied_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(copied_sheet, "ChartObjects", &[])
+                .expect("reopened copied ChartObjects"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(copied_chart_objects, "Count", &[])
+                    .expect("reopened copied ChartObjects.Count")
+            ),
+            1.0
+        );
+    }
+
+    #[test]
+    fn worksheet_move_preserves_embedded_chart_support_parts_for_cross_workbook_target() {
+        let mut runtime = ExcelRuntime::new();
+        let source_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_support_parts_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open embedded chart support source workbook");
+        let source_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(source_workbook.0, "Worksheets", &[])
+                .expect("source Workbook.Worksheets"),
+        );
+        let source_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(source_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("source Worksheets.Item(1)"),
+        );
+        let target_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open target workbook");
+        let target_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(target_workbook.0, "Worksheets", &[])
+                .expect("target Workbook.Worksheets"),
+        );
+        let target_sheet1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(target_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("target Worksheets.Item(1)"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(source_sheet, "Move", &[OmValue::Object(target_sheet1)])
+                .expect("Worksheet.Move Before:=target Sheet1"),
+            OmValue::Empty
+        ));
+        let stale_error = runtime
+            .dispatch_get(source_workbook.0, "Name", &[])
+            .expect_err("single-sheet source workbook should close after move");
+        assert_eq!(stale_error.code, OmErrorCode::InvalidState);
+
+        let saved = runtime
+            .save_workbook(
+                target_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save target workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        assert!(
+            saved_package.parts().iter().any(|part| {
+                part.name.starts_with("xl/charts/_rels/chart")
+                    && part.name.ends_with(".xml.rels")
+                    && String::from_utf8_lossy(&part.bytes).contains(
+                        r#"Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle""#,
+                    )
+                    && String::from_utf8_lossy(&part.bytes).contains(
+                        r#"Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle""#,
+                    )
+            }),
+            "moved worksheet chart relationships should preserve chart style/color support"
+        );
+        assert!(
+            saved_package.parts().iter().any(|part| {
+                part.name.starts_with("xl/charts/style")
+                    && part.name.ends_with(".xml")
+                    && String::from_utf8_lossy(&part.bytes).contains(r#"id="404""#)
+            }),
+            "moved worksheet chart style support part should be copied"
+        );
+        assert!(
+            saved_package.parts().iter().any(|part| {
+                part.name.starts_with("xl/charts/colors")
+                    && part.name.ends_with(".xml")
+                    && String::from_utf8_lossy(&part.bytes).contains(r#"id="404""#)
+            }),
+            "moved worksheet chart color support part should be copied"
+        );
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen moved embedded chart workbook");
+        let reopened_worksheets = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[])
+                .expect("reopened Workbook.Worksheets"),
+        );
+        let moved_sheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened moved worksheet"),
+        );
+        let moved_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(moved_sheet, "ChartObjects", &[])
+                .expect("reopened moved ChartObjects"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(moved_chart_objects, "Count", &[])
+                    .expect("reopened moved ChartObjects.Count")
+            ),
+            1.0
+        );
+    }
+
+    #[test]
     fn worksheet_move_supports_after_targets_and_rejects_invalid_arguments() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
