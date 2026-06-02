@@ -112460,6 +112460,152 @@ mod tests {
     }
 
     #[test]
+    fn chartobjects_duplicate_preserves_chart_support_parts() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_support_parts_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart support parts");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+
+        runtime
+            .dispatch_invoke(chart_objects, "Duplicate", &[])
+            .expect("ChartObjects.Duplicate");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after support-part ChartObjects.Duplicate");
+        let saved_package =
+            OpcPackage::from_bytes(&saved).expect("saved ChartObjects.Duplicate package");
+        let duplicate_chart_rels = String::from_utf8(
+            saved_package
+                .part("xl/charts/_rels/chart2.xml.rels")
+                .expect("duplicate chart rels")
+                .bytes
+                .clone(),
+        )
+        .expect("duplicate chart rels utf8");
+        assert!(duplicate_chart_rels.contains(
+            r#"Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle""#
+        ));
+        assert!(duplicate_chart_rels.contains(
+            r#"Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle""#
+        ));
+        assert!(
+            saved_package
+                .part("xl/charts/style2.xml")
+                .map(|part| String::from_utf8_lossy(&part.bytes).contains(r#"id="404""#))
+                .unwrap_or(false),
+            "ChartObjects.Duplicate chart style support part should be copied"
+        );
+        assert!(
+            saved_package
+                .part("xl/charts/colors2.xml")
+                .map(|part| String::from_utf8_lossy(&part.bytes).contains(r#"id="404""#))
+                .unwrap_or(false),
+            "ChartObjects.Duplicate chart color support part should be copied"
+        );
+    }
+
+    #[test]
+    fn shaperange_duplicate_preserves_chart_support_parts() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_support_parts_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart support parts");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let shape_range = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "ShapeRange", &[])
+                .expect("ChartObject.ShapeRange"),
+        );
+
+        runtime
+            .dispatch_invoke(shape_range, "Duplicate", &[])
+            .expect("ShapeRange.Duplicate");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after support-part ShapeRange.Duplicate");
+        let saved_package =
+            OpcPackage::from_bytes(&saved).expect("saved ShapeRange.Duplicate package");
+        let duplicate_chart_rels = String::from_utf8(
+            saved_package
+                .part("xl/charts/_rels/chart2.xml.rels")
+                .expect("duplicate chart rels")
+                .bytes
+                .clone(),
+        )
+        .expect("duplicate chart rels utf8");
+        assert!(duplicate_chart_rels.contains(
+            r#"Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle""#
+        ));
+        assert!(duplicate_chart_rels.contains(
+            r#"Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle""#
+        ));
+        assert!(
+            saved_package
+                .part("xl/charts/style2.xml")
+                .map(|part| String::from_utf8_lossy(&part.bytes).contains(r#"id="404""#))
+                .unwrap_or(false),
+            "ShapeRange.Duplicate chart style support part should be copied"
+        );
+        assert!(
+            saved_package
+                .part("xl/charts/colors2.xml")
+                .map(|part| String::from_utf8_lossy(&part.bytes).contains(r#"id="404""#))
+                .unwrap_or(false),
+            "ShapeRange.Duplicate chart color support part should be copied"
+        );
+    }
+
+    #[test]
     fn chartobject_delete_clears_pending_support_parts_for_unsaved_duplicate() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
