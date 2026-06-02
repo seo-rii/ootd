@@ -112371,6 +112371,95 @@ mod tests {
     }
 
     #[test]
+    fn chartobject_duplicate_materializes_chart_support_parts_stably_across_repeated_saves() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_support_parts_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart support parts");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+
+        runtime
+            .dispatch_invoke(chart_object, "Duplicate", &[])
+            .expect("ChartObject.Duplicate");
+        assert_eq!(
+            runtime
+                .runtime_workbook(workbook)
+                .expect("runtime workbook after duplicate")
+                .chart_support_part_sources
+                .len(),
+            1
+        );
+
+        let first_saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("first save after support-part duplicate");
+        assert!(
+            !runtime
+                .runtime_workbook(workbook)
+                .expect("runtime workbook after first save")
+                .chart_support_part_sources
+                .is_empty(),
+            "pure save should keep pending chart support sources for repeated saves"
+        );
+        let first_package = OpcPackage::from_bytes(&first_saved).expect("first saved package");
+        assert!(first_package.contains("xl/charts/style2.xml"));
+        assert!(first_package.contains("xl/charts/colors2.xml"));
+
+        let second_saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("second save after support-part duplicate");
+        let second_package = OpcPackage::from_bytes(&second_saved).expect("second saved package");
+        assert!(second_package.contains("xl/charts/style2.xml"));
+        assert!(second_package.contains("xl/charts/colors2.xml"));
+        assert!(!second_package.contains("xl/charts/style3.xml"));
+        assert!(!second_package.contains("xl/charts/colors3.xml"));
+        assert!(!second_package.contains("xl/charts/_rels/chart3.xml.rels"));
+        let duplicate_chart_rels = String::from_utf8(
+            second_package
+                .part("xl/charts/_rels/chart2.xml.rels")
+                .expect("duplicate chart rels after second save")
+                .bytes
+                .clone(),
+        )
+        .expect("duplicate chart rels utf8");
+        assert!(duplicate_chart_rels.contains(r#"Target="style2.xml""#));
+        assert!(duplicate_chart_rels.contains(r#"Target="colors2.xml""#));
+    }
+
+    #[test]
     fn chartobject_delete_clears_pending_support_parts_for_unsaved_duplicate() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
