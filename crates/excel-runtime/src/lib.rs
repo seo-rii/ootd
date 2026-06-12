@@ -13127,44 +13127,73 @@ impl ExcelRuntime {
                             ));
                         }
                     }
-                    if let Some(value) = args.get(3)
-                        && !om_value_is_omitted(value)
-                    {
+                    let plot_by =
+                        chart_plot_by_from_optional_arg(args.get(3), "Chart.ChartWizard PlotBy")?;
+                    let label_flag = |index: usize, label: &str| -> OmResult<bool> {
+                        let Some(value) = args.get(index) else {
+                            return Ok(false);
+                        };
+                        if om_value_is_omitted(value) {
+                            return Ok(false);
+                        }
                         let OmValue::Number(number) = value else {
-                            return Err(OmError::type_mismatch(
-                                "Chart.ChartWizard PlotBy expects a numeric value when provided",
-                            ));
+                            return Err(OmError::type_mismatch(format!(
+                                "{label} expects a numeric value when provided"
+                            )));
                         };
                         if !number.is_finite()
                             || number.fract() != 0.0
-                            || *number < i32::MIN as f64
-                            || *number > i32::MAX as f64
+                            || *number < 0.0
+                            || *number > 1.0
                         {
-                            return Err(OmError::invalid_argument(
-                                "Chart.ChartWizard PlotBy expects an integer value when provided",
-                            ));
+                            return Err(OmError::invalid_argument(format!(
+                                "{label} supports 0 or 1 label rows/columns"
+                            )));
                         }
-                        if !matches!(*number as i32, XL_PLOT_BY_ROWS | XL_PLOT_BY_COLUMNS) {
-                            return Err(OmError::invalid_argument(
-                                "Chart.ChartWizard PlotBy supports xlRows and xlColumns",
-                            ));
-                        }
-                    }
-                    validate_optional_integer_arg(args, 4, "Chart.ChartWizard CategoryLabels")?;
-                    validate_optional_integer_arg(args, 5, "Chart.ChartWizard SeriesLabels")?;
+                        Ok(*number == 1.0)
+                    };
+                    let category_labels = label_flag(4, "Chart.ChartWizard CategoryLabels")?;
+                    let series_labels = label_flag(5, "Chart.ChartWizard SeriesLabels")?;
 
                     if let Some(value) = args.first()
                         && !om_value_is_omitted(value)
                     {
                         match value {
                             OmValue::Object(_) => {
-                                let mut source_args = vec![value.clone()];
-                                if let Some(plot_by) = args.get(3)
-                                    && !om_value_is_omitted(plot_by)
+                                let source_range = self.chart_source_range_from_arg(
+                                    workbook,
+                                    value,
+                                    "Chart.ChartWizard",
+                                )?;
+                                let new_series = self.chart_series_models_for_range_source(
+                                    workbook,
+                                    &source_range,
+                                    plot_by,
+                                    0,
+                                    series_labels,
+                                    category_labels,
+                                )?;
                                 {
-                                    source_args.push(plot_by.clone());
+                                    let runtime = self.runtime_workbook_mut(workbook)?;
+                                    if runtime.read_only {
+                                        return Err(OmError::new(
+                                            OmErrorCode::InvalidState,
+                                            "cannot modify a read-only workbook",
+                                        ));
+                                    }
+                                    let chart_model = runtime
+                                        .loaded
+                                        .state
+                                        .charts
+                                        .get_mut(&chart_id)
+                                        .ok_or_else(|| {
+                                            OmError::new(OmErrorCode::NotFound, "chart not found")
+                                        })?;
+                                    chart_model.series = new_series;
+                                    chart_model.dirty = true;
+                                    runtime.dirty = true;
                                 }
-                                self.dispatch_invoke(chart, "SetSourceData", &source_args)?;
+                                self.stale_series_handles_for_chart(workbook, chart_id);
                             }
                             _ => {
                                 return Err(OmError::type_mismatch(
@@ -113777,7 +113806,38 @@ mod tests {
                     .dispatch_get(series_collection, "Count", &[])
                     .expect("SeriesCollection.Count after ChartWizard")
             ),
-            2.0
+            1.0
+        );
+        let first_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1) after ChartWizard"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_series, "Name", &[])
+                .expect("Series.Name after ChartWizard"),
+            OmValue::Text("=Sheet1!$B$1".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_series, "XValues", &[])
+                .expect("Series.XValues after ChartWizard"),
+            OmValue::Text("=Sheet1!$A$2:$A$3".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_series, "Values", &[])
+                .expect("Series.Values after ChartWizard"),
+            OmValue::Text("=Sheet1!$B$2:$B$3".to_string())
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(first_series, "Formula", &[])
+                    .expect("Series.Formula after ChartWizard")
+            ),
+            "=SERIES(Sheet1!$B$1,Sheet1!$A$2:$A$3,Sheet1!$B$2:$B$3,1)"
         );
         let category_axis = expect_object_handle(
             runtime
@@ -113916,6 +113976,23 @@ mod tests {
                 .expect_err("Chart.ChartWizard ExtraTitle rejects non-text")
                 .code,
             OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "ChartWizard",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(2.0),
+                    ],
+                )
+                .expect_err("Chart.ChartWizard rejects multi-row category labels")
+                .code,
+            OmErrorCode::InvalidArgument
         );
         assert_eq!(
             runtime
