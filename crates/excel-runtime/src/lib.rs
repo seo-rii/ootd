@@ -22379,11 +22379,6 @@ impl ExcelRuntime {
                     })
                     .transpose()?
                     .unwrap_or(false);
-                if replace {
-                    return Err(OmError::unsupported(
-                        "SeriesCollection.Add Replace is not supported yet",
-                    ));
-                }
                 let source_range =
                     self.chart_source_range_from_arg(workbook, &args[0], "SeriesCollection.Add")?;
                 let existing_series_len = self.chart_model(workbook, chart_id)?.series.len();
@@ -22395,6 +22390,29 @@ impl ExcelRuntime {
                     series_labels,
                     category_labels,
                 )?;
+                let replacement_category_source = if replace {
+                    if !category_labels {
+                        return Err(OmError::invalid_argument(
+                            "SeriesCollection.Add Replace requires CategoryLabels",
+                        ));
+                    }
+                    let mut category_sources = new_series
+                        .iter()
+                        .filter_map(|series| series.x_values.clone());
+                    let Some(first_source) = category_sources.next() else {
+                        return Err(OmError::invalid_argument(
+                            "SeriesCollection.Add Replace requires category label source data",
+                        ));
+                    };
+                    if category_sources.any(|source| source.raw.text != first_source.raw.text) {
+                        return Err(OmError::unsupported(
+                            "SeriesCollection.Add Replace with multiple category label ranges is not supported yet",
+                        ));
+                    }
+                    Some(first_source)
+                } else {
+                    None
+                };
                 let first_new_series_index = {
                     let runtime = self.runtime_workbook_mut(workbook)?;
                     if runtime.read_only {
@@ -22409,6 +22427,11 @@ impl ExcelRuntime {
                         .charts
                         .get_mut(&chart_id)
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    if let Some(category_source) = replacement_category_source {
+                        for series in &mut chart.series {
+                            series.x_values = Some(category_source.clone());
+                        }
+                    }
                     let first_new_series_index = chart.series.len();
                     chart.series.append(&mut new_series);
                     chart.dirty = true;
@@ -116345,7 +116368,7 @@ mod tests {
             ),
             2.0
         );
-        let unsupported_replace = runtime
+        let replace_without_category_labels = runtime
             .dispatch_invoke(
                 series_collection,
                 "Add",
@@ -116357,8 +116380,11 @@ mod tests {
                     OmValue::Bool(true),
                 ],
             )
-            .expect_err("SeriesCollection.Add Replace unsupported");
-        assert_eq!(unsupported_replace.code, OmErrorCode::Unsupported);
+            .expect_err("SeriesCollection.Add Replace without CategoryLabels");
+        assert_eq!(
+            replace_without_category_labels.code,
+            OmErrorCode::InvalidArgument
+        );
 
         let saved = runtime
             .save_workbook(
@@ -116633,6 +116659,189 @@ mod tests {
                     .expect("reopened first row Series.Formula")
             ),
             "=SERIES(Sheet1!$A$2,Sheet1!$B$1:$C$1,Sheet1!$B$2:$C$2,3)"
+        );
+    }
+
+    #[test]
+    fn series_collection_add_replace_updates_existing_category_labels() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let existing_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries"),
+        );
+        let existing_values = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("D2:D3".to_string())])
+                .expect("Worksheet.Range(D2:D3)"),
+        );
+        let existing_categories = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("E2:E3".to_string())])
+                .expect("Worksheet.Range(E2:E3)"),
+        );
+        runtime
+            .dispatch_set(
+                existing_series,
+                "Values",
+                OmValue::Object(existing_values),
+                &[],
+            )
+            .expect("set existing Series.Values");
+        runtime
+            .dispatch_set(
+                existing_series,
+                "XValues",
+                OmValue::Object(existing_categories),
+                &[],
+            )
+            .expect("set existing Series.XValues");
+        assert_eq!(
+            runtime
+                .dispatch_get(existing_series, "XValues", &[])
+                .expect("existing Series.XValues before Replace"),
+            OmValue::Text("=Sheet1!$E$2:$E$3".to_string())
+        );
+
+        let source_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:C3".to_string())])
+                .expect("Worksheet.Range(A1:C3)"),
+        );
+        let first_added_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    series_collection,
+                    "Add",
+                    &[
+                        OmValue::Object(source_range),
+                        OmValue::Number(f64::from(super::XL_PLOT_BY_COLUMNS)),
+                        OmValue::Bool(true),
+                        OmValue::Bool(true),
+                        OmValue::Bool(true),
+                    ],
+                )
+                .expect("SeriesCollection.Add Replace"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection.Count after Replace Add")
+            ),
+            3.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(existing_series, "XValues", &[])
+                .expect("existing Series.XValues after Replace"),
+            OmValue::Text("=Sheet1!$A$2:$A$3".to_string())
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(first_added_series, "Formula", &[])
+                    .expect("first added Series.Formula after Replace")
+            ),
+            "=SERIES(Sheet1!$B$1,Sheet1!$A$2:$A$3,Sheet1!$B$2:$B$3,2)"
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after SeriesCollection.Add Replace");
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after SeriesCollection.Add Replace");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_existing_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_existing_series, "XValues", &[])
+                .expect("reopened existing Series.XValues"),
+            OmValue::Text("=Sheet1!$A$2:$A$3".to_string())
         );
     }
 
