@@ -99933,6 +99933,159 @@ mod tests {
     }
 
     #[test]
+    fn chart_delete_removes_persisted_chart_sheet_support_parts() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_support_parts_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with embedded chart support parts");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "Move",
+                &[OmValue::Missing, OmValue::Object(worksheet)],
+            )
+            .expect("embedded Chart.Move after worksheet");
+        let moved_saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after support-part Chart.Move");
+        let moved_package = OpcPackage::from_bytes(&moved_saved).expect("moved package");
+        assert!(
+            moved_package.parts().iter().any(|part| {
+                part.name.starts_with("xl/charts/style")
+                    && part.name.ends_with(".xml")
+                    && String::from_utf8_lossy(&part.bytes).contains(r#"id="404""#)
+            }),
+            "moved chart sheet style support part should exist before delete"
+        );
+        assert!(
+            moved_package.parts().iter().any(|part| {
+                part.name.starts_with("xl/charts/colors")
+                    && part.name.ends_with(".xml")
+                    && String::from_utf8_lossy(&part.bytes).contains(r#"id="404""#)
+            }),
+            "moved chart sheet color support part should exist before delete"
+        );
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: moved_saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen moved chart sheet support workbook");
+        let application = runtime.root_application();
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(charts, "Item", &[OmValue::Number(1.0)])
+                .expect("Charts.Item(1)"),
+        );
+        runtime
+            .dispatch_set(application, "DisplayAlerts", OmValue::Bool(false), &[])
+            .expect("disable DisplayAlerts");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "Delete", &[])
+                .expect("Chart.Delete"),
+            OmValue::Bool(true)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after support-part Chart.Delete");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        assert!(!saved_package.contains("xl/chartsheets/sheet1.xml"));
+        assert!(!saved_package.contains("xl/chartsheets/_rels/sheet1.xml.rels"));
+        assert!(!saved_package.contains("xl/drawings/drawing1.xml"));
+        assert!(!saved_package.contains("xl/drawings/_rels/drawing1.xml.rels"));
+        assert!(!saved_package.contains("xl/charts/chart2.xml"));
+        assert!(!saved_package.contains("xl/charts/_rels/chart2.xml.rels"));
+        assert!(
+            !saved_package
+                .parts()
+                .iter()
+                .any(|part| part.name.starts_with("xl/charts/style"))
+        );
+        assert!(
+            !saved_package
+                .parts()
+                .iter()
+                .any(|part| part.name.starts_with("xl/charts/colors"))
+        );
+        let saved_content_types = String::from_utf8(
+            saved_package
+                .part("[Content_Types].xml")
+                .expect("saved content types")
+                .bytes
+                .clone(),
+        )
+        .expect("content types utf8");
+        assert!(!saved_content_types.contains("/xl/chartsheets/sheet1.xml"));
+        assert!(!saved_content_types.contains("/xl/drawings/drawing1.xml"));
+        assert!(!saved_content_types.contains("/xl/charts/chart2.xml"));
+        assert!(!saved_content_types.contains("/xl/charts/style"));
+        assert!(!saved_content_types.contains("/xl/charts/colors"));
+
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen chart sheet support delete workbook");
+        assert!(reopened.state.chart_sheets.is_empty());
+        assert!(reopened.state.drawings.is_empty());
+        assert!(reopened.state.charts.is_empty());
+    }
+
+    #[test]
     fn chartobject_visible_roundtrips_non_visual_hidden_attr() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
