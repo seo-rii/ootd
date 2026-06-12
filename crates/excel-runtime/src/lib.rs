@@ -14085,6 +14085,8 @@ impl ExcelRuntime {
                         &source_range,
                         plot_by,
                         0,
+                        false,
+                        false,
                     )?;
                     {
                         let runtime = self.runtime_workbook_mut(workbook)?;
@@ -22352,14 +22354,35 @@ impl ExcelRuntime {
                 }
                 let plot_by =
                     chart_plot_by_from_optional_arg(args.get(1), "SeriesCollection.Add Rowcol")?;
-                for (index, label) in [(2, "SeriesLabels"), (3, "CategoryLabels"), (4, "Replace")] {
-                    if let Some(value) = args.get(index)
-                        && !om_value_is_omitted(value)
-                    {
-                        return Err(OmError::unsupported(format!(
-                            "SeriesCollection.Add {label} is not supported yet"
-                        )));
-                    }
+                let series_labels = args
+                    .get(2)
+                    .map(|value| {
+                        coerce_optional_bool_arg(value, false, "SeriesCollection.Add SeriesLabels")
+                    })
+                    .transpose()?
+                    .unwrap_or(false);
+                let category_labels = args
+                    .get(3)
+                    .map(|value| {
+                        coerce_optional_bool_arg(
+                            value,
+                            false,
+                            "SeriesCollection.Add CategoryLabels",
+                        )
+                    })
+                    .transpose()?
+                    .unwrap_or(false);
+                let replace = args
+                    .get(4)
+                    .map(|value| {
+                        coerce_optional_bool_arg(value, false, "SeriesCollection.Add Replace")
+                    })
+                    .transpose()?
+                    .unwrap_or(false);
+                if replace {
+                    return Err(OmError::unsupported(
+                        "SeriesCollection.Add Replace is not supported yet",
+                    ));
                 }
                 let source_range =
                     self.chart_source_range_from_arg(workbook, &args[0], "SeriesCollection.Add")?;
@@ -22369,6 +22392,8 @@ impl ExcelRuntime {
                     &source_range,
                     plot_by,
                     existing_series_len,
+                    series_labels,
+                    category_labels,
                 )?;
                 let first_new_series_index = {
                     let runtime = self.runtime_workbook_mut(workbook)?;
@@ -22448,9 +22473,36 @@ impl ExcelRuntime {
         source_range: &RangeSet,
         plot_by: Option<i32>,
         first_order: usize,
+        series_labels: bool,
+        category_labels: bool,
     ) -> OmResult<Vec<SeriesModel>> {
         let workbook_id = self.workbook_model(workbook)?.id;
         let mut new_series = Vec::new();
+        let plot_by = if plot_by.is_none() && (series_labels || category_labels) {
+            Some(XL_PLOT_BY_COLUMNS)
+        } else {
+            plot_by
+        };
+        let mut make_series = |name: Option<ChartSourceExpr>,
+                               x_values: Option<ChartSourceExpr>,
+                               values: ChartSourceExpr| {
+            let order = u32::try_from(first_order + new_series.len()).ok();
+            new_series.push(SeriesModel {
+                name,
+                x_values,
+                values: Some(values),
+                bubble_size: None,
+                bar_shape: None,
+                smooth: None,
+                marker_style: None,
+                marker_size: None,
+                invert_if_negative: None,
+                points: BTreeMap::new(),
+                data_labels: None,
+                point_data_labels: BTreeMap::new(),
+                order,
+            });
+        };
         match plot_by {
             Some(XL_PLOT_BY_ROWS) => {
                 for area in source_range.areas() {
@@ -22461,33 +22513,81 @@ impl ExcelRuntime {
                         .worksheet_model(workbook, source_sheet_id)?
                         .name
                         .clone();
-                    for row in area.rect.row_first..=area.rect.row_last {
+                    let data_row_first = if category_labels {
+                        area.rect.row_first.checked_add(1).ok_or_else(|| {
+                            OmError::invalid_argument(
+                                "SeriesCollection.Add category labels leave no data rows",
+                            )
+                        })?
+                    } else {
+                        area.rect.row_first
+                    };
+                    let data_col_first = if series_labels {
+                        area.rect.col_first.checked_add(1).ok_or_else(|| {
+                            OmError::invalid_argument(
+                                "SeriesCollection.Add series labels leave no data columns",
+                            )
+                        })?
+                    } else {
+                        area.rect.col_first
+                    };
+                    if data_row_first > area.rect.row_last {
+                        return Err(OmError::invalid_argument(
+                            "SeriesCollection.Add category labels leave no data rows",
+                        ));
+                    }
+                    if data_col_first > area.rect.col_last {
+                        return Err(OmError::invalid_argument(
+                            "SeriesCollection.Add series labels leave no data columns",
+                        ));
+                    }
+                    let x_values = if category_labels {
+                        Some(chart_source_expr_for_range(
+                            workbook_id,
+                            source_sheet_id,
+                            Rect {
+                                row_first: area.rect.row_first,
+                                row_last: area.rect.row_first,
+                                col_first: data_col_first,
+                                col_last: area.rect.col_last,
+                            },
+                            &worksheet_name,
+                        )?)
+                    } else {
+                        None
+                    };
+                    for row in data_row_first..=area.rect.row_last {
+                        let name = if series_labels {
+                            Some(chart_source_expr_for_range(
+                                workbook_id,
+                                source_sheet_id,
+                                Rect {
+                                    row_first: row,
+                                    row_last: row,
+                                    col_first: area.rect.col_first,
+                                    col_last: area.rect.col_first,
+                                },
+                                &worksheet_name,
+                            )?)
+                        } else {
+                            None
+                        };
                         let values_rect = Rect {
                             row_first: row,
                             row_last: row,
-                            col_first: area.rect.col_first,
+                            col_first: data_col_first,
                             col_last: area.rect.col_last,
                         };
-                        new_series.push(SeriesModel {
-                            name: None,
-                            x_values: None,
-                            values: Some(chart_source_expr_for_range(
+                        make_series(
+                            name,
+                            x_values.clone(),
+                            chart_source_expr_for_range(
                                 workbook_id,
                                 source_sheet_id,
                                 values_rect,
                                 &worksheet_name,
-                            )?),
-                            bubble_size: None,
-                            bar_shape: None,
-                            smooth: None,
-                            marker_style: None,
-                            marker_size: None,
-                            invert_if_negative: None,
-                            points: BTreeMap::new(),
-                            data_labels: None,
-                            point_data_labels: BTreeMap::new(),
-                            order: u32::try_from(first_order + new_series.len()).ok(),
-                        });
+                            )?,
+                        );
                     }
                 }
             }
@@ -22500,33 +22600,81 @@ impl ExcelRuntime {
                         .worksheet_model(workbook, source_sheet_id)?
                         .name
                         .clone();
-                    for col in area.rect.col_first..=area.rect.col_last {
+                    let data_row_first = if series_labels {
+                        area.rect.row_first.checked_add(1).ok_or_else(|| {
+                            OmError::invalid_argument(
+                                "SeriesCollection.Add series labels leave no data rows",
+                            )
+                        })?
+                    } else {
+                        area.rect.row_first
+                    };
+                    let data_col_first = if category_labels {
+                        area.rect.col_first.checked_add(1).ok_or_else(|| {
+                            OmError::invalid_argument(
+                                "SeriesCollection.Add category labels leave no data columns",
+                            )
+                        })?
+                    } else {
+                        area.rect.col_first
+                    };
+                    if data_row_first > area.rect.row_last {
+                        return Err(OmError::invalid_argument(
+                            "SeriesCollection.Add series labels leave no data rows",
+                        ));
+                    }
+                    if data_col_first > area.rect.col_last {
+                        return Err(OmError::invalid_argument(
+                            "SeriesCollection.Add category labels leave no data columns",
+                        ));
+                    }
+                    let x_values = if category_labels {
+                        Some(chart_source_expr_for_range(
+                            workbook_id,
+                            source_sheet_id,
+                            Rect {
+                                row_first: data_row_first,
+                                row_last: area.rect.row_last,
+                                col_first: area.rect.col_first,
+                                col_last: area.rect.col_first,
+                            },
+                            &worksheet_name,
+                        )?)
+                    } else {
+                        None
+                    };
+                    for col in data_col_first..=area.rect.col_last {
+                        let name = if series_labels {
+                            Some(chart_source_expr_for_range(
+                                workbook_id,
+                                source_sheet_id,
+                                Rect {
+                                    row_first: area.rect.row_first,
+                                    row_last: area.rect.row_first,
+                                    col_first: col,
+                                    col_last: col,
+                                },
+                                &worksheet_name,
+                            )?)
+                        } else {
+                            None
+                        };
                         let values_rect = Rect {
-                            row_first: area.rect.row_first,
+                            row_first: data_row_first,
                             row_last: area.rect.row_last,
                             col_first: col,
                             col_last: col,
                         };
-                        new_series.push(SeriesModel {
-                            name: None,
-                            x_values: None,
-                            values: Some(chart_source_expr_for_range(
+                        make_series(
+                            name,
+                            x_values.clone(),
+                            chart_source_expr_for_range(
                                 workbook_id,
                                 source_sheet_id,
                                 values_rect,
                                 &worksheet_name,
-                            )?),
-                            bubble_size: None,
-                            bar_shape: None,
-                            smooth: None,
-                            marker_style: None,
-                            marker_size: None,
-                            invert_if_negative: None,
-                            points: BTreeMap::new(),
-                            data_labels: None,
-                            point_data_labels: BTreeMap::new(),
-                            order: u32::try_from(first_order + new_series.len()).ok(),
-                        });
+                            )?,
+                        );
                     }
                 }
             }
@@ -22543,21 +22691,11 @@ impl ExcelRuntime {
                         .clone();
                     areas.push((source_sheet_id, area.rect, worksheet_name));
                 }
-                new_series.push(SeriesModel {
-                    name: None,
-                    x_values: None,
-                    values: Some(chart_source_expr_for_range_areas(workbook_id, areas)?),
-                    bubble_size: None,
-                    bar_shape: None,
-                    smooth: None,
-                    marker_style: None,
-                    marker_size: None,
-                    invert_if_negative: None,
-                    points: BTreeMap::new(),
-                    data_labels: None,
-                    point_data_labels: BTreeMap::new(),
-                    order: u32::try_from(first_order).ok(),
-                });
+                make_series(
+                    None,
+                    None,
+                    chart_source_expr_for_range_areas(workbook_id, areas)?,
+                );
             }
         }
         Ok(new_series)
@@ -116207,18 +116345,20 @@ mod tests {
             ),
             2.0
         );
-        let unsupported_series_labels = runtime
+        let unsupported_replace = runtime
             .dispatch_invoke(
                 series_collection,
                 "Add",
                 &[
                     OmValue::Object(source_range),
                     OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
                     OmValue::Bool(true),
                 ],
             )
-            .expect_err("SeriesCollection.Add SeriesLabels unsupported");
-        assert_eq!(unsupported_series_labels.code, OmErrorCode::Unsupported);
+            .expect_err("SeriesCollection.Add Replace unsupported");
+        assert_eq!(unsupported_replace.code, OmErrorCode::Unsupported);
 
         let saved = runtime
             .save_workbook(
@@ -116282,6 +116422,217 @@ mod tests {
                 .dispatch_get(reopened_second_series, "Values", &[])
                 .expect("reopened second Series.Values"),
             OmValue::Text("=Sheet1!$B$1:$B$3".to_string())
+        );
+    }
+
+    #[test]
+    fn series_collection_add_uses_series_and_category_labels() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let source_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:C3".to_string())])
+                .expect("Worksheet.Range(A1:C3)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+
+        let first_column_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    series_collection,
+                    "Add",
+                    &[
+                        OmValue::Object(source_range),
+                        OmValue::Number(f64::from(super::XL_PLOT_BY_COLUMNS)),
+                        OmValue::Bool(true),
+                        OmValue::Bool(true),
+                    ],
+                )
+                .expect("SeriesCollection.Add xlColumns with labels"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection.Count after xlColumns label Add")
+            ),
+            2.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_column_series, "Name", &[])
+                .expect("first column Series.Name"),
+            OmValue::Text("=Sheet1!$B$1".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_column_series, "XValues", &[])
+                .expect("first column Series.XValues"),
+            OmValue::Text("=Sheet1!$A$2:$A$3".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_column_series, "Values", &[])
+                .expect("first column Series.Values"),
+            OmValue::Text("=Sheet1!$B$2:$B$3".to_string())
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(first_column_series, "Formula", &[])
+                    .expect("first column Series.Formula")
+            ),
+            "=SERIES(Sheet1!$B$1,Sheet1!$A$2:$A$3,Sheet1!$B$2:$B$3,1)"
+        );
+        let second_column_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(2.0)])
+                .expect("SeriesCollection.Item(2) after column label Add"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(second_column_series, "Formula", &[])
+                    .expect("second column Series.Formula")
+            ),
+            "=SERIES(Sheet1!$C$1,Sheet1!$A$2:$A$3,Sheet1!$C$2:$C$3,2)"
+        );
+
+        let first_row_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    series_collection,
+                    "Add",
+                    &[
+                        OmValue::Object(source_range),
+                        OmValue::Number(f64::from(super::XL_PLOT_BY_ROWS)),
+                        OmValue::Bool(true),
+                        OmValue::Bool(true),
+                    ],
+                )
+                .expect("SeriesCollection.Add xlRows with labels"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection.Count after xlRows label Add")
+            ),
+            4.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(first_row_series, "Formula", &[])
+                    .expect("first row Series.Formula")
+            ),
+            "=SERIES(Sheet1!$A$2,Sheet1!$B$1:$C$1,Sheet1!$B$2:$C$2,3)"
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after SeriesCollection.Add labels");
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after SeriesCollection.Add labels");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_series_collection, "Count", &[])
+                    .expect("reopened SeriesCollection.Count")
+            ),
+            4.0
+        );
+        let reopened_first_row_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(3.0)])
+                .expect("reopened SeriesCollection.Item(3)"),
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(reopened_first_row_series, "Formula", &[])
+                    .expect("reopened first row Series.Formula")
+            ),
+            "=SERIES(Sheet1!$A$2,Sheet1!$B$1:$C$1,Sheet1!$B$2:$C$2,3)"
         );
     }
 
