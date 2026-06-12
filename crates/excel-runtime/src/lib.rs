@@ -14943,7 +14943,38 @@ impl ExcelRuntime {
                             "DataLabels.ClearFormats does not accept arguments",
                         ));
                     }
-                    self.series_model(workbook, chart_id, series_index)?;
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    let chart = runtime
+                        .loaded
+                        .state
+                        .charts
+                        .get_mut(&chart_id)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    let series = chart
+                        .series
+                        .get_mut(series_index)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "series not found"))?;
+                    if let Some(data_labels) = series.data_labels.as_mut() {
+                        let changed = data_labels.number_format.is_some()
+                            || data_labels.number_format_linked.is_some()
+                            || data_labels.position.is_some()
+                            || data_labels.separator.is_some();
+                        if changed {
+                            data_labels.number_format = None;
+                            data_labels.number_format_linked = None;
+                            data_labels.position = None;
+                            data_labels.separator = None;
+                            data_labels.dirty = true;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                    }
                     Ok(OmValue::Empty)
                 }
                 "Propagate" => {
@@ -110015,6 +110046,56 @@ mod tests {
             .expect("DataLabels.Position = outside end");
         assert_eq!(
             runtime
+                .dispatch_invoke(data_labels, "ClearFormats", &[])
+                .expect("DataLabels.ClearFormats"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_labels, "ShowCategoryName", &[])
+                .expect("DataLabels.ShowCategoryName after ClearFormats"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_labels, "ShowValue", &[])
+                .expect("DataLabels.ShowValue after ClearFormats"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_labels, "HasLeaderLines", &[])
+                .expect("DataLabels.HasLeaderLines after ClearFormats"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_labels, "Separator", &[])
+                .expect("DataLabels.Separator after ClearFormats"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_labels, "NumberFormat", &[])
+                .expect("DataLabels.NumberFormat after ClearFormats"),
+            OmValue::Text("General".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_labels, "NumberFormatLinked", &[])
+                .expect("DataLabels.NumberFormatLinked after ClearFormats"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(data_labels, "Position", &[])
+                    .expect("DataLabels.Position after ClearFormats")
+            ),
+            f64::from(super::XL_LABEL_POSITION_BEST_FIT)
+        );
+        assert_eq!(
+            runtime
                 .dispatch_set(
                     data_labels,
                     "ShowValue",
@@ -110111,9 +110192,9 @@ mod tests {
         assert!(saved_chart_xml.contains(r#"<c:showVal val="1"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:showPercent val="0"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:showBubbleSize val="0"/>"#));
-        assert!(saved_chart_xml.contains(r#"<c:numFmt formatCode="0.0%" sourceLinked="1"/>"#));
-        assert!(saved_chart_xml.contains(r#"<c:dLblPos val="outEnd"/>"#));
-        assert!(saved_chart_xml.contains("<c:separator> | </c:separator>"));
+        assert!(!saved_chart_xml.contains("<c:numFmt"));
+        assert!(!saved_chart_xml.contains("<c:dLblPos"));
+        assert!(!saved_chart_xml.contains("<c:separator>"));
 
         let mut reopened_runtime = ExcelRuntime::new();
         let reopened_workbook = reopened_runtime
@@ -110187,13 +110268,13 @@ mod tests {
             reopened_runtime
                 .dispatch_get(reopened_data_labels, "Separator", &[])
                 .expect("reopened DataLabels.Separator"),
-            OmValue::Text(" | ".to_string())
+            OmValue::Empty
         );
         assert_eq!(
             reopened_runtime
                 .dispatch_get(reopened_data_labels, "NumberFormat", &[])
                 .expect("reopened DataLabels.NumberFormat"),
-            OmValue::Text("0.0%".to_string())
+            OmValue::Text("General".to_string())
         );
         assert_eq!(
             reopened_runtime
@@ -110207,7 +110288,7 @@ mod tests {
                     .dispatch_get(reopened_data_labels, "Position", &[])
                     .expect("reopened DataLabels.Position")
             ),
-            f64::from(super::XL_LABEL_POSITION_OUTSIDE_END)
+            f64::from(super::XL_LABEL_POSITION_BEST_FIT)
         );
         let reopened_state = reopened_runtime
             .workbook_state(reopened_workbook)
@@ -110229,13 +110310,10 @@ mod tests {
         assert_eq!(series_data_labels.show_value, Some(true));
         assert_eq!(series_data_labels.show_percentage, Some(false));
         assert_eq!(series_data_labels.show_bubble_size, Some(false));
-        assert_eq!(series_data_labels.number_format.as_deref(), Some("0.0%"));
-        assert_eq!(series_data_labels.number_format_linked, Some(true));
-        assert_eq!(
-            series_data_labels.position,
-            Some(ChartDataLabelPosition::OutsideEnd)
-        );
-        assert_eq!(series_data_labels.separator.as_deref(), Some(" | "));
+        assert_eq!(series_data_labels.number_format, None);
+        assert_eq!(series_data_labels.number_format_linked, None);
+        assert_eq!(series_data_labels.position, None);
+        assert_eq!(series_data_labels.separator, None);
         assert!(!series_data_labels.dirty);
     }
 
