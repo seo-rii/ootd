@@ -14073,180 +14073,19 @@ impl ExcelRuntime {
                             "Chart.SetSourceData expects Source and optional PlotBy arguments",
                         ));
                     }
-                    let plot_by = match args.get(1) {
-                        None => None,
-                        Some(value) if om_value_is_omitted(value) => None,
-                        Some(OmValue::Number(number)) => {
-                            if !number.is_finite()
-                                || number.fract() != 0.0
-                                || *number < i32::MIN as f64
-                                || *number > i32::MAX as f64
-                            {
-                                return Err(OmError::invalid_argument(
-                                    "Chart.SetSourceData PlotBy expects an integer value when provided",
-                                ));
-                            }
-                            let plot_by = *number as i32;
-                            if !matches!(plot_by, XL_PLOT_BY_ROWS | XL_PLOT_BY_COLUMNS) {
-                                return Err(OmError::invalid_argument(
-                                    "Chart.SetSourceData PlotBy supports xlRows and xlColumns",
-                                ));
-                            }
-                            Some(plot_by)
-                        }
-                        Some(_) => {
-                            return Err(OmError::type_mismatch(
-                                "Chart.SetSourceData PlotBy expects a numeric value when provided",
-                            ));
-                        }
-                    };
-                    let source_range = match &args[0] {
-                        OmValue::Object(handle) => match self.runtime_object(*handle)? {
-                            RuntimeObjectKind::Range {
-                                workbook: range_workbook,
-                                range,
-                                ..
-                            } => {
-                                if range_workbook != workbook {
-                                    return Err(OmError::unsupported(
-                                        "Chart.SetSourceData cross-workbook ranges are not supported",
-                                    ));
-                                }
-                                for area in range.areas() {
-                                    if matches!(area.scope, SheetScope::Multi3D { .. }) {
-                                        return Err(OmError::unsupported(
-                                            "Chart.SetSourceData 3D ranges are not supported",
-                                        ));
-                                    }
-                                }
-                                range
-                            }
-                            _ => {
-                                return Err(OmError::type_mismatch(
-                                    "Chart.SetSourceData Source expects a Range object",
-                                ));
-                            }
-                        },
-                        _ => {
-                            return Err(OmError::type_mismatch(
-                                "Chart.SetSourceData Source expects a Range object",
-                            ));
-                        }
-                    };
-                    let workbook_id = self.workbook_model(workbook)?.id;
-                    let mut new_series = Vec::new();
-                    match plot_by {
-                        Some(XL_PLOT_BY_ROWS) => {
-                            for area in source_range.areas() {
-                                let SheetScope::Single(source_sheet_id) = area.scope else {
-                                    unreachable!("3D ranges were rejected above");
-                                };
-                                let worksheet_name = self
-                                    .worksheet_model(workbook, source_sheet_id)?
-                                    .name
-                                    .clone();
-                                for row in area.rect.row_first..=area.rect.row_last {
-                                    let values_rect = Rect {
-                                        row_first: row,
-                                        row_last: row,
-                                        col_first: area.rect.col_first,
-                                        col_last: area.rect.col_last,
-                                    };
-                                    new_series.push(SeriesModel {
-                                        name: None,
-                                        x_values: None,
-                                        values: Some(chart_source_expr_for_range(
-                                            workbook_id,
-                                            source_sheet_id,
-                                            values_rect,
-                                            &worksheet_name,
-                                        )?),
-                                        bubble_size: None,
-                                        bar_shape: None,
-                                        smooth: None,
-                                        marker_style: None,
-                                        marker_size: None,
-                                        invert_if_negative: None,
-                                        points: BTreeMap::new(),
-                                        data_labels: None,
-                                        point_data_labels: BTreeMap::new(),
-                                        order: u32::try_from(new_series.len()).ok(),
-                                    });
-                                }
-                            }
-                        }
-                        Some(XL_PLOT_BY_COLUMNS) => {
-                            for area in source_range.areas() {
-                                let SheetScope::Single(source_sheet_id) = area.scope else {
-                                    unreachable!("3D ranges were rejected above");
-                                };
-                                let worksheet_name = self
-                                    .worksheet_model(workbook, source_sheet_id)?
-                                    .name
-                                    .clone();
-                                for col in area.rect.col_first..=area.rect.col_last {
-                                    let values_rect = Rect {
-                                        row_first: area.rect.row_first,
-                                        row_last: area.rect.row_last,
-                                        col_first: col,
-                                        col_last: col,
-                                    };
-                                    new_series.push(SeriesModel {
-                                        name: None,
-                                        x_values: None,
-                                        values: Some(chart_source_expr_for_range(
-                                            workbook_id,
-                                            source_sheet_id,
-                                            values_rect,
-                                            &worksheet_name,
-                                        )?),
-                                        bubble_size: None,
-                                        bar_shape: None,
-                                        smooth: None,
-                                        marker_style: None,
-                                        marker_size: None,
-                                        invert_if_negative: None,
-                                        points: BTreeMap::new(),
-                                        data_labels: None,
-                                        point_data_labels: BTreeMap::new(),
-                                        order: u32::try_from(new_series.len()).ok(),
-                                    });
-                                }
-                            }
-                        }
-                        Some(_) => unreachable!("unsupported PlotBy was rejected"),
-                        None => {
-                            let mut areas = Vec::with_capacity(source_range.len());
-                            for area in source_range.areas() {
-                                let SheetScope::Single(source_sheet_id) = area.scope else {
-                                    unreachable!("3D ranges were rejected above");
-                                };
-                                let worksheet_name = self
-                                    .worksheet_model(workbook, source_sheet_id)?
-                                    .name
-                                    .clone();
-                                areas.push((source_sheet_id, area.rect, worksheet_name));
-                            }
-                            new_series.push(SeriesModel {
-                                name: None,
-                                x_values: None,
-                                values: Some(chart_source_expr_for_range_areas(
-                                    workbook_id,
-                                    areas,
-                                )?),
-                                bubble_size: None,
-                                bar_shape: None,
-                                smooth: None,
-                                marker_style: None,
-                                marker_size: None,
-                                invert_if_negative: None,
-                                points: BTreeMap::new(),
-                                data_labels: None,
-                                point_data_labels: BTreeMap::new(),
-                                order: Some(0),
-                            });
-                        }
-                    }
+                    let plot_by =
+                        chart_plot_by_from_optional_arg(args.get(1), "Chart.SetSourceData PlotBy")?;
+                    let source_range = self.chart_source_range_from_arg(
+                        workbook,
+                        &args[0],
+                        "Chart.SetSourceData",
+                    )?;
+                    let new_series = self.chart_series_models_for_range_source(
+                        workbook,
+                        &source_range,
+                        plot_by,
+                        0,
+                    )?;
                     {
                         let runtime = self.runtime_workbook_mut(workbook)?;
                         if runtime.read_only {
@@ -22505,10 +22344,223 @@ impl ExcelRuntime {
                     ),
                 ))
             }
+            "Add" => {
+                if args.is_empty() || args.len() > 5 {
+                    return Err(OmError::invalid_argument(
+                        "SeriesCollection.Add expects Source and optional Rowcol, SeriesLabels, CategoryLabels, and Replace arguments",
+                    ));
+                }
+                let plot_by =
+                    chart_plot_by_from_optional_arg(args.get(1), "SeriesCollection.Add Rowcol")?;
+                for (index, label) in [(2, "SeriesLabels"), (3, "CategoryLabels"), (4, "Replace")] {
+                    if let Some(value) = args.get(index)
+                        && !om_value_is_omitted(value)
+                    {
+                        return Err(OmError::unsupported(format!(
+                            "SeriesCollection.Add {label} is not supported yet"
+                        )));
+                    }
+                }
+                let source_range =
+                    self.chart_source_range_from_arg(workbook, &args[0], "SeriesCollection.Add")?;
+                let existing_series_len = self.chart_model(workbook, chart_id)?.series.len();
+                let mut new_series = self.chart_series_models_for_range_source(
+                    workbook,
+                    &source_range,
+                    plot_by,
+                    existing_series_len,
+                )?;
+                let first_new_series_index = {
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    let chart = runtime
+                        .loaded
+                        .state
+                        .charts
+                        .get_mut(&chart_id)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    let first_new_series_index = chart.series.len();
+                    chart.series.append(&mut new_series);
+                    chart.dirty = true;
+                    runtime.dirty = true;
+                    first_new_series_index
+                };
+                Ok(OmValue::Object(
+                    self.register_series_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        first_new_series_index,
+                        chart_object_parent,
+                    ),
+                ))
+            }
             _ => Err(OmError::unsupported(format!(
                 "SeriesCollection.{member} is not implemented as a method"
             ))),
         }
+    }
+
+    fn chart_source_range_from_arg(
+        &self,
+        workbook: WorkbookHandle,
+        value: &OmValue,
+        owner: &str,
+    ) -> OmResult<RangeSet> {
+        match value {
+            OmValue::Object(handle) => match self.runtime_object(*handle)? {
+                RuntimeObjectKind::Range {
+                    workbook: range_workbook,
+                    range,
+                    ..
+                } => {
+                    if range_workbook != workbook {
+                        return Err(OmError::unsupported(format!(
+                            "{owner} cross-workbook ranges are not supported"
+                        )));
+                    }
+                    for area in range.areas() {
+                        if matches!(area.scope, SheetScope::Multi3D { .. }) {
+                            return Err(OmError::unsupported(format!(
+                                "{owner} 3D ranges are not supported"
+                            )));
+                        }
+                    }
+                    Ok(range)
+                }
+                _ => Err(OmError::type_mismatch(format!(
+                    "{owner} Source expects a Range object"
+                ))),
+            },
+            _ => Err(OmError::type_mismatch(format!(
+                "{owner} Source expects a Range object"
+            ))),
+        }
+    }
+
+    fn chart_series_models_for_range_source(
+        &self,
+        workbook: WorkbookHandle,
+        source_range: &RangeSet,
+        plot_by: Option<i32>,
+        first_order: usize,
+    ) -> OmResult<Vec<SeriesModel>> {
+        let workbook_id = self.workbook_model(workbook)?.id;
+        let mut new_series = Vec::new();
+        match plot_by {
+            Some(XL_PLOT_BY_ROWS) => {
+                for area in source_range.areas() {
+                    let SheetScope::Single(source_sheet_id) = area.scope else {
+                        unreachable!("3D ranges were rejected above");
+                    };
+                    let worksheet_name = self
+                        .worksheet_model(workbook, source_sheet_id)?
+                        .name
+                        .clone();
+                    for row in area.rect.row_first..=area.rect.row_last {
+                        let values_rect = Rect {
+                            row_first: row,
+                            row_last: row,
+                            col_first: area.rect.col_first,
+                            col_last: area.rect.col_last,
+                        };
+                        new_series.push(SeriesModel {
+                            name: None,
+                            x_values: None,
+                            values: Some(chart_source_expr_for_range(
+                                workbook_id,
+                                source_sheet_id,
+                                values_rect,
+                                &worksheet_name,
+                            )?),
+                            bubble_size: None,
+                            bar_shape: None,
+                            smooth: None,
+                            marker_style: None,
+                            marker_size: None,
+                            invert_if_negative: None,
+                            points: BTreeMap::new(),
+                            data_labels: None,
+                            point_data_labels: BTreeMap::new(),
+                            order: u32::try_from(first_order + new_series.len()).ok(),
+                        });
+                    }
+                }
+            }
+            Some(XL_PLOT_BY_COLUMNS) => {
+                for area in source_range.areas() {
+                    let SheetScope::Single(source_sheet_id) = area.scope else {
+                        unreachable!("3D ranges were rejected above");
+                    };
+                    let worksheet_name = self
+                        .worksheet_model(workbook, source_sheet_id)?
+                        .name
+                        .clone();
+                    for col in area.rect.col_first..=area.rect.col_last {
+                        let values_rect = Rect {
+                            row_first: area.rect.row_first,
+                            row_last: area.rect.row_last,
+                            col_first: col,
+                            col_last: col,
+                        };
+                        new_series.push(SeriesModel {
+                            name: None,
+                            x_values: None,
+                            values: Some(chart_source_expr_for_range(
+                                workbook_id,
+                                source_sheet_id,
+                                values_rect,
+                                &worksheet_name,
+                            )?),
+                            bubble_size: None,
+                            bar_shape: None,
+                            smooth: None,
+                            marker_style: None,
+                            marker_size: None,
+                            invert_if_negative: None,
+                            points: BTreeMap::new(),
+                            data_labels: None,
+                            point_data_labels: BTreeMap::new(),
+                            order: u32::try_from(first_order + new_series.len()).ok(),
+                        });
+                    }
+                }
+            }
+            Some(_) => unreachable!("unsupported PlotBy was rejected"),
+            None => {
+                let mut areas = Vec::with_capacity(source_range.len());
+                for area in source_range.areas() {
+                    let SheetScope::Single(source_sheet_id) = area.scope else {
+                        unreachable!("3D ranges were rejected above");
+                    };
+                    let worksheet_name = self
+                        .worksheet_model(workbook, source_sheet_id)?
+                        .name
+                        .clone();
+                    areas.push((source_sheet_id, area.rect, worksheet_name));
+                }
+                new_series.push(SeriesModel {
+                    name: None,
+                    x_values: None,
+                    values: Some(chart_source_expr_for_range_areas(workbook_id, areas)?),
+                    bubble_size: None,
+                    bar_shape: None,
+                    smooth: None,
+                    marker_style: None,
+                    marker_size: None,
+                    invert_if_negative: None,
+                    points: BTreeMap::new(),
+                    data_labels: None,
+                    point_data_labels: BTreeMap::new(),
+                    order: u32::try_from(first_order).ok(),
+                });
+            }
+        }
+        Ok(new_series)
     }
 
     fn dispatch_get_series(
@@ -42073,6 +42125,34 @@ fn chart_axis_group_from_excel_value(value: u32, label: &str) -> OmResult<ChartA
         XL_SECONDARY => Ok(ChartAxisGroup::Secondary),
         _ => Err(OmError::invalid_argument(format!(
             "{label} supports xlPrimary and xlSecondary"
+        ))),
+    }
+}
+
+fn chart_plot_by_from_optional_arg(value: Option<&OmValue>, label: &str) -> OmResult<Option<i32>> {
+    match value {
+        None => Ok(None),
+        Some(value) if om_value_is_omitted(value) => Ok(None),
+        Some(OmValue::Number(number)) => {
+            if !number.is_finite()
+                || number.fract() != 0.0
+                || *number < i32::MIN as f64
+                || *number > i32::MAX as f64
+            {
+                return Err(OmError::invalid_argument(format!(
+                    "{label} expects an integer value when provided"
+                )));
+            }
+            let plot_by = *number as i32;
+            if !matches!(plot_by, XL_PLOT_BY_ROWS | XL_PLOT_BY_COLUMNS) {
+                return Err(OmError::invalid_argument(format!(
+                    "{label} supports xlRows and xlColumns"
+                )));
+            }
+            Ok(Some(plot_by))
+        }
+        Some(_) => Err(OmError::type_mismatch(format!(
+            "{label} expects a numeric value when provided"
         ))),
     }
 }
@@ -116012,6 +116092,196 @@ mod tests {
                     .expect("reopened Series.Formula")
             ),
             "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$B$1,Sheet1!$A$1:$C$1,1)"
+        );
+    }
+
+    #[test]
+    fn series_collection_add_appends_range_sources_and_persists() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let source_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection.Count before Add")
+            ),
+            0.0
+        );
+
+        let first_added_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    series_collection,
+                    "Add",
+                    &[
+                        OmValue::Object(source_range),
+                        OmValue::Number(f64::from(super::XL_PLOT_BY_COLUMNS)),
+                    ],
+                )
+                .expect("SeriesCollection.Add xlColumns"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection.Count after Add")
+            ),
+            2.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_added_series, "Values", &[])
+                .expect("first added Series.Values"),
+            OmValue::Text("=Sheet1!$A$1:$A$3".to_string())
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_added_series, "PlotOrder", &[])
+                    .expect("first added Series.PlotOrder")
+            ),
+            1.0
+        );
+        let second_added_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(2.0)])
+                .expect("SeriesCollection.Item(2) after Add"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_added_series, "Values", &[])
+                .expect("second added Series.Values"),
+            OmValue::Text("=Sheet1!$B$1:$B$3".to_string())
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_added_series, "PlotOrder", &[])
+                    .expect("second added Series.PlotOrder")
+            ),
+            2.0
+        );
+        let unsupported_series_labels = runtime
+            .dispatch_invoke(
+                series_collection,
+                "Add",
+                &[
+                    OmValue::Object(source_range),
+                    OmValue::Missing,
+                    OmValue::Bool(true),
+                ],
+            )
+            .expect_err("SeriesCollection.Add SeriesLabels unsupported");
+        assert_eq!(unsupported_series_labels.code, OmErrorCode::Unsupported);
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after SeriesCollection.Add");
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after SeriesCollection.Add");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_series_collection, "Count", &[])
+                    .expect("reopened SeriesCollection.Count")
+            ),
+            2.0
+        );
+        let reopened_second_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(2.0)])
+                .expect("reopened SeriesCollection.Item(2)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_second_series, "Values", &[])
+                .expect("reopened second Series.Values"),
+            OmValue::Text("=Sheet1!$B$1:$B$3".to_string())
         );
     }
 
