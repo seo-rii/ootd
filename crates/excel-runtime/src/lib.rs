@@ -128755,6 +128755,134 @@ mod tests {
     }
 
     #[test]
+    fn chart_set_source_data_preserves_loaded_chart_support_parts() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_support_parts_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with embedded chart support parts");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let source_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+
+        runtime
+            .dispatch_invoke(chart, "SetSourceData", &[OmValue::Object(source_range)])
+            .expect("Chart.SetSourceData on loaded support-part chart");
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after support-part Chart.SetSourceData");
+        let saved_package =
+            OpcPackage::from_bytes(&saved).expect("saved support-part SetSourceData package");
+        let chart_rels = String::from_utf8(
+            saved_package
+                .part("xl/charts/_rels/chart1.xml.rels")
+                .expect("saved chart relationships")
+                .bytes
+                .clone(),
+        )
+        .expect("chart rels utf8");
+        assert!(chart_rels.contains(
+            r#"Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle""#
+        ));
+        assert!(chart_rels.contains(
+            r#"Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle""#
+        ));
+        assert!(
+            saved_package
+                .part("xl/charts/style1.xml")
+                .map(|part| String::from_utf8_lossy(&part.bytes).contains(r#"id="404""#))
+                .unwrap_or(false),
+            "loaded chart style support part should survive SetSourceData"
+        );
+        assert!(
+            saved_package
+                .part("xl/charts/colors1.xml")
+                .map(|part| String::from_utf8_lossy(&part.bytes).contains(r#"id="404""#))
+                .unwrap_or(false),
+            "loaded chart color support part should survive SetSourceData"
+        );
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen support-part SetSourceData workbook");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_series, "Values", &[])
+                .expect("reopened Series.Values"),
+            OmValue::Text("=Sheet1!$A$1:$B$3".to_string())
+        );
+    }
+
+    #[test]
     fn chart_set_source_data_accepts_multi_area_range_sources() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
