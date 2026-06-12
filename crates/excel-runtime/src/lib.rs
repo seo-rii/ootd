@@ -14500,6 +14500,35 @@ impl ExcelRuntime {
                         ));
                     }
                     self.validate_point_index(workbook, chart_id, series_index, point_index)?;
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    let chart = runtime
+                        .loaded
+                        .state
+                        .charts
+                        .get_mut(&chart_id)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    let series = chart
+                        .series
+                        .get_mut(series_index)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "series not found"))?;
+                    let point_index = u32::try_from(point_index).map_err(|_| {
+                        OmError::invalid_argument("Point.ClearFormats index is out of bounds")
+                    })?;
+                    if let Some(point) = series.points.get_mut(&point_index)
+                        && point.explosion.is_some()
+                        && point.explosion != Some(0)
+                    {
+                        point.explosion = Some(0);
+                        point.dirty = true;
+                        chart.dirty = true;
+                        runtime.dirty = true;
+                    }
                     Ok(OmValue::Empty)
                 }
                 _ => Err(OmError::unsupported(format!(
@@ -110594,6 +110623,190 @@ mod tests {
                     .expect("reopened first Point.Explosion")
             ),
             35.0
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_second_point, "Explosion", &[])
+                    .expect("reopened second Point.Explosion")
+            ),
+            10.0
+        );
+    }
+
+    #[test]
+    fn point_clear_formats_resets_point_explosion() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_PIE)),
+                &[],
+            )
+            .expect("set Chart.ChartType to pie");
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+        let first_point = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Points", &[OmValue::Number(1.0)])
+                .expect("Series.Points(1)"),
+        );
+        let second_point = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Points", &[OmValue::Number(2.0)])
+                .expect("Series.Points(2)"),
+        );
+        runtime
+            .dispatch_set(first_point, "Explosion", OmValue::Number(35.0), &[])
+            .expect("set first Point.Explosion");
+        runtime
+            .dispatch_set(second_point, "Explosion", OmValue::Number(10.0), &[])
+            .expect("set second Point.Explosion");
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(first_point, "ClearFormats", &[])
+                .expect("Point.ClearFormats"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_point, "Explosion", &[])
+                    .expect("first Point.Explosion after ClearFormats")
+            ),
+            0.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_point, "Explosion", &[])
+                    .expect("second Point.Explosion after ClearFormats")
+            ),
+            10.0
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after Point.ClearFormats");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:pieChart>"));
+        assert!(
+            saved_chart_xml.contains(r#"<c:dPt><c:idx val="0"/><c:explosion val="0"/></c:dPt>"#)
+        );
+        assert!(
+            saved_chart_xml.contains(r#"<c:dPt><c:idx val="1"/><c:explosion val="10"/></c:dPt>"#)
+        );
+        assert!(!saved_chart_xml.contains(r#"<c:explosion val="35"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after Point.ClearFormats");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        let reopened_first_point = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_series, "Points", &[OmValue::Number(1.0)])
+                .expect("reopened Series.Points(1)"),
+        );
+        let reopened_second_point = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_series, "Points", &[OmValue::Number(2.0)])
+                .expect("reopened Series.Points(2)"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_first_point, "Explosion", &[])
+                    .expect("reopened first Point.Explosion")
+            ),
+            0.0
         );
         assert_eq!(
             expect_number(
