@@ -4521,8 +4521,16 @@ impl ExcelRuntime {
                         let series = chart.series.get_mut(series_index).ok_or_else(|| {
                             OmError::new(OmErrorCode::NotFound, "series not found")
                         })?;
+                        let mut changed = false;
                         if series.data_labels.as_ref() != Some(&replacement) {
                             series.data_labels = Some(replacement);
+                            changed = true;
+                        }
+                        if !has_data_labels && !series.point_data_labels.is_empty() {
+                            series.point_data_labels.clear();
+                            changed = true;
+                        }
+                        if changed {
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -14918,9 +14926,20 @@ impl ExcelRuntime {
                         .series
                         .get_mut(series_index)
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "series not found"))?;
-                    series.data_labels = Some(chart_data_labels_disabled_model());
-                    chart.dirty = true;
-                    runtime.dirty = true;
+                    let replacement = chart_data_labels_disabled_model();
+                    let mut changed = false;
+                    if series.data_labels.as_ref() != Some(&replacement) {
+                        series.data_labels = Some(replacement);
+                        changed = true;
+                    }
+                    if !series.point_data_labels.is_empty() {
+                        series.point_data_labels.clear();
+                        changed = true;
+                    }
+                    if changed {
+                        chart.dirty = true;
+                        runtime.dirty = true;
+                    }
                     Ok(OmValue::Empty)
                 }
                 "Select" => {
@@ -111977,6 +111996,139 @@ mod tests {
             ),
             f64::from(super::XL_LABEL_POSITION_BEST_FIT)
         );
+    }
+
+    #[test]
+    fn disabling_data_labels_clears_point_label_overrides() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+
+        runtime
+            .dispatch_set(series, "HasDataLabels", OmValue::Bool(true), &[])
+            .expect("Series.HasDataLabels = true");
+        let data_labels = expect_object_handle(
+            runtime
+                .dispatch_get(series, "DataLabels", &[])
+                .expect("Series.DataLabels"),
+        );
+        let second_label = expect_object_handle(
+            runtime
+                .dispatch_invoke(data_labels, "Item", &[OmValue::Number(2.0)])
+                .expect("DataLabels.Item(2)"),
+        );
+        runtime
+            .dispatch_set(second_label, "ShowCategoryName", OmValue::Bool(true), &[])
+            .expect("DataLabel.ShowCategoryName = true");
+        {
+            let state = runtime.workbook_state(workbook).expect("workbook state");
+            let chart_model = state.charts.values().next().expect("chart model");
+            assert_eq!(chart_model.series[0].point_data_labels.len(), 1);
+        }
+
+        runtime
+            .dispatch_set(series, "HasDataLabels", OmValue::Bool(false), &[])
+            .expect("Series.HasDataLabels = false");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "HasDataLabels", &[])
+                .expect("Series.HasDataLabels after false"),
+            OmValue::Bool(false)
+        );
+        {
+            let state = runtime.workbook_state(workbook).expect("workbook state");
+            let chart_model = state.charts.values().next().expect("chart model");
+            assert!(chart_model.series[0].point_data_labels.is_empty());
+        }
+
+        runtime
+            .dispatch_set(series, "HasDataLabels", OmValue::Bool(true), &[])
+            .expect("Series.HasDataLabels = true again");
+        let data_labels = expect_object_handle(
+            runtime
+                .dispatch_get(series, "DataLabels", &[])
+                .expect("Series.DataLabels again"),
+        );
+        let second_label = expect_object_handle(
+            runtime
+                .dispatch_invoke(data_labels, "Item", &[OmValue::Number(2.0)])
+                .expect("DataLabels.Item(2) again"),
+        );
+        runtime
+            .dispatch_set(second_label, "ShowCategoryName", OmValue::Bool(true), &[])
+            .expect("DataLabel.ShowCategoryName = true again");
+        runtime
+            .dispatch_invoke(data_labels, "Delete", &[])
+            .expect("DataLabels.Delete");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "HasDataLabels", &[])
+                .expect("Series.HasDataLabels after Delete"),
+            OmValue::Bool(false)
+        );
+        {
+            let state = runtime.workbook_state(workbook).expect("workbook state");
+            let chart_model = state.charts.values().next().expect("chart model");
+            assert!(chart_model.series[0].point_data_labels.is_empty());
+        }
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after DataLabels.Delete");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(!saved_chart_xml.contains("<c:dLbl><c:idx"));
+        assert!(saved_chart_xml.contains(r#"<c:showVal val="0"/>"#));
     }
 
     #[test]
