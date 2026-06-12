@@ -15119,6 +15119,64 @@ impl ExcelRuntime {
                         ));
                     }
                     self.validate_data_label_index(workbook, chart_id, series_index, point_index)?;
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    let chart = runtime
+                        .loaded
+                        .state
+                        .charts
+                        .get_mut(&chart_id)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    let inherited =
+                        chart_point_effective_data_labels(chart, series_index, point_index)
+                            .cloned();
+                    let series = chart
+                        .series
+                        .get_mut(series_index)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "series not found"))?;
+                    let point_index = u32::try_from(point_index).map_err(|_| {
+                        OmError::invalid_argument("DataLabel index is out of bounds")
+                    })?;
+                    let changed =
+                        if let Some(data_labels) = series.point_data_labels.get_mut(&point_index) {
+                            let changed = data_labels.number_format.is_some()
+                                || data_labels.number_format_linked.is_some()
+                                || data_labels.position.is_some()
+                                || data_labels.separator.is_some();
+                            if changed {
+                                data_labels.number_format = None;
+                                data_labels.number_format_linked = None;
+                                data_labels.position = None;
+                                data_labels.separator = None;
+                                data_labels.dirty = true;
+                            }
+                            changed
+                        } else if let Some(mut data_labels) = inherited {
+                            let changed = data_labels.number_format.is_some()
+                                || data_labels.number_format_linked.is_some()
+                                || data_labels.position.is_some()
+                                || data_labels.separator.is_some();
+                            if changed {
+                                data_labels.number_format = None;
+                                data_labels.number_format_linked = None;
+                                data_labels.position = None;
+                                data_labels.separator = None;
+                                data_labels.dirty = true;
+                                series.point_data_labels.insert(point_index, data_labels);
+                            }
+                            changed
+                        } else {
+                            false
+                        };
+                    if changed {
+                        chart.dirty = true;
+                        runtime.dirty = true;
+                    }
                     Ok(OmValue::Empty)
                 }
                 _ => Err(OmError::unsupported(format!(
@@ -111641,6 +111699,283 @@ mod tests {
                 .dispatch_get(reopened_third_label, "ShowValue", &[])
                 .expect("reopened third DataLabel.ShowValue"),
             OmValue::Bool(false)
+        );
+    }
+
+    #[test]
+    fn data_label_clear_formats_resets_point_formatting_and_persists() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+
+        runtime
+            .dispatch_set(series, "HasDataLabels", OmValue::Bool(true), &[])
+            .expect("Series.HasDataLabels = true");
+        let data_labels = expect_object_handle(
+            runtime
+                .dispatch_get(series, "DataLabels", &[])
+                .expect("Series.DataLabels"),
+        );
+        let second_label = expect_object_handle(
+            runtime
+                .dispatch_invoke(data_labels, "Item", &[OmValue::Number(2.0)])
+                .expect("DataLabels.Item(2)"),
+        );
+
+        runtime
+            .dispatch_set(second_label, "ShowValue", OmValue::Bool(false), &[])
+            .expect("DataLabel.ShowValue = false");
+        runtime
+            .dispatch_set(second_label, "ShowCategoryName", OmValue::Bool(true), &[])
+            .expect("DataLabel.ShowCategoryName = true");
+        runtime
+            .dispatch_set(second_label, "HasLeaderLines", OmValue::Bool(true), &[])
+            .expect("DataLabel.HasLeaderLines = true");
+        runtime
+            .dispatch_set(
+                second_label,
+                "Separator",
+                OmValue::Text(" * ".to_string()),
+                &[],
+            )
+            .expect("DataLabel.Separator = star");
+        runtime
+            .dispatch_set(
+                second_label,
+                "NumberFormat",
+                OmValue::Text("#,##0.00".to_string()),
+                &[],
+            )
+            .expect("DataLabel.NumberFormat = number");
+        runtime
+            .dispatch_set(
+                second_label,
+                "Position",
+                OmValue::Number(f64::from(super::XL_LABEL_POSITION_CENTER)),
+                &[],
+            )
+            .expect("DataLabel.Position = center");
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(second_label, "ClearFormats", &[])
+                .expect("DataLabel.ClearFormats"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_label, "ShowValue", &[])
+                .expect("DataLabel.ShowValue after ClearFormats"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_label, "ShowCategoryName", &[])
+                .expect("DataLabel.ShowCategoryName after ClearFormats"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_label, "HasLeaderLines", &[])
+                .expect("DataLabel.HasLeaderLines after ClearFormats"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_label, "Separator", &[])
+                .expect("DataLabel.Separator after ClearFormats"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_label, "NumberFormat", &[])
+                .expect("DataLabel.NumberFormat after ClearFormats"),
+            OmValue::Text("General".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_label, "NumberFormatLinked", &[])
+                .expect("DataLabel.NumberFormatLinked after ClearFormats"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_label, "Position", &[])
+                    .expect("DataLabel.Position after ClearFormats")
+            ),
+            f64::from(super::XL_LABEL_POSITION_BEST_FIT)
+        );
+        {
+            let state = runtime.workbook_state(workbook).expect("workbook state");
+            let chart_model = state.charts.values().next().expect("chart model");
+            let second_point_labels = chart_model.series[0]
+                .point_data_labels
+                .get(&1)
+                .expect("second point data labels after ClearFormats");
+            assert_eq!(second_point_labels.show_value, Some(false));
+            assert_eq!(second_point_labels.show_category_name, Some(true));
+            assert_eq!(second_point_labels.has_leader_lines, Some(true));
+            assert_eq!(second_point_labels.number_format, None);
+            assert_eq!(second_point_labels.number_format_linked, None);
+            assert_eq!(second_point_labels.position, None);
+            assert_eq!(second_point_labels.separator, None);
+        }
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after DataLabel.ClearFormats");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(
+            r#"<c:dLbl><c:idx val="1"/><c:showLeaderLines val="1"/><c:showCatName val="1"/><c:showVal val="0"/></c:dLbl>"#
+        ));
+        assert!(!saved_chart_xml.contains(r##"<c:numFmt formatCode="#,##0.00""##));
+        assert!(!saved_chart_xml.contains(r#"<c:dLblPos val="ctr""#));
+        assert!(!saved_chart_xml.contains("<c:separator> * </c:separator>"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after DataLabel.ClearFormats");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        let reopened_data_labels = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_series, "DataLabels", &[])
+                .expect("reopened Series.DataLabels"),
+        );
+        let reopened_second_label = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_data_labels, "Item", &[OmValue::Number(2.0)])
+                .expect("reopened DataLabels.Item(2)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_second_label, "ShowValue", &[])
+                .expect("reopened DataLabel.ShowValue"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_second_label, "ShowCategoryName", &[])
+                .expect("reopened DataLabel.ShowCategoryName"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_second_label, "HasLeaderLines", &[])
+                .expect("reopened DataLabel.HasLeaderLines"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_second_label, "Separator", &[])
+                .expect("reopened DataLabel.Separator"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_second_label, "NumberFormat", &[])
+                .expect("reopened DataLabel.NumberFormat"),
+            OmValue::Text("General".to_string())
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_second_label, "NumberFormatLinked", &[])
+                .expect("reopened DataLabel.NumberFormatLinked"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_second_label, "Position", &[])
+                    .expect("reopened DataLabel.Position")
+            ),
+            f64::from(super::XL_LABEL_POSITION_BEST_FIT)
         );
     }
 
