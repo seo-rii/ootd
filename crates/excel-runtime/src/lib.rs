@@ -14932,6 +14932,12 @@ impl ExcelRuntime {
                         .charts
                         .get_mut(&chart_id)
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    if chart_data_labels_count_for_chart_series(chart, series_index) == 0 {
+                        return Err(OmError::new(
+                            OmErrorCode::NotFound,
+                            "chart data labels not found",
+                        ));
+                    }
                     let series = chart
                         .series
                         .get_mut(series_index)
@@ -112102,6 +112108,13 @@ mod tests {
             let chart_model = state.charts.values().next().expect("chart model");
             assert!(chart_model.series[0].point_data_labels.is_empty());
         }
+        assert_eq!(
+            runtime
+                .dispatch_invoke(data_labels, "Delete", &[])
+                .expect_err("DataLabels.Delete rejects absent labels after HasDataLabels false")
+                .code,
+            OmErrorCode::NotFound
+        );
 
         runtime
             .dispatch_set(series, "HasDataLabels", OmValue::Bool(true), &[])
@@ -112133,6 +112146,13 @@ mod tests {
             let chart_model = state.charts.values().next().expect("chart model");
             assert!(chart_model.series[0].point_data_labels.is_empty());
         }
+        assert_eq!(
+            runtime
+                .dispatch_invoke(data_labels, "Delete", &[])
+                .expect_err("DataLabels.Delete rejects absent labels after Delete")
+                .code,
+            OmErrorCode::NotFound
+        );
 
         let saved = runtime
             .save_workbook(
