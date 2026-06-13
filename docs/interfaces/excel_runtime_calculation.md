@@ -348,7 +348,7 @@ Logical notes:
 - `AND`, `OR`, and `XOR` support scalar arguments and rectangular range arguments.
 - Text and blank cells inside logical range arguments are ignored; a logical range with no numeric or boolean values returns `#VALUE!`.
 - `IF`, `IFS`, `LAMBDA`, `LET`, and `SWITCH` can return scalar text when the selected branch, binding, call, or result is text. `LET` supports scalar local name bindings for the final calculation expression.
-- `LAMBDA` supports scalar parameter binding, nested calls, omitted trailing arguments, and `ISOMITTED` checks. It does not yet model workbook-defined named lambdas.
+- `LAMBDA` supports scalar parameter binding, nested calls, omitted trailing arguments, `ISOMITTED` checks, and named LAMBDA calls stored through workbook or worksheet defined names.
 
 ### Aggregate and count helpers
 

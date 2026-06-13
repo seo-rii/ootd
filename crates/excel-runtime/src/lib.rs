@@ -51141,6 +51141,16 @@ impl<'a> FormulaEvaluator<'a> {
             .map(CellValue::Number)
     }
 
+    fn evaluate_formula_value_probe_text(
+        &mut self,
+        sheet_id: SheetId,
+        formula_text: &str,
+        current_position: Option<(u32, u32)>,
+    ) -> Result<FormulaValueProbe, FormulaEvalError> {
+        FormulaParser::new(formula_text, self, sheet_id, current_position)
+            .parse_value_probe_formula()
+    }
+
     fn numeric_cell_value(
         &mut self,
         sheet_id: SheetId,
@@ -51789,7 +51799,23 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return Err(FormulaEvalError::Unsupported);
         };
         if !formula_text_function_name(identifier.as_str()) {
-            return Err(FormulaEvalError::Unsupported);
+            self.skip_whitespace();
+            if !self.consume_char('(') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let Some(value) = self.parse_bound_lambda_call_value(identifier.as_str())? else {
+                return Err(FormulaEvalError::Unsupported);
+            };
+            self.skip_whitespace();
+            return if self.index == self.input.len() {
+                match value {
+                    FormulaValueProbe::Text(text) => Ok(text),
+                    FormulaValueProbe::Error(error) => Err(error),
+                    _ => Err(FormulaEvalError::Unsupported),
+                }
+            } else {
+                Err(FormulaEvalError::Unsupported)
+            };
         }
         self.skip_whitespace();
         if !self.consume_char('(') {
@@ -51828,10 +51854,15 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         &mut self,
         name: &str,
     ) -> Result<Option<FormulaValueProbe>, FormulaEvalError> {
-        let Some(lambda @ FormulaValueProbe::Lambda { .. }) = self.binding_value(name) else {
-            return Ok(None);
-        };
-        self.parse_lambda_call_arguments(lambda).map(Some)
+        if let Some(lambda @ FormulaValueProbe::Lambda { .. }) = self.binding_value(name) {
+            return self.parse_lambda_call_arguments(lambda).map(Some);
+        }
+        if let Some(lambda @ FormulaValueProbe::Lambda { .. }) =
+            self.defined_name_value_probe(name)?
+        {
+            return self.parse_lambda_call_arguments(lambda).map(Some);
+        }
+        Ok(None)
     }
 
     fn parse_lambda_argument(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
@@ -62058,12 +62089,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             } else {
                 refers_to_text
             };
-            let value = self.evaluator.evaluate_formula_text(
+            let value = self.evaluator.evaluate_formula_value_probe_text(
                 self.sheet_id,
                 formula_text.as_str(),
                 self.current_position,
             )?;
-            Ok(formula_value_probe_from_cell_value(value))
+            Ok(value)
         })();
         self.evaluator.resolving_names.remove(&name_id);
         result.map(Some)
@@ -77139,7 +77170,7 @@ mod tests {
     #[test]
     fn application_calculate_updates_lambda_array_formulas() {
         let mut runtime = ExcelRuntime::new();
-        runtime
+        let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
                 bytes: synthetic_workbook_bytes(),
                 format_hint: Some(FileFormat::Xlsx),
@@ -77182,14 +77213,34 @@ mod tests {
                 &[],
             )
             .expect("set source");
+        let workbook_names = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Names", &[])
+                .expect("Workbook.Names"),
+        );
+        for (name, refers_to) in [
+            ("DOUBLEIT", "=LAMBDA(x,x*2)"),
+            ("SUFFIX", r#"=LAMBDA(text,CONCAT(text,"!"))"#),
+        ] {
+            runtime
+                .dispatch_invoke(
+                    workbook_names,
+                    "Add",
+                    &[
+                        OmValue::Text(name.to_string()),
+                        OmValue::Text(refers_to.to_string()),
+                    ],
+                )
+                .expect("Workbook.Names.Add lambda");
+        }
         let formulas = expect_object_handle(
             runtime
                 .dispatch_invoke(
                     active_sheet,
                     "Range",
-                    &[OmValue::Text("D1:D14".to_string())],
+                    &[OmValue::Text("D1:D17".to_string())],
                 )
-                .expect("Range(D1:D14)"),
+                .expect("Range(D1:D17)"),
         );
         runtime
             .dispatch_set(
@@ -77197,7 +77248,7 @@ mod tests {
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        14,
+                        17,
                         1,
                         vec![
                             OmValue::Text("=LAMBDA(x,x+1)(4)".to_string()),
@@ -77221,6 +77272,9 @@ mod tests {
                                 r#"=REDUCE("a",A1:A2,LAMBDA(acc,value,CONCAT(acc,value)))"#
                                     .to_string(),
                             ),
+                            OmValue::Text("=DOUBLEIT(6)".to_string()),
+                            OmValue::Text("=LET(f,DOUBLEIT,f(7))".to_string()),
+                            OmValue::Text(r#"=SUFFIX("ok")"#.to_string()),
                         ],
                     )
                     .expect("lambda helper formulas"),
@@ -77256,6 +77310,9 @@ mod tests {
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
                 OmValue::Text("a12".to_string()),
+                OmValue::Number(12.0),
+                OmValue::Number(14.0),
+                OmValue::Text("ok!".to_string()),
             ]
         );
     }
