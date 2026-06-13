@@ -14593,11 +14593,14 @@ impl ExcelRuntime {
                             "chart data labels not found",
                         ));
                     }
+                    let inherited =
+                        chart_series_effective_data_labels(chart, series_index).cloned();
                     let series = chart
                         .series
                         .get_mut(series_index)
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "series not found"))?;
-                    if let Some(data_labels) = series.data_labels.as_mut() {
+                    let mut changed = false;
+                    let clear_formatting = |data_labels: &mut ChartDataLabelsModel| {
                         let changed = data_labels.number_format.is_some()
                             || data_labels.number_format_linked.is_some()
                             || data_labels.position.is_some()
@@ -14608,9 +14611,27 @@ impl ExcelRuntime {
                             data_labels.position = None;
                             data_labels.separator = None;
                             data_labels.dirty = true;
-                            chart.dirty = true;
-                            runtime.dirty = true;
                         }
+                        changed
+                    };
+                    if let Some(data_labels) = series.data_labels.as_mut() {
+                        if clear_formatting(data_labels) {
+                            changed = true;
+                        }
+                    } else if let Some(mut data_labels) = inherited
+                        && clear_formatting(&mut data_labels)
+                    {
+                        series.data_labels = Some(data_labels);
+                        changed = true;
+                    }
+                    for data_labels in series.point_data_labels.values_mut() {
+                        if clear_formatting(data_labels) {
+                            changed = true;
+                        }
+                    }
+                    if changed {
+                        chart.dirty = true;
+                        runtime.dirty = true;
                     }
                     Ok(OmValue::Empty)
                 }
@@ -109667,6 +109688,35 @@ mod tests {
                 &[],
             )
             .expect("DataLabels.Position = outside end");
+        let first_data_label = expect_object_handle(
+            runtime
+                .dispatch_invoke(data_labels, "Item", &[OmValue::Number(1.0)])
+                .expect("DataLabels.Item(1) before ClearFormats"),
+        );
+        runtime
+            .dispatch_set(
+                first_data_label,
+                "Separator",
+                OmValue::Text(" :: ".to_string()),
+                &[],
+            )
+            .expect("DataLabel.Separator point override");
+        runtime
+            .dispatch_set(
+                first_data_label,
+                "NumberFormat",
+                OmValue::Text("0.00".to_string()),
+                &[],
+            )
+            .expect("DataLabel.NumberFormat point override");
+        runtime
+            .dispatch_set(
+                first_data_label,
+                "Position",
+                OmValue::Number(f64::from(super::XL_LABEL_POSITION_ABOVE)),
+                &[],
+            )
+            .expect("DataLabel.Position point override");
         assert_eq!(
             runtime
                 .dispatch_invoke(data_labels, "ClearFormats", &[])
@@ -109699,8 +109749,20 @@ mod tests {
         );
         assert_eq!(
             runtime
+                .dispatch_get(first_data_label, "Separator", &[])
+                .expect("DataLabel.Separator after DataLabels.ClearFormats"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
                 .dispatch_get(data_labels, "NumberFormat", &[])
                 .expect("DataLabels.NumberFormat after ClearFormats"),
+            OmValue::Text("General".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_data_label, "NumberFormat", &[])
+                .expect("DataLabel.NumberFormat after DataLabels.ClearFormats"),
             OmValue::Text("General".to_string())
         );
         assert_eq!(
@@ -109714,6 +109776,14 @@ mod tests {
                 runtime
                     .dispatch_get(data_labels, "Position", &[])
                     .expect("DataLabels.Position after ClearFormats")
+            ),
+            f64::from(super::XL_LABEL_POSITION_BEST_FIT)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_data_label, "Position", &[])
+                    .expect("DataLabel.Position after DataLabels.ClearFormats")
             ),
             f64::from(super::XL_LABEL_POSITION_BEST_FIT)
         );
@@ -109938,6 +110008,147 @@ mod tests {
         assert_eq!(series_data_labels.position, None);
         assert_eq!(series_data_labels.separator, None);
         assert!(!series_data_labels.dirty);
+    }
+
+    #[test]
+    fn data_labels_clear_formats_materializes_inherited_chart_label_formatting() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+
+        runtime
+            .dispatch_invoke(
+                chart,
+                "ApplyDataLabels",
+                &[
+                    OmValue::Number(f64::from(super::XL_DATA_LABELS_SHOW_VALUE)),
+                    OmValue::Bool(false),
+                    OmValue::Bool(false),
+                    OmValue::Bool(false),
+                    OmValue::Bool(false),
+                    OmValue::Bool(false),
+                    OmValue::Bool(true),
+                    OmValue::Bool(false),
+                    OmValue::Bool(false),
+                    OmValue::Text(" | ".to_string()),
+                ],
+            )
+            .expect("Chart.ApplyDataLabels");
+        {
+            let state = runtime.workbook_state(workbook).expect("workbook state");
+            let chart_model = state.charts.values().next().expect("chart model");
+            assert_eq!(
+                chart_model
+                    .data_labels
+                    .as_ref()
+                    .expect("chart-level data labels")
+                    .separator
+                    .as_deref(),
+                Some(" | ")
+            );
+            assert!(chart_model.series[0].data_labels.is_none());
+        }
+
+        let data_labels = expect_object_handle(
+            runtime
+                .dispatch_get(series, "DataLabels", &[])
+                .expect("Series.DataLabels from chart-level labels"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_labels, "Separator", &[])
+                .expect("inherited DataLabels.Separator"),
+            OmValue::Text(" | ".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(data_labels, "ClearFormats", &[])
+                .expect("DataLabels.ClearFormats inherited labels"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_labels, "Separator", &[])
+                .expect("DataLabels.Separator after inherited ClearFormats"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_labels, "NumberFormat", &[])
+                .expect("DataLabels.NumberFormat after inherited ClearFormats"),
+            OmValue::Text("General".to_string())
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(data_labels, "Position", &[])
+                    .expect("DataLabels.Position after inherited ClearFormats")
+            ),
+            f64::from(super::XL_LABEL_POSITION_BEST_FIT)
+        );
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after clear");
+            let chart_model = state
+                .charts
+                .values()
+                .next()
+                .expect("chart model after clear");
+            assert_eq!(
+                chart_model
+                    .data_labels
+                    .as_ref()
+                    .expect("chart-level data labels after clear")
+                    .separator
+                    .as_deref(),
+                Some(" | ")
+            );
+            let series_data_labels = chart_model.series[0]
+                .data_labels
+                .as_ref()
+                .expect("materialized series data labels");
+            assert_eq!(series_data_labels.separator, None);
+            assert_eq!(series_data_labels.number_format, None);
+            assert_eq!(series_data_labels.number_format_linked, None);
+            assert_eq!(series_data_labels.position, None);
+        }
     }
 
     #[test]
