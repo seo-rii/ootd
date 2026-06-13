@@ -12647,13 +12647,110 @@ impl ExcelRuntime {
                     }
                     Ok(OmValue::Empty)
                 }
-                "ClearToMatchColorStyle" | "ClearToMatchStyle" => {
+                "ClearToMatchColorStyle" => {
                     if !args.is_empty() {
                         return Err(OmError::invalid_argument(format!(
                             "Chart.{member} does not accept arguments"
                         )));
                     }
                     self.chart_model(workbook, chart_id)?;
+                    Ok(OmValue::Empty)
+                }
+                "ClearToMatchStyle" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "Chart.ClearToMatchStyle does not accept arguments",
+                        ));
+                    }
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    let chart = runtime
+                        .loaded
+                        .state
+                        .charts
+                        .get_mut(&chart_id)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    let mut changed = false;
+                    if chart.rounded_corners.take().is_some() {
+                        changed = true;
+                    }
+                    let clear_data_label_formatting = |data_labels: &mut ChartDataLabelsModel| {
+                        let changed = data_labels.number_format.is_some()
+                            || data_labels.number_format_linked.is_some()
+                            || data_labels.position.is_some()
+                            || data_labels.separator.is_some();
+                        if changed {
+                            data_labels.number_format = None;
+                            data_labels.number_format_linked = None;
+                            data_labels.position = None;
+                            data_labels.separator = None;
+                            data_labels.dirty = true;
+                        }
+                        changed
+                    };
+                    if let Some(data_labels) = chart.data_labels.as_mut()
+                        && clear_data_label_formatting(data_labels)
+                    {
+                        changed = true;
+                    }
+                    if let Some(data_table) = chart.data_table.as_mut() {
+                        let cleared_data_table = data_table.has_border_horizontal.is_some()
+                            || data_table.has_border_vertical.is_some()
+                            || data_table.has_border_outline.is_some();
+                        if cleared_data_table {
+                            data_table.has_border_horizontal = None;
+                            data_table.has_border_vertical = None;
+                            data_table.has_border_outline = None;
+                            data_table.dirty = true;
+                            chart.data_table_dirty = true;
+                            changed = true;
+                        }
+                    }
+                    for axis in &mut chart.axes {
+                        if axis.tick_label_number_format.is_some()
+                            || axis.tick_label_number_format_linked.is_some()
+                        {
+                            axis.tick_label_number_format = None;
+                            axis.tick_label_number_format_linked = None;
+                            changed = true;
+                        }
+                    }
+                    for series in &mut chart.series {
+                        let cleared_series = series.bar_shape.is_some()
+                            || series.smooth.is_some()
+                            || series.marker_style.is_some()
+                            || series.marker_size.is_some()
+                            || series.invert_if_negative.is_some()
+                            || !series.points.is_empty();
+                        if cleared_series {
+                            series.bar_shape = None;
+                            series.smooth = None;
+                            series.marker_style = None;
+                            series.marker_size = None;
+                            series.invert_if_negative = None;
+                            series.points.clear();
+                            changed = true;
+                        }
+                        if let Some(data_labels) = series.data_labels.as_mut()
+                            && clear_data_label_formatting(data_labels)
+                        {
+                            changed = true;
+                        }
+                        for data_labels in series.point_data_labels.values_mut() {
+                            if clear_data_label_formatting(data_labels) {
+                                changed = true;
+                            }
+                        }
+                    }
+                    if changed {
+                        chart.dirty = true;
+                        runtime.dirty = true;
+                    }
                     Ok(OmValue::Empty)
                 }
                 "ApplyLayout" => {
@@ -116479,6 +116576,420 @@ mod tests {
                 .expect_err("Chart.SetElement rejects non-integer Element")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn chart_clear_to_match_style_resets_modeled_formatting_overrides() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("Chart.ChartArea"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+        let value_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.Axes(xlValue)"),
+        );
+        let tick_labels = expect_object_handle(
+            runtime
+                .dispatch_get(value_axis, "TickLabels", &[])
+                .expect("Axis.TickLabels"),
+        );
+
+        runtime
+            .dispatch_set(chart_area, "RoundedCorners", OmValue::Bool(true), &[])
+            .expect("set ChartArea.RoundedCorners");
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_LINE_MARKERS)),
+                &[],
+            )
+            .expect("set Chart.ChartType");
+        runtime
+            .dispatch_set(
+                series,
+                "MarkerStyle",
+                OmValue::Number(f64::from(super::XL_MARKER_STYLE_DIAMOND)),
+                &[],
+            )
+            .expect("set Series.MarkerStyle");
+        runtime
+            .dispatch_set(series, "MarkerSize", OmValue::Number(11.0), &[])
+            .expect("set Series.MarkerSize");
+        runtime
+            .dispatch_set(series, "Smooth", OmValue::Bool(true), &[])
+            .expect("set Series.Smooth");
+        runtime
+            .dispatch_set(series, "InvertIfNegative", OmValue::Bool(true), &[])
+            .expect("set Series.InvertIfNegative");
+        runtime
+            .dispatch_invoke(
+                series,
+                "ApplyDataLabels",
+                &[
+                    OmValue::Number(4.0),
+                    OmValue::Bool(false),
+                    OmValue::Bool(true),
+                    OmValue::Bool(false),
+                    OmValue::Bool(false),
+                    OmValue::Bool(false),
+                    OmValue::Bool(true),
+                    OmValue::Bool(false),
+                    OmValue::Bool(false),
+                    OmValue::Text(" | ".to_string()),
+                ],
+            )
+            .expect("Series.ApplyDataLabels");
+        let data_labels = expect_object_handle(
+            runtime
+                .dispatch_get(series, "DataLabels", &[])
+                .expect("Series.DataLabels"),
+        );
+        runtime
+            .dispatch_set(
+                data_labels,
+                "NumberFormat",
+                OmValue::Text("0.0%".to_string()),
+                &[],
+            )
+            .expect("set DataLabels.NumberFormat");
+        runtime
+            .dispatch_set(
+                data_labels,
+                "Position",
+                OmValue::Number(f64::from(super::XL_LABEL_POSITION_OUTSIDE_END)),
+                &[],
+            )
+            .expect("set DataLabels.Position");
+        runtime
+            .dispatch_set(chart, "HasDataTable", OmValue::Bool(true), &[])
+            .expect("set Chart.HasDataTable");
+        let data_table = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "DataTable", &[])
+                .expect("Chart.DataTable"),
+        );
+        runtime
+            .dispatch_set(data_table, "HasBorderHorizontal", OmValue::Bool(false), &[])
+            .expect("set DataTable.HasBorderHorizontal");
+        runtime
+            .dispatch_set(data_table, "HasBorderVertical", OmValue::Bool(false), &[])
+            .expect("set DataTable.HasBorderVertical");
+        runtime
+            .dispatch_set(data_table, "HasBorderOutline", OmValue::Bool(false), &[])
+            .expect("set DataTable.HasBorderOutline");
+        runtime
+            .dispatch_set(data_table, "ShowLegendKey", OmValue::Bool(true), &[])
+            .expect("set DataTable.ShowLegendKey");
+        runtime
+            .dispatch_set(
+                tick_labels,
+                "NumberFormat",
+                OmValue::Text("0.00%".to_string()),
+                &[],
+            )
+            .expect("set TickLabels.NumberFormat");
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "ClearToMatchStyle", &[])
+                .expect("Chart.ClearToMatchStyle"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "ChartType", &[])
+                    .expect("Chart.ChartType after ClearToMatchStyle")
+            ),
+            f64::from(super::XL_LINE_MARKERS)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_area, "RoundedCorners", &[])
+                .expect("ChartArea.RoundedCorners after ClearToMatchStyle"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "RoundedCorners", &[])
+                .expect("ChartObject.RoundedCorners after ClearToMatchStyle"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series, "MarkerStyle", &[])
+                    .expect("Series.MarkerStyle after ClearToMatchStyle")
+            ),
+            f64::from(super::XL_MARKER_STYLE_AUTOMATIC)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series, "MarkerSize", &[])
+                    .expect("Series.MarkerSize after ClearToMatchStyle")
+            ),
+            5.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Smooth", &[])
+                .expect("Series.Smooth after ClearToMatchStyle"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "InvertIfNegative", &[])
+                .expect("Series.InvertIfNegative after ClearToMatchStyle"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_labels, "ShowValue", &[])
+                .expect("DataLabels.ShowValue after ClearToMatchStyle"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_labels, "NumberFormat", &[])
+                .expect("DataLabels.NumberFormat after ClearToMatchStyle"),
+            OmValue::Text("General".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_labels, "NumberFormatLinked", &[])
+                .expect("DataLabels.NumberFormatLinked after ClearToMatchStyle"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(data_labels, "Position", &[])
+                    .expect("DataLabels.Position after ClearToMatchStyle")
+            ),
+            f64::from(super::XL_LABEL_POSITION_BEST_FIT)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_labels, "Separator", &[])
+                .expect("DataLabels.Separator after ClearToMatchStyle"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasDataTable", &[])
+                .expect("Chart.HasDataTable after ClearToMatchStyle"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table, "HasBorderHorizontal", &[])
+                .expect("DataTable.HasBorderHorizontal after ClearToMatchStyle"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table, "HasBorderVertical", &[])
+                .expect("DataTable.HasBorderVertical after ClearToMatchStyle"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table, "HasBorderOutline", &[])
+                .expect("DataTable.HasBorderOutline after ClearToMatchStyle"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table, "ShowLegendKey", &[])
+                .expect("DataTable.ShowLegendKey after ClearToMatchStyle"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(tick_labels, "NumberFormat", &[])
+                .expect("TickLabels.NumberFormat after ClearToMatchStyle"),
+            OmValue::Text("General".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(tick_labels, "NumberFormatLinked", &[])
+                .expect("TickLabels.NumberFormatLinked after ClearToMatchStyle"),
+            OmValue::Bool(true)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after Chart.ClearToMatchStyle");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(!saved_chart_xml.contains("<c:roundedCorners"));
+        assert!(!saved_chart_xml.contains(r#"<c:symbol val="diamond"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:size val="11"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:smooth val="1"/>"#));
+        assert!(!saved_chart_xml.contains(r#"<c:invertIfNegative val="1"/>"#));
+        assert!(!saved_chart_xml.contains(r#"formatCode="0.0%""#));
+        assert!(!saved_chart_xml.contains(r#"formatCode="0.00%""#));
+        assert!(!saved_chart_xml.contains("<c:dLblPos"));
+        assert!(!saved_chart_xml.contains("<c:separator>"));
+        assert!(!saved_chart_xml.contains("<c:showHorzBorder"));
+        assert!(!saved_chart_xml.contains("<c:showVertBorder"));
+        assert!(!saved_chart_xml.contains("<c:showOutline"));
+        assert!(saved_chart_xml.contains(r#"<c:showKeys val="1"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after Chart.ClearToMatchStyle");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_chart_area = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "ChartArea", &[])
+                .expect("reopened Chart.ChartArea"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened SeriesCollection.Item(1)"),
+        );
+        let reopened_data_labels = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_series, "DataLabels", &[])
+                .expect("reopened Series.DataLabels"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart, "ChartType", &[])
+                    .expect("reopened Chart.ChartType")
+            ),
+            f64::from(super::XL_LINE_MARKERS)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart_area, "RoundedCorners", &[])
+                .expect("reopened ChartArea.RoundedCorners"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_series, "MarkerStyle", &[])
+                    .expect("reopened Series.MarkerStyle")
+            ),
+            f64::from(super::XL_MARKER_STYLE_AUTOMATIC)
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_series, "MarkerSize", &[])
+                    .expect("reopened Series.MarkerSize")
+            ),
+            5.0
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_data_labels, "NumberFormat", &[])
+                .expect("reopened DataLabels.NumberFormat"),
+            OmValue::Text("General".to_string())
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_data_labels, "Position", &[])
+                    .expect("reopened DataLabels.Position")
+            ),
+            f64::from(super::XL_LABEL_POSITION_BEST_FIT)
         );
     }
 
