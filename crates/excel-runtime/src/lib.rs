@@ -2962,7 +2962,6 @@ impl ExcelRuntime {
                         "Name" | "AlternativeText" | "Title" | "LockAspectRatio" | "OnAction"
                     )
                     | ("Chart", "HasAxis")
-                    | ("ChartArea", "Left" | "Top" | "Width" | "Height")
             )
         {
             self.focus_member_supported(surface, member, true)?;
@@ -5525,32 +5524,6 @@ impl ExcelRuntime {
                     )));
                 }
                 match member {
-                    "Left" | "Top" | "Width" | "Height" => {
-                        let chart_object_id = {
-                            let state = &self.runtime_workbook(workbook)?.loaded.state;
-                            state
-                                .drawings
-                                .values()
-                                .flat_map(|drawing| drawing.objects.iter())
-                                .find_map(|object| match object {
-                                    DrawingObjectModel::ChartFrame(chart_object)
-                                        if chart_object.chart_id == chart_id =>
-                                    {
-                                        Some(chart_object.id)
-                                    }
-                                    DrawingObjectModel::UnsupportedRaw { .. } => None,
-                                    _ => None,
-                                })
-                                .ok_or_else(|| {
-                                    OmError::unsupported(
-                                        "ChartArea geometry is only available for embedded charts",
-                                    )
-                                })?
-                        };
-                        let chart_object =
-                            self.register_chart_object_handle(workbook, chart_object_id);
-                        self.dispatch_set(chart_object, member, value, &[])
-                    }
                     "RoundedCorners" => {
                         let OmValue::Bool(rounded_corners) = value else {
                             return Err(OmError::type_mismatch(
@@ -104158,38 +104131,22 @@ mod tests {
         runtime
             .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
             .expect("clear chart area geometry dirty state");
-        for (member, value) in [
-            ("Left", 11.0),
-            ("Top", 12.0),
-            ("Width", 130.0),
-            ("Height", 80.0),
-        ] {
-            runtime
-                .dispatch_set(chart_area, member, OmValue::Number(value), &[])
-                .unwrap_or_else(|error| panic!("ChartArea.{member} setter failed: {error:?}"));
-            assert_eq!(
-                expect_number(
-                    runtime
-                        .dispatch_get(chart_object, member, &[])
-                        .unwrap_or_else(|error| panic!(
-                            "ChartObject.{member} after ChartArea set failed: {error:?}"
-                        ))
-                ),
-                value
+        for member in ["Left", "Top", "Width", "Height"] {
+            let error = match runtime.dispatch_set(chart_area, member, OmValue::Number(1.0), &[]) {
+                Ok(()) => panic!("ChartArea.{member} should be read-only"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code, OmErrorCode::Unsupported);
+            assert!(
+                error.message.contains("pinned OM registry"),
+                "ChartArea.{member}: {error:?}"
             );
         }
         assert_eq!(
             runtime
                 .dispatch_get(workbook.0, "Saved", &[])
-                .expect("Workbook.Saved after ChartArea geometry set"),
-            OmValue::Bool(false)
-        );
-        assert_eq!(
-            runtime
-                .dispatch_set(chart_area, "Height", OmValue::Number(-1.0), &[])
-                .expect_err("negative ChartArea.Height should fail")
-                .code,
-            OmErrorCode::InvalidArgument
+                .expect("Workbook.Saved after rejected ChartArea geometry setters"),
+            OmValue::Bool(true)
         );
         let read_only_name = runtime
             .dispatch_set(chart_area, "Name", OmValue::Text("bad".to_string()), &[])
