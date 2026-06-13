@@ -15000,6 +15000,12 @@ impl ExcelRuntime {
                         .charts
                         .get_mut(&chart_id)
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    if chart_data_labels_count_for_chart_series(chart, series_index) == 0 {
+                        return Err(OmError::new(
+                            OmErrorCode::NotFound,
+                            "chart data labels not found",
+                        ));
+                    }
                     let series = chart
                         .series
                         .get_mut(series_index)
@@ -112131,6 +112137,15 @@ mod tests {
                 .code,
             OmErrorCode::NotFound
         );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(data_labels, "ClearFormats", &[])
+                .expect_err(
+                    "DataLabels.ClearFormats rejects absent labels after HasDataLabels false"
+                )
+                .code,
+            OmErrorCode::NotFound
+        );
 
         runtime
             .dispatch_set(series, "HasDataLabels", OmValue::Bool(true), &[])
@@ -112173,6 +112188,13 @@ mod tests {
             runtime
                 .dispatch_invoke(data_labels, "Select", &[])
                 .expect_err("DataLabels.Select rejects absent labels after Delete")
+                .code,
+            OmErrorCode::NotFound
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(data_labels, "ClearFormats", &[])
+                .expect_err("DataLabels.ClearFormats rejects absent labels after Delete")
                 .code,
             OmErrorCode::NotFound
         );
