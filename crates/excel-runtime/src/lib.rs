@@ -2963,12 +2963,7 @@ impl ExcelRuntime {
                     )
                     | (
                         "Chart",
-                        "HasAxis"
-                            | "ProtectContents"
-                            | "ProtectDrawingObjects"
-                            | "ProtectData"
-                            | "ProtectFormatting"
-                            | "ProtectSelection"
+                        "HasAxis" | "ProtectData" | "ProtectFormatting" | "ProtectSelection"
                     )
                     | ("ChartArea", "Left" | "Top" | "Width" | "Height")
             )
@@ -112838,13 +112833,19 @@ mod tests {
                 .code,
             OmErrorCode::TypeMismatch
         );
-        assert_eq!(
-            runtime
-                .dispatch_set(chart, "ProtectContents", OmValue::Bool(true), &[])
-                .expect_err("Chart.ProtectContents is read-only")
-                .code,
-            OmErrorCode::Unsupported
-        );
+        for member in ["ProtectContents", "ProtectDrawingObjects"] {
+            let error = match runtime.dispatch_set(chart, member, OmValue::Bool(true), &[]) {
+                Ok(()) => panic!("Chart.{member} should be read-only"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code, OmErrorCode::Unsupported);
+            assert!(
+                error
+                    .message
+                    .contains("not writable in the pinned OM registry"),
+                "{error:?}"
+            );
+        }
 
         runtime
             .dispatch_invoke(
