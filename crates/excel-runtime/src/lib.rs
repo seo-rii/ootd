@@ -6967,8 +6967,7 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
-                    "ProtectContents" | "ProtectData" | "ProtectFormatting"
-                    | "ProtectSelection" => {
+                    "ProtectData" | "ProtectFormatting" | "ProtectSelection" => {
                         let OmValue::Bool(protected) = value else {
                             return Err(OmError::type_mismatch(format!(
                                 "Chart.{member} expects a boolean value"
@@ -6992,10 +6991,6 @@ impl ExcelRuntime {
                                 })?;
                         let current = chart.protection.unwrap_or_default();
                         let next = match member {
-                            "ProtectContents" => ChartProtectionModel {
-                                contents: protected,
-                                ..current
-                            },
                             "ProtectData" => ChartProtectionModel {
                                 data: protected,
                                 ..current
@@ -112810,9 +112805,6 @@ mod tests {
         }
 
         runtime
-            .dispatch_set(chart, "ProtectContents", OmValue::Bool(true), &[])
-            .expect("set Chart.ProtectContents");
-        runtime
             .dispatch_set(chart, "ProtectData", OmValue::Bool(true), &[])
             .expect("set Chart.ProtectData");
         runtime
@@ -112821,12 +112813,6 @@ mod tests {
         runtime
             .dispatch_set(chart, "ProtectSelection", OmValue::Bool(true), &[])
             .expect("set Chart.ProtectSelection");
-        assert_eq!(
-            runtime
-                .dispatch_get(chart, "ProtectContents", &[])
-                .expect("Chart.ProtectContents after set"),
-            OmValue::Bool(true)
-        );
         assert_eq!(
             runtime
                 .dispatch_get(chart, "ProtectData", &[])
@@ -112854,10 +112840,10 @@ mod tests {
         );
         assert_eq!(
             runtime
-                .dispatch_set(chart, "ProtectContents", OmValue::Number(1.0), &[])
-                .expect_err("Chart.ProtectContents rejects non-bool")
+                .dispatch_set(chart, "ProtectContents", OmValue::Bool(true), &[])
+                .expect_err("Chart.ProtectContents is read-only")
                 .code,
-            OmErrorCode::TypeMismatch
+            OmErrorCode::Unsupported
         );
 
         runtime
