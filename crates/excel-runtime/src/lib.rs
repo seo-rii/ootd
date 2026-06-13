@@ -2961,10 +2961,7 @@ impl ExcelRuntime {
                         "ShapeRange",
                         "Name" | "AlternativeText" | "Title" | "LockAspectRatio" | "OnAction"
                     )
-                    | (
-                        "Chart",
-                        "HasAxis" | "ProtectData" | "ProtectFormatting" | "ProtectSelection"
-                    )
+                    | ("Chart", "HasAxis")
                     | ("ChartArea", "Left" | "Top" | "Width" | "Height")
             )
         {
@@ -6957,52 +6954,6 @@ impl ExcelRuntime {
                         if view_3d.right_angle_axes != Some(right_angle_axes) {
                             view_3d.right_angle_axes = Some(right_angle_axes);
                             chart.view_3d_dirty = true;
-                            chart.dirty = true;
-                            runtime.dirty = true;
-                        }
-                        Ok(())
-                    }
-                    "ProtectData" | "ProtectFormatting" | "ProtectSelection" => {
-                        let OmValue::Bool(protected) = value else {
-                            return Err(OmError::type_mismatch(format!(
-                                "Chart.{member} expects a boolean value"
-                            )));
-                        };
-                        let runtime = self.runtime_workbook_mut(workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
-                        }
-                        let chart =
-                            runtime
-                                .loaded
-                                .state
-                                .charts
-                                .get_mut(&chart_id)
-                                .ok_or_else(|| {
-                                    OmError::new(OmErrorCode::NotFound, "chart not found")
-                                })?;
-                        let current = chart.protection.unwrap_or_default();
-                        let next = match member {
-                            "ProtectData" => ChartProtectionModel {
-                                data: protected,
-                                ..current
-                            },
-                            "ProtectFormatting" => ChartProtectionModel {
-                                formatting: protected,
-                                ..current
-                            },
-                            "ProtectSelection" => ChartProtectionModel {
-                                selection: protected,
-                                ..current
-                            },
-                            _ => unreachable!("chart protection setter was matched"),
-                        };
-                        if current != next {
-                            chart.protection = Some(next);
-                            chart.protection_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -112799,41 +112750,13 @@ mod tests {
             );
         }
 
-        runtime
-            .dispatch_set(chart, "ProtectData", OmValue::Bool(true), &[])
-            .expect("set Chart.ProtectData");
-        runtime
-            .dispatch_set(chart, "ProtectFormatting", OmValue::Bool(true), &[])
-            .expect("set Chart.ProtectFormatting");
-        runtime
-            .dispatch_set(chart, "ProtectSelection", OmValue::Bool(true), &[])
-            .expect("set Chart.ProtectSelection");
-        assert_eq!(
-            runtime
-                .dispatch_get(chart, "ProtectData", &[])
-                .expect("Chart.ProtectData after set"),
-            OmValue::Bool(true)
-        );
-        assert_eq!(
-            runtime
-                .dispatch_get(chart, "ProtectFormatting", &[])
-                .expect("Chart.ProtectFormatting after set"),
-            OmValue::Bool(true)
-        );
-        assert_eq!(
-            runtime
-                .dispatch_get(chart, "ProtectSelection", &[])
-                .expect("Chart.ProtectSelection after set"),
-            OmValue::Bool(true)
-        );
-        assert_eq!(
-            runtime
-                .dispatch_set(chart, "ProtectData", OmValue::Number(1.0), &[])
-                .expect_err("Chart.ProtectData rejects non-bool")
-                .code,
-            OmErrorCode::TypeMismatch
-        );
-        for member in ["ProtectContents", "ProtectDrawingObjects"] {
+        for member in [
+            "ProtectContents",
+            "ProtectDrawingObjects",
+            "ProtectData",
+            "ProtectFormatting",
+            "ProtectSelection",
+        ] {
             let error = match runtime.dispatch_set(chart, member, OmValue::Bool(true), &[]) {
                 Ok(()) => panic!("Chart.{member} should be read-only"),
                 Err(error) => error,
@@ -112916,9 +112839,9 @@ mod tests {
         .expect("protected chart xml utf8");
         assert!(protected_chart_xml.contains("<c:protection>"));
         assert!(protected_chart_xml.contains(r#"<c:chartObject val="1"/>"#));
-        assert!(protected_chart_xml.contains(r#"<c:data val="1"/>"#));
-        assert!(protected_chart_xml.contains(r#"<c:formatting val="1"/>"#));
-        assert!(protected_chart_xml.contains(r#"<c:selection val="1"/>"#));
+        assert!(!protected_chart_xml.contains("<c:data"));
+        assert!(!protected_chart_xml.contains("<c:formatting"));
+        assert!(!protected_chart_xml.contains("<c:selection"));
         assert!(protected_chart_xml.contains(r#"<c:userInterface val="1"/>"#));
 
         let mut protected_runtime = ExcelRuntime::new();
@@ -112953,9 +112876,9 @@ mod tests {
         for (member, expected) in [
             ("ProtectContents", true),
             ("ProtectDrawingObjects", false),
-            ("ProtectData", true),
-            ("ProtectFormatting", true),
-            ("ProtectSelection", true),
+            ("ProtectData", false),
+            ("ProtectFormatting", false),
+            ("ProtectSelection", false),
             ("ProtectionMode", true),
         ] {
             assert_eq!(
