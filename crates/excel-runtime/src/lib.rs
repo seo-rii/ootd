@@ -14162,7 +14162,27 @@ impl ExcelRuntime {
                                 "ChartArea.ClearFormats does not accept arguments",
                             ));
                         }
-                        self.chart_model(workbook, chart_id)?;
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        if chart.rounded_corners.is_some() {
+                            chart.rounded_corners = None;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
                         Ok(OmValue::Empty)
                     }
                     "Clear" | "ClearContents" => {
@@ -113595,6 +113615,160 @@ mod tests {
                 0.0
             );
         }
+    }
+
+    #[test]
+    fn chartarea_clear_formats_resets_rounded_corners_and_preserves_extensions() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            "</c:chartSpace>",
+            r#"<c:extLst><c:ext uri="urn:chartarea-clear-formats-preserve"/></c:extLst></c:chartSpace>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("Chart.ChartArea"),
+        );
+
+        runtime
+            .dispatch_set(chart_area, "RoundedCorners", OmValue::Bool(true), &[])
+            .expect("set ChartArea.RoundedCorners");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "RoundedCorners", &[])
+                .expect("ChartObject.RoundedCorners before ClearFormats"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_area, "ClearFormats", &[OmValue::Missing])
+                .expect_err("ChartArea.ClearFormats rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_area, "ClearFormats", &[])
+                .expect("ChartArea.ClearFormats"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_area, "RoundedCorners", &[])
+                .expect("ChartArea.RoundedCorners after ClearFormats"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "RoundedCorners", &[])
+                .expect("ChartObject.RoundedCorners after ClearFormats"),
+            OmValue::Bool(false)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after ChartArea.ClearFormats");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:ext uri="urn:chartarea-clear-formats-preserve"/>"#));
+        assert!(!saved_chart_xml.contains("<c:roundedCorners"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after ChartArea.ClearFormats");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_chart_area = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "ChartArea", &[])
+                .expect("reopened Chart.ChartArea"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart_area, "RoundedCorners", &[])
+                .expect("reopened ChartArea.RoundedCorners"),
+            OmValue::Bool(false)
+        );
     }
 
     #[test]
