@@ -2954,13 +2954,7 @@ impl ExcelRuntime {
         let focus_surface = Self::runtime_object_focus_surface(&object);
         if let Some(surface) = focus_surface
             && self.focus_member_declared(surface, member)
-            && !matches!(
-                (surface, member),
-                (
-                    "ShapeRange",
-                    "AlternativeText" | "Title" | "LockAspectRatio" | "OnAction"
-                ) | ("Chart", "HasAxis")
-            )
+            && !matches!((surface, member), ("Chart", "HasAxis"))
         {
             self.focus_member_supported(surface, member, true)?;
         }
@@ -4120,197 +4114,6 @@ impl ExcelRuntime {
                             )?;
                             if chart_object.graphic_frame_transform_xml != updated_transform {
                                 chart_object.graphic_frame_transform_xml = updated_transform;
-                                chart_object.dirty = true;
-                                drawing.dirty = true;
-                                workbook_dirty = true;
-                            }
-                        }
-                    }
-                    if workbook_dirty {
-                        runtime.dirty = true;
-                    }
-                    return Ok(());
-                }
-                if member == "LockAspectRatio" {
-                    if !args.is_empty() {
-                        return Err(OmError::invalid_argument(
-                            "ShapeRange.LockAspectRatio does not accept index arguments",
-                        ));
-                    }
-                    let locked = match value {
-                        OmValue::Bool(value) => value,
-                        OmValue::Number(number)
-                            if number.is_finite()
-                                && number.fract() == 0.0
-                                && matches!(number as i32, MSO_TRUE | MSO_FALSE) =>
-                        {
-                            number as i32 == MSO_TRUE
-                        }
-                        OmValue::Number(_) => {
-                            return Err(OmError::invalid_argument(
-                                "ShapeRange.LockAspectRatio expects msoTrue or msoFalse",
-                            ));
-                        }
-                        _ => {
-                            return Err(OmError::type_mismatch(
-                                "ShapeRange.LockAspectRatio expects a boolean or MsoTriState value",
-                            ));
-                        }
-                    };
-                    let chart_object_ids = self
-                        .shape_range_chart_object_entries(workbook, &source)?
-                        .into_iter()
-                        .map(|(chart_object_id, _)| chart_object_id)
-                        .collect::<Vec<_>>();
-                    if chart_object_ids.is_empty() {
-                        return Err(OmError::new(
-                            OmErrorCode::NotFound,
-                            "chart object not found",
-                        ));
-                    }
-                    let runtime = self.runtime_workbook_mut(workbook)?;
-                    if runtime.read_only {
-                        return Err(OmError::new(
-                            OmErrorCode::InvalidState,
-                            "cannot modify a read-only workbook",
-                        ));
-                    }
-                    let mut workbook_dirty = false;
-                    for drawing in runtime.loaded.state.drawings.values_mut() {
-                        for object in &mut drawing.objects {
-                            let DrawingObjectModel::ChartFrame(chart_object) = object else {
-                                continue;
-                            };
-                            if !chart_object_ids.contains(&chart_object.id) {
-                                continue;
-                            }
-                            let updated_frame_properties = set_graphic_frame_lock_aspect_ratio_xml(
-                                chart_object.non_visual_frame_properties_xml.as_deref(),
-                                locked,
-                            )?;
-                            if chart_object.non_visual_frame_properties_xml
-                                != updated_frame_properties
-                            {
-                                chart_object.non_visual_frame_properties_xml =
-                                    updated_frame_properties;
-                                chart_object.dirty = true;
-                                drawing.dirty = true;
-                                workbook_dirty = true;
-                            }
-                        }
-                    }
-                    if workbook_dirty {
-                        runtime.dirty = true;
-                    }
-                    return Ok(());
-                }
-                if matches!(member, "AlternativeText" | "Title") {
-                    let (attr_name, property_name) = match member {
-                        "AlternativeText" => ("descr", "AlternativeText"),
-                        "Title" => ("title", "Title"),
-                        _ => unreachable!("ShapeRange non-visual text member was matched"),
-                    };
-                    if !args.is_empty() {
-                        return Err(OmError::invalid_argument(format!(
-                            "ShapeRange.{property_name} does not accept index arguments"
-                        )));
-                    }
-                    let OmValue::Text(text) = value else {
-                        return Err(OmError::type_mismatch(format!(
-                            "ShapeRange.{property_name} expects a string value"
-                        )));
-                    };
-                    let chart_object_ids = self
-                        .shape_range_chart_object_entries(workbook, &source)?
-                        .into_iter()
-                        .map(|(chart_object_id, _)| chart_object_id)
-                        .collect::<Vec<_>>();
-                    if chart_object_ids.is_empty() {
-                        return Err(OmError::new(
-                            OmErrorCode::NotFound,
-                            "chart object not found",
-                        ));
-                    }
-                    let runtime = self.runtime_workbook_mut(workbook)?;
-                    if runtime.read_only {
-                        return Err(OmError::new(
-                            OmErrorCode::InvalidState,
-                            "cannot modify a read-only workbook",
-                        ));
-                    }
-                    let mut workbook_dirty = false;
-                    for drawing in runtime.loaded.state.drawings.values_mut() {
-                        for object in &mut drawing.objects {
-                            let DrawingObjectModel::ChartFrame(chart_object) = object else {
-                                continue;
-                            };
-                            if !chart_object_ids.contains(&chart_object.id) {
-                                continue;
-                            }
-                            let changed = if text.is_empty() {
-                                chart_object.non_visual_attrs.remove(attr_name).is_some()
-                            } else if chart_object.non_visual_attrs.get(attr_name) != Some(&text) {
-                                chart_object
-                                    .non_visual_attrs
-                                    .insert(attr_name.to_string(), text.clone());
-                                true
-                            } else {
-                                false
-                            };
-                            if changed {
-                                chart_object.dirty = true;
-                                drawing.dirty = true;
-                                workbook_dirty = true;
-                            }
-                        }
-                    }
-                    if workbook_dirty {
-                        runtime.dirty = true;
-                    }
-                    return Ok(());
-                }
-                if member == "OnAction" {
-                    if !args.is_empty() {
-                        return Err(OmError::invalid_argument(
-                            "ShapeRange.OnAction does not accept index arguments",
-                        ));
-                    }
-                    let OmValue::Text(on_action) = value else {
-                        return Err(OmError::type_mismatch(
-                            "ShapeRange.OnAction expects a string value",
-                        ));
-                    };
-                    let chart_object_ids = self
-                        .shape_range_chart_object_entries(workbook, &source)?
-                        .into_iter()
-                        .map(|(chart_object_id, _)| chart_object_id)
-                        .collect::<Vec<_>>();
-                    if chart_object_ids.is_empty() {
-                        return Err(OmError::new(
-                            OmErrorCode::NotFound,
-                            "chart object not found",
-                        ));
-                    }
-                    let runtime = self.runtime_workbook_mut(workbook)?;
-                    if runtime.read_only {
-                        return Err(OmError::new(
-                            OmErrorCode::InvalidState,
-                            "cannot modify a read-only workbook",
-                        ));
-                    }
-                    let mut workbook_dirty = false;
-                    for drawing in runtime.loaded.state.drawings.values_mut() {
-                        for object in &mut drawing.objects {
-                            let DrawingObjectModel::ChartFrame(chart_object) = object else {
-                                continue;
-                            };
-                            if !chart_object_ids.contains(&chart_object.id) {
-                                continue;
-                            }
-                            if chart_object.graphic_frame_attrs.get("macro") != Some(&on_action) {
-                                chart_object
-                                    .graphic_frame_attrs
-                                    .insert("macro".to_string(), on_action.clone());
                                 chart_object.dirty = true;
                                 drawing.dirty = true;
                                 workbook_dirty = true;
@@ -31803,148 +31606,6 @@ fn graphic_frame_lock_aspect_ratio(raw_xml: Option<&str>) -> OmResult<bool> {
         }
         buffer.clear();
     }
-}
-
-fn rewrite_graphic_frame_locks_no_change_aspect(
-    element: &BytesStart<'_>,
-    decoder: quick_xml::encoding::Decoder,
-    locked: bool,
-) -> OmResult<BytesStart<'static>> {
-    let mut rewritten =
-        BytesStart::new(String::from_utf8_lossy(element.name().as_ref()).into_owned());
-    for attr in element.attributes() {
-        let attr = attr.map_err(runtime_xml_error)?;
-        if xml_local_name(attr.key.as_ref()) == b"noChangeAspect" {
-            continue;
-        }
-        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
-        let value = attr
-            .decode_and_unescape_value(decoder)
-            .map_err(runtime_xml_error)?
-            .into_owned();
-        rewritten.push_attribute((key.as_str(), value.as_str()));
-    }
-    if locked {
-        rewritten.push_attribute(("noChangeAspect", "1"));
-    }
-    Ok(rewritten)
-}
-
-fn set_graphic_frame_lock_aspect_ratio_xml(
-    raw_xml: Option<&str>,
-    locked: bool,
-) -> OmResult<Option<String>> {
-    let Some(raw_xml) = raw_xml else {
-        return Ok(locked.then(|| {
-            r#"<xdr:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></xdr:cNvGraphicFramePr>"#
-                .to_string()
-        }));
-    };
-    let mut reader = Reader::from_reader(Cursor::new(raw_xml.as_bytes()));
-    reader.config_mut().trim_text(false);
-    let mut writer = Writer::new(Cursor::new(Vec::new()));
-    let mut buffer = Vec::new();
-    let mut root_depth = 0usize;
-    let mut inside_root = false;
-    let mut saw_graphic_frame_locks = false;
-    loop {
-        match reader.read_event_into(&mut buffer) {
-            Ok(Event::Start(element)) => {
-                let local_name = xml_local_name(element.name().as_ref()).to_vec();
-                if !inside_root && local_name.as_slice() == b"cNvGraphicFramePr" {
-                    inside_root = true;
-                    root_depth = 1;
-                    writer
-                        .write_event(Event::Start(element.into_owned()))
-                        .map_err(runtime_xml_error)?;
-                } else {
-                    if inside_root {
-                        root_depth += 1;
-                    }
-                    if local_name.as_slice() == b"graphicFrameLocks" {
-                        saw_graphic_frame_locks = true;
-                        let rewritten = rewrite_graphic_frame_locks_no_change_aspect(
-                            &element,
-                            reader.decoder(),
-                            locked,
-                        )?;
-                        writer
-                            .write_event(Event::Start(rewritten))
-                            .map_err(runtime_xml_error)?;
-                    } else {
-                        writer
-                            .write_event(Event::Start(element.into_owned()))
-                            .map_err(runtime_xml_error)?;
-                    }
-                }
-            }
-            Ok(Event::Empty(element)) => {
-                let local_name = xml_local_name(element.name().as_ref()).to_vec();
-                if !inside_root && local_name.as_slice() == b"cNvGraphicFramePr" {
-                    if locked {
-                        let qualified_name =
-                            String::from_utf8_lossy(element.name().as_ref()).into_owned();
-                        writer
-                            .write_event(Event::Start(element.into_owned()))
-                            .map_err(runtime_xml_error)?;
-                        let mut locks = BytesStart::new("a:graphicFrameLocks");
-                        locks.push_attribute(("noChangeAspect", "1"));
-                        writer
-                            .write_event(Event::Empty(locks))
-                            .map_err(runtime_xml_error)?;
-                        writer
-                            .write_event(Event::End(BytesEnd::new(qualified_name)))
-                            .map_err(runtime_xml_error)?;
-                    } else {
-                        writer
-                            .write_event(Event::Empty(element.into_owned()))
-                            .map_err(runtime_xml_error)?;
-                    }
-                } else if local_name.as_slice() == b"graphicFrameLocks" {
-                    saw_graphic_frame_locks = true;
-                    let rewritten = rewrite_graphic_frame_locks_no_change_aspect(
-                        &element,
-                        reader.decoder(),
-                        locked,
-                    )?;
-                    writer
-                        .write_event(Event::Empty(rewritten))
-                        .map_err(runtime_xml_error)?;
-                } else {
-                    writer
-                        .write_event(Event::Empty(element.into_owned()))
-                        .map_err(runtime_xml_error)?;
-                }
-            }
-            Ok(Event::End(element)) => {
-                if inside_root && root_depth == 1 && !saw_graphic_frame_locks && locked {
-                    let mut locks = BytesStart::new("a:graphicFrameLocks");
-                    locks.push_attribute(("noChangeAspect", "1"));
-                    writer
-                        .write_event(Event::Empty(locks))
-                        .map_err(runtime_xml_error)?;
-                }
-                writer
-                    .write_event(Event::End(element.into_owned()))
-                    .map_err(runtime_xml_error)?;
-                if inside_root && root_depth > 0 {
-                    root_depth -= 1;
-                    if root_depth == 0 {
-                        inside_root = false;
-                    }
-                }
-            }
-            Ok(Event::Eof) => break,
-            Ok(event) => writer
-                .write_event(event.into_owned())
-                .map_err(runtime_xml_error)?,
-            Err(error) => return Err(runtime_xml_error(error)),
-        }
-        buffer.clear();
-    }
-    String::from_utf8(writer.into_inner().into_inner())
-        .map(Some)
-        .map_err(runtime_xml_error)
 }
 
 fn om_value_is_omitted(value: &OmValue) -> bool {
@@ -101520,60 +101181,6 @@ mod tests {
         );
 
         runtime
-            .dispatch_set(shape_range, "LockAspectRatio", OmValue::Bool(false), &[])
-            .expect("clear ShapeRange.LockAspectRatio");
-        assert_eq!(
-            expect_number(
-                runtime
-                    .dispatch_get(single_shape, "LockAspectRatio", &[])
-                    .expect("first ShapeRange.LockAspectRatio false")
-            ),
-            f64::from(super::MSO_FALSE)
-        );
-        assert_eq!(
-            expect_number(
-                runtime
-                    .dispatch_get(second_shape, "LockAspectRatio", &[])
-                    .expect("second ShapeRange.LockAspectRatio false")
-            ),
-            f64::from(super::MSO_FALSE)
-        );
-        runtime
-            .dispatch_set(
-                shape_range,
-                "LockAspectRatio",
-                OmValue::Number(f64::from(super::MSO_TRUE)),
-                &[],
-            )
-            .expect("set ShapeRange.LockAspectRatio");
-        assert_eq!(
-            expect_number(
-                runtime
-                    .dispatch_get(shape_range, "LockAspectRatio", &[])
-                    .expect("ShapeRange.LockAspectRatio after set")
-            ),
-            f64::from(super::MSO_TRUE)
-        );
-        assert_eq!(
-            runtime
-                .dispatch_set(shape_range, "LockAspectRatio", OmValue::Number(2.0), &[])
-                .expect_err("ShapeRange.LockAspectRatio rejects unsupported tristate")
-                .code,
-            OmErrorCode::InvalidArgument
-        );
-        assert_eq!(
-            runtime
-                .dispatch_set(
-                    shape_range,
-                    "LockAspectRatio",
-                    OmValue::Text("true".to_string()),
-                    &[],
-                )
-                .expect_err("ShapeRange.LockAspectRatio rejects text")
-                .code,
-            OmErrorCode::TypeMismatch
-        );
-        runtime
             .dispatch_set(shape_range, "Rotation", OmValue::Number(45.25), &[])
             .expect("set ShapeRange.Rotation");
         assert_eq!(
@@ -101605,61 +101212,6 @@ mod tests {
             OmErrorCode::TypeMismatch
         );
 
-        runtime
-            .dispatch_set(
-                shape_range,
-                "AlternativeText",
-                OmValue::Text("Revenue charts".to_string()),
-                &[],
-            )
-            .expect("set ShapeRange.AlternativeText");
-        assert_eq!(
-            expect_text(
-                runtime
-                    .dispatch_get(single_shape, "AlternativeText", &[])
-                    .expect("first ShapeRange.AlternativeText after set")
-            ),
-            "Revenue charts"
-        );
-        assert_eq!(
-            expect_text(
-                runtime
-                    .dispatch_get(second_shape, "AlternativeText", &[])
-                    .expect("second ShapeRange.AlternativeText after set")
-            ),
-            "Revenue charts"
-        );
-        assert_eq!(
-            runtime
-                .dispatch_set(shape_range, "AlternativeText", OmValue::Number(1.0), &[],)
-                .expect_err("ShapeRange.AlternativeText rejects non-text")
-                .code,
-            OmErrorCode::TypeMismatch
-        );
-        runtime
-            .dispatch_set(
-                shape_range,
-                "Title",
-                OmValue::Text("Revenue chart title".to_string()),
-                &[],
-            )
-            .expect("set ShapeRange.Title");
-        assert_eq!(
-            expect_text(
-                runtime
-                    .dispatch_get(single_shape, "Title", &[])
-                    .expect("first ShapeRange.Title after set")
-            ),
-            "Revenue chart title"
-        );
-        assert_eq!(
-            expect_text(
-                runtime
-                    .dispatch_get(second_shape, "Title", &[])
-                    .expect("second ShapeRange.Title after set")
-            ),
-            "Revenue chart title"
-        );
         assert_eq!(
             runtime
                 .dispatch_get(shape_range, "Title", &[OmValue::Missing])
@@ -101669,74 +101221,94 @@ mod tests {
         );
         assert_eq!(
             runtime
-                .dispatch_set(shape_range, "Title", OmValue::Number(1.0), &[])
-                .expect_err("ShapeRange.Title rejects non-text")
-                .code,
-            OmErrorCode::TypeMismatch
-        );
-        runtime
-            .dispatch_set(
-                second_shape,
-                "OnAction",
-                OmValue::Text("Book1.xlsm!RefreshSecondChart".to_string()),
-                &[],
-            )
-            .expect("set second ShapeRange.OnAction");
-        assert_eq!(
-            expect_text(
-                runtime
-                    .dispatch_get(shape_range, "OnAction", &[])
-                    .expect("mixed ShapeRange.OnAction")
-            ),
-            ""
-        );
-        runtime
-            .dispatch_set(
-                shape_range,
-                "OnAction",
-                OmValue::Text("Book1.xlsm!RefreshAllCharts".to_string()),
-                &[],
-            )
-            .expect("set ShapeRange.OnAction");
-        assert_eq!(
-            expect_text(
-                runtime
-                    .dispatch_get(single_shape, "OnAction", &[])
-                    .expect("first ShapeRange.OnAction after set")
-            ),
-            "Book1.xlsm!RefreshAllCharts"
-        );
-        assert_eq!(
-            expect_text(
-                runtime
-                    .dispatch_get(second_shape, "OnAction", &[])
-                    .expect("second ShapeRange.OnAction after set")
-            ),
-            "Book1.xlsm!RefreshAllCharts"
-        );
-        assert_eq!(
-            expect_text(
-                runtime
-                    .dispatch_get(shape_range, "OnAction", &[])
-                    .expect("ShapeRange.OnAction after set")
-            ),
-            "Book1.xlsm!RefreshAllCharts"
-        );
-        assert_eq!(
-            runtime
                 .dispatch_get(shape_range, "OnAction", &[OmValue::Missing])
                 .expect_err("ShapeRange.OnAction rejects arguments")
                 .code,
             OmErrorCode::InvalidArgument
         );
+        for (member, value) in [
+            ("LockAspectRatio", OmValue::Bool(false)),
+            (
+                "AlternativeText",
+                OmValue::Text("Revenue charts".to_string()),
+            ),
+            ("Title", OmValue::Text("Revenue chart title".to_string())),
+            (
+                "OnAction",
+                OmValue::Text("Book1.xlsm!RefreshAllCharts".to_string()),
+            ),
+        ] {
+            let error = match runtime.dispatch_set(shape_range, member, value, &[]) {
+                Ok(()) => panic!("ShapeRange.{member} should be read-only"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code, OmErrorCode::Unsupported);
+            assert!(
+                error.message.contains("pinned OM registry"),
+                "ShapeRange.{member}: {error:?}"
+            );
+        }
         assert_eq!(
             runtime
-                .dispatch_set(shape_range, "OnAction", OmValue::Bool(true), &[])
-                .expect_err("ShapeRange.OnAction rejects non-text")
+                .dispatch_set(
+                    second_shape,
+                    "OnAction",
+                    OmValue::Text("Book1.xlsm!RefreshSecondChart".to_string()),
+                    &[],
+                )
+                .expect_err("single ShapeRange.OnAction should be read-only")
                 .code,
-            OmErrorCode::TypeMismatch
+            OmErrorCode::Unsupported
         );
-        let saved_with_non_visual_text = runtime
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "LockAspectRatio", &[])
+                    .expect("ShapeRange.LockAspectRatio after rejected set")
+            ),
+            f64::from(super::MSO_SHAPE_MIXED)
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(single_shape, "AlternativeText", &[])
+                    .expect("first ShapeRange.AlternativeText after rejected set")
+            ),
+            "Revenue detail"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(second_shape, "AlternativeText", &[])
+                    .expect("second ShapeRange.AlternativeText after rejected set")
+            ),
+            ""
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(single_shape, "Title", &[])
+                    .expect("first ShapeRange.Title after rejected set")
+            ),
+            "Chart Alt"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(second_shape, "Title", &[])
+                    .expect("second ShapeRange.Title after rejected set")
+            ),
+            ""
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(shape_range, "OnAction", &[])
+                    .expect("ShapeRange.OnAction after rejected set")
+            ),
+            ""
+        );
+        let saved_with_shape_range_state = runtime
             .save_workbook(
                 workbook,
                 SaveWorkbookSpec {
@@ -101745,24 +101317,24 @@ mod tests {
                     lossless: true,
                 },
             )
-            .expect("save workbook with ShapeRange non-visual text");
-        let saved_non_visual_text_package = OpcPackage::from_bytes(&saved_with_non_visual_text)
-            .expect("saved non-visual text package");
-        let saved_non_visual_text_drawing = String::from_utf8(
-            saved_non_visual_text_package
+            .expect("save workbook with ShapeRange visual state");
+        let saved_shape_range_package =
+            OpcPackage::from_bytes(&saved_with_shape_range_state).expect("saved package");
+        let saved_shape_range_drawing = String::from_utf8(
+            saved_shape_range_package
                 .part("xl/drawings/drawing1.xml")
-                .expect("saved non-visual text drawing part")
+                .expect("saved ShapeRange drawing part")
                 .bytes
                 .clone(),
         )
-        .expect("saved non-visual text drawing XML utf8");
-        assert!(saved_non_visual_text_drawing.contains(r#"descr="Revenue charts""#));
-        assert!(saved_non_visual_text_drawing.contains(r#"title="Revenue chart title""#));
-        assert!(saved_non_visual_text_drawing.contains(r#"noChangeAspect="1""#));
-        assert!(saved_non_visual_text_drawing.contains(r#"rot="2715000""#));
-        assert!(saved_non_visual_text_drawing.contains(r#"flipH="1""#));
-        assert!(saved_non_visual_text_drawing.contains(r#"flipV="1""#));
-        assert!(saved_non_visual_text_drawing.contains(r#"macro="Book1.xlsm!RefreshAllCharts""#));
+        .expect("saved ShapeRange drawing XML utf8");
+        assert!(saved_shape_range_drawing.contains(r#"descr="Revenue detail""#));
+        assert!(saved_shape_range_drawing.contains(r#"title="Chart Alt""#));
+        assert!(saved_shape_range_drawing.contains(r#"noChangeAspect="1""#));
+        assert!(saved_shape_range_drawing.contains(r#"rot="2715000""#));
+        assert!(saved_shape_range_drawing.contains(r#"flipH="1""#));
+        assert!(saved_shape_range_drawing.contains(r#"flipV="1""#));
+        assert!(!saved_shape_range_drawing.contains("RefreshAllCharts"));
 
         runtime
             .dispatch_set(shape_range, "Visible", OmValue::Bool(false), &[])
