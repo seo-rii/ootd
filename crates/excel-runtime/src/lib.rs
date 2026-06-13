@@ -15056,6 +15056,12 @@ impl ExcelRuntime {
                         return Err(OmError::new(OmErrorCode::NotFound, "series not found"));
                     }
                     let label_count = chart_data_labels_count_for_chart_series(chart, series_index);
+                    if label_count == 0 {
+                        return Err(OmError::new(
+                            OmErrorCode::NotFound,
+                            "chart data labels not found",
+                        ));
+                    }
                     if index as usize > label_count {
                         return Err(OmError::invalid_argument(
                             "DataLabels.Propagate Index is out of bounds",
@@ -112195,6 +112201,20 @@ mod tests {
             runtime
                 .dispatch_invoke(data_labels, "ClearFormats", &[])
                 .expect_err("DataLabels.ClearFormats rejects absent labels after Delete")
+                .code,
+            OmErrorCode::NotFound
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(data_labels, "Propagate", &[OmValue::Number(0.0)])
+                .expect_err("DataLabels.Propagate(0) rejects absent labels after Delete")
+                .code,
+            OmErrorCode::NotFound
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(data_labels, "Propagate", &[OmValue::Number(1.0)])
+                .expect_err("DataLabels.Propagate(1) rejects absent labels after Delete")
                 .code,
             OmErrorCode::NotFound
         );
