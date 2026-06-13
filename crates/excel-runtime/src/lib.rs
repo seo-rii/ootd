@@ -30973,11 +30973,18 @@ impl ExcelRuntime {
 
     fn set_selection(&mut self, workbook: WorkbookHandle, sheet_id: SheetId, rect: Rect) {
         self.active_workbook = Some(workbook);
-        self.active_chart = None;
         self.selection = Some(RuntimeSelection {
             workbook,
             sheet_id,
             rect,
+        });
+        self.active_chart = self.runtime_workbook(workbook).ok().and_then(|runtime| {
+            runtime
+                .loaded
+                .state
+                .chart_sheets
+                .get(&sheet_id)
+                .map(|binding| (workbook, binding.chart_id, None))
         });
     }
 
@@ -86546,7 +86553,7 @@ mod tests {
     }
 
     #[test]
-    fn workbooks_add_supports_numeric_chart_and_macro_templates_as_sheet_shells() {
+    fn workbooks_add_supports_numeric_chart_template_and_macro_sheet_shells() {
         let mut runtime = ExcelRuntime::new();
         let application = runtime.root_application();
         let workbooks = expect_object_handle(
@@ -86592,6 +86599,32 @@ mod tests {
                 expected_sheet_name
             );
             if template == super::XL_WBA_TEMPLATE_CHART {
+                let active_chart = expect_object_handle(
+                    runtime
+                        .dispatch_get(application, "ActiveChart", &[])
+                        .expect("ActiveChart after Workbooks.Add xlWBATChart"),
+                );
+                assert_eq!(
+                    expect_text(
+                        runtime
+                            .dispatch_get(active_chart, "Name", &[])
+                            .expect("ActiveChart.Name after Workbooks.Add xlWBATChart")
+                    ),
+                    expected_sheet_name
+                );
+                let selection = expect_object_handle(
+                    runtime
+                        .dispatch_get(application, "Selection", &[])
+                        .expect("Selection after Workbooks.Add xlWBATChart"),
+                );
+                assert_eq!(
+                    expect_text(
+                        runtime
+                            .dispatch_get(selection, "Name", &[])
+                            .expect("Selection.Name after Workbooks.Add xlWBATChart")
+                    ),
+                    expected_sheet_name
+                );
                 let charts = expect_object_handle(
                     runtime
                         .dispatch_get(workbook, "Charts", &[])
@@ -86658,6 +86691,13 @@ mod tests {
                     Some("xl/chartsheets/sheet1.xml")
                 );
                 assert_eq!(reopened.state.chart_sheets.len(), 1);
+            } else {
+                assert_eq!(
+                    runtime
+                        .dispatch_get(application, "ActiveChart", &[])
+                        .expect("ActiveChart after macro template workbook"),
+                    OmValue::Empty
+                );
             }
             assert!(expect_bool(
                 runtime
@@ -94671,7 +94711,7 @@ mod tests {
     }
 
     #[test]
-    fn worksheets_add_supports_numeric_chart_and_macro_types_as_sheet_shells() {
+    fn worksheets_add_supports_numeric_chart_type_and_macro_sheet_shells() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -94711,6 +94751,32 @@ mod tests {
                     ],
                 )
                 .expect("Worksheets.Add Type:=xlChart"),
+        );
+        let active_chart_after_chart_add = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveChart", &[])
+                .expect("ActiveChart after Worksheets.Add Type:=xlChart"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_chart_after_chart_add, "Name", &[])
+                    .expect("ActiveChart.Name after Worksheets.Add Type:=xlChart")
+            ),
+            "Chart1"
+        );
+        let selection_after_chart_add = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after Worksheets.Add Type:=xlChart"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection_after_chart_add, "Name", &[])
+                    .expect("Selection.Name after Worksheets.Add Type:=xlChart")
+            ),
+            "Chart1"
         );
         let macro_sheet = expect_object_handle(
             runtime
@@ -94839,6 +94905,12 @@ mod tests {
                     .expect("active sheet name after typed shell adds")
             ),
             "IntlMacro1"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "ActiveChart", &[])
+                .expect("ActiveChart after macro sheet adds"),
+            OmValue::Empty
         );
 
         let saved = runtime
