@@ -483,9 +483,9 @@ Lookup notes:
 
 - `MATCH` supports exact match, ascending approximate match, and descending approximate match over one-dimensional ranges.
 - `LOOKUP` supports the vector form with ascending approximate match, using the lookup vector as the result vector when the third argument is omitted.
-- `XMATCH` supports exact match, wildcard match, exact-or-next-smaller, exact-or-next-larger, and forward or reverse linear search over one-dimensional ranges.
+- `XMATCH` supports exact match, wildcard match, exact-or-next-smaller, exact-or-next-larger, forward or reverse linear search, and ascending or descending binary search over one-dimensional ranges.
 - `VLOOKUP` and `HLOOKUP` support exact and ascending approximate table lookup.
-- `XLOOKUP` supports scalar one-dimensional lookup and return arrays, `if_not_found`, exact match, wildcard match, exact-or-next-smaller, exact-or-next-larger, and forward or reverse linear search.
+- `XLOOKUP` supports scalar one-dimensional lookup and return arrays, `if_not_found`, exact match, wildcard match, exact-or-next-smaller, exact-or-next-larger, forward or reverse linear search, and ascending or descending binary search.
 - `GETPIVOTDATA` parses field/item pairs and returns the scalar value at the pivot-table anchor reference when no pivot cache metadata is available.
 - `INDIRECT`, `OFFSET`, and `TRIMRANGE` resolve references to the scalar upper-left value of the resulting range. `INDIRECT` supports A1 text and focused R1C1 text conversion; `TRIMRANGE` supports leading/trailing row and column trim modes.
 - `ROW()` and `COLUMN()` without arguments resolve against the formula cell position during recalculation.
@@ -704,7 +704,7 @@ External data notes:
 
 - The evaluator is still numeric-first. It includes focused scalar text and date/time text-parse subsets, but broader string semantics, locale-sensitive date/time parsing, and richer coercion rules are not implemented.
 - Dynamic array behavior and broader `Formula2` parity are not implemented.
-- Lookup/reference support now includes workbook and worksheet scoped names, explicit multi-area references for supported functions, and 3D reference expansion for aggregate-style formulas. It is still a focused subset and does not model array-returning `INDEX(..., 0, ...)` or `XLOOKUP`, binary search modes, external workbook references, or broader lookup/reference families yet.
+- Lookup/reference support now includes workbook and worksheet scoped names, explicit multi-area references for supported functions, and 3D reference expansion for aggregate-style formulas. It is still a focused subset and does not model array-returning `INDEX(..., 0, ...)`, external workbook references, or broader lookup/reference families yet.
 - Runtime Range object support preserves explicit multi-area order for address, areas, count, scalar assignment, calculation, find/replace, clear, fill, offset/resize, first-area row/column projections, and focused chart source binding. Selection and clipboard payloads are still rectangular.
 - Unsupported formulas should fail predictably, but the runtime does not yet aim for 1:1 compatibility with Excel's full calculation engine.
 

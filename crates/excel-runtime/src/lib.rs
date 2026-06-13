@@ -47825,6 +47825,14 @@ enum FormulaXLookupMatchMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormulaXLookupSearchMode {
+    Forward,
+    Reverse,
+    BinaryAscending,
+    BinaryDescending,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FormulaLookupOrientation {
     FirstColumn,
     FirstRow,
@@ -50009,10 +50017,14 @@ fn formula_xlookup_match_mode_argument(
     }
 }
 
-fn formula_xlookup_reverse_search_argument(value: f64) -> Result<bool, FormulaEvalError> {
+fn formula_xlookup_search_mode_argument(
+    value: f64,
+) -> Result<FormulaXLookupSearchMode, FormulaEvalError> {
     match formula_integer_argument(value)? {
-        1 => Ok(false),
-        -1 => Ok(true),
+        1 => Ok(FormulaXLookupSearchMode::Forward),
+        -1 => Ok(FormulaXLookupSearchMode::Reverse),
+        2 => Ok(FormulaXLookupSearchMode::BinaryAscending),
+        -2 => Ok(FormulaXLookupSearchMode::BinaryDescending),
         _ => Err(FormulaEvalError::Value),
     }
 }
@@ -50441,11 +50453,33 @@ fn xlookup_match_index_in_values(
     lookup_value: &FormulaValueProbe,
     values: &[FormulaValueProbe],
     mode: FormulaXLookupMatchMode,
-    reverse_search: bool,
+    search_mode: FormulaXLookupSearchMode,
 ) -> Result<usize, FormulaEvalError> {
     if let FormulaValueProbe::Error(error) = lookup_value {
         return Err(*error);
     }
+    match search_mode {
+        FormulaXLookupSearchMode::Forward => {
+            xlookup_linear_match_index_in_values(lookup_value, values, mode, false)
+        }
+        FormulaXLookupSearchMode::Reverse => {
+            xlookup_linear_match_index_in_values(lookup_value, values, mode, true)
+        }
+        FormulaXLookupSearchMode::BinaryAscending => {
+            xlookup_binary_match_index_in_values(lookup_value, values, mode, true)
+        }
+        FormulaXLookupSearchMode::BinaryDescending => {
+            xlookup_binary_match_index_in_values(lookup_value, values, mode, false)
+        }
+    }
+}
+
+fn xlookup_linear_match_index_in_values(
+    lookup_value: &FormulaValueProbe,
+    values: &[FormulaValueProbe],
+    mode: FormulaXLookupMatchMode,
+    reverse_search: bool,
+) -> Result<usize, FormulaEvalError> {
     let indexes = if reverse_search {
         (0..values.len()).rev().collect::<Vec<_>>()
     } else {
@@ -50508,6 +50542,67 @@ fn xlookup_match_index_in_values(
         }
     }
     best.map(|(index, _)| index).ok_or(FormulaEvalError::NA)
+}
+
+fn xlookup_binary_match_index_in_values(
+    lookup_value: &FormulaValueProbe,
+    values: &[FormulaValueProbe],
+    mode: FormulaXLookupMatchMode,
+    ascending: bool,
+) -> Result<usize, FormulaEvalError> {
+    if matches!(mode, FormulaXLookupMatchMode::Wildcard) {
+        return Err(FormulaEvalError::Value);
+    }
+
+    let mut comparable = Vec::with_capacity(values.len());
+    for (index, candidate) in values.iter().enumerate() {
+        if formula_value_probe_ordering(candidate, lookup_value)?.is_some() {
+            comparable.push((index, candidate));
+        }
+    }
+    if comparable.is_empty() {
+        return Err(FormulaEvalError::NA);
+    }
+
+    let mut low = 0_usize;
+    let mut high = comparable.len();
+    while low < high {
+        let mid = low + (high - low) / 2;
+        let ordering = formula_value_probe_ordering(comparable[mid].1, lookup_value)?
+            .ok_or(FormulaEvalError::NA)?;
+        let before_lookup = if ascending {
+            ordering == Ordering::Less
+        } else {
+            ordering == Ordering::Greater
+        };
+        if before_lookup {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+
+    if let Some((index, candidate)) = comparable.get(low)
+        && formula_value_probe_exact_match(lookup_value, candidate)?
+    {
+        return Ok(*index);
+    }
+
+    let candidate = match mode {
+        FormulaXLookupMatchMode::Exact => None,
+        FormulaXLookupMatchMode::ExactOrNextSmaller if ascending => {
+            low.checked_sub(1).and_then(|index| comparable.get(index))
+        }
+        FormulaXLookupMatchMode::ExactOrNextSmaller => comparable.get(low),
+        FormulaXLookupMatchMode::ExactOrNextLarger if ascending => comparable.get(low),
+        FormulaXLookupMatchMode::ExactOrNextLarger => {
+            low.checked_sub(1).and_then(|index| comparable.get(index))
+        }
+        FormulaXLookupMatchMode::Wildcard => None,
+    };
+    candidate
+        .map(|(index, _)| *index)
+        .ok_or(FormulaEvalError::NA)
 }
 
 fn formula_value_probe_exact_match(
@@ -58623,7 +58718,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         let (sheet_id, rect, orientation) = self.parse_lookup_vector_reference_argument()?;
         let mut mode = FormulaXLookupMatchMode::Exact;
-        let mut reverse_search = false;
+        let mut search_mode = FormulaXLookupSearchMode::Forward;
         self.skip_whitespace();
         if !self.consume_char(')') {
             if !self.consume_char(',') {
@@ -58635,7 +58730,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 if !self.consume_char(',') {
                     return Err(FormulaEvalError::Unsupported);
                 }
-                reverse_search = formula_xlookup_reverse_search_argument(self.parse_comparison()?)?;
+                search_mode = formula_xlookup_search_mode_argument(self.parse_comparison()?)?;
                 self.skip_whitespace();
                 if !self.consume_char(')') {
                     return Err(FormulaEvalError::Unsupported);
@@ -58646,7 +58741,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             .evaluator
             .lookup_values_in_rect(sheet_id, rect, orientation)?;
         let index =
-            xlookup_match_index_in_values(&lookup_value, values.as_slice(), mode, reverse_search)?;
+            xlookup_match_index_in_values(&lookup_value, values.as_slice(), mode, search_mode)?;
         Ok(index as f64 + 1.0)
     }
 
@@ -58804,7 +58899,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
 
         let mut if_not_found = None;
         let mut mode = FormulaXLookupMatchMode::Exact;
-        let mut reverse_search = false;
+        let mut search_mode = FormulaXLookupSearchMode::Forward;
         self.skip_whitespace();
         if !self.consume_char(')') {
             if !self.consume_char(',') {
@@ -58822,8 +58917,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                     if !self.consume_char(',') {
                         return Err(FormulaEvalError::Unsupported);
                     }
-                    reverse_search =
-                        formula_xlookup_reverse_search_argument(self.parse_comparison()?)?;
+                    search_mode = formula_xlookup_search_mode_argument(self.parse_comparison()?)?;
                     self.skip_whitespace();
                     if !self.consume_char(')') {
                         return Err(FormulaEvalError::Unsupported);
@@ -58841,7 +58935,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             &lookup_value,
             lookup_values.as_slice(),
             mode,
-            reverse_search,
+            search_mode,
         ) {
             Ok(index) => index,
             Err(FormulaEvalError::NA) => {
@@ -77745,17 +77839,17 @@ mod tests {
         );
         let source = expect_object_handle(
             runtime
-                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:D5".to_string())])
-                .expect("Range(A1:D5)"),
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:F5".to_string())])
+                .expect("Range(A1:F5)"),
         );
         let formulas = expect_object_handle(
             runtime
                 .dispatch_invoke(
                     active_sheet,
                     "Range",
-                    &[OmValue::Text("F1:F10".to_string())],
+                    &[OmValue::Text("H1:H17".to_string())],
                 )
-                .expect("Range(F1:F10)"),
+                .expect("Range(H1:H17)"),
         );
 
         runtime
@@ -77765,28 +77859,38 @@ mod tests {
                 OmValue::Array(
                     OmArray::new(
                         5,
-                        4,
+                        6,
                         vec![
                             OmValue::Text("alpha".to_string()),
                             OmValue::Text("Aye".to_string()),
                             OmValue::Number(10.0),
                             OmValue::Text("ten".to_string()),
+                            OmValue::Number(100.0),
+                            OmValue::Text("hundred".to_string()),
                             OmValue::Text("beta".to_string()),
                             OmValue::Text("Bee".to_string()),
                             OmValue::Number(20.0),
                             OmValue::Text("twenty".to_string()),
+                            OmValue::Number(80.0),
+                            OmValue::Text("eighty".to_string()),
                             OmValue::Text("delta".to_string()),
                             OmValue::Text("Dee".to_string()),
                             OmValue::Number(40.0),
                             OmValue::Text("forty".to_string()),
+                            OmValue::Number(40.0),
+                            OmValue::Text("forty desc".to_string()),
                             OmValue::Text("gamma".to_string()),
                             OmValue::Text("Gee".to_string()),
                             OmValue::Number(80.0),
                             OmValue::Text("eighty".to_string()),
+                            OmValue::Number(20.0),
+                            OmValue::Text("twenty desc".to_string()),
                             OmValue::Text("beta".to_string()),
                             OmValue::Text("Bee two".to_string()),
                             OmValue::Number(100.0),
                             OmValue::Text("hundred".to_string()),
+                            OmValue::Number(10.0),
+                            OmValue::Text("ten desc".to_string()),
                         ],
                     )
                     .expect("xlookup source values"),
@@ -77800,7 +77904,7 @@ mod tests {
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        10,
+                        17,
                         1,
                         vec![
                             OmValue::Text("=XLOOKUP(\"beta\", A1:A5, B1:B5)".to_string()),
@@ -77821,6 +77925,21 @@ mod tests {
                             OmValue::Text(
                                 "=CONCAT(XLOOKUP(35, C1:C5, D1:D5, \"missing\", 1), \"!\")"
                                     .to_string(),
+                            ),
+                            OmValue::Text("=XMATCH(40, C1:C5, 0, 2)".to_string()),
+                            OmValue::Text(
+                                "=XLOOKUP(35, C1:C5, D1:D5, \"missing\", -1, 2)".to_string(),
+                            ),
+                            OmValue::Text(
+                                "=XLOOKUP(35, C1:C5, D1:D5, \"missing\", 1, 2)".to_string(),
+                            ),
+                            OmValue::Text("=XMATCH(35, E1:E5, -1, -2)".to_string()),
+                            OmValue::Text(
+                                "=XLOOKUP(35, E1:E5, F1:F5, \"missing\", 1, -2)".to_string(),
+                            ),
+                            OmValue::Text("=XMATCH(80, E1:E5, 0, -2)".to_string()),
+                            OmValue::Text(
+                                "=XLOOKUP(\"be*\", A1:A5, B1:B5, \"missing\", 2, 2)".to_string(),
                             ),
                         ],
                     )
@@ -77853,6 +77972,13 @@ mod tests {
                 OmValue::Number(3.0),
                 OmValue::Text("twenty".to_string()),
                 OmValue::Text("forty!".to_string()),
+                OmValue::Number(3.0),
+                OmValue::Text("twenty".to_string()),
+                OmValue::Text("forty".to_string()),
+                OmValue::Number(4.0),
+                OmValue::Text("forty desc".to_string()),
+                OmValue::Number(2.0),
+                OmValue::Error(CellError::Value),
             ]
         );
         assert_eq!(
