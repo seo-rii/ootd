@@ -14964,7 +14964,16 @@ impl ExcelRuntime {
                             "DataLabels.Select does not accept arguments",
                         ));
                     }
-                    self.series_model(workbook, chart_id, series_index)?;
+                    let chart_model = self.chart_model(workbook, chart_id)?;
+                    if chart_model.series.get(series_index).is_none() {
+                        return Err(OmError::new(OmErrorCode::NotFound, "series not found"));
+                    }
+                    if chart_data_labels_count_for_chart_series(chart_model, series_index) == 0 {
+                        return Err(OmError::new(
+                            OmErrorCode::NotFound,
+                            "chart data labels not found",
+                        ));
+                    }
                     let chart = self.register_chart_handle_with_chart_object_parent_origin(
                         workbook,
                         chart_id,
@@ -112115,6 +112124,13 @@ mod tests {
                 .code,
             OmErrorCode::NotFound
         );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(data_labels, "Select", &[])
+                .expect_err("DataLabels.Select rejects absent labels after HasDataLabels false")
+                .code,
+            OmErrorCode::NotFound
+        );
 
         runtime
             .dispatch_set(series, "HasDataLabels", OmValue::Bool(true), &[])
@@ -112150,6 +112166,13 @@ mod tests {
             runtime
                 .dispatch_invoke(data_labels, "Delete", &[])
                 .expect_err("DataLabels.Delete rejects absent labels after Delete")
+                .code,
+            OmErrorCode::NotFound
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(data_labels, "Select", &[])
+                .expect_err("DataLabels.Select rejects absent labels after Delete")
                 .code,
             OmErrorCode::NotFound
         );
