@@ -16517,7 +16517,7 @@ impl ExcelRuntime {
                 };
                 let sheet_id = self.active_sheet_id(active_workbook)?;
                 Ok(OmValue::Object(
-                    self.register_worksheet_handle(active_workbook, sheet_id).0,
+                    self.register_sheet_object_handle(active_workbook, sheet_id)?,
                 ))
             }
             "ActiveChart" => {
@@ -16977,10 +16977,12 @@ impl ExcelRuntime {
                     self.dispatch_invoke(handle, "Item", args)
                 }
             }
-            "ActiveSheet" => Ok(OmValue::Object(
-                self.register_worksheet_handle(workbook, self.active_sheet_id(workbook)?)
-                    .0,
-            )),
+            "ActiveSheet" => {
+                let sheet_id = self.active_sheet_id(workbook)?;
+                Ok(OmValue::Object(
+                    self.register_sheet_object_handle(workbook, sheet_id)?,
+                ))
+            }
             _ => Err(OmError::unsupported(format!(
                 "Workbook.{member} is not implemented as a property"
             ))),
@@ -88238,10 +88240,14 @@ mod tests {
                 assert_eq!(
                     expect_number(
                         runtime
-                            .dispatch_get(active_sheet, "Type", &[])
-                            .expect("ActiveSheet.Type")
+                            .dispatch_get(active_sheet, "ChartType", &[])
+                            .expect("ActiveSheet.ChartType")
                     ),
-                    f64::from(super::XL_SHEET_TYPE_CHART)
+                    expect_number(
+                        runtime
+                            .dispatch_get(active_chart, "ChartType", &[])
+                            .expect("ActiveChart.ChartType after Workbooks.Add xlWBATChart")
+                    )
                 );
                 let saved = runtime
                     .save_workbook(
@@ -96684,10 +96690,14 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
-                    .dispatch_get(active_sheet, "Type", &[])
-                    .expect("active chart sheet type")
+                    .dispatch_get(active_sheet, "ChartType", &[])
+                    .expect("active chart sheet ChartType")
             ),
-            f64::from(super::XL_SHEET_TYPE_CHART)
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "ChartType", &[])
+                    .expect("Charts.Add chart ChartType")
+            )
         );
         assert_eq!(
             expect_number(
@@ -98677,10 +98687,10 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
-                    .dispatch_get(chart_sheet, "Type", &[])
-                    .expect("chart sheet type")
+                    .dispatch_get(chart_sheet, "ChartType", &[])
+                    .expect("chart sheet ChartType")
             ),
-            f64::from(super::XL_SHEET_TYPE_CHART)
+            f64::from(super::XL_PIE)
         );
         let selection_chart = expect_object_handle(
             runtime
@@ -98788,14 +98798,6 @@ mod tests {
                     .expect("chart sheet Evaluate sheet-qualified formula")
             ),
             43.0
-        );
-        assert_unsupported!(
-            runtime.dispatch_invoke(chart_sheet, "Paste", &[]),
-            "chart sheet Paste should be unsupported"
-        );
-        assert_unsupported!(
-            runtime.dispatch_invoke(chart_sheet, "PasteSpecial", &[]),
-            "chart sheet PasteSpecial should be unsupported"
         );
         assert_unsupported!(
             runtime.dispatch_get(application, "Cells", &[]),
@@ -99494,12 +99496,12 @@ mod tests {
                 .expect("chart sheet ChartObjects.Item(1).Parent"),
         );
         assert_eq!(
-            expect_number(
-                runtime
-                    .dispatch_get(sheet_origin_parent, "Type", &[])
-                    .expect("sheet-origin ChartObject.Parent.Type")
-            ),
-            f64::from(super::XL_SHEET_TYPE_CHART)
+            runtime
+                .dispatch_get(sheet_origin_parent, "ChartType", &[])
+                .expect("sheet-origin ChartObject.Parent.ChartType"),
+            runtime
+                .dispatch_get(chart, "ChartType", &[])
+                .expect("chart sheet Chart.ChartType after sheet-origin item")
         );
         let sheet_origin_shape_range = expect_object_handle(
             runtime
@@ -99512,12 +99514,12 @@ mod tests {
                 .expect("sheet-origin ChartObject.ShapeRange.Parent"),
         );
         assert_eq!(
-            expect_number(
-                runtime
-                    .dispatch_get(sheet_origin_shape_parent, "Type", &[])
-                    .expect("sheet-origin ShapeRange.Parent.Type")
-            ),
-            f64::from(super::XL_SHEET_TYPE_CHART)
+            runtime
+                .dispatch_get(sheet_origin_shape_parent, "ChartType", &[])
+                .expect("sheet-origin ShapeRange.Parent.ChartType"),
+            runtime
+                .dispatch_get(chart, "ChartType", &[])
+                .expect("chart sheet Chart.ChartType after sheet-origin ShapeRange")
         );
         let sheet_origin_embedded_chart = expect_object_handle(
             runtime
@@ -99535,12 +99537,12 @@ mod tests {
                 .expect("sheet-origin embedded Chart.Parent.Parent"),
         );
         assert_eq!(
-            expect_number(
-                runtime
-                    .dispatch_get(sheet_origin_embedded_chart_grandparent, "Type", &[])
-                    .expect("sheet-origin embedded Chart.Parent.Parent.Type")
-            ),
-            f64::from(super::XL_SHEET_TYPE_CHART)
+            runtime
+                .dispatch_get(sheet_origin_embedded_chart_grandparent, "ChartType", &[])
+                .expect("sheet-origin embedded Chart.Parent.Parent.ChartType"),
+            runtime
+                .dispatch_get(chart, "ChartType", &[])
+                .expect("chart sheet Chart.ChartType after embedded parent chain")
         );
         let sheet_origin_plot_area = expect_object_handle(
             runtime
@@ -99563,12 +99565,12 @@ mod tests {
                 .expect("sheet-origin PlotArea.Parent.Parent.Parent"),
         );
         assert_eq!(
-            expect_number(
-                runtime
-                    .dispatch_get(sheet_origin_plot_area_origin, "Type", &[])
-                    .expect("sheet-origin PlotArea parent origin Type")
-            ),
-            f64::from(super::XL_SHEET_TYPE_CHART)
+            runtime
+                .dispatch_get(sheet_origin_plot_area_origin, "ChartType", &[])
+                .expect("sheet-origin PlotArea parent origin ChartType"),
+            runtime
+                .dispatch_get(chart, "ChartType", &[])
+                .expect("chart sheet Chart.ChartType after PlotArea parent chain")
         );
     }
 
@@ -99816,12 +99818,12 @@ mod tests {
                 .expect("chart sheet ChartObjects.Parent"),
         );
         assert_eq!(
-            expect_number(
-                runtime
-                    .dispatch_get(chart_sheet_chart_objects_parent, "Type", &[])
-                    .expect("chart sheet ChartObjects.Parent.Type")
-            ),
-            f64::from(super::XL_SHEET_TYPE_CHART)
+            runtime
+                .dispatch_get(chart_sheet_chart_objects_parent, "ChartType", &[])
+                .expect("chart sheet ChartObjects.Parent.ChartType"),
+            runtime
+                .dispatch_get(chart, "ChartType", &[])
+                .expect("chart sheet Chart.ChartType after ChartObjects")
         );
         let chart_sheet_shape_range = expect_object_handle(
             runtime
@@ -99834,12 +99836,12 @@ mod tests {
                 .expect("chart sheet ChartObjects.ShapeRange.Parent"),
         );
         assert_eq!(
-            expect_number(
-                runtime
-                    .dispatch_get(chart_sheet_shape_range_parent, "Type", &[])
-                    .expect("chart sheet ChartObjects.ShapeRange.Parent.Type")
-            ),
-            f64::from(super::XL_SHEET_TYPE_CHART)
+            runtime
+                .dispatch_get(chart_sheet_shape_range_parent, "ChartType", &[])
+                .expect("chart sheet ChartObjects.ShapeRange.Parent.ChartType"),
+            runtime
+                .dispatch_get(chart, "ChartType", &[])
+                .expect("chart sheet Chart.ChartType after ChartObjects.ShapeRange")
         );
 
         let embedded_chart_object = expect_object_handle(
@@ -100018,12 +100020,12 @@ mod tests {
                 .expect("chart sheet ChartObjects.ShapeRange.Item(1).Parent"),
         );
         assert_eq!(
-            expect_number(
-                runtime
-                    .dispatch_get(chart_sheet_shape_item_parent, "Type", &[])
-                    .expect("chart sheet ChartObjects.ShapeRange.Item(1).Parent.Type")
-            ),
-            f64::from(super::XL_SHEET_TYPE_CHART)
+            runtime
+                .dispatch_get(chart_sheet_shape_item_parent, "ChartType", &[])
+                .expect("chart sheet ChartObjects.ShapeRange.Item(1).Parent.ChartType"),
+            runtime
+                .dispatch_get(chart, "ChartType", &[])
+                .expect("chart sheet Chart.ChartType after ChartObjects.ShapeRange.Item")
         );
         assert_eq!(
             expect_number(
