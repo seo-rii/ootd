@@ -58619,12 +58619,17 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if self.consume_char(')') {
             return Ok(self.evaluator.state.worksheets.len() as f64);
         }
-        let _ = self.parse_reference_argument()?;
+        let reference = self.parse_reference_set_argument()?;
         self.skip_whitespace();
         if !self.consume_char(')') {
             return Err(FormulaEvalError::Unsupported);
         }
-        Ok(1.0)
+        let sheet_ids = reference
+            .areas()
+            .iter()
+            .map(|(sheet_id, _)| *sheet_id)
+            .collect::<BTreeSet<_>>();
+        Ok(sheet_ids.len() as f64)
     }
 
     fn sheet_index(&self, sheet_id: SheetId) -> Result<f64, FormulaEvalError> {
@@ -78578,8 +78583,8 @@ mod tests {
             .expect("reactivate first sheet");
         let formulas = expect_object_handle(
             runtime
-                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("B1:B6".to_string())])
-                .expect("Sheet1.Range(B1:B6)"),
+                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("B1:B8".to_string())])
+                .expect("Sheet1.Range(B1:B8)"),
         );
 
         runtime
@@ -78588,7 +78593,7 @@ mod tests {
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        6,
+                        8,
                         1,
                         vec![
                             OmValue::Text("=SHEETS()".to_string()),
@@ -78597,6 +78602,10 @@ mod tests {
                             OmValue::Text("=SHEET('Data Sheet'!A1)".to_string()),
                             OmValue::Text("=SHEETS(A1)".to_string()),
                             OmValue::Text("=SHEETS('Data Sheet'!A1:B2)".to_string()),
+                            OmValue::Text("=SHEETS('Data Sheet:Sheet1'!A1)".to_string()),
+                            OmValue::Text(
+                                "=SHEETS(INDIRECT(\"'Data Sheet'!A1,Sheet1!A1\"))".to_string(),
+                            ),
                         ],
                     )
                     .expect("sheet info formulas"),
@@ -78624,6 +78633,8 @@ mod tests {
                 OmValue::Number(1.0),
                 OmValue::Number(1.0),
                 OmValue::Number(1.0),
+                OmValue::Number(2.0),
+                OmValue::Number(2.0),
             ]
         );
     }

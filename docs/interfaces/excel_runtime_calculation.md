@@ -491,9 +491,9 @@ Lookup notes:
 - `ROW()` and `COLUMN()` without arguments resolve against the formula cell position during recalculation.
 - Dynamic array projection helpers, including `BYCOL`, `BYROW`, `FILTER`, `GROUPBY`, `MAKEARRAY`, `MAP`, `PIVOTBY`, `REDUCE`, `SCAN`, `SORT`, `SORTBY`, and `UNIQUE`, currently return the scalar top-left, first projected, or scalar accumulator value; full spill-range materialization is tracked separately.
 - `GROUPBY` and `PIVOTBY` support first-group scalar aggregation over workbook ranges for `SUM`, `AVERAGE`, `COUNT`, `COUNTA`, `MAX`, `MIN`, and `PRODUCT`.
-- `AREAS` returns `1` for supported single-area references; `ADDRESS` supports A1/R1C1 text output with absolute/relative flags and optional sheet text.
+- `AREAS` returns the explicit area count for supported reference sets; `ADDRESS` supports A1/R1C1 text output with absolute/relative flags and optional sheet text.
 - `CELL` supports focused metadata types such as `address`, `row`, `col`, `contents`, `type`, `format`, `filename`, `width`, `prefix`, `color`, `parentheses`, and `protect` for the upper-left cell of a reference.
-- `SHEET()` returns the current worksheet's 1-based workbook position; `SHEETS()` returns the workbook worksheet count, and reference arguments are supported for single-sheet references.
+- `SHEET()` returns the current worksheet's 1-based workbook position; `SHEETS()` returns the workbook worksheet count and counts unique sheets in supported direct, 3D, named, and projected reference arguments.
 - Lookup comparisons support numbers, booleans, and case-insensitive text.
 - `INDEX`, `LOOKUP`, `VLOOKUP`, `HLOOKUP`, and `XLOOKUP` return scalar text results as `CellValue::Text`; numeric results still flow through the numeric evaluator.
 - `CHOOSE` can return scalar text when the selected argument is text.
