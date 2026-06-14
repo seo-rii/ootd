@@ -27791,6 +27791,11 @@ impl ExcelRuntime {
                                 "Worksheet.Paste Destination expects a Range object",
                             ));
                         };
+                        if destination_range.areas().len() != 1 {
+                            return Err(OmError::unsupported(
+                                "Worksheet.Paste Destination requires a single-area range for cell materialization",
+                            ));
+                        }
                         let (destination_sheet_id, _) =
                             Self::range_set_single_area(&destination_range)?;
                         if destination_workbook != workbook || destination_sheet_id != sheet_id {
@@ -91387,6 +91392,24 @@ mod tests {
             runtime
                 .dispatch_invoke(worksheet, "Range", &[OmValue::Text("G7,I7".to_string())])
                 .expect("Range(G7,I7)"),
+        );
+        runtime
+            .dispatch_invoke(source, "Copy", &[])
+            .expect("Range.Copy clipboard for multi-area Destination paste");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(worksheet, "Paste", &[OmValue::Object(multi_area_selection)])
+                .expect_err("Worksheet.Paste rejects explicit multi-area Destination")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode after rejected Worksheet.Paste")
+            ),
+            f64::from(super::XL_COPY)
         );
         runtime
             .dispatch_invoke(source, "Copy", &[])
