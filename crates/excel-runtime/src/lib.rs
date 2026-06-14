@@ -55272,6 +55272,282 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return Err(FormulaEvalError::Value);
         }
 
+        #[derive(Clone)]
+        enum TextDateTimeFormatToken {
+            Literal(String),
+            Year(usize),
+            MonthOrMinute(usize),
+            Day(usize),
+            Hour(usize),
+            Second(usize),
+            AmPm(String),
+        }
+
+        let mut tokens = Vec::new();
+        let mut literal = String::new();
+        let push_literal = |tokens: &mut Vec<TextDateTimeFormatToken>, literal: &mut String| {
+            if !literal.is_empty() {
+                tokens.push(TextDateTimeFormatToken::Literal(std::mem::take(literal)));
+            }
+        };
+        let format_chars = format.chars().collect::<Vec<_>>();
+        let mut index = 0_usize;
+        while index < format_chars.len() {
+            let ch = format_chars[index];
+            if ch == '"' {
+                index += 1;
+                loop {
+                    let quoted = format_chars.get(index).ok_or(FormulaEvalError::Value)?;
+                    index += 1;
+                    if *quoted == '"' {
+                        break;
+                    }
+                    literal.push(*quoted);
+                }
+                continue;
+            }
+            if ch == '\\' {
+                index += 1;
+                let escaped = format_chars.get(index).ok_or(FormulaEvalError::Value)?;
+                literal.push(*escaped);
+                index += 1;
+                continue;
+            }
+            if matches!(ch, '_' | '*') {
+                index += 1;
+                format_chars.get(index).ok_or(FormulaEvalError::Value)?;
+                index += 1;
+                continue;
+            }
+            let starts_with = |needle: &str| -> bool {
+                let needle_chars = needle.chars().collect::<Vec<_>>();
+                format_chars
+                    .get(index..index + needle_chars.len())
+                    .is_some_and(|candidate| {
+                        candidate
+                            .iter()
+                            .zip(needle_chars.iter())
+                            .all(|(left, right)| left.eq_ignore_ascii_case(right))
+                    })
+            };
+            if starts_with("AM/PM") || starts_with("A/P") {
+                push_literal(&mut tokens, &mut literal);
+                let len = if starts_with("AM/PM") { 5 } else { 3 };
+                tokens.push(TextDateTimeFormatToken::AmPm(
+                    format_chars[index..index + len].iter().collect(),
+                ));
+                index += len;
+                continue;
+            }
+            if ch.is_ascii_alphabetic() {
+                let lower = ch.to_ascii_lowercase();
+                if !matches!(lower, 'y' | 'm' | 'd' | 'h' | 's') {
+                    return Err(FormulaEvalError::Value);
+                }
+                let start = index;
+                index += 1;
+                while index < format_chars.len()
+                    && format_chars[index].to_ascii_lowercase() == lower
+                {
+                    index += 1;
+                }
+                push_literal(&mut tokens, &mut literal);
+                let len = index - start;
+                tokens.push(match lower {
+                    'y' => TextDateTimeFormatToken::Year(len),
+                    'm' => TextDateTimeFormatToken::MonthOrMinute(len),
+                    'd' => TextDateTimeFormatToken::Day(len),
+                    'h' => TextDateTimeFormatToken::Hour(len),
+                    's' => TextDateTimeFormatToken::Second(len),
+                    _ => return Err(FormulaEvalError::Value),
+                });
+                continue;
+            }
+            literal.push(ch);
+            index += 1;
+        }
+        push_literal(&mut tokens, &mut literal);
+
+        if tokens
+            .iter()
+            .any(|token| !matches!(token, TextDateTimeFormatToken::Literal(_)))
+        {
+            let has_am_pm = tokens
+                .iter()
+                .any(|token| matches!(token, TextDateTimeFormatToken::AmPm(_)));
+            let mut minute_tokens = vec![false; tokens.len()];
+            let mut needs_date = false;
+            let mut needs_time = false;
+            for token_index in 0..tokens.len() {
+                match &tokens[token_index] {
+                    TextDateTimeFormatToken::Literal(_) => {}
+                    TextDateTimeFormatToken::Year(_) | TextDateTimeFormatToken::Day(_) => {
+                        needs_date = true;
+                    }
+                    TextDateTimeFormatToken::Hour(_)
+                    | TextDateTimeFormatToken::Second(_)
+                    | TextDateTimeFormatToken::AmPm(_) => {
+                        needs_time = true;
+                    }
+                    TextDateTimeFormatToken::MonthOrMinute(_) => {
+                        let previous = tokens[..token_index]
+                            .iter()
+                            .rev()
+                            .find(|token| !matches!(token, TextDateTimeFormatToken::Literal(_)));
+                        let next = tokens[token_index + 1..]
+                            .iter()
+                            .find(|token| !matches!(token, TextDateTimeFormatToken::Literal(_)));
+                        let time_context = previous.is_some_and(|token| {
+                            matches!(
+                                token,
+                                TextDateTimeFormatToken::Hour(_)
+                                    | TextDateTimeFormatToken::Second(_)
+                            )
+                        }) || next.is_some_and(|token| {
+                            matches!(
+                                token,
+                                TextDateTimeFormatToken::Hour(_)
+                                    | TextDateTimeFormatToken::Second(_)
+                            )
+                        }) || (has_am_pm
+                            && !previous.is_some_and(|token| {
+                                matches!(
+                                    token,
+                                    TextDateTimeFormatToken::Year(_)
+                                        | TextDateTimeFormatToken::Day(_)
+                                )
+                            })
+                            && !next.is_some_and(|token| {
+                                matches!(
+                                    token,
+                                    TextDateTimeFormatToken::Year(_)
+                                        | TextDateTimeFormatToken::Day(_)
+                                )
+                            }));
+                        minute_tokens[token_index] = time_context;
+                        if time_context {
+                            needs_time = true;
+                        } else {
+                            needs_date = true;
+                        }
+                    }
+                }
+            }
+
+            let (year, month, day, weekday) = if needs_date {
+                let (year, month, day) = formula_ymd_from_serial(number)?;
+                let serial = formula_serial_integer(number)?;
+                (
+                    year,
+                    month,
+                    day,
+                    formula_weekday_monday0_from_serial(serial) as usize,
+                )
+            } else {
+                (1900, 1, 1, 0)
+            };
+            let (hour, minute, second) = if needs_time {
+                formula_time_parts_from_serial(number)?
+            } else {
+                (0, 0, 0)
+            };
+            let month_names = [
+                ("Jan", "January"),
+                ("Feb", "February"),
+                ("Mar", "March"),
+                ("Apr", "April"),
+                ("May", "May"),
+                ("Jun", "June"),
+                ("Jul", "July"),
+                ("Aug", "August"),
+                ("Sep", "September"),
+                ("Oct", "October"),
+                ("Nov", "November"),
+                ("Dec", "December"),
+            ];
+            let weekday_names = [
+                ("Mon", "Monday"),
+                ("Tue", "Tuesday"),
+                ("Wed", "Wednesday"),
+                ("Thu", "Thursday"),
+                ("Fri", "Friday"),
+                ("Sat", "Saturday"),
+                ("Sun", "Sunday"),
+            ];
+            let mut output = String::new();
+            for (token_index, token) in tokens.iter().enumerate() {
+                match token {
+                    TextDateTimeFormatToken::Literal(value) => output.push_str(value),
+                    TextDateTimeFormatToken::Year(len) => {
+                        if *len <= 2 {
+                            output.push_str(format!("{:02}", year.rem_euclid(100)).as_str());
+                        } else {
+                            output.push_str(format!("{year:04}").as_str());
+                        }
+                    }
+                    TextDateTimeFormatToken::MonthOrMinute(len) => {
+                        if minute_tokens[token_index] {
+                            if *len == 1 {
+                                output.push_str(minute.to_string().as_str());
+                            } else {
+                                output.push_str(format!("{minute:02}").as_str());
+                            }
+                        } else {
+                            match *len {
+                                1 => output.push_str(month.to_string().as_str()),
+                                2 => output.push_str(format!("{month:02}").as_str()),
+                                3 => output.push_str(month_names[(month - 1) as usize].0),
+                                _ => output.push_str(month_names[(month - 1) as usize].1),
+                            }
+                        }
+                    }
+                    TextDateTimeFormatToken::Day(len) => match *len {
+                        1 => output.push_str(day.to_string().as_str()),
+                        2 => output.push_str(format!("{day:02}").as_str()),
+                        3 => output.push_str(weekday_names[weekday].0),
+                        _ => output.push_str(weekday_names[weekday].1),
+                    },
+                    TextDateTimeFormatToken::Hour(len) => {
+                        let display_hour = if has_am_pm {
+                            match hour % 12 {
+                                0 => 12,
+                                value => value,
+                            }
+                        } else {
+                            hour
+                        };
+                        if *len == 1 {
+                            output.push_str(display_hour.to_string().as_str());
+                        } else {
+                            output.push_str(format!("{display_hour:02}").as_str());
+                        }
+                    }
+                    TextDateTimeFormatToken::Second(len) => {
+                        if *len == 1 {
+                            output.push_str(second.to_string().as_str());
+                        } else {
+                            output.push_str(format!("{second:02}").as_str());
+                        }
+                    }
+                    TextDateTimeFormatToken::AmPm(pattern) => {
+                        let marker = if pattern.eq_ignore_ascii_case("A/P") {
+                            if hour < 12 { "A" } else { "P" }
+                        } else if hour < 12 {
+                            "AM"
+                        } else {
+                            "PM"
+                        };
+                        if pattern.chars().any(|ch| ch.is_ascii_uppercase()) {
+                            output.push_str(marker);
+                        } else {
+                            output.push_str(marker.to_ascii_lowercase().as_str());
+                        }
+                    }
+                }
+            }
+            return Ok(output);
+        }
+
         let mut in_quote = false;
         let mut escaped = false;
         for ch in format.chars() {
@@ -77808,9 +78084,9 @@ mod tests {
                 .dispatch_invoke(
                     active_sheet,
                     "Range",
-                    &[OmValue::Text("K1:K16".to_string())],
+                    &[OmValue::Text("K1:K20".to_string())],
                 )
-                .expect("Range(K1:K16)"),
+                .expect("Range(K1:K20)"),
         );
 
         runtime
@@ -77871,7 +78147,7 @@ mod tests {
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        16,
+                        20,
                         1,
                         vec![
                             OmValue::Text("=LOOKUP(25,A1:A4,B1:B4)".to_string()),
@@ -77885,6 +78161,13 @@ mod tests {
                             OmValue::Text(r#"=TEXT(0.256,"0.0%")"#.to_string()),
                             OmValue::Text(r#"=TEXT(-12.3,"$0.00")"#.to_string()),
                             OmValue::Text(r#"=TEXT(1,"yyyy")"#.to_string()),
+                            OmValue::Text(r#"=TEXT(DATE(2024,2,29),"yyyy-mm-dd")"#.to_string()),
+                            OmValue::Text(r#"=TEXT(DATE(2024,2,29),"mmm d, yyyy")"#.to_string()),
+                            OmValue::Text(r#"=TEXT(TIME(18,5,7),"h:mm AM/PM")"#.to_string()),
+                            OmValue::Text(
+                                r#"=TEXT(DATE(2024,2,29)+TIME(6,5,7),"yyyy-mm-dd hh:mm:ss")"#
+                                    .to_string(),
+                            ),
                             OmValue::Text(
                                 r#"=HYPERLINK("https://example.com","Example")"#.to_string(),
                             ),
@@ -77926,7 +78209,11 @@ mod tests {
                 OmValue::Text("1,234.57".to_string()),
                 OmValue::Text("25.6%".to_string()),
                 OmValue::Text("-$12.30".to_string()),
-                OmValue::Error(CellError::Value),
+                OmValue::Text("1900".to_string()),
+                OmValue::Text("2024-02-29".to_string()),
+                OmValue::Text("Feb 29, 2024".to_string()),
+                OmValue::Text("6:05 PM".to_string()),
+                OmValue::Text("2024-02-29 06:05:07".to_string()),
                 OmValue::Text("Example".to_string()),
                 OmValue::Text("https://example.com".to_string()),
                 OmValue::Text("lowmidhightop".to_string()),
