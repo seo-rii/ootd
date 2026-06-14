@@ -8920,10 +8920,10 @@ impl ExcelRuntime {
                         kind.member_name()
                     )));
                 }
-                match (kind, member) {
-                    (RuntimeSheetCollectionKind::Charts, "Visible") => {
-                        coerce_sheet_visibility(value.clone())?;
-                        let chart_sheet_ids = {
+                match member {
+                    "Visible" => {
+                        let new_visibility = coerce_sheet_visibility(value.clone())?;
+                        let sheet_ids = {
                             let runtime = self.runtime_workbook(workbook)?;
                             if runtime.read_only {
                                 return Err(OmError::new(
@@ -8931,16 +8931,36 @@ impl ExcelRuntime {
                                     "cannot modify a read-only workbook",
                                 ));
                             }
+                            if new_visibility != SheetVisibility::Visible {
+                                let mut visible_target_count = 0usize;
+                                let mut visible_outside_count = 0usize;
+                                for worksheet in &runtime.loaded.state.worksheets {
+                                    if worksheet.visibility != SheetVisibility::Visible {
+                                        continue;
+                                    }
+                                    if kind.includes(worksheet.kind) {
+                                        visible_target_count += 1;
+                                    } else {
+                                        visible_outside_count += 1;
+                                    }
+                                }
+                                if visible_target_count > 0 && visible_outside_count == 0 {
+                                    return Err(OmError::new(
+                                        OmErrorCode::InvalidState,
+                                        "cannot hide the last visible worksheet in a workbook",
+                                    ));
+                                }
+                            }
                             runtime
                                 .loaded
                                 .state
                                 .worksheets
                                 .iter()
-                                .filter(|worksheet| worksheet.kind == SheetKind::ChartSheet)
+                                .filter(|worksheet| kind.includes(worksheet.kind))
                                 .map(|worksheet| worksheet.id)
                                 .collect::<Vec<_>>()
                         };
-                        for sheet_id in chart_sheet_ids {
+                        for sheet_id in sheet_ids {
                             let sheet = self.register_worksheet_handle(workbook, sheet_id).0;
                             self.dispatch_set(sheet, "Visible", value.clone(), &[])?;
                         }
@@ -17155,11 +17175,11 @@ impl ExcelRuntime {
                 }
                 Ok(OmValue::Number(f64::from(XL_CREATOR_CODE)))
             }
-            "Visible" if collection_kind == RuntimeSheetCollectionKind::Charts => {
+            "Visible" => {
                 if !args.is_empty() {
-                    return Err(OmError::invalid_argument(
-                        "Charts.Visible does not accept arguments",
-                    ));
+                    return Err(OmError::invalid_argument(format!(
+                        "{collection_name}.Visible does not accept arguments"
+                    )));
                 }
                 let visibilities = self
                     .runtime_workbook(workbook)?
@@ -17167,7 +17187,7 @@ impl ExcelRuntime {
                     .state
                     .worksheets
                     .iter()
-                    .filter(|worksheet| worksheet.kind == SheetKind::ChartSheet)
+                    .filter(|worksheet| collection_kind.includes(worksheet.kind))
                     .map(|worksheet| worksheet.visibility)
                     .collect::<Vec<_>>();
                 let Some(first_visibility) = visibilities.first().copied() else {
@@ -98973,6 +98993,11 @@ mod tests {
                 .dispatch_get(workbook.0, "Sheets", &[])
                 .expect("Workbook.Sheets"),
         );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
         let first_chart = expect_object_handle(
             runtime
                 .dispatch_invoke(charts, "Add", &[])
@@ -99247,6 +99272,67 @@ mod tests {
                     .expect("Charts.Visible after collection show")
             ),
             f64::from(super::XL_SHEET_VISIBLE)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(worksheets, "Visible", &[])
+                    .expect("Worksheets.Visible initially")
+            ),
+            f64::from(super::XL_SHEET_VISIBLE)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheets, "Visible", &[])
+                    .expect("Sheets.Visible initially")
+            ),
+            f64::from(super::XL_SHEET_VISIBLE)
+        );
+        runtime
+            .dispatch_set(
+                worksheets,
+                "Visible",
+                OmValue::Number(f64::from(super::XL_SHEET_HIDDEN)),
+                &[],
+            )
+            .expect("hide all worksheets via Worksheets.Visible");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(worksheets, "Visible", &[])
+                    .expect("Worksheets.Visible after collection hide")
+            ),
+            f64::from(super::XL_SHEET_HIDDEN)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(sheets, "Visible", &[])
+                .expect("Sheets.Visible mixed worksheet/chart visibility"),
+            OmValue::Null
+        );
+        runtime
+            .dispatch_set(worksheets, "Visible", OmValue::Bool(true), &[])
+            .expect("show all worksheets via Worksheets.Visible");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheets, "Visible", &[])
+                    .expect("Sheets.Visible after Worksheets.Visible show")
+            ),
+            f64::from(super::XL_SHEET_VISIBLE)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    sheets,
+                    "Visible",
+                    OmValue::Number(f64::from(super::XL_SHEET_HIDDEN)),
+                    &[],
+                )
+                .expect_err("Sheets.Visible should reject hiding every visible sheet")
+                .code,
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             runtime
