@@ -28263,6 +28263,12 @@ impl ExcelRuntime {
             ));
         }
 
+        if collection_kind == RuntimeSheetCollectionKind::Sheets {
+            return Ok(OmValue::Object(
+                self.register_sheet_object_handle(workbook, sheet_id)?,
+            ));
+        }
+
         Ok(OmValue::Object(
             self.register_worksheet_handle(workbook, sheet_id).0,
         ))
@@ -98323,6 +98329,45 @@ mod tests {
                     .expect("Sheets.Item(3).Name")
             ),
             "Chart2"
+        );
+        let first_sheet_object = expect_object_handle(
+            runtime
+                .dispatch_get(sheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Sheets.Item(1) chart handle"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_sheet_object, "ChartType", &[])
+                .expect("Sheets.Item(1).ChartType"),
+            runtime
+                .dispatch_get(third_chart, "ChartType", &[])
+                .expect("third Chart.ChartType")
+        );
+        let second_sheet_object = expect_object_handle(
+            runtime
+                .dispatch_get(sheets, "Item", &[OmValue::Number(2.0)])
+                .expect("Sheets.Item(2) chart handle"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_sheet_object, "ChartType", &[])
+                .expect("Sheets.Item(2).ChartType"),
+            runtime
+                .dispatch_get(first_chart, "ChartType", &[])
+                .expect("first Chart.ChartType")
+        );
+        let third_sheet_object = expect_object_handle(
+            runtime
+                .dispatch_get(sheets, "Item", &[OmValue::Number(3.0)])
+                .expect("Sheets.Item(3) chart handle"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(third_sheet_object, "ChartType", &[])
+                .expect("Sheets.Item(3).ChartType"),
+            runtime
+                .dispatch_get(second_chart, "ChartType", &[])
+                .expect("second Chart.ChartType")
         );
         assert_eq!(
             expect_text(
