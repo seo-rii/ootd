@@ -49577,6 +49577,79 @@ fn formula_numbervalue(
 
 fn formula_datevalue_text(text: &str) -> Result<f64, FormulaEvalError> {
     let trimmed = text.trim();
+    if trimmed.chars().any(|ch| ch.is_ascii_alphabetic()) {
+        let normalized = trimmed.replace([',', '-', '/'], " ");
+        let parts = normalized.split_whitespace().collect::<Vec<_>>();
+        if parts.len() != 3 {
+            return Err(FormulaEvalError::Value);
+        }
+        let month_names = [
+            ("JAN", "JANUARY"),
+            ("FEB", "FEBRUARY"),
+            ("MAR", "MARCH"),
+            ("APR", "APRIL"),
+            ("MAY", "MAY"),
+            ("JUN", "JUNE"),
+            ("JUL", "JULY"),
+            ("AUG", "AUGUST"),
+            ("SEP", "SEPTEMBER"),
+            ("OCT", "OCTOBER"),
+            ("NOV", "NOVEMBER"),
+            ("DEC", "DECEMBER"),
+        ];
+        let mut month_index = None;
+        for (index, part) in parts.iter().enumerate() {
+            let token = part.trim_end_matches('.').to_ascii_uppercase();
+            if let Some((month_zero_based, _)) =
+                month_names.iter().enumerate().find(|(_, (short, long))| {
+                    token == *short || token == *long || (token == "SEPT" && *long == "SEPTEMBER")
+                })
+            {
+                if month_index.is_some() {
+                    return Err(FormulaEvalError::Value);
+                }
+                month_index = Some((index, month_zero_based as i64 + 1));
+            }
+        }
+        let Some((month_position, month)) = month_index else {
+            return Err(FormulaEvalError::Value);
+        };
+        let parse_numeric_part = |part: &str| -> Result<i64, FormulaEvalError> {
+            let value = part.trim_end_matches('.');
+            let lower = value.to_ascii_lowercase();
+            let value = if lower.ends_with("st")
+                || lower.ends_with("nd")
+                || lower.ends_with("rd")
+                || lower.ends_with("th")
+            {
+                &value[..value.len() - 2]
+            } else {
+                value
+            };
+            if value.is_empty() {
+                return Err(FormulaEvalError::Value);
+            }
+            value.parse::<i64>().map_err(|_| FormulaEvalError::Value)
+        };
+        let (year, day) = match month_position {
+            0 => (parse_numeric_part(parts[2])?, parse_numeric_part(parts[1])?),
+            1 if parts[0].trim().len() == 4 => {
+                (parse_numeric_part(parts[0])?, parse_numeric_part(parts[2])?)
+            }
+            1 => (parse_numeric_part(parts[2])?, parse_numeric_part(parts[0])?),
+            _ => return Err(FormulaEvalError::Value),
+        };
+        if !(1900..=9999).contains(&year) || day < 1 {
+            return Err(FormulaEvalError::Value);
+        }
+        if year == 1900 && month == 2 && day == 29 {
+            return Ok(60.0);
+        }
+        if day > i64::from(days_in_excel_month(year, month as u32)) {
+            return Err(FormulaEvalError::Value);
+        }
+        return formula_date_serial_from_args(year as f64, month as f64, day as f64);
+    }
     let separator = if trimmed.contains('-') {
         '-'
     } else if trimmed.contains('/') {
@@ -79799,9 +79872,9 @@ mod tests {
                 .dispatch_invoke(
                     active_sheet,
                     "Range",
-                    &[OmValue::Text("A1:A15".to_string())],
+                    &[OmValue::Text("A1:A19".to_string())],
                 )
-                .expect("Range(A1:A15)"),
+                .expect("Range(A1:A19)"),
         );
 
         runtime
@@ -79810,12 +79883,15 @@ mod tests {
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        15,
+                        19,
                         1,
                         vec![
                             OmValue::Text(r#"=DATEVALUE("2024-02-29")"#.to_string()),
                             OmValue::Text(r#"=DATEVALUE("2024/3/1")"#.to_string()),
                             OmValue::Text(r#"=DATEVALUE("2/29/2024")"#.to_string()),
+                            OmValue::Text(r#"=DATEVALUE("Feb 29, 2024")"#.to_string()),
+                            OmValue::Text(r#"=DATEVALUE("29-Feb-2024")"#.to_string()),
+                            OmValue::Text(r#"=DATEVALUE("2024 February 29th")"#.to_string()),
                             OmValue::Text(r#"=DATEVALUE("1900-02-29")"#.to_string()),
                             OmValue::Text(r#"=DATEVALUE("bad")"#.to_string()),
                             OmValue::Text(r#"=TIMEVALUE("6:00 PM")"#.to_string()),
@@ -79827,6 +79903,7 @@ mod tests {
                             OmValue::Text(r#"=VALUE("2024-02-29")"#.to_string()),
                             OmValue::Text(r#"=VALUE("6:00 PM")"#.to_string()),
                             OmValue::Text(r#"=VALUE("2024-02-29 6:00 PM")"#.to_string()),
+                            OmValue::Text(r#"=VALUE("Feb 29, 2024 6:00 PM")"#.to_string()),
                             OmValue::Text(r#"=VALUE("2024-02-29 bad")"#.to_string()),
                         ],
                     )
@@ -79852,6 +79929,9 @@ mod tests {
                 OmValue::Number(45351.0),
                 OmValue::Number(45352.0),
                 OmValue::Number(45351.0),
+                OmValue::Number(45351.0),
+                OmValue::Number(45351.0),
+                OmValue::Number(45351.0),
                 OmValue::Number(60.0),
                 OmValue::Error(CellError::Value),
                 OmValue::Number(0.75),
@@ -79862,6 +79942,7 @@ mod tests {
                 OmValue::Error(CellError::Value),
                 OmValue::Number(45351.0),
                 OmValue::Number(0.75),
+                OmValue::Number(45351.75),
                 OmValue::Number(45351.75),
                 OmValue::Error(CellError::Value),
             ]

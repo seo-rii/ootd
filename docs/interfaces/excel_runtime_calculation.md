@@ -536,7 +536,7 @@ Date/time notes:
 - `WEEKDAY` supports return types `1`, `2`, `3`, and `11` through `17`; `WEEKNUM` supports return types `1`, `2`, `11` through `17`, and ISO return type `21`.
 - `WORKDAY.INTL` and `NETWORKDAYS.INTL` support Excel weekend codes `1` through `7` and `11` through `17`, plus seven-character weekend masks.
 - `TIME` produces fractional-day serial values, with hour/minute/second rollover for non-negative arguments.
-- `DATEVALUE` supports ISO-like `yyyy-mm-dd`, `yyyy/m/d`, and numeric `m/d/yyyy` text.
+- `DATEVALUE` supports ISO-like `yyyy-mm-dd`, `yyyy/m/d`, numeric `m/d/yyyy`, and invariant English month-name text such as `Feb 29, 2024`, `29-Feb-2024`, and `2024 February 29th`.
 - `TIMEVALUE` supports `h:mm`, `h:mm:ss`, and `AM`/`PM` suffixes.
 - `TODAY` and `NOW` return volatile serial values from the host clock; `NOW` includes the fractional day.
 - Locale-sensitive date/time text parsing beyond that focused subset is not implemented.
