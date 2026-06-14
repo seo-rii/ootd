@@ -8731,7 +8731,7 @@
               }
             }
           },
-          "access": "read",
+          "access": "readwrite",
           "returnType": {
             "kind": "primitive",
             "name": "bool",

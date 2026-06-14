@@ -6678,6 +6678,37 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
+                    "HasAxis" => {
+                        if args.is_empty() || args.len() > 2 {
+                            return Err(OmError::invalid_argument(
+                                "Chart.HasAxis expects axis type and optional axis group",
+                            ));
+                        }
+                        let OmValue::Bool(has_axis) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Chart.HasAxis expects a boolean value",
+                            ));
+                        };
+                        let axis_type = coerce_u32_arg(&args[0], "Chart.HasAxis axis type")? as i32;
+                        if !matches!(axis_type, XL_CATEGORY | XL_VALUE | XL_SERIES_AXIS) {
+                            return Err(OmError::invalid_argument(
+                                "Chart.HasAxis supports category, value, and series axes",
+                            ));
+                        }
+                        let axis_group = args
+                            .get(1)
+                            .map(|value| coerce_u32_arg(value, "Chart.HasAxis axis group"))
+                            .transpose()?
+                            .unwrap_or(XL_PRIMARY);
+                        let axis_group = chart_axis_group_from_excel_value(
+                            axis_group,
+                            "Chart.HasAxis axis group",
+                        )?;
+                        self.set_chart_axis_presence(
+                            workbook, chart_id, axis_type, axis_group, has_axis,
+                        )?;
+                        Ok(())
+                    }
                     "Elevation" | "HeightPercent" | "Rotation" | "DepthPercent" | "Perspective" => {
                         let value = coerce_chart_view_3d_integer(&value, member)?;
                         let runtime = self.runtime_workbook_mut(workbook)?;
@@ -128871,24 +128902,7 @@ mod tests {
             OmErrorCode::InvalidArgument
         );
 
-        let clear_category_error = runtime
-            .dispatch_set(
-                chart,
-                "HasAxis",
-                OmValue::Bool(false),
-                &[OmValue::Number(f64::from(super::XL_CATEGORY))],
-            )
-            .expect_err("Chart.HasAxis setter is read-only");
-        assert_eq!(clear_category_error.code, OmErrorCode::Unsupported);
-        assert!(
-            clear_category_error
-                .message
-                .contains("not writable in the pinned OM registry"),
-            "unexpected Chart.HasAxis setter error: {}",
-            clear_category_error.message
-        );
-
-        let add_secondary_error = runtime
+        runtime
             .dispatch_set(
                 chart,
                 "HasAxis",
@@ -128898,26 +128912,7 @@ mod tests {
                     OmValue::Number(f64::from(super::XL_SECONDARY)),
                 ],
             )
-            .expect_err("Chart.HasAxis setter is read-only");
-        assert_eq!(add_secondary_error.code, OmErrorCode::Unsupported);
-        assert!(
-            add_secondary_error
-                .message
-                .contains("not writable in the pinned OM registry"),
-            "unexpected Chart.HasAxis setter error: {}",
-            add_secondary_error.message
-        );
-
-        assert_eq!(
-            runtime
-                .dispatch_get(
-                    chart,
-                    "HasAxis",
-                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
-                )
-                .expect("Chart.HasAxis(xlCategory) after rejected setter"),
-            OmValue::Bool(true)
-        );
+            .expect("Chart.HasAxis adds secondary value axis");
         assert_eq!(
             runtime
                 .dispatch_get(
@@ -128928,16 +128923,179 @@ mod tests {
                         OmValue::Number(f64::from(super::XL_SECONDARY)),
                     ],
                 )
-                .expect("Chart.HasAxis(xlValue, xlSecondary) after rejected setter"),
-            OmValue::Bool(false)
+                .expect("Chart.HasAxis(xlValue, xlSecondary) after setter"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(axes, "Count", &[])
+                .expect_err("Axes handle should be stale after Chart.HasAxis setter")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis_primary, "Type", &[])
+                .expect_err("Axis handle should be stale after Chart.HasAxis setter")
+                .code,
+            OmErrorCode::InvalidState
+        );
+
+        let axes = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Axes", &[])
+                .expect("Chart.Axes collection after secondary axis add"),
         );
         assert_eq!(
             expect_number(
                 runtime
                     .dispatch_get(axes, "Count", &[])
-                    .expect("Axes.Count after rejected Chart.HasAxis setters")
+                    .expect("Axes.Count after secondary axis add")
+            ),
+            3.0
+        );
+        let secondary_value_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[
+                        OmValue::Number(f64::from(super::XL_VALUE)),
+                        OmValue::Number(f64::from(super::XL_SECONDARY)),
+                    ],
+                )
+                .expect("Chart.Axes(xlValue, xlSecondary) after setter"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(secondary_value_axis, "AxisGroup", &[])
+                    .expect("secondary value Axis.AxisGroup")
+            ),
+            f64::from(super::XL_SECONDARY)
+        );
+
+        runtime
+            .dispatch_set(
+                chart,
+                "HasAxis",
+                OmValue::Bool(false),
+                &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+            )
+            .expect("Chart.HasAxis removes category axis");
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "HasAxis",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.HasAxis(xlCategory) after setter"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(secondary_value_axis, "Type", &[])
+                .expect_err("Axis handle should be stale after category axis removal")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        let axes = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Axes", &[])
+                .expect("Chart.Axes collection after category axis removal"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(axes, "Count", &[])
+                    .expect("Axes.Count after category axis removal")
             ),
             2.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect_err("Chart.Axes(xlCategory) after category removal")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after Chart.HasAxis setters");
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after Chart.HasAxis setters");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "HasAxis",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("reopened Chart.HasAxis(xlCategory)"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "HasAxis",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("reopened Chart.HasAxis(xlValue)"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "HasAxis",
+                    &[
+                        OmValue::Number(f64::from(super::XL_VALUE)),
+                        OmValue::Number(f64::from(super::XL_SECONDARY)),
+                    ],
+                )
+                .expect("reopened Chart.HasAxis(xlValue, xlSecondary)"),
+            OmValue::Bool(true)
         );
     }
 
