@@ -20349,7 +20349,7 @@
             "name": "string",
             "aliasOf": "BSTR"
           },
-          "access": "read"
+          "access": "readwrite"
         },
         {
           "name": "Title",
@@ -20376,7 +20376,7 @@
             "name": "string",
             "aliasOf": "BSTR"
           },
-          "access": "read"
+          "access": "readwrite"
         },
         {
           "name": "HasChart",
@@ -20780,7 +20780,7 @@
             "name": "string",
             "aliasOf": "BSTR"
           },
-          "access": "read"
+          "access": "readwrite"
         },
         {
           "name": "PrintObject",
