@@ -1068,6 +1068,7 @@ pub struct ExcelRuntime {
     active_workbook: Option<WorkbookHandle>,
     active_chart: Option<(WorkbookHandle, ChartId, Option<ChartObjectsParent>)>,
     selection: Option<RuntimeSelection>,
+    selection_range: Option<RangeSet>,
     workbooks: BTreeMap<u64, RuntimeWorkbook>,
     objects: BTreeMap<u64, RuntimeObjectKind>,
     stale_objects: BTreeSet<u64>,
@@ -1113,6 +1114,7 @@ impl ExcelRuntime {
             active_workbook: None,
             active_chart: None,
             selection: None,
+            selection_range: None,
             workbooks: BTreeMap::new(),
             objects,
             stale_objects: BTreeSet::new(),
@@ -9230,6 +9232,15 @@ impl ExcelRuntime {
                             }
                             return Ok(OmValue::Empty);
                         }
+                        "Select" => {
+                            if !args.is_empty() {
+                                return Err(OmError::invalid_argument(
+                                    "Range.Select does not accept arguments",
+                                ));
+                            }
+                            self.set_range_selection(workbook, range)?;
+                            return Ok(OmValue::Empty);
+                        }
                         "CopyPicture" => {
                             validate_copy_picture_args(args, 2, "Range.CopyPicture")?;
                             self.set_headless_copy_mode();
@@ -16632,6 +16643,17 @@ impl ExcelRuntime {
                     return Ok(OmValue::Object(
                         self.register_chart_handle(active_workbook, chart_id),
                     ));
+                }
+                if let Some(range) = self.selection_range.clone() {
+                    let active_workbook_id = self.workbook_model(active_workbook)?.id;
+                    if range.workbook_id() == active_workbook_id {
+                        let (range_sheet_id, range_rect) = Self::range_set_first_area(&range)?;
+                        if range_sheet_id == selection.sheet_id && range_rect == selection.rect {
+                            return Ok(OmValue::Object(
+                                self.register_range_set_handle(active_workbook, range).0,
+                            ));
+                        }
+                    }
                 }
                 Ok(OmValue::Object(
                     self.register_range_handle(active_workbook, selection.sheet_id, selection.rect)
@@ -31795,6 +31817,7 @@ impl ExcelRuntime {
             sheet_id,
             rect,
         });
+        self.selection_range = None;
         self.active_chart = self.runtime_workbook(workbook).ok().and_then(|runtime| {
             runtime
                 .loaded
@@ -31803,6 +31826,14 @@ impl ExcelRuntime {
                 .get(&sheet_id)
                 .map(|binding| (workbook, binding.chart_id, None))
         });
+    }
+
+    fn set_range_selection(&mut self, workbook: WorkbookHandle, range: RangeSet) -> OmResult<()> {
+        self.ensure_range_set_targets_grid_worksheets(workbook, &range, "Range.Select")?;
+        let (sheet_id, rect) = Self::range_set_first_area(&range)?;
+        self.set_selection(workbook, sheet_id, rect);
+        self.selection_range = Some(range);
+        Ok(())
     }
 
     fn remember_selection(&mut self, workbook: WorkbookHandle, sheet_id: SheetId, rect: Rect) {
@@ -82502,6 +82533,94 @@ mod tests {
             runtime
                 .dispatch_invoke(range, "Select", &[OmValue::Bool(true)])
                 .expect_err("Range.Select args should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn range_select_preserves_multi_area_application_selection() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets.Item(1)"),
+        );
+        let range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "Range",
+                    &[OmValue::Text("A1:A2,C1:C2".to_string())],
+                )
+                .expect("Worksheet.Range multi-area"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(range, "Select", &[])
+                .expect("Range.Select multi-area"),
+            OmValue::Empty
+        ));
+
+        let application = runtime.root_application();
+        let selection = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Application.Selection after multi-area Range.Select"),
+        );
+        let active_cell = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveCell", &[])
+                .expect("Application.ActiveCell after multi-area Range.Select"),
+        );
+        let areas = expect_object_handle(
+            runtime
+                .dispatch_get(selection, "Areas", &[])
+                .expect("Selection.Areas after multi-area Range.Select"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection, "Address", &[])
+                    .expect("Selection address after multi-area Range.Select")
+            ),
+            "$A$1:$A$2,$C$1:$C$2"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(areas, "Count", &[])
+                    .expect("Selection.Areas.Count after multi-area Range.Select")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_cell, "Address", &[])
+                    .expect("ActiveCell address after multi-area Range.Select")
+            ),
+            "$A$1"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(range, "Select", &[OmValue::Bool(true)])
+                .expect_err("multi-area Range.Select args should be rejected")
                 .code,
             OmErrorCode::InvalidArgument
         );
