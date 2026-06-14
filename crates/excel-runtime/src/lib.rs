@@ -24757,8 +24757,7 @@ impl ExcelRuntime {
                         &range,
                         "Application.Range",
                     )?;
-                    let (sheet_id, rect) = Self::range_set_first_area(&range)?;
-                    self.remember_selection(workbook, sheet_id, rect);
+                    self.remember_range_selection(workbook, &range, "Application.Range")?;
                     Ok(OmValue::Object(
                         self.register_range_set_handle(workbook, range).0,
                     ))
@@ -27557,8 +27556,7 @@ impl ExcelRuntime {
                 self.ensure_grid_worksheet(workbook, sheet_id, "Worksheet.Range")?;
                 if let [OmValue::Text(reference)] = args {
                     let range = self.resolve_worksheet_range_text(workbook, sheet_id, reference)?;
-                    let (_, rect) = Self::range_set_first_area(&range)?;
-                    self.remember_selection(workbook, sheet_id, rect);
+                    self.remember_range_selection(workbook, &range, "Worksheet.Range")?;
                     return Ok(OmValue::Object(
                         self.register_range_set_handle(workbook, range).0,
                     ));
@@ -31837,7 +31835,8 @@ impl ExcelRuntime {
         operation: &str,
     ) -> OmResult<()> {
         self.ensure_range_set_targets_grid_worksheets(workbook, &range, operation)?;
-        let (sheet_id, rect) = Self::range_set_first_area(&range)?;
+        let (sheet_id, rects) = Self::range_set_single_sheet_rects(&range)?;
+        let rect = rects[0];
         self.set_selection(workbook, sheet_id, rect);
         self.selection_range = Some(range);
         Ok(())
@@ -31851,6 +31850,27 @@ impl ExcelRuntime {
         if self.active_workbook == Some(workbook) && target_visible {
             self.set_selection(workbook, sheet_id, rect);
         }
+    }
+
+    fn remember_range_selection(
+        &mut self,
+        workbook: WorkbookHandle,
+        range: &RangeSet,
+        operation: &str,
+    ) -> OmResult<()> {
+        let (sheet_id, rect) = Self::range_set_first_area(range)?;
+        let target_visible = self
+            .worksheet_model(workbook, sheet_id)
+            .map(|worksheet| worksheet.visibility == SheetVisibility::Visible)
+            .unwrap_or(false);
+        if self.active_workbook == Some(workbook) && target_visible {
+            if Self::range_set_single_sheet_rects(range).is_ok() {
+                self.set_range_selection(workbook, range.clone(), operation)?;
+            } else {
+                self.set_selection(workbook, sheet_id, rect);
+            }
+        }
+        Ok(())
     }
 
     fn current_region_rect(
@@ -83073,6 +83093,11 @@ mod tests {
                 )
                 .expect("Range(C1,A1:B1)"),
         );
+        let selection = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Selection", &[])
+                .expect("Selection after multi-area Worksheet.Range"),
+        );
         let areas = expect_object_handle(
             runtime
                 .dispatch_get(range, "Areas", &[])
@@ -83094,6 +83119,14 @@ mod tests {
                 runtime
                     .dispatch_get(range, "Address", &[])
                     .expect("multi-area address")
+            ),
+            "$C$1,$A$1:$B$1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection, "Address", &[])
+                    .expect("Selection after multi-area Worksheet.Range address")
             ),
             "$C$1,$A$1:$B$1"
         );
@@ -83155,6 +83188,19 @@ mod tests {
             ),
             2.0
         );
+        let selection_areas = expect_object_handle(
+            runtime
+                .dispatch_get(selection, "Areas", &[])
+                .expect("Selection.Areas after multi-area Worksheet.Range"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(selection_areas, "Count", &[])
+                    .expect("Selection.Areas.Count after multi-area Worksheet.Range")
+            ),
+            2.0
+        );
         assert_eq!(
             expect_object_handle(
                 runtime
@@ -83202,11 +83248,24 @@ mod tests {
                 )
                 .expect("Application.Range(Sheet1!C1,Sheet1!A1:B1)"),
         );
+        let application_selection = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Selection", &[])
+                .expect("Selection after same-sheet multi-area Application.Range"),
+        );
         assert_eq!(
             expect_text(
                 runtime
                     .dispatch_get(application_range, "Address", &[])
                     .expect("application multi-area address")
+            ),
+            "$C$1,$A$1:$B$1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(application_selection, "Address", &[])
+                    .expect("Selection after same-sheet multi-area Application.Range address")
             ),
             "$C$1,$A$1:$B$1"
         );
@@ -83238,6 +83297,11 @@ mod tests {
                 )
                 .expect("Application.Range(Sheet1!C1,'Data 2'!A1:B1)"),
         );
+        let cross_sheet_selection = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Selection", &[])
+                .expect("Selection after cross-sheet Application.Range"),
+        );
         assert_eq!(
             expect_text(
                 runtime
@@ -83245,6 +83309,21 @@ mod tests {
                     .expect("cross-sheet multi-area address")
             ),
             "Sheet1!$C$1,'Data 2'!$A$1:$B$1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(cross_sheet_selection, "Address", &[])
+                    .expect("Selection after cross-sheet Application.Range address")
+            ),
+            "$C$1"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(cross_sheet_range, "Select", &[])
+                .expect_err("cross-sheet Range.Select should be rejected")
+                .code,
+            OmErrorCode::InvalidArgument
         );
 
         let axis_range = expect_object_handle(
