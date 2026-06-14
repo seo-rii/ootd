@@ -10196,6 +10196,11 @@ impl ExcelRuntime {
                                             "Range.Sort {label} expects a Range object or A1 reference"
                                         )));
                                     };
+                                    if key_range.areas().len() != 1 {
+                                        return Err(OmError::unsupported(format!(
+                                            "Range.Sort {label} requires a single-area key range"
+                                        )));
+                                    }
                                     let (key_sheet_id, key_rect) =
                                         Self::range_set_single_area(&key_range)?;
                                     if key_workbook != workbook || key_sheet_id != sheet_id {
@@ -87171,6 +87176,11 @@ mod tests {
                 .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
                 .expect("Range(A1)"),
         );
+        let multi_area_key = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1,C1".to_string())])
+                .expect("Range(A1,C1)"),
+        );
         runtime
             .dispatch_set(
                 table,
@@ -87429,6 +87439,46 @@ mod tests {
                 .expect_err("Range.Sort should reject DataOption2 without Key2")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(table, "Sort", &[OmValue::Object(multi_area_key)])
+                .expect_err("Range.Sort should reject multi-area Key1")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    table,
+                    "Sort",
+                    &[
+                        OmValue::Object(key),
+                        OmValue::Missing,
+                        OmValue::Object(multi_area_key),
+                    ],
+                )
+                .expect_err("Range.Sort should reject multi-area Key2")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    table,
+                    "Sort",
+                    &[
+                        OmValue::Object(key),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Object(multi_area_key),
+                    ],
+                )
+                .expect_err("Range.Sort should reject multi-area Key3")
+                .code,
+            OmErrorCode::Unsupported
         );
 
         let mut read_only_runtime = ExcelRuntime::new();
