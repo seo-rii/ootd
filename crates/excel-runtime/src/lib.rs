@@ -12134,6 +12134,8 @@ impl ExcelRuntime {
                         | "Duplicate"
                         | "CopyPicture"
                         | "Delete"
+                        | "IncrementLeft"
+                        | "IncrementTop"
                         | "SendToBack"
                 ) {
                     self.focus_member_supported("ChartObject", member, false)?;
@@ -12203,6 +12205,54 @@ impl ExcelRuntime {
                         Ok(OmValue::Bool(
                             self.delete_chart_object(workbook, chart_object_id)?,
                         ))
+                    }
+                    "IncrementLeft" | "IncrementTop" => {
+                        if args.len() != 1 {
+                            return Err(OmError::invalid_argument(format!(
+                                "ChartObject.{member} expects one numeric increment argument"
+                            )));
+                        }
+                        let OmValue::Number(increment) = &args[0] else {
+                            return Err(OmError::type_mismatch(format!(
+                                "ChartObject.{member} expects a numeric increment"
+                            )));
+                        };
+                        if !increment.is_finite() {
+                            return Err(OmError::invalid_argument(format!(
+                                "ChartObject.{member} expects a finite numeric increment"
+                            )));
+                        }
+                        let geometry_member = if member == "IncrementLeft" {
+                            "Left"
+                        } else {
+                            "Top"
+                        };
+                        let chart_object_handle = self
+                            .register_chart_object_handle_with_parent_origin(
+                                workbook,
+                                chart_object_id,
+                                parent,
+                            );
+                        let OmValue::Number(current) =
+                            self.dispatch_get(chart_object_handle, geometry_member, &[])?
+                        else {
+                            return Err(OmError::type_mismatch(format!(
+                                "ChartObject.{geometry_member} did not return a numeric value"
+                            )));
+                        };
+                        let next = current + *increment;
+                        if !next.is_finite() {
+                            return Err(OmError::invalid_argument(format!(
+                                "ChartObject.{member} result is not finite"
+                            )));
+                        }
+                        self.dispatch_set(
+                            chart_object_handle,
+                            geometry_member,
+                            OmValue::Number(next),
+                            &[],
+                        )?;
+                        Ok(OmValue::Empty)
                     }
                     "Activate" | "Select" => {
                         if member == "Activate" && !args.is_empty() {
@@ -15370,6 +15420,8 @@ impl ExcelRuntime {
                             | "Duplicate"
                             | "CopyPicture"
                             | "Delete"
+                            | "IncrementLeft"
+                            | "IncrementTop"
                             | "SendToBack"
                     )
                     | (
@@ -104195,21 +104247,27 @@ mod tests {
         runtime
             .dispatch_set(chart_object, "Height", OmValue::Number(70.0), &[])
             .expect("set ChartObject.Height");
+        runtime
+            .dispatch_invoke(chart_object, "IncrementLeft", &[OmValue::Number(4.0)])
+            .expect("ChartObject.IncrementLeft");
+        runtime
+            .dispatch_invoke(chart_object, "IncrementTop", &[OmValue::Number(-2.0)])
+            .expect("ChartObject.IncrementTop");
         assert_eq!(
             expect_number(
                 runtime
                     .dispatch_get(chart_object, "Left", &[])
-                    .expect("ChartObject.Left after set")
+                    .expect("ChartObject.Left after increment")
             ),
-            8.0
+            12.0
         );
         assert_eq!(
             expect_number(
                 runtime
                     .dispatch_get(chart_object, "Top", &[])
-                    .expect("ChartObject.Top after set")
+                    .expect("ChartObject.Top after increment")
             ),
-            9.0
+            7.0
         );
         assert_eq!(
             expect_number(
@@ -104285,7 +104343,7 @@ mod tests {
                     .dispatch_get(reopened_chart_object, "Left", &[])
                     .expect("reopened ChartObject.Left")
             ),
-            8.0
+            12.0
         );
         assert_eq!(
             expect_number(
@@ -104293,7 +104351,7 @@ mod tests {
                     .dispatch_get(reopened_chart_object, "Top", &[])
                     .expect("reopened ChartObject.Top")
             ),
-            9.0
+            7.0
         );
         assert_eq!(
             expect_number(
