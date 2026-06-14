@@ -4273,23 +4273,52 @@ impl ExcelRuntime {
                                 "Series.AxisGroup expects an XlAxisGroup numeric value",
                             ));
                         };
-                        if !number.is_finite() || number.fract() != 0.0 {
+                        if !number.is_finite()
+                            || number.fract() != 0.0
+                            || number < u32::MIN as f64
+                            || number > u32::MAX as f64
+                        {
                             return Err(OmError::invalid_argument(
                                 "Series.AxisGroup expects an integral XlAxisGroup value",
                             ));
                         }
-                        match number as u32 {
-                            XL_PRIMARY => {
-                                self.series_model(workbook, chart_id, series_index)?;
-                                Ok(())
-                            }
-                            XL_SECONDARY => Err(OmError::unsupported(
-                                "Series.AxisGroup secondary axes are not supported yet",
-                            )),
-                            _ => Err(OmError::invalid_argument(
-                                "Series.AxisGroup supports xlPrimary and xlSecondary",
-                            )),
+                        self.series_model(workbook, chart_id, series_index)?;
+                        let axis_group =
+                            chart_axis_group_from_excel_value(number as u32, "Series.AxisGroup")?;
+                        if axis_group == ChartAxisGroup::Secondary {
+                            self.set_chart_axis_presence(
+                                workbook,
+                                chart_id,
+                                XL_VALUE,
+                                ChartAxisGroup::Secondary,
+                                true,
+                            )?;
                         }
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let series = chart.series.get_mut(series_index).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "series not found")
+                        })?;
+                        if series.axis_group != axis_group {
+                            series.axis_group = axis_group;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
                     }
                     "HasDataLabels" => {
                         let OmValue::Bool(has_data_labels) = value else {
@@ -5848,15 +5877,47 @@ impl ExcelRuntime {
                             ));
                         }
                         self.chart_group_model(workbook, chart_id, group_index)?;
-                        match number as i32 {
-                            value if value == XL_PRIMARY as i32 => Ok(()),
-                            value if value == XL_SECONDARY as i32 => Err(OmError::unsupported(
-                                "ChartGroup.AxisGroup secondary axes are not supported yet",
-                            )),
-                            _ => Err(OmError::invalid_argument(
-                                "ChartGroup.AxisGroup supports xlPrimary and xlSecondary",
-                            )),
+                        let axis_group = chart_axis_group_from_excel_value(
+                            number as u32,
+                            "ChartGroup.AxisGroup",
+                        )?;
+                        if axis_group == ChartAxisGroup::Secondary {
+                            self.set_chart_axis_presence(
+                                workbook,
+                                chart_id,
+                                XL_VALUE,
+                                ChartAxisGroup::Secondary,
+                                true,
+                            )?;
                         }
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        let mut changed = false;
+                        for series in &mut chart.series {
+                            if series.axis_group != axis_group {
+                                series.axis_group = axis_group;
+                                changed = true;
+                            }
+                        }
+                        if changed {
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        Ok(())
                     }
                     "HasRadarAxisLabels" => {
                         let OmValue::Bool(enabled) = value else {
@@ -21061,7 +21122,18 @@ impl ExcelRuntime {
                         &chart.chart_type,
                     )?))),
                     "Index" => Ok(OmValue::Number((group_index + 1) as f64)),
-                    "AxisGroup" => Ok(OmValue::Number(f64::from(XL_PRIMARY))),
+                    "AxisGroup" => Ok(OmValue::Number(f64::from(
+                        if !chart.series.is_empty()
+                            && chart
+                                .series
+                                .iter()
+                                .all(|series| series.axis_group == ChartAxisGroup::Secondary)
+                        {
+                            XL_SECONDARY
+                        } else {
+                            XL_PRIMARY
+                        },
+                    ))),
                     "SeriesLines" | "DropLines" | "HiLoLines" | "UpBars" | "DownBars" => {
                         let kind = ChartGroupLineKind::from_chart_group_member(member)
                             .expect("matched ChartGroup line object member");
@@ -22443,6 +22515,7 @@ impl ExcelRuntime {
                         data_labels: None,
                         point_data_labels: BTreeMap::new(),
                         order: u32::try_from(series_index).ok(),
+                        axis_group: ChartAxisGroup::Primary,
                     });
                     if let Some(plot_order) = series_index
                         .checked_add(1)
@@ -22655,6 +22728,7 @@ impl ExcelRuntime {
                 data_labels: None,
                 point_data_labels: BTreeMap::new(),
                 order,
+                axis_group: ChartAxisGroup::Primary,
             });
         };
         match plot_by {
@@ -22994,7 +23068,13 @@ impl ExcelRuntime {
                 let series = self.series_model(workbook, chart_id, series_index)?;
                 Ok(OmValue::Text(series_formula_text(series, series_index)))
             }
-            "AxisGroup" => Ok(OmValue::Number(f64::from(XL_PRIMARY))),
+            "AxisGroup" => {
+                let series = self.series_model(workbook, chart_id, series_index)?;
+                Ok(OmValue::Number(f64::from(match series.axis_group {
+                    ChartAxisGroup::Primary => XL_PRIMARY,
+                    ChartAxisGroup::Secondary => XL_SECONDARY,
+                })))
+            }
             "HasDataLabels" => Ok(OmValue::Bool(chart_data_labels_visible(
                 chart_series_effective_data_labels(
                     self.chart_model(workbook, chart_id)?,
@@ -105441,15 +105521,38 @@ mod tests {
                 &[],
             )
             .expect("set ChartGroup.AxisGroup xlPrimary");
-        let secondary_chart_group_axis = runtime
+        runtime
             .dispatch_set(
                 chart_group,
                 "AxisGroup",
                 OmValue::Number(f64::from(super::XL_SECONDARY)),
                 &[],
             )
-            .expect_err("secondary ChartGroup.AxisGroup should be unsupported");
-        assert_eq!(secondary_chart_group_axis.code, OmErrorCode::Unsupported);
+            .expect("set ChartGroup.AxisGroup xlSecondary");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_group, "AxisGroup", &[])
+                    .expect("ChartGroup.AxisGroup after secondary set")
+            ),
+            f64::from(super::XL_SECONDARY)
+        );
+        runtime
+            .dispatch_set(
+                chart_group,
+                "AxisGroup",
+                OmValue::Number(f64::from(super::XL_PRIMARY)),
+                &[],
+            )
+            .expect("restore ChartGroup.AxisGroup xlPrimary");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_group, "AxisGroup", &[])
+                    .expect("ChartGroup.AxisGroup after primary restore")
+            ),
+            f64::from(super::XL_PRIMARY)
+        );
         let invalid_chart_group_axis = runtime
             .dispatch_set(chart_group, "AxisGroup", OmValue::Number(3.0), &[])
             .expect_err("invalid ChartGroup.AxisGroup should fail");
@@ -130600,15 +130703,61 @@ mod tests {
             .expect("set first Series.AxisGroup xlPrimary");
         assert_eq!(
             runtime
-                .dispatch_set(
-                    first_series,
-                    "AxisGroup",
-                    OmValue::Number(f64::from(super::XL_SECONDARY)),
-                    &[],
+                .dispatch_get(
+                    chart,
+                    "HasAxis",
+                    &[
+                        OmValue::Number(f64::from(super::XL_VALUE)),
+                        OmValue::Number(f64::from(super::XL_SECONDARY)),
+                    ],
                 )
-                .expect_err("secondary Series.AxisGroup should be unsupported")
-                .code,
-            OmErrorCode::Unsupported
+                .expect("Chart.HasAxis secondary value before Series.AxisGroup set"),
+            OmValue::Bool(false)
+        );
+        runtime
+            .dispatch_set(
+                first_series,
+                "AxisGroup",
+                OmValue::Number(f64::from(super::XL_SECONDARY)),
+                &[],
+            )
+            .expect("set first Series.AxisGroup xlSecondary");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_series, "AxisGroup", &[])
+                    .expect("first Series.AxisGroup after secondary set")
+            ),
+            f64::from(super::XL_SECONDARY)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "HasAxis",
+                    &[
+                        OmValue::Number(f64::from(super::XL_VALUE)),
+                        OmValue::Number(f64::from(super::XL_SECONDARY)),
+                    ],
+                )
+                .expect("Chart.HasAxis secondary value after Series.AxisGroup set"),
+            OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_set(
+                first_series,
+                "AxisGroup",
+                OmValue::Number(f64::from(super::XL_PRIMARY)),
+                &[],
+            )
+            .expect("restore first Series.AxisGroup xlPrimary");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_series, "AxisGroup", &[])
+                    .expect("first Series.AxisGroup after primary restore")
+            ),
+            f64::from(super::XL_PRIMARY)
         );
         assert_eq!(
             runtime

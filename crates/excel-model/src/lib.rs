@@ -1220,6 +1220,7 @@ mod tests {
                     data_labels: None,
                     point_data_labels: BTreeMap::new(),
                     order: Some(0),
+                    axis_group: super::ChartAxisGroup::Primary,
                 }],
                 title: None,
                 legend: None,

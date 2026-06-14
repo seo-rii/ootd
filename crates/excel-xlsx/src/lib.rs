@@ -3895,6 +3895,7 @@ fn chart_series_from_summary(
                     })
                     .collect(),
                 order: series.order.or_else(|| u32::try_from(index).ok()),
+                axis_group: ChartAxisGroup::Primary,
             })
             .collect();
     }
@@ -3917,6 +3918,7 @@ fn chart_series_from_summary(
             data_labels: None,
             point_data_labels: BTreeMap::new(),
             order: u32::try_from(index).ok(),
+            axis_group: ChartAxisGroup::Primary,
         })
         .collect()
 }
