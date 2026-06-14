@@ -17207,9 +17207,9 @@ impl ExcelRuntime {
                     }
                 };
                 Ok(adjacent_sheet_id
-                    .map(|sheet_id| {
-                        OmValue::Object(self.register_worksheet_handle(workbook, sheet_id).0)
-                    })
+                    .map(|sheet_id| self.register_sheet_object_handle(workbook, sheet_id))
+                    .transpose()?
+                    .map(OmValue::Object)
                     .unwrap_or(OmValue::Empty))
             }
             "Visible" => {
@@ -20417,9 +20417,9 @@ impl ExcelRuntime {
                     }
                 };
                 Ok(adjacent_sheet_id
-                    .map(|sheet_id| {
-                        OmValue::Object(self.register_worksheet_handle(workbook, sheet_id).0)
-                    })
+                    .map(|sheet_id| self.register_sheet_object_handle(workbook, sheet_id))
+                    .transpose()?
+                    .map(OmValue::Object)
                     .unwrap_or(OmValue::Empty))
             }
             "Visible" => {
@@ -28274,6 +28274,41 @@ impl ExcelRuntime {
         sheet_id: SheetId,
     ) -> WorksheetHandle {
         WorksheetHandle(self.register_object(RuntimeObjectKind::Worksheet { workbook, sheet_id }))
+    }
+
+    fn register_sheet_object_handle(
+        &mut self,
+        workbook: WorkbookHandle,
+        sheet_id: SheetId,
+    ) -> OmResult<ObjectHandle> {
+        let chart_id = {
+            let state = &self.runtime_workbook(workbook)?.loaded.state;
+            let worksheet = state
+                .worksheets
+                .iter()
+                .find(|worksheet| worksheet.id == sheet_id)
+                .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?;
+            if worksheet.kind == SheetKind::ChartSheet {
+                Some(
+                    state
+                        .chart_sheets
+                        .get(&sheet_id)
+                        .map(|binding| binding.chart_id)
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "chart sheet is missing a chart binding",
+                            )
+                        })?,
+                )
+            } else {
+                None
+            }
+        };
+        Ok(match chart_id {
+            Some(chart_id) => self.register_chart_handle(workbook, chart_id),
+            None => self.register_worksheet_handle(workbook, sheet_id).0,
+        })
     }
 
     fn register_range_handle(
@@ -98502,6 +98537,14 @@ mod tests {
             ),
             "Chart1"
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(third_next, "ChartType", &[])
+                .expect("third Chart.Next.ChartType"),
+            runtime
+                .dispatch_get(first_chart, "ChartType", &[])
+                .expect("first Chart.ChartType")
+        );
         let first_previous = expect_object_handle(
             runtime
                 .dispatch_get(first_chart, "Previous", &[])
@@ -98515,6 +98558,14 @@ mod tests {
             ),
             "Chart3"
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_previous, "ChartType", &[])
+                .expect("first Chart.Previous.ChartType"),
+            runtime
+                .dispatch_get(third_chart, "ChartType", &[])
+                .expect("third Chart.ChartType")
+        );
         let second_next = expect_object_handle(
             runtime
                 .dispatch_get(second_chart, "Next", &[])
@@ -98527,6 +98578,19 @@ mod tests {
                     .expect("second Chart.Next.Name")
             ),
             "Sheet1"
+        );
+        let worksheet_previous = expect_object_handle(
+            runtime
+                .dispatch_get(second_next, "Previous", &[])
+                .expect("worksheet previous chart sheet"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(worksheet_previous, "ChartType", &[])
+                .expect("worksheet previous Chart.ChartType"),
+            runtime
+                .dispatch_get(second_chart, "ChartType", &[])
+                .expect("second Chart.ChartType")
         );
     }
 
