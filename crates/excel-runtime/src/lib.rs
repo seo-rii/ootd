@@ -591,12 +591,11 @@ struct RuntimeSelection {
     rect: Rect,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct RuntimeClipboard {
     mode: i32,
     workbook: WorkbookHandle,
-    sheet_id: SheetId,
-    rect: Rect,
+    range: RangeSet,
 }
 
 #[derive(Debug, Clone)]
@@ -2393,6 +2392,7 @@ impl ExcelRuntime {
         }
         if self
             .clipboard
+            .as_ref()
             .is_some_and(|clipboard| clipboard.workbook == workbook)
         {
             self.clipboard = None;
@@ -9548,6 +9548,33 @@ impl ExcelRuntime {
                         _ => {}
                     }
                 }
+                if matches!(member, "Copy" | "Cut") {
+                    let destination = match args {
+                        [] | [OmValue::Missing] | [OmValue::Empty] | [OmValue::Null] => None,
+                        [OmValue::Object(destination)] => Some(*destination),
+                        [_] => {
+                            return Err(OmError::type_mismatch(format!(
+                                "Range.{member} Destination expects a Range object"
+                            )));
+                        }
+                        _ => {
+                            return Err(OmError::invalid_argument(format!(
+                                "Range.{member} accepts at most one Destination argument"
+                            )));
+                        }
+                    };
+
+                    if destination.is_none() {
+                        let mode = if member == "Copy" { XL_COPY } else { XL_CUT };
+                        self.cut_copy_mode = Some(mode);
+                        self.clipboard = Some(RuntimeClipboard {
+                            mode,
+                            workbook,
+                            range: range.clone(),
+                        });
+                        return Ok(OmValue::Empty);
+                    }
+                }
                 let (sheet_id, rect) = Self::range_set_single_area(&range)?;
                 self.focus_member_supported("Range", member, false)?;
                 match member {
@@ -10880,8 +10907,7 @@ impl ExcelRuntime {
                             self.clipboard = Some(RuntimeClipboard {
                                 mode: XL_COPY,
                                 workbook,
-                                sheet_id,
-                                rect,
+                                range: range.clone(),
                             });
                             return Ok(OmValue::Empty);
                         };
@@ -11055,8 +11081,7 @@ impl ExcelRuntime {
                             self.clipboard = Some(RuntimeClipboard {
                                 mode: XL_CUT,
                                 workbook,
-                                sheet_id,
-                                rect,
+                                range: range.clone(),
                             });
                             return Ok(OmValue::Empty);
                         };
@@ -11531,16 +11556,18 @@ impl ExcelRuntime {
                                 "Range.PasteSpecial Transpose",
                             )?,
                         };
-                        let clipboard = self.clipboard.ok_or_else(|| {
+                        let clipboard = self.clipboard.clone().ok_or_else(|| {
                             OmError::new(
                                 OmErrorCode::InvalidState,
                                 "Range.PasteSpecial requires an active copy or cut range",
                             )
                         })?;
+                        let (clipboard_sheet_id, clipboard_rect) =
+                            Self::range_set_single_area(&clipboard.range)?;
                         let source = self.register_range_handle(
                             clipboard.workbook,
-                            clipboard.sheet_id,
-                            clipboard.rect,
+                            clipboard_sheet_id,
+                            clipboard_rect,
                         );
                         let destination = self.register_range_handle(workbook, sheet_id, rect);
                         if paste_type_is_metadata_only {
@@ -11580,19 +11607,19 @@ impl ExcelRuntime {
                         let source_cells = {
                             let state = &self.runtime_workbook(clipboard.workbook)?.loaded.state;
                             let source_worksheet =
-                                state.worksheet_data_for_sheet(clipboard.sheet_id)?;
+                                state.worksheet_data_for_sheet(clipboard_sheet_id)?;
                             let mut cells = Vec::with_capacity(
-                                (clipboard.rect.height() * clipboard.rect.width()) as usize,
+                                (clipboard_rect.height() * clipboard_rect.width()) as usize,
                             );
-                            for row in clipboard.rect.row_first..=clipboard.rect.row_last {
-                                for col in clipboard.rect.col_first..=clipboard.rect.col_last {
+                            for row in clipboard_rect.row_first..=clipboard_rect.row_last {
+                                for col in clipboard_rect.col_first..=clipboard_rect.col_last {
                                     cells.push(source_worksheet.cells.get(&(row, col)).cloned());
                                 }
                             }
                             cells
                         };
-                        let source_height = clipboard.rect.height();
-                        let source_width = clipboard.rect.width();
+                        let source_height = clipboard_rect.height();
+                        let source_width = clipboard_rect.width();
                         let paste_height = if transpose {
                             source_width
                         } else {
@@ -11657,9 +11684,9 @@ impl ExcelRuntime {
                                         let source_col_offset =
                                             if transpose { row_offset } else { col_offset };
                                         let source_row =
-                                            clipboard.rect.row_first + source_row_offset;
+                                            clipboard_rect.row_first + source_row_offset;
                                         let source_col =
-                                            clipboard.rect.col_first + source_col_offset;
+                                            clipboard_rect.col_first + source_col_offset;
                                         let source_index = (source_row_offset * source_width
                                             + source_col_offset)
                                             as usize;
@@ -11869,8 +11896,8 @@ impl ExcelRuntime {
                             };
                         let clear_source =
                             |source_worksheet: &mut WorksheetData, skip_target_overlap: bool| {
-                                for row in clipboard.rect.row_first..=clipboard.rect.row_last {
-                                    for col in clipboard.rect.col_first..=clipboard.rect.col_last {
+                                for row in clipboard_rect.row_first..=clipboard_rect.row_last {
+                                    for col in clipboard_rect.col_first..=clipboard_rect.col_last {
                                         if skip_target_overlap
                                             && (target_rect.row_first..=target_rect.row_last)
                                                 .contains(&row)
@@ -11921,8 +11948,8 @@ impl ExcelRuntime {
                                 let source_worksheet = runtime
                                     .loaded
                                     .state
-                                    .worksheet_data_for_sheet_mut(clipboard.sheet_id)?;
-                                clear_source(source_worksheet, sheet_id == clipboard.sheet_id);
+                                    .worksheet_data_for_sheet_mut(clipboard_sheet_id)?;
+                                clear_source(source_worksheet, sheet_id == clipboard_sheet_id);
                             }
                         } else {
                             if self.runtime_workbook(workbook)?.read_only
@@ -11948,7 +11975,7 @@ impl ExcelRuntime {
                                 let source_worksheet = source_runtime
                                     .loaded
                                     .state
-                                    .worksheet_data_for_sheet_mut(clipboard.sheet_id)?;
+                                    .worksheet_data_for_sheet_mut(clipboard_sheet_id)?;
                                 clear_source(source_worksheet, false);
                             }
                         }
@@ -13449,7 +13476,7 @@ impl ExcelRuntime {
                             ));
                         }
                     };
-                    let clipboard = self.clipboard.ok_or_else(|| {
+                    let clipboard = self.clipboard.clone().ok_or_else(|| {
                         OmError::new(
                             OmErrorCode::InvalidState,
                             "Chart.Paste requires an active copy or cut range",
@@ -13461,11 +13488,8 @@ impl ExcelRuntime {
                         ));
                     }
                     if paste_type != XL_PASTE_FORMATS {
-                        let source = self.register_range_handle(
-                            clipboard.workbook,
-                            clipboard.sheet_id,
-                            clipboard.rect,
-                        );
+                        let source =
+                            self.register_range_set_handle(clipboard.workbook, clipboard.range);
                         let chart = self.register_chart_handle(workbook, chart_id);
                         self.dispatch_invoke(chart, "SetSourceData", &[OmValue::Object(source.0)])?;
                     }
@@ -116583,6 +116607,126 @@ mod tests {
                 .expect_err("Chart.Paste rejects too many arguments")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn chart_paste_preserves_multi_area_copied_range_source() {
+        let mut runtime = ExcelRuntime::new();
+        let application = runtime.root_application();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "Range",
+                    &[OmValue::Text("A1:A3,C1:C3".to_string())],
+                )
+                .expect("Worksheet.Range(A1:A3,C1:C3)"),
+        );
+
+        runtime
+            .dispatch_invoke(source, "Copy", &[])
+            .expect("multi-area Range.Copy before Chart.Paste");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode after multi-area Range.Copy")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "Paste", &[])
+                .expect("Chart.Paste multi-area source"),
+            OmValue::Empty
+        );
+
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection after multi-area Chart.Paste"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1) after multi-area Chart.Paste"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Values", &[])
+                .expect("Series.Values after multi-area Chart.Paste"),
+            OmValue::Text("=Sheet1!$A$1:$A$3,Sheet1!$C$1:$C$3".to_string())
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Formula", &[])
+                    .expect("Series.Formula after multi-area Chart.Paste")
+            ),
+            "=SERIES(,,(Sheet1!$A$1:$A$3,Sheet1!$C$1:$C$3),1)"
+        );
+
+        let state = runtime
+            .workbook_state(workbook)
+            .expect("workbook state after multi-area Chart.Paste");
+        let sheet_id = state.worksheets[0].id;
+        let chart_model = state.charts.values().next().expect("chart model");
+        let values = chart_model.series[0]
+            .values
+            .as_ref()
+            .expect("series values");
+        let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
+            panic!("multi-area Chart.Paste values should keep a resolved range");
+        };
+        assert_eq!(range.areas().len(), 2);
+        assert_eq!(range.areas()[0].scope, SheetScope::Single(sheet_id));
+        assert_eq!(
+            range.areas()[0].rect,
+            Rect {
+                row_first: 1,
+                row_last: 3,
+                col_first: 1,
+                col_last: 1,
+            }
+        );
+        assert_eq!(range.areas()[1].scope, SheetScope::Single(sheet_id));
+        assert_eq!(
+            range.areas()[1].rect,
+            Rect {
+                row_first: 1,
+                row_last: 3,
+                col_first: 3,
+                col_last: 3,
+            }
         );
     }
 
