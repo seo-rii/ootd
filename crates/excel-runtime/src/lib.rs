@@ -9594,6 +9594,11 @@ impl ExcelRuntime {
                         });
                         return Ok(OmValue::Empty);
                     }
+                    if range.areas().len() != 1 {
+                        return Err(OmError::unsupported(format!(
+                            "Range.{member} with a Destination requires a single-area source range for cell materialization"
+                        )));
+                    }
                 }
                 let (sheet_id, rect) = Self::range_set_single_area(&range)?;
                 self.focus_member_supported("Range", member, false)?;
@@ -10942,6 +10947,11 @@ impl ExcelRuntime {
                                 "Range.Copy Destination expects a Range object",
                             ));
                         };
+                        if destination_range.areas().len() != 1 {
+                            return Err(OmError::unsupported(
+                                "Range.Copy Destination requires a single-area range for cell materialization",
+                            ));
+                        }
                         let (destination_sheet_id, destination_rect) =
                             Self::range_set_single_area(&destination_range)?;
 
@@ -11116,6 +11126,11 @@ impl ExcelRuntime {
                                 "Range.Cut Destination expects a Range object",
                             ));
                         };
+                        if destination_range.areas().len() != 1 {
+                            return Err(OmError::unsupported(
+                                "Range.Cut Destination requires a single-area range for cell materialization",
+                            ));
+                        }
                         let (destination_sheet_id, destination_rect) =
                             Self::range_set_single_area(&destination_range)?;
 
@@ -92790,6 +92805,39 @@ mod tests {
                 .code,
             OmErrorCode::InvalidArgument
         );
+        let single_cell_destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E5".to_string())])
+                .expect("Range(E5)"),
+        );
+        let multi_area_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1,C1".to_string())])
+                .expect("Range(A1,C1)"),
+        );
+        let multi_area_destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E5,G5".to_string())])
+                .expect("Range(E5,G5)"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    multi_area_source,
+                    "Copy",
+                    &[OmValue::Object(single_cell_destination)]
+                )
+                .expect_err("Range.Copy should reject multi-area source materialization")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(source, "Copy", &[OmValue::Object(multi_area_destination)])
+                .expect_err("Range.Copy should reject multi-area Destination materialization")
+                .code,
+            OmErrorCode::Unsupported
+        );
     }
 
     #[test]
@@ -93210,6 +93258,21 @@ mod tests {
                 .code,
             OmErrorCode::InvalidArgument
         );
+        let single_cell_destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E5".to_string())])
+                .expect("Range(E5)"),
+        );
+        let multi_area_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1,C1".to_string())])
+                .expect("Range(A1,C1)"),
+        );
+        let multi_area_destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("E5,G5".to_string())])
+                .expect("Range(E5,G5)"),
+        );
         assert_eq!(
             runtime
                 .dispatch_invoke(
@@ -93220,6 +93283,24 @@ mod tests {
                 .expect_err("Range.Cut should reject extra args")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    multi_area_source,
+                    "Cut",
+                    &[OmValue::Object(single_cell_destination)]
+                )
+                .expect_err("Range.Cut should reject multi-area source materialization")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(source, "Cut", &[OmValue::Object(multi_area_destination)])
+                .expect_err("Range.Cut should reject multi-area Destination materialization")
+                .code,
+            OmErrorCode::Unsupported
         );
 
         let mut read_only_runtime = ExcelRuntime::new();
