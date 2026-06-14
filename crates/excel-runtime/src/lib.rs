@@ -961,6 +961,7 @@ enum RuntimeObjectKind {
     SeriesCollection {
         workbook: WorkbookHandle,
         chart_id: ChartId,
+        axis_group_filter: Option<ChartAxisGroup>,
         chart_object_parent: Option<ChartObjectsParent>,
     },
     Series {
@@ -2891,10 +2892,12 @@ impl ExcelRuntime {
             RuntimeObjectKind::SeriesCollection {
                 workbook,
                 chart_id,
+                axis_group_filter,
                 chart_object_parent,
             } => self.dispatch_get_series_collection(
                 workbook,
                 chart_id,
+                axis_group_filter,
                 chart_object_parent,
                 member,
                 args,
@@ -5876,7 +5879,10 @@ impl ExcelRuntime {
                                 "ChartGroup.AxisGroup expects an integral XlAxisGroup value",
                             ));
                         }
-                        self.chart_group_model(workbook, chart_id, group_index)?;
+                        let current_axis_group = {
+                            let chart = self.chart_group_model(workbook, chart_id, group_index)?;
+                            chart_group_axis_group(chart, group_index)?
+                        };
                         let axis_group = chart_axis_group_from_excel_value(
                             number as u32,
                             "ChartGroup.AxisGroup",
@@ -5908,7 +5914,9 @@ impl ExcelRuntime {
                                 })?;
                         let mut changed = false;
                         for series in &mut chart.series {
-                            if series.axis_group != axis_group {
+                            if series.axis_group == current_axis_group
+                                && series.axis_group != axis_group
+                            {
                                 series.axis_group = axis_group;
                                 changed = true;
                             }
@@ -14160,10 +14168,12 @@ impl ExcelRuntime {
             RuntimeObjectKind::SeriesCollection {
                 workbook,
                 chart_id,
+                axis_group_filter,
                 chart_object_parent,
             } => self.dispatch_invoke_series_collection(
                 workbook,
                 chart_id,
+                axis_group_filter,
                 chart_object_parent,
                 member,
                 args,
@@ -21007,8 +21017,8 @@ impl ExcelRuntime {
                         "ChartGroups.Count does not accept arguments",
                     ));
                 }
-                self.chart_model(workbook, chart_id)?;
-                Ok(OmValue::Number(1.0))
+                let chart = self.chart_model(workbook, chart_id)?;
+                Ok(OmValue::Number(chart_group_axis_groups(chart).len() as f64))
             }
             "Item" => self.dispatch_invoke_chart_groups(
                 workbook,
@@ -21075,12 +21085,17 @@ impl ExcelRuntime {
                     ));
                 };
                 let index = coerce_u32_arg(index, "ChartGroups.Item index")? as usize;
-                if index != 1 {
+                if index == 0 {
                     return Err(OmError::invalid_argument(
                         "ChartGroups.Item index is out of bounds",
                     ));
                 }
-                self.chart_model(workbook, chart_id)?;
+                let chart = self.chart_model(workbook, chart_id)?;
+                if index > chart_group_axis_groups(chart).len() {
+                    return Err(OmError::invalid_argument(
+                        "ChartGroups.Item index is out of bounds",
+                    ));
+                }
                 Ok(OmValue::Object(
                     self.register_chart_group_handle_with_chart_object_parent_origin(
                         workbook,
@@ -21111,13 +21126,16 @@ impl ExcelRuntime {
 
         match member {
             "SeriesCollection" => {
-                self.chart_group_model(workbook, chart_id, group_index)?;
-                let handle = self
-                    .register_series_collection_handle_with_chart_object_parent_origin(
-                        workbook,
-                        chart_id,
-                        chart_object_parent,
-                    );
+                let axis_group = {
+                    let chart = self.chart_group_model(workbook, chart_id, group_index)?;
+                    chart_group_axis_group(chart, group_index)?
+                };
+                let handle = self.register_object(RuntimeObjectKind::SeriesCollection {
+                    workbook,
+                    chart_id,
+                    axis_group_filter: Some(axis_group),
+                    chart_object_parent,
+                });
                 if args.is_empty() {
                     Ok(OmValue::Object(handle))
                 } else {
@@ -21154,15 +21172,9 @@ impl ExcelRuntime {
                     )?))),
                     "Index" => Ok(OmValue::Number((group_index + 1) as f64)),
                     "AxisGroup" => Ok(OmValue::Number(f64::from(
-                        if !chart.series.is_empty()
-                            && chart
-                                .series
-                                .iter()
-                                .all(|series| series.axis_group == ChartAxisGroup::Secondary)
-                        {
-                            XL_SECONDARY
-                        } else {
-                            XL_PRIMARY
+                        match chart_group_axis_group(chart, group_index)? {
+                            ChartAxisGroup::Primary => XL_PRIMARY,
+                            ChartAxisGroup::Secondary => XL_SECONDARY,
                         },
                     ))),
                     "SeriesLines" | "DropLines" | "HiLoLines" | "UpBars" | "DownBars" => {
@@ -22368,6 +22380,7 @@ impl ExcelRuntime {
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
+        axis_group_filter: Option<ChartAxisGroup>,
         chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
@@ -22383,13 +22396,22 @@ impl ExcelRuntime {
                         "SeriesCollection.Count does not accept arguments",
                     ));
                 }
-                Ok(OmValue::Number(
-                    self.chart_model(workbook, chart_id)?.series.len() as f64,
-                ))
+                let chart = self.chart_model(workbook, chart_id)?;
+                let count = chart
+                    .series
+                    .iter()
+                    .filter(|series| {
+                        axis_group_filter
+                            .map(|axis_group| series.axis_group == axis_group)
+                            .unwrap_or(true)
+                    })
+                    .count();
+                Ok(OmValue::Number(count as f64))
             }
             "Item" => self.dispatch_invoke_series_collection(
                 workbook,
                 chart_id,
+                axis_group_filter,
                 chart_object_parent,
                 member,
                 args,
@@ -22435,6 +22457,7 @@ impl ExcelRuntime {
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
+        axis_group_filter: Option<ChartAxisGroup>,
         chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
@@ -22453,13 +22476,24 @@ impl ExcelRuntime {
                 let index = match index {
                     OmValue::Number(_) => {
                         let index = coerce_u32_arg(index, "SeriesCollection.Item index")? as usize;
-                        if index == 0 || index > self.chart_model(workbook, chart_id)?.series.len()
-                        {
+                        let chart = self.chart_model(workbook, chart_id)?;
+                        let matching_indices = chart
+                            .series
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(series_index, series)| {
+                                axis_group_filter
+                                    .map(|axis_group| series.axis_group == axis_group)
+                                    .unwrap_or(true)
+                                    .then_some(series_index)
+                            })
+                            .collect::<Vec<_>>();
+                        if index == 0 || index > matching_indices.len() {
                             return Err(OmError::invalid_argument(
                                 "SeriesCollection.Item index is out of bounds",
                             ));
                         }
-                        index - 1
+                        matching_indices[index - 1]
                     }
                     OmValue::Text(name) => {
                         let lookup = name.trim();
@@ -22469,6 +22503,12 @@ impl ExcelRuntime {
                         })?;
                         let mut matched_index = None;
                         for (series_index, series) in chart.series.iter().enumerate() {
+                            if axis_group_filter
+                                .map(|axis_group| series.axis_group != axis_group)
+                                .unwrap_or(false)
+                            {
+                                continue;
+                            }
                             let Some(source) = series.name.as_ref() else {
                                 continue;
                             };
@@ -22517,6 +22557,16 @@ impl ExcelRuntime {
                         "SeriesCollection.NewSeries does not accept arguments",
                     ));
                 }
+                let axis_group = axis_group_filter.unwrap_or(ChartAxisGroup::Primary);
+                if axis_group == ChartAxisGroup::Secondary {
+                    self.set_chart_axis_presence(
+                        workbook,
+                        chart_id,
+                        XL_VALUE,
+                        ChartAxisGroup::Secondary,
+                        true,
+                    )?;
+                }
                 let series_index = {
                     let runtime = self.runtime_workbook_mut(workbook)?;
                     if runtime.read_only {
@@ -22546,7 +22596,7 @@ impl ExcelRuntime {
                         data_labels: None,
                         point_data_labels: BTreeMap::new(),
                         order: u32::try_from(series_index).ok(),
-                        axis_group: ChartAxisGroup::Primary,
+                        axis_group,
                     });
                     if let Some(plot_order) = series_index
                         .checked_add(1)
@@ -22611,6 +22661,20 @@ impl ExcelRuntime {
                     series_labels,
                     category_labels,
                 )?;
+                if let Some(axis_group) = axis_group_filter {
+                    if axis_group == ChartAxisGroup::Secondary {
+                        self.set_chart_axis_presence(
+                            workbook,
+                            chart_id,
+                            XL_VALUE,
+                            ChartAxisGroup::Secondary,
+                            true,
+                        )?;
+                    }
+                    for series in &mut new_series {
+                        series.axis_group = axis_group;
+                    }
+                }
                 let replacement_category_sources = if replace {
                     if !category_labels {
                         return Err(OmError::invalid_argument(
@@ -28280,6 +28344,7 @@ impl ExcelRuntime {
         self.register_object(RuntimeObjectKind::SeriesCollection {
             workbook,
             chart_id,
+            axis_group_filter: None,
             chart_object_parent,
         })
     }
@@ -29581,7 +29646,7 @@ impl ExcelRuntime {
         group_index: usize,
     ) -> OmResult<&ChartModel> {
         let chart = self.chart_model(workbook, chart_id)?;
-        if group_index == 0 {
+        if chart_group_axis_group(chart, group_index).is_ok() {
             Ok(chart)
         } else {
             Err(OmError::new(OmErrorCode::NotFound, "chart group not found"))
@@ -29595,9 +29660,11 @@ impl ExcelRuntime {
         group_index: usize,
     ) -> OmResult<usize> {
         let chart = self.chart_group_model(workbook, chart_id, group_index)?;
+        let axis_group = chart_group_axis_group(chart, group_index)?;
         Ok(chart
             .series
-            .first()
+            .iter()
+            .find(|series| series.axis_group == axis_group)
             .map(chart_series_category_count)
             .unwrap_or(0))
     }
@@ -29614,10 +29681,12 @@ impl ExcelRuntime {
             .charts
             .get(&chart_id)
             .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
-        if group_index != 0 {
-            return Err(OmError::new(OmErrorCode::NotFound, "chart group not found"));
-        }
-        let Some(series) = chart.series.first() else {
+        let axis_group = chart_group_axis_group(chart, group_index)?;
+        let Some(series) = chart
+            .series
+            .iter()
+            .find(|series| series.axis_group == axis_group)
+        else {
             return Err(OmError::new(
                 OmErrorCode::NotFound,
                 "chart category not found",
@@ -42574,6 +42643,33 @@ fn chart_axis_group_from_excel_value(value: u32, label: &str) -> OmResult<ChartA
             "{label} supports xlPrimary and xlSecondary"
         ))),
     }
+}
+
+fn chart_group_axis_groups(chart: &ChartModel) -> Vec<ChartAxisGroup> {
+    let mut groups = Vec::new();
+    if chart.series.is_empty()
+        || chart
+            .series
+            .iter()
+            .any(|series| series.axis_group == ChartAxisGroup::Primary)
+    {
+        groups.push(ChartAxisGroup::Primary);
+    }
+    if chart
+        .series
+        .iter()
+        .any(|series| series.axis_group == ChartAxisGroup::Secondary)
+    {
+        groups.push(ChartAxisGroup::Secondary);
+    }
+    groups
+}
+
+fn chart_group_axis_group(chart: &ChartModel, group_index: usize) -> OmResult<ChartAxisGroup> {
+    chart_group_axis_groups(chart)
+        .get(group_index)
+        .copied()
+        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart group not found"))
 }
 
 fn chart_plot_by_from_optional_arg(value: Option<&OmValue>, label: &str) -> OmResult<Option<i32>> {
@@ -131180,6 +131276,88 @@ mod tests {
                 &[],
             )
             .expect("set second Series.AxisGroup xlSecondary");
+        let chart_groups = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[])
+                .expect("Chart.ChartGroups"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_groups, "Count", &[])
+                    .expect("ChartGroups.Count")
+            ),
+            2.0
+        );
+        let primary_group = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_groups, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartGroups.Item(1)"),
+        );
+        let secondary_group = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_groups, "Item", &[OmValue::Number(2.0)])
+                .expect("ChartGroups.Item(2)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(primary_group, "AxisGroup", &[])
+                    .expect("primary ChartGroup.AxisGroup")
+            ),
+            f64::from(super::XL_PRIMARY)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(secondary_group, "AxisGroup", &[])
+                    .expect("secondary ChartGroup.AxisGroup")
+            ),
+            f64::from(super::XL_SECONDARY)
+        );
+        let primary_group_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(primary_group, "SeriesCollection", &[])
+                .expect("primary ChartGroup.SeriesCollection"),
+        );
+        let secondary_group_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(secondary_group, "SeriesCollection", &[])
+                .expect("secondary ChartGroup.SeriesCollection"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(primary_group_series_collection, "Count", &[])
+                    .expect("primary ChartGroup.SeriesCollection.Count")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(secondary_group_series_collection, "Count", &[])
+                    .expect("secondary ChartGroup.SeriesCollection.Count")
+            ),
+            1.0
+        );
+        let secondary_group_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    secondary_group_series_collection,
+                    "Item",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("secondary ChartGroup.SeriesCollection.Item(1)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(secondary_group_series, "AxisGroup", &[])
+                    .expect("secondary group Series.AxisGroup")
+            ),
+            f64::from(super::XL_SECONDARY)
+        );
 
         let saved = runtime
             .save_workbook(
@@ -131250,6 +131428,37 @@ mod tests {
             reopened_runtime
                 .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(2.0)])
                 .expect("reopened SeriesCollection.Item(2)"),
+        );
+        let reopened_chart_groups = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "ChartGroups", &[])
+                .expect("reopened Chart.ChartGroups"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_groups, "Count", &[])
+                    .expect("reopened ChartGroups.Count")
+            ),
+            2.0
+        );
+        let reopened_secondary_group = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_groups, "Item", &[OmValue::Number(2.0)])
+                .expect("reopened ChartGroups.Item(2)"),
+        );
+        let reopened_secondary_group_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_secondary_group, "SeriesCollection", &[])
+                .expect("reopened secondary ChartGroup.SeriesCollection"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_secondary_group_series_collection, "Count", &[])
+                    .expect("reopened secondary ChartGroup.SeriesCollection.Count")
+            ),
+            1.0
         );
         assert_eq!(
             expect_number(
