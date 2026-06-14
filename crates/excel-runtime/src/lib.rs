@@ -1062,6 +1062,7 @@ pub struct ExcelRuntime {
     clipboard: Option<RuntimeClipboard>,
     find_state: Option<RuntimeFindState>,
     last_goto_selection: Option<RuntimeSelection>,
+    last_goto_range: Option<(WorkbookHandle, RangeSet)>,
     next_handle: u64,
     next_object_handle: u64,
     next_created_workbook_index: u64,
@@ -1108,6 +1109,7 @@ impl ExcelRuntime {
             clipboard: None,
             find_state: None,
             last_goto_selection: None,
+            last_goto_range: None,
             next_handle: 1,
             next_object_handle: FIRST_DYNAMIC_OBJECT_HANDLE_VALUE,
             next_created_workbook_index: 1,
@@ -2412,6 +2414,13 @@ impl ExcelRuntime {
             .is_some_and(|selection| selection.workbook == workbook)
         {
             self.last_goto_selection = None;
+        }
+        if self
+            .last_goto_range
+            .as_ref()
+            .is_some_and(|(goto_workbook, _)| *goto_workbook == workbook)
+        {
+            self.last_goto_range = None;
         }
         Ok(())
     }
@@ -24704,16 +24713,11 @@ impl ExcelRuntime {
 
                 let (workbook, range) = match args.first() {
                     None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => {
-                        let selection = self.last_goto_selection.ok_or_else(|| {
+                        self.last_goto_range.clone().ok_or_else(|| {
                             OmError::invalid_state(
                                 "Application.Goto without a reference requires a prior Application.Goto selection",
                             )
-                        })?;
-                        let workbook_id = self.workbook_model(selection.workbook)?.id;
-                        (
-                            selection.workbook,
-                            RangeSet::single_rect(workbook_id, selection.sheet_id, selection.rect)?,
-                        )
+                        })?
                     }
                     Some(OmValue::Text(reference)) => {
                         self.resolve_application_range_text(reference)?
@@ -24741,12 +24745,13 @@ impl ExcelRuntime {
                     "Application.Goto",
                 )?;
                 let (sheet_id, rect) = Self::range_set_first_area(&range)?;
-                self.set_range_selection(workbook, range, "Application.Goto")?;
+                self.set_range_selection(workbook, range.clone(), "Application.Goto")?;
                 self.last_goto_selection = Some(RuntimeSelection {
                     workbook,
                     sheet_id,
                     rect,
                 });
+                self.last_goto_range = Some((workbook, range));
                 Ok(OmValue::Empty)
             }
             "Range" => match args {
@@ -95358,6 +95363,25 @@ mod tests {
                 runtime
                     .dispatch_get(multi_text_selection, "Address", &[])
                     .expect("Selection after Application.Goto(multi-area text) address")
+            ),
+            "$E$1:$E$2,$G$1:$G$2"
+        );
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(application, "Goto", &[])
+                .expect("Application.Goto without reference repeats multi-area goto"),
+            OmValue::Empty
+        ));
+        let repeated_multi_selection = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after repeated multi-area Application.Goto"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(repeated_multi_selection, "Address", &[])
+                    .expect("Selection after repeated multi-area Application.Goto address")
             ),
             "$E$1:$E$2,$G$1:$G$2"
         );
