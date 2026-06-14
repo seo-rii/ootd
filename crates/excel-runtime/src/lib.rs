@@ -27784,6 +27784,17 @@ impl ExcelRuntime {
                 let destination = if let Some(destination) = destination {
                     destination
                 } else {
+                    if let Some(selection_range) = self.selection_range.as_ref()
+                        && selection_range.workbook_id() == self.workbook_model(workbook)?.id
+                        && let Ok((selection_sheet_id, _)) =
+                            Self::range_set_single_sheet_rects(selection_range)
+                        && selection_sheet_id == sheet_id
+                        && selection_range.len() != 1
+                    {
+                        return Err(OmError::unsupported(
+                            "Worksheet.Paste without a Destination requires a single-area selection",
+                        ));
+                    }
                     let rect = self
                         .selection
                         .filter(|selection| {
@@ -91245,6 +91256,24 @@ mod tests {
                 .expect_err("Worksheet.Paste rejects empty clipboard")
                 .code,
             OmErrorCode::InvalidState
+        );
+        let multi_area_selection = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("G7,I7".to_string())])
+                .expect("Range(G7,I7)"),
+        );
+        runtime
+            .dispatch_invoke(source, "Copy", &[])
+            .expect("Range.Copy clipboard for multi-area selection paste");
+        runtime
+            .dispatch_invoke(multi_area_selection, "Select", &[])
+            .expect("select multi-area destination");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(worksheet, "Paste", &[])
+                .expect_err("Worksheet.Paste rejects multi-area selection destination")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert_eq!(
             runtime
