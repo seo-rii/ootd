@@ -27561,28 +27561,37 @@ impl ExcelRuntime {
                         self.register_range_set_handle(workbook, range).0,
                     ));
                 }
-                let rect = match args {
-                    [OmValue::Object(handle)] => match self.runtime_object(*handle)? {
+                if let [OmValue::Object(handle)] = args {
+                    match self.runtime_object(*handle)? {
                         RuntimeObjectKind::Range {
                             workbook: range_workbook,
                             range: object_range,
                             ..
                         } => {
-                            let (range_sheet_id, rect) =
-                                Self::range_set_single_area(&object_range)?;
+                            let (range_sheet_id, _) =
+                                Self::range_set_single_sheet_rects(&object_range)?;
                             if range_workbook != workbook || range_sheet_id != sheet_id {
                                 return Err(OmError::invalid_argument(
                                     "Worksheet.Range object argument must belong to the same worksheet",
                                 ));
                             }
-                            rect
+                            self.remember_range_selection(
+                                workbook,
+                                &object_range,
+                                "Worksheet.Range",
+                            )?;
+                            return Ok(OmValue::Object(
+                                self.register_range_set_handle(workbook, object_range).0,
+                            ));
                         }
                         _ => {
                             return Err(OmError::type_mismatch(
                                 "Worksheet.Range expects A1 references or Range objects",
                             ));
                         }
-                    },
+                    }
+                }
+                let rect = match args {
                     [start, end] => {
                         let start = match start {
                             OmValue::Text(a1) => parse_rect_a1(a1)?,
@@ -89268,6 +89277,30 @@ mod tests {
                 .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B1".to_string())])
                 .expect("Range(A1:B1)"),
         );
+        let multi_area_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:A2,C1:C2".to_string())],
+                )
+                .expect("Range(A1:A2,C1:C2)"),
+        );
+        let multi_area_object_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Object(multi_area_source)])
+                .expect("Range(multi_area_source)"),
+        );
+        let multi_area_object_areas = expect_object_handle(
+            runtime
+                .dispatch_get(multi_area_object_range, "Areas", &[])
+                .expect("Range(multi_area_source).Areas"),
+        );
+        let selection_after_multi_area_object = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after Range(multi_area_source)"),
+        );
         let object_range = expect_object_handle(
             runtime
                 .dispatch_invoke(
@@ -89343,6 +89376,30 @@ mod tests {
                     .expect("single_object_range Address")
             ),
             "$A$1:$B$1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(multi_area_object_range, "Address", &[])
+                    .expect("multi_area_object_range Address")
+            ),
+            "$A$1:$A$2,$C$1:$C$2"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(multi_area_object_areas, "Count", &[])
+                    .expect("multi_area_object_range Areas.Count")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection_after_multi_area_object, "Address", &[])
+                    .expect("Selection after Range(multi_area_source) Address")
+            ),
+            "$A$1:$A$2,$C$1:$C$2"
         );
         assert_eq!(
             expect_text(
