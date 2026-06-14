@@ -245,6 +245,10 @@ const XL_QUALITY_MINIMUM: i32 = 1;
 const MSO_ELEMENT_CHART_TITLE_NONE: i32 = 0;
 const MSO_ELEMENT_CHART_TITLE_CENTERED_OVERLAY: i32 = 1;
 const MSO_ELEMENT_CHART_TITLE_ABOVE_CHART: i32 = 2;
+const MSO_ELEMENT_ERROR_BAR_NONE: i32 = 700;
+const MSO_ELEMENT_ERROR_BAR_STANDARD_ERROR: i32 = 701;
+const MSO_ELEMENT_ERROR_BAR_PERCENTAGE: i32 = 702;
+const MSO_ELEMENT_ERROR_BAR_STANDARD_DEVIATION: i32 = 703;
 const MSO_ELEMENT_DATA_LABEL_NONE: i32 = 200;
 const MSO_ELEMENT_DATA_LABEL_SHOW: i32 = 201;
 const MSO_ELEMENT_DATA_LABEL_CENTER: i32 = 202;
@@ -267,6 +271,11 @@ const MSO_ELEMENT_LEGEND_LEFT_OVERLAY: i32 = 106;
 const MSO_ELEMENT_DATA_TABLE_NONE: i32 = 500;
 const MSO_ELEMENT_DATA_TABLE_SHOW: i32 = 501;
 const MSO_ELEMENT_DATA_TABLE_WITH_LEGEND_KEYS: i32 = 502;
+const MSO_ELEMENT_TRENDLINE_NONE: i32 = 600;
+const MSO_ELEMENT_TRENDLINE_ADD_LINEAR: i32 = 601;
+const MSO_ELEMENT_TRENDLINE_ADD_EXPONENTIAL: i32 = 602;
+const MSO_ELEMENT_TRENDLINE_ADD_LINEAR_FORECAST: i32 = 603;
+const MSO_ELEMENT_TRENDLINE_ADD_TWO_PERIOD_MOVING_AVERAGE: i32 = 604;
 const MSO_ELEMENT_LINE_NONE: i32 = 800;
 const MSO_ELEMENT_LINE_DROP_LINE: i32 = 801;
 const MSO_ELEMENT_LINE_HI_LO_LINE: i32 = 802;
@@ -274,6 +283,12 @@ const MSO_ELEMENT_LINE_SERIES_LINE: i32 = 803;
 const MSO_ELEMENT_LINE_DROP_HI_LO_LINE: i32 = 804;
 const MSO_ELEMENT_UP_DOWN_BARS_NONE: i32 = 900;
 const MSO_ELEMENT_UP_DOWN_BARS_SHOW: i32 = 901;
+const MSO_ELEMENT_PLOT_AREA_NONE: i32 = 1000;
+const MSO_ELEMENT_PLOT_AREA_SHOW: i32 = 1001;
+const MSO_ELEMENT_CHART_WALL_NONE: i32 = 1100;
+const MSO_ELEMENT_CHART_WALL_SHOW: i32 = 1101;
+const MSO_ELEMENT_CHART_FLOOR_NONE: i32 = 1200;
+const MSO_ELEMENT_CHART_FLOOR_SHOW: i32 = 1201;
 const MSO_ELEMENT_PRIMARY_VALUE_GRIDLINES_NONE: i32 = 328;
 const MSO_ELEMENT_PRIMARY_VALUE_GRIDLINES_MINOR: i32 = 329;
 const MSO_ELEMENT_PRIMARY_VALUE_GRIDLINES_MAJOR: i32 = 330;
@@ -14013,6 +14028,28 @@ impl ExcelRuntime {
                         self.dispatch_set(axis, "HasTitle", OmValue::Bool(has_title), &[])?;
                         return Ok(OmValue::Empty);
                     }
+                    let valid_unimplemented_element = matches!(
+                        element,
+                        MSO_ELEMENT_ERROR_BAR_NONE
+                            | MSO_ELEMENT_ERROR_BAR_STANDARD_ERROR
+                            | MSO_ELEMENT_ERROR_BAR_PERCENTAGE
+                            | MSO_ELEMENT_ERROR_BAR_STANDARD_DEVIATION
+                            | MSO_ELEMENT_TRENDLINE_NONE
+                            | MSO_ELEMENT_TRENDLINE_ADD_LINEAR
+                            | MSO_ELEMENT_TRENDLINE_ADD_EXPONENTIAL
+                            | MSO_ELEMENT_TRENDLINE_ADD_LINEAR_FORECAST
+                            | MSO_ELEMENT_TRENDLINE_ADD_TWO_PERIOD_MOVING_AVERAGE
+                            | MSO_ELEMENT_PLOT_AREA_NONE
+                            | MSO_ELEMENT_PLOT_AREA_SHOW
+                            | MSO_ELEMENT_CHART_WALL_NONE
+                            | MSO_ELEMENT_CHART_WALL_SHOW
+                            | MSO_ELEMENT_CHART_FLOOR_NONE
+                            | MSO_ELEMENT_CHART_FLOOR_SHOW
+                    );
+                    if valid_unimplemented_element {
+                        self.chart_model(workbook, chart_id)?;
+                        return Ok(OmValue::Empty);
+                    }
                     let changed_title_or_legend = matches!(
                         element,
                         MSO_ELEMENT_CHART_TITLE_NONE
@@ -14027,8 +14064,9 @@ impl ExcelRuntime {
                             | MSO_ELEMENT_LEGEND_LEFT_OVERLAY
                     );
                     if !changed_title_or_legend {
-                        self.chart_model(workbook, chart_id)?;
-                        return Ok(OmValue::Empty);
+                        return Err(OmError::invalid_argument(format!(
+                            "Chart.SetElement Element {element} is not a valid MsoChartElementType"
+                        )));
                     }
 
                     let mut stale_titles = false;
@@ -118081,9 +118119,22 @@ mod tests {
         );
         assert_eq!(
             runtime
-                .dispatch_invoke(chart, "SetElement", &[OmValue::Number(1200.0)])
+                .dispatch_invoke(
+                    chart,
+                    "SetElement",
+                    &[OmValue::Number(f64::from(
+                        super::MSO_ELEMENT_CHART_FLOOR_NONE
+                    ))],
+                )
                 .expect("Chart.SetElement unsupported but valid MsoChartElementType"),
             OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "SetElement", &[OmValue::Number(99999.0)])
+                .expect_err("Chart.SetElement rejects invalid MsoChartElementType")
+                .code,
+            OmErrorCode::InvalidArgument
         );
         assert_eq!(
             runtime
