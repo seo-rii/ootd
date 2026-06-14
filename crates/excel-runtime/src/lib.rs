@@ -27631,6 +27631,11 @@ impl ExcelRuntime {
                                     range: object_range,
                                     ..
                                 } => {
+                                    if object_range.areas().len() != 1 {
+                                        return Err(OmError::unsupported(
+                                            "Worksheet.Range endpoint arguments require single-area Range objects",
+                                        ));
+                                    }
                                     let (range_sheet_id, rect) =
                                         Self::range_set_single_area(&object_range)?;
                                     if range_workbook != workbook || range_sheet_id != sheet_id {
@@ -27660,6 +27665,11 @@ impl ExcelRuntime {
                                     range: object_range,
                                     ..
                                 } => {
+                                    if object_range.areas().len() != 1 {
+                                        return Err(OmError::unsupported(
+                                            "Worksheet.Range endpoint arguments require single-area Range objects",
+                                        ));
+                                    }
                                     let (range_sheet_id, rect) =
                                         Self::range_set_single_area(&object_range)?;
                                     if range_workbook != workbook || range_sheet_id != sheet_id {
@@ -89521,6 +89531,28 @@ mod tests {
                 .expect_err("Range(foreign_cell) should fail")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Object(multi_area_source), OmValue::Object(cell_b2)]
+                )
+                .expect_err("Range(multi_area_source, cell_b2) should fail")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Object(cell_a1), OmValue::Object(multi_area_source)]
+                )
+                .expect_err("Range(cell_a1, multi_area_source) should fail")
+                .code,
+            OmErrorCode::Unsupported
         );
     }
 
