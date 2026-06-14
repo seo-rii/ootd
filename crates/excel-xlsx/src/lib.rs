@@ -784,6 +784,8 @@ pub struct ChartSeriesSummary {
     pub data_labels: Option<ChartDataLabelsSummary>,
     pub point_data_labels: BTreeMap<u32, ChartDataLabelsSummary>,
     pub order: Option<u32>,
+    pub axis_ids: Vec<String>,
+    pub axis_group: ChartAxisGroup,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3895,7 +3897,7 @@ fn chart_series_from_summary(
                     })
                     .collect(),
                 order: series.order.or_else(|| u32::try_from(index).ok()),
-                axis_group: ChartAxisGroup::Primary,
+                axis_group: series.axis_group,
             })
             .collect();
     }
@@ -16378,6 +16380,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut buffer = Vec::new();
     let mut root_name = None;
     let mut chart_type_names = Vec::new();
+    let mut chart_group_count = 0usize;
     let mut chart_style = None::<u16>;
     let mut bar_direction = None::<String>;
     let mut chart_grouping = None::<String>;
@@ -16447,6 +16450,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut active_point_data_label_depth = 0usize;
     let mut data_label_separator_text = None::<String>;
     let mut data_label_separator_depth = 0usize;
+    let mut active_chart_group_series_start = None::<usize>;
+    let mut active_chart_group_axis_ids = Vec::<String>::new();
     let mut element_path = Vec::<String>::new();
 
     let parse_u32_val_attr = |element: &BytesStart<'_>,
@@ -16766,10 +16771,13 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     root_name = Some(local_name_text.clone());
                 }
                 if local_name.ends_with(b"Chart") && local_name != b"chart" {
+                    chart_group_count += 1;
                     let name = String::from_utf8_lossy(local_name).into_owned();
                     if chart_type_names.iter().all(|existing| existing != &name) {
                         chart_type_names.push(name);
                     }
+                    active_chart_group_series_start = Some(series.len());
+                    active_chart_group_axis_ids.clear();
                 }
                 if local_name == b"extLst" {
                     has_extension_list = true;
@@ -17360,6 +17368,15 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 {
                     axes[axis_index].raw_id = Some(axis_id);
                 }
+                if local_name == b"axId"
+                    && active_axis_index.is_none()
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                    && let Some(axis_id) = parse_string_val_attr(&element, &reader)?
+                {
+                    active_chart_group_axis_ids.push(axis_id);
+                }
                 if local_name == b"majorGridlines"
                     && let Some(axis_index) = active_axis_index
                 {
@@ -17620,10 +17637,13 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     root_name = Some(String::from_utf8_lossy(local_name).into_owned());
                 }
                 if local_name.ends_with(b"Chart") && local_name != b"chart" {
+                    chart_group_count += 1;
                     let name = String::from_utf8_lossy(local_name).into_owned();
                     if chart_type_names.iter().all(|existing| existing != &name) {
                         chart_type_names.push(name);
                     }
+                    active_chart_group_series_start = Some(series.len());
+                    active_chart_group_axis_ids.clear();
                 }
                 if local_name == b"extLst" {
                     has_extension_list = true;
@@ -18316,6 +18336,15 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 {
                     axes[axis_index].raw_id = Some(axis_id);
                 }
+                if local_name == b"axId"
+                    && active_axis_index.is_none()
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                    && let Some(axis_id) = parse_string_val_attr(&element, &reader)?
+                {
+                    active_chart_group_axis_ids.push(axis_id);
+                }
                 if local_name == b"order"
                     && let Some(active_series) = active_series.as_mut()
                     && let Some(order) = parse_u32_val_attr(&element, &reader, "series order")?
@@ -18674,6 +18703,15 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 if local_name == b"dLbls" {
                     data_labels_target = None;
                 }
+                if local_name.ends_with(b"Chart")
+                    && local_name != b"chart"
+                    && let Some(series_start) = active_chart_group_series_start.take()
+                {
+                    for series in &mut series[series_start..] {
+                        series.axis_ids = active_chart_group_axis_ids.clone();
+                    }
+                    active_chart_group_axis_ids.clear();
+                }
                 if active_axis_depth > 0 {
                     if active_axis_depth == 1
                         && matches!(local_name, b"catAx" | b"valAx" | b"dateAx" | b"serAx")
@@ -18723,6 +18761,21 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         } else {
             axis.axis_group = ChartAxisGroup::Primary;
             *seen = true;
+        }
+    }
+    let axis_groups_by_id = axes
+        .iter()
+        .filter_map(|axis| axis.raw_id.as_ref().map(|raw_id| (raw_id, axis.axis_group)))
+        .collect::<BTreeMap<_, _>>();
+    for series in &mut series {
+        if chart_group_count > 1
+            && series.axis_ids.iter().any(|axis_id| {
+                axis_groups_by_id
+                    .get(axis_id)
+                    .is_some_and(|axis_group| *axis_group == ChartAxisGroup::Secondary)
+            })
+        {
+            series.axis_group = ChartAxisGroup::Secondary;
         }
     }
 
@@ -23830,6 +23883,8 @@ mod tests {
                 }),
                 point_data_labels: BTreeMap::new(),
                 order: Some(0),
+                axis_ids: Vec::new(),
+                axis_group: ChartAxisGroup::Primary,
             }]
         );
         assert!(chart_summary.has_extension_list);
@@ -24207,6 +24262,39 @@ mod tests {
             chart_colors_xml
         );
         assert!(saved_package.contains("xl/charts/_rels/chart1.xml.rels"));
+    }
+
+    #[test]
+    fn parse_chart_part_summary_maps_series_to_secondary_axis_group() {
+        let chart_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart>
+    <c:plotArea>
+      <c:barChart>
+        <c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numRef><c:f>Sheet1!$A$1:$A$3</c:f></c:numRef></c:val></c:ser>
+        <c:axId val="10"/><c:axId val="20"/>
+      </c:barChart>
+      <c:lineChart>
+        <c:ser><c:idx val="1"/><c:order val="1"/><c:val><c:numRef><c:f>Sheet1!$B$1:$B$3</c:f></c:numRef></c:val></c:ser>
+        <c:axId val="10"/><c:axId val="50"/>
+      </c:lineChart>
+      <c:catAx><c:axId val="10"/></c:catAx>
+      <c:valAx><c:axId val="20"/></c:valAx>
+      <c:valAx><c:axId val="50"/></c:valAx>
+    </c:plotArea>
+  </c:chart>
+</c:chartSpace>"#;
+        let summary = super::parse_chart_part_summary(chart_xml).expect("chart summary");
+
+        assert_eq!(summary.axes.len(), 3);
+        assert_eq!(summary.axes[0].axis_group, ChartAxisGroup::Primary);
+        assert_eq!(summary.axes[1].axis_group, ChartAxisGroup::Primary);
+        assert_eq!(summary.axes[2].axis_group, ChartAxisGroup::Secondary);
+        assert_eq!(summary.series.len(), 2);
+        assert_eq!(summary.series[0].axis_ids, vec!["10", "20"]);
+        assert_eq!(summary.series[0].axis_group, ChartAxisGroup::Primary);
+        assert_eq!(summary.series[1].axis_ids, vec!["10", "50"]);
+        assert_eq!(summary.series[1].axis_group, ChartAxisGroup::Secondary);
     }
 
     #[test]

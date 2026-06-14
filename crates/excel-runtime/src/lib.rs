@@ -130891,6 +130891,104 @@ mod tests {
     }
 
     #[test]
+    fn loaded_chart_series_axis_group_follows_chart_group_axis_refs() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let second_series_xml = r#"<c:axId val="10"/><c:axId val="20"/></c:barChart><c:lineChart><c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:strRef><c:f>Sheet1!$D$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$D$2:$D$4</c:f></c:numRef></c:val></c:ser><c:axId val="10"/><c:axId val="50"/></c:lineChart><c:catAx>"#;
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace("</c:barChart><c:catAx>", second_series_xml)
+        .replace(
+            "</c:valAx></c:plotArea>",
+            r#"</c:valAx><c:valAx><c:axId val="50"/></c:valAx></c:plotArea>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with secondary-axis chart group");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let first_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+        let second_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(2.0)])
+                .expect("SeriesCollection.Item(2)"),
+        );
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_series, "AxisGroup", &[])
+                    .expect("first Series.AxisGroup")
+            ),
+            f64::from(super::XL_PRIMARY)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_series, "AxisGroup", &[])
+                    .expect("second Series.AxisGroup")
+            ),
+            f64::from(super::XL_SECONDARY)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "HasAxis",
+                    &[
+                        OmValue::Number(f64::from(super::XL_VALUE)),
+                        OmValue::Number(f64::from(super::XL_SECONDARY)),
+                    ],
+                )
+                .expect("Chart.HasAxis secondary value"),
+            OmValue::Bool(true)
+        );
+    }
+
+    #[test]
     fn chart_series_delete_removes_series_and_roundtrips() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
