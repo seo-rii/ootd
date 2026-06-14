@@ -49502,6 +49502,67 @@ fn formula_numbervalue(
     }
 }
 
+fn formula_value_text(text: &str) -> Result<f64, FormulaEvalError> {
+    let mut body = text.trim();
+    if body.is_empty() {
+        return Err(FormulaEvalError::Value);
+    }
+
+    let mut accounting_negative = false;
+    if let Some(inner) = body
+        .strip_prefix('(')
+        .and_then(|value| value.strip_suffix(')'))
+    {
+        accounting_negative = true;
+        body = inner.trim();
+        if body.is_empty() {
+            return Err(FormulaEvalError::Value);
+        }
+    } else if body.contains('(') || body.contains(')') {
+        return Err(FormulaEvalError::Value);
+    }
+
+    let mut explicit_negative = false;
+    if let Some(rest) = body.strip_prefix('+') {
+        body = rest.trim_start();
+    } else if let Some(rest) = body.strip_prefix('-') {
+        explicit_negative = true;
+        body = rest.trim_start();
+    }
+    if accounting_negative && explicit_negative {
+        return Err(FormulaEvalError::Value);
+    }
+
+    if let Some(rest) = body.strip_prefix('$') {
+        body = rest.trim_start();
+    }
+    if let Some(rest) = body.strip_prefix('+') {
+        if explicit_negative {
+            return Err(FormulaEvalError::Value);
+        }
+        body = rest.trim_start();
+    } else if let Some(rest) = body.strip_prefix('-') {
+        if explicit_negative || accounting_negative {
+            return Err(FormulaEvalError::Value);
+        }
+        explicit_negative = true;
+        body = rest.trim_start();
+    }
+    if body.contains('$') || body.contains('(') || body.contains(')') {
+        return Err(FormulaEvalError::Value);
+    }
+
+    let mut value = formula_numbervalue(body, ".", ",")?;
+    if accounting_negative ^ explicit_negative {
+        value = -value;
+    }
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(FormulaEvalError::Value)
+    }
+}
+
 fn formula_proper_text(text: &str) -> String {
     let mut output = String::new();
     let mut capitalize_next = true;
@@ -56867,24 +56928,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if !self.consume_char(')') {
             return Err(FormulaEvalError::Unsupported);
         }
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            return Err(FormulaEvalError::Value);
-        }
-        let (body, multiplier) = if let Some(value) = trimmed.strip_suffix('%') {
-            (value.trim(), 0.01)
-        } else {
-            (trimmed, 1.0)
-        };
-        if body.is_empty() {
-            return Err(FormulaEvalError::Value);
-        }
-        let value = body.parse::<f64>().map_err(|_| FormulaEvalError::Value)? * multiplier;
-        if value.is_finite() {
-            Ok(value)
-        } else {
-            Err(FormulaEvalError::Value)
-        }
+        formula_value_text(text.as_str())
     }
 
     fn parse_numbervalue_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -76241,9 +76285,9 @@ mod tests {
                 .dispatch_invoke(
                     active_sheet,
                     "Range",
-                    &[OmValue::Text("A1:A15".to_string())],
+                    &[OmValue::Text("A1:A19".to_string())],
                 )
-                .expect("Range(A1:A15)"),
+                .expect("Range(A1:A19)"),
         );
 
         runtime
@@ -76252,7 +76296,7 @@ mod tests {
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        15,
+                        19,
                         1,
                         vec![
                             OmValue::Text(r#"=REPT("ha", 3)"#.to_string()),
@@ -76270,6 +76314,10 @@ mod tests {
                             OmValue::Text(r#"=VALUE("45%")"#.to_string()),
                             OmValue::Text(r#"=VALUE(CONCAT("1", "2"))"#.to_string()),
                             OmValue::Text(r#"=VALUE("bad")"#.to_string()),
+                            OmValue::Text(r#"=VALUE("$1,234.50")"#.to_string()),
+                            OmValue::Text(r#"=VALUE("($12.30)")"#.to_string()),
+                            OmValue::Text(r#"=VALUE("-$45%")"#.to_string()),
+                            OmValue::Text(r#"=VALUE("$bad")"#.to_string()),
                             OmValue::Text(r#"=NUMBERVALUE("2,500.25")"#.to_string()),
                             OmValue::Text(r#"=NUMBERVALUE("2.500,25", ",", ".")"#.to_string()),
                             OmValue::Text(r#"=NUMBERVALUE("12,5% ", ",", ".")"#.to_string()),
@@ -76305,6 +76353,10 @@ mod tests {
                 OmValue::Number(12.5),
                 OmValue::Number(0.45),
                 OmValue::Number(12.0),
+                OmValue::Error(CellError::Value),
+                OmValue::Number(1234.5),
+                OmValue::Number(-12.3),
+                OmValue::Number(-0.45),
                 OmValue::Error(CellError::Value),
                 OmValue::Number(2500.25),
                 OmValue::Number(2500.25),
