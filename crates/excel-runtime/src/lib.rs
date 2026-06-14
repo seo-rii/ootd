@@ -9238,7 +9238,7 @@ impl ExcelRuntime {
                                     "Range.Select does not accept arguments",
                                 ));
                             }
-                            self.set_range_selection(workbook, range)?;
+                            self.set_range_selection(workbook, range, "Range.Select")?;
                             return Ok(OmValue::Empty);
                         }
                         "CopyPicture" => {
@@ -24702,29 +24702,26 @@ impl ExcelRuntime {
                     }
                 }
 
-                let (workbook, sheet_id, rect) = match args.first() {
-                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => self
-                        .last_goto_selection
-                        .map(|selection| {
-                            (selection.workbook, selection.sheet_id, selection.rect)
-                        })
-                        .ok_or_else(|| {
+                let (workbook, range) = match args.first() {
+                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => {
+                        let selection = self.last_goto_selection.ok_or_else(|| {
                             OmError::invalid_state(
                                 "Application.Goto without a reference requires a prior Application.Goto selection",
                             )
-                        })?,
+                        })?;
+                        let workbook_id = self.workbook_model(selection.workbook)?.id;
+                        (
+                            selection.workbook,
+                            RangeSet::single_rect(workbook_id, selection.sheet_id, selection.rect)?,
+                        )
+                    }
                     Some(OmValue::Text(reference)) => {
-                        let (workbook, sheet_id, rect) =
-                            self.resolve_application_reference_text(reference)?;
-                        (workbook, sheet_id, rect)
+                        self.resolve_application_range_text(reference)?
                     }
                     Some(OmValue::Object(handle)) => match self.runtime_object(*handle)? {
                         RuntimeObjectKind::Range {
                             workbook, range, ..
-                        } => {
-                            let (sheet_id, rect) = Self::range_set_single_area(&range)?;
-                            (workbook, sheet_id, rect)
-                        }
+                        } => (workbook, range),
                         _ => {
                             return Err(OmError::type_mismatch(
                                 "Application.Goto expects a Range object or A1-style text reference",
@@ -24738,8 +24735,13 @@ impl ExcelRuntime {
                     }
                 };
 
-                self.ensure_grid_worksheet(workbook, sheet_id, "Application.Goto")?;
-                self.set_selection(workbook, sheet_id, rect);
+                self.ensure_range_set_targets_grid_worksheets(
+                    workbook,
+                    &range,
+                    "Application.Goto",
+                )?;
+                let (sheet_id, rect) = Self::range_set_first_area(&range)?;
+                self.set_range_selection(workbook, range, "Application.Goto")?;
                 self.last_goto_selection = Some(RuntimeSelection {
                     workbook,
                     sheet_id,
@@ -31828,8 +31830,13 @@ impl ExcelRuntime {
         });
     }
 
-    fn set_range_selection(&mut self, workbook: WorkbookHandle, range: RangeSet) -> OmResult<()> {
-        self.ensure_range_set_targets_grid_worksheets(workbook, &range, "Range.Select")?;
+    fn set_range_selection(
+        &mut self,
+        workbook: WorkbookHandle,
+        range: RangeSet,
+        operation: &str,
+    ) -> OmResult<()> {
+        self.ensure_range_set_targets_grid_worksheets(workbook, &range, operation)?;
         let (sheet_id, rect) = Self::range_set_first_area(&range)?;
         self.set_selection(workbook, sheet_id, rect);
         self.selection_range = Some(range);
@@ -95138,6 +95145,85 @@ mod tests {
                     .expect("ActiveCell after Application.Goto(range) address")
             ),
             "$B$3"
+        );
+
+        let foreign_multi_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheet2,
+                    "Range",
+                    &[OmValue::Text("A1:A2,C1:C2".to_string())],
+                )
+                .expect("Workbook2.Range(A1:A2,C1:C2)"),
+        );
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(application, "Goto", &[OmValue::Object(foreign_multi_range)])
+                .expect("Application.Goto(multi-area range)"),
+            OmValue::Empty
+        ));
+        let multi_selection = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after Application.Goto(multi-area range)"),
+        );
+        let multi_selection_areas = expect_object_handle(
+            runtime
+                .dispatch_get(multi_selection, "Areas", &[])
+                .expect("Selection.Areas after Application.Goto(multi-area range)"),
+        );
+        let active_cell_after_multi = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveCell", &[])
+                .expect("ActiveCell after Application.Goto(multi-area range)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(multi_selection, "Address", &[])
+                    .expect("Selection after Application.Goto(multi-area range) address")
+            ),
+            "$A$1:$A$2,$C$1:$C$2"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(multi_selection_areas, "Count", &[])
+                    .expect("Selection.Areas.Count after Application.Goto(multi-area range)")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_cell_after_multi, "Address", &[])
+                    .expect("ActiveCell after Application.Goto(multi-area range) address")
+            ),
+            "$A$1"
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(
+                    application,
+                    "Goto",
+                    &[OmValue::Text("E1:E2,G1:G2".to_string())],
+                )
+                .expect("Application.Goto(multi-area text)"),
+            OmValue::Empty
+        ));
+        let multi_text_selection = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after Application.Goto(multi-area text)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(multi_text_selection, "Address", &[])
+                    .expect("Selection after Application.Goto(multi-area text) address")
+            ),
+            "$E$1:$E$2,$G$1:$G$2"
         );
 
         assert!(matches!(
