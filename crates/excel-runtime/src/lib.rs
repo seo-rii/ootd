@@ -31734,6 +31734,11 @@ impl ExcelRuntime {
                     range: after_range,
                     ..
                 } => {
+                    if after_range.areas().len() != 1 {
+                        return Err(OmError::invalid_argument(format!(
+                            "{context} After must be a single cell"
+                        )));
+                    }
                     let (after_sheet_id, after_rect) = Self::range_set_single_area(&after_range)?;
                     if after_workbook != workbook || after_sheet_id != sheet_id {
                         return Err(OmError::invalid_argument(format!(
@@ -86052,6 +86057,11 @@ mod tests {
                 .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1:C2".to_string())])
                 .expect("Range(C1:C2) after"),
         );
+        let multi_area_after = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1,C2".to_string())])
+                .expect("Range(C1,C2) after"),
+        );
         runtime
             .dispatch_set(
                 formula_cell,
@@ -86117,6 +86127,20 @@ mod tests {
                     ],
                 )
                 .expect_err("Range.Find should reject multi-cell After")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    search_range,
+                    "Find",
+                    &[
+                        OmValue::Text("needle".to_string()),
+                        OmValue::Object(multi_area_after),
+                    ],
+                )
+                .expect_err("Range.Find should reject multi-area After")
                 .code,
             OmErrorCode::InvalidArgument
         );
