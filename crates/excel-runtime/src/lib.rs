@@ -25143,47 +25143,39 @@ impl ExcelRuntime {
                     self.register_chart_handle(workbook, chart_id),
                 ))
             }
-            "Delete" if collection_kind == RuntimeSheetCollectionKind::Charts => {
+            "Delete" => {
                 if !args.is_empty() {
-                    return Err(OmError::invalid_argument(
-                        "Charts.Delete does not accept arguments",
-                    ));
+                    return Err(OmError::invalid_argument(format!(
+                        "{collection_name}.Delete does not accept arguments"
+                    )));
                 }
-                let chart_sheet_ids = {
-                    let runtime = self.runtime_workbook(workbook)?;
-                    if runtime.read_only {
-                        return Err(OmError::new(
-                            OmErrorCode::InvalidState,
-                            "cannot modify a read-only workbook",
-                        ));
-                    }
-                    runtime
-                        .loaded
-                        .state
-                        .worksheets
-                        .iter()
-                        .filter(|worksheet| worksheet.kind == SheetKind::ChartSheet)
-                        .map(|worksheet| worksheet.id)
-                        .collect::<Vec<_>>()
-                };
-                for sheet_id in chart_sheet_ids {
-                    if !self.delete_worksheet(workbook, sheet_id, true)? {
-                        return Ok(OmValue::Bool(false));
-                    }
+                let sheet_ids = self.sheet_collection_ids_in_order(workbook, collection_kind)?;
+                if sheet_ids.is_empty() {
+                    return Ok(OmValue::Bool(true));
+                }
+                self.ensure_sheet_block_can_be_deleted_from_workbook(
+                    workbook,
+                    sheet_ids.as_slice(),
+                )?;
+                if self.display_alerts {
+                    return Ok(OmValue::Bool(false));
+                }
+                for sheet_id in sheet_ids {
+                    self.delete_worksheet(workbook, sheet_id, false)?;
                 }
                 Ok(OmValue::Bool(true))
             }
-            "Copy" if collection_kind == RuntimeSheetCollectionKind::Charts => {
+            "Copy" => {
                 if args.len() > 2 {
-                    return Err(OmError::invalid_argument(
-                        "Charts.Copy accepts at most Before and After arguments",
-                    ));
+                    return Err(OmError::invalid_argument(format!(
+                        "{collection_name}.Copy accepts at most Before and After arguments"
+                    )));
                 }
-                let chart_sheet_ids = self.chart_sheet_ids_in_order(workbook)?;
-                if chart_sheet_ids.is_empty() {
+                let sheet_ids = self.sheet_collection_ids_in_order(workbook, collection_kind)?;
+                if sheet_ids.is_empty() {
                     return Err(OmError::new(
                         OmErrorCode::NotFound,
-                        "Charts collection is empty",
+                        format!("{collection_name} collection is empty"),
                     ));
                 }
                 if let Some((target_workbook, base_insertion_index)) = self
@@ -25191,44 +25183,51 @@ impl ExcelRuntime {
                         workbook,
                         args.first(),
                         args.get(1),
-                        "Charts.Copy",
+                        &format!("{collection_name}.Copy"),
                     )?
                 {
-                    self.copy_chart_sheet_block_to_workbook(
+                    let copied_sheet_ids = self.copy_sheet_block_to_workbook(
                         workbook,
-                        chart_sheet_ids.as_slice(),
+                        sheet_ids.as_slice(),
                         target_workbook,
                         base_insertion_index,
-                        "Charts.Copy",
+                        &format!("{collection_name}.Copy"),
                     )?;
+                    if let Some(active_sheet_id) = copied_sheet_ids.first().copied() {
+                        self.set_selection(
+                            target_workbook,
+                            active_sheet_id,
+                            Rect::single_cell(1, 1),
+                        );
+                    }
                     return Ok(OmValue::Empty);
                 }
 
-                self.create_workbook_from_chart_sheet_block(
+                self.create_workbook_from_sheet_block(
                     workbook,
-                    chart_sheet_ids.as_slice(),
-                    "Charts.Copy",
+                    sheet_ids.as_slice(),
+                    &format!("{collection_name}.Copy"),
                 )?;
                 Ok(OmValue::Empty)
             }
-            "Move" if collection_kind == RuntimeSheetCollectionKind::Charts => {
+            "Move" => {
                 if args.len() > 2 {
-                    return Err(OmError::invalid_argument(
-                        "Charts.Move accepts at most Before and After arguments",
-                    ));
+                    return Err(OmError::invalid_argument(format!(
+                        "{collection_name}.Move accepts at most Before and After arguments"
+                    )));
                 }
-                let chart_sheet_ids = self.chart_sheet_ids_in_order(workbook)?;
-                if chart_sheet_ids.is_empty() {
+                let sheet_ids = self.sheet_collection_ids_in_order(workbook, collection_kind)?;
+                if sheet_ids.is_empty() {
                     return Err(OmError::new(
                         OmErrorCode::NotFound,
-                        "Charts collection is empty",
+                        format!("{collection_name} collection is empty"),
                     ));
                 }
                 let placement_target = self.worksheet_placement_target(
                     workbook,
                     args.first(),
                     args.get(1),
-                    "Charts.Move",
+                    &format!("{collection_name}.Move"),
                 )?;
                 let (source_read_only, source_sheet_count) = {
                     let runtime = self.runtime_workbook(workbook)?;
@@ -25243,9 +25242,8 @@ impl ExcelRuntime {
 
                 if let Some((target_workbook, base_insertion_index)) = placement_target {
                     if target_workbook == workbook {
-                        let moving_sheet_ids =
-                            chart_sheet_ids.iter().copied().collect::<BTreeSet<_>>();
-                        let active_sheet_id = chart_sheet_ids[0];
+                        let moving_sheet_ids = sheet_ids.iter().copied().collect::<BTreeSet<_>>();
+                        let active_sheet_id = sheet_ids[0];
                         {
                             let runtime = self.runtime_workbook_mut(workbook)?;
                             let target_index =
@@ -25258,14 +25256,14 @@ impl ExcelRuntime {
                                 .take(target_index)
                                 .filter(|worksheet| moving_sheet_ids.contains(&worksheet.id))
                                 .count();
-                            let mut moving_sheets = Vec::with_capacity(chart_sheet_ids.len());
+                            let mut moving_sheets = Vec::with_capacity(sheet_ids.len());
                             let mut remaining_sheets = Vec::with_capacity(
                                 runtime
                                     .loaded
                                     .state
                                     .worksheets
                                     .len()
-                                    .saturating_sub(chart_sheet_ids.len()),
+                                    .saturating_sub(sheet_ids.len()),
                             );
                             for worksheet in runtime.loaded.state.worksheets.drain(..) {
                                 if moving_sheet_ids.contains(&worksheet.id) {
@@ -25277,7 +25275,7 @@ impl ExcelRuntime {
                             if moving_sheets.is_empty() {
                                 return Err(OmError::new(
                                     OmErrorCode::InvalidState,
-                                    "Charts.Move found no chart sheets to move",
+                                    format!("{collection_name}.Move found no sheets to move"),
                                 ));
                             }
                             let adjusted_index = target_index
@@ -25312,15 +25310,19 @@ impl ExcelRuntime {
                         return Ok(OmValue::Empty);
                     }
 
-                    let copied_sheet_ids = self.copy_chart_sheet_block_to_workbook(
+                    let copied_sheet_ids = self.copy_sheet_block_to_workbook(
                         workbook,
-                        chart_sheet_ids.as_slice(),
+                        sheet_ids.as_slice(),
                         target_workbook,
                         base_insertion_index,
-                        "Charts.Move",
+                        &format!("{collection_name}.Move"),
                     )?;
-                    if source_sheet_count > chart_sheet_ids.len() {
-                        for sheet_id in chart_sheet_ids {
+                    if source_sheet_count > sheet_ids.len() {
+                        self.ensure_sheet_block_can_be_deleted_from_workbook(
+                            workbook,
+                            sheet_ids.as_slice(),
+                        )?;
+                        for sheet_id in sheet_ids {
                             self.delete_worksheet(workbook, sheet_id, false)?;
                         }
                     } else {
@@ -25336,14 +25338,17 @@ impl ExcelRuntime {
                     return Ok(OmValue::Empty);
                 }
 
-                let (moved_workbook, moved_sheet_ids) = self
-                    .create_workbook_from_chart_sheet_block(
+                let (moved_workbook, moved_sheet_ids) = self.create_workbook_from_sheet_block(
+                    workbook,
+                    sheet_ids.as_slice(),
+                    &format!("{collection_name}.Move"),
+                )?;
+                if source_sheet_count > sheet_ids.len() {
+                    self.ensure_sheet_block_can_be_deleted_from_workbook(
                         workbook,
-                        chart_sheet_ids.as_slice(),
-                        "Charts.Move",
+                        sheet_ids.as_slice(),
                     )?;
-                if source_sheet_count > chart_sheet_ids.len() {
-                    for sheet_id in chart_sheet_ids {
+                    for sheet_id in sheet_ids {
                         self.delete_worksheet(workbook, sheet_id, false)?;
                     }
                 } else {
@@ -25393,40 +25398,37 @@ impl ExcelRuntime {
                 }
                 Ok(OmValue::Empty)
             }
-            "Select" if collection_kind == RuntimeSheetCollectionKind::Charts => {
+            "Select" => {
                 if args.len() > 1 {
-                    return Err(OmError::invalid_argument(
-                        "Charts.Select accepts at most a Replace argument",
-                    ));
+                    return Err(OmError::invalid_argument(format!(
+                        "{collection_name}.Select accepts at most a Replace argument"
+                    )));
                 }
                 if let Some(value) = args.first()
                     && !om_value_is_omitted(value)
                 {
-                    coerce_optional_bool_arg(value, true, "Charts.Select Replace")?;
+                    coerce_optional_bool_arg(
+                        value,
+                        true,
+                        &format!("{collection_name}.Select Replace"),
+                    )?;
                 }
-                let (sheet_id, chart_id) = {
-                    let runtime = self.runtime_workbook(workbook)?;
-                    runtime
-                        .loaded
-                        .state
-                        .worksheets
-                        .iter()
-                        .filter(|worksheet| worksheet.kind == SheetKind::ChartSheet)
-                        .find_map(|worksheet| {
-                            runtime
-                                .loaded
-                                .state
-                                .chart_sheets
-                                .get(&worksheet.id)
-                                .map(|binding| (worksheet.id, binding.chart_id))
-                        })
-                        .ok_or_else(|| {
-                            OmError::new(OmErrorCode::NotFound, "Charts collection is empty")
-                        })?
-                };
-                self.ensure_worksheet_visible(workbook, sheet_id, "Charts.Select")?;
+                let sheet_id = self
+                    .sheet_collection_ids_in_order(workbook, collection_kind)?
+                    .first()
+                    .copied()
+                    .ok_or_else(|| {
+                        OmError::new(
+                            OmErrorCode::NotFound,
+                            format!("{collection_name} collection is empty"),
+                        )
+                    })?;
+                self.ensure_worksheet_visible(
+                    workbook,
+                    sheet_id,
+                    &format!("{collection_name}.Select"),
+                )?;
                 self.set_selection(workbook, sheet_id, Rect::single_cell(1, 1));
-                self.active_chart = Some((workbook, chart_id, None));
                 Ok(OmValue::Empty)
             }
             "Item" => self.resolve_sheet_collection_item(workbook, collection_kind, args),
@@ -25436,28 +25438,67 @@ impl ExcelRuntime {
         }
     }
 
-    fn chart_sheet_ids_in_order(&self, workbook: WorkbookHandle) -> OmResult<Vec<SheetId>> {
+    fn sheet_collection_ids_in_order(
+        &self,
+        workbook: WorkbookHandle,
+        collection_kind: RuntimeSheetCollectionKind,
+    ) -> OmResult<Vec<SheetId>> {
         let runtime = self.runtime_workbook(workbook)?;
         Ok(runtime
             .loaded
             .state
             .worksheets
             .iter()
-            .filter(|worksheet| worksheet.kind == SheetKind::ChartSheet)
+            .filter(|worksheet| collection_kind.includes(worksheet.kind))
             .map(|worksheet| worksheet.id)
             .collect())
     }
 
-    fn copy_chart_sheet_block_to_workbook(
+    fn ensure_sheet_block_can_be_deleted_from_workbook(
+        &self,
+        workbook: WorkbookHandle,
+        sheet_ids: &[SheetId],
+    ) -> OmResult<()> {
+        let runtime = self.runtime_workbook(workbook)?;
+        if runtime.read_only {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                "cannot modify a read-only workbook",
+            ));
+        }
+        if sheet_ids.is_empty() {
+            return Ok(());
+        }
+        let deleting_sheet_ids = sheet_ids.iter().copied().collect::<BTreeSet<_>>();
+        if runtime.loaded.state.worksheets.len() <= deleting_sheet_ids.len() {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                "cannot delete every sheet in a workbook",
+            ));
+        }
+        let visible_sheet_remains = runtime.loaded.state.worksheets.iter().any(|worksheet| {
+            worksheet.visibility == SheetVisibility::Visible
+                && !deleting_sheet_ids.contains(&worksheet.id)
+        });
+        if !visible_sheet_remains {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                "cannot delete the last visible worksheet in a workbook",
+            ));
+        }
+        Ok(())
+    }
+
+    fn copy_sheet_block_to_workbook(
         &mut self,
         workbook: WorkbookHandle,
-        chart_sheet_ids: &[SheetId],
+        sheet_ids: &[SheetId],
         target_workbook: WorkbookHandle,
         base_insertion_index: usize,
         operation: &str,
     ) -> OmResult<Vec<SheetId>> {
-        let mut copied_sheet_ids = Vec::with_capacity(chart_sheet_ids.len());
-        for (offset, sheet_id) in chart_sheet_ids.iter().copied().enumerate() {
+        let mut copied_sheet_ids = Vec::with_capacity(sheet_ids.len());
+        for (offset, sheet_id) in sheet_ids.iter().copied().enumerate() {
             let insertion_index = base_insertion_index.checked_add(offset).ok_or_else(|| {
                 OmError::invalid_argument(format!("{operation} target index is too large"))
             })?;
@@ -25474,7 +25515,7 @@ impl ExcelRuntime {
             else {
                 return Err(OmError::new(
                     OmErrorCode::InvalidState,
-                    format!("{operation} did not create a chart sheet"),
+                    format!("{operation} did not create a sheet"),
                 ));
             };
             copied_sheet_ids.push(copied_sheet_id);
@@ -25482,10 +25523,10 @@ impl ExcelRuntime {
         Ok(copied_sheet_ids)
     }
 
-    fn create_workbook_from_chart_sheet_block(
+    fn create_workbook_from_sheet_block(
         &mut self,
         workbook: WorkbookHandle,
-        chart_sheet_ids: &[SheetId],
+        sheet_ids: &[SheetId],
         operation: &str,
     ) -> OmResult<(WorkbookHandle, Vec<SheetId>)> {
         let copied_workbook = self.create_workbook()?;
@@ -25503,9 +25544,9 @@ impl ExcelRuntime {
             .state
             .worksheets
             .len();
-        let copied_sheet_ids = self.copy_chart_sheet_block_to_workbook(
+        let copied_sheet_ids = self.copy_sheet_block_to_workbook(
             workbook,
-            chart_sheet_ids,
+            sheet_ids,
             copied_workbook,
             base_insertion_index,
             operation,
@@ -25514,7 +25555,7 @@ impl ExcelRuntime {
         let active_sheet_id = copied_sheet_ids
             .first()
             .copied()
-            .ok_or_else(|| OmError::new(OmErrorCode::InvalidState, "no charts copied"))?;
+            .ok_or_else(|| OmError::new(OmErrorCode::InvalidState, "no sheets copied"))?;
         self.set_selection(copied_workbook, active_sheet_id, Rect::single_cell(1, 1));
         Ok((copied_workbook, copied_sheet_ids))
     }
@@ -139705,6 +139746,252 @@ mod tests {
                     .expect("Workbooks.Count after close")
             ),
             1.0
+        );
+    }
+
+    #[test]
+    fn worksheet_collection_copy_and_move_operate_on_all_worksheets() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Workbooks", &[])
+                .expect("Application.Workbooks"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheet2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Add", &[])
+                .expect("Worksheets.Add Sheet2"),
+        );
+        let sheet2_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(sheet2, "Range", &[OmValue::Text("B2".to_string())])
+                .expect("Sheet2.Range(B2)"),
+        );
+        runtime
+            .dispatch_set(
+                sheet2_range,
+                "Value",
+                OmValue::Text("collection copy".to_string()),
+                &[],
+            )
+            .expect("Sheet2.Range(B2).Value");
+
+        runtime
+            .dispatch_invoke(worksheets, "Select", &[])
+            .expect("Worksheets.Select");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after Worksheets.Select"),
+        );
+        let first_worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("ActiveSheet.Name after Worksheets.Select")
+            ),
+            expect_text(
+                runtime
+                    .dispatch_get(first_worksheet, "Name", &[])
+                    .expect("Worksheets.Item(1).Name")
+            )
+        );
+
+        runtime
+            .dispatch_invoke(worksheets, "Copy", &[])
+            .expect("Worksheets.Copy without placement");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbooks, "Count", &[])
+                    .expect("Workbooks.Count after Worksheets.Copy")
+            ),
+            2.0
+        );
+        let copied_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after Worksheets.Copy"),
+        );
+        let copied_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(copied_workbook, "Worksheets", &[])
+                .expect("copied Workbook.Worksheets"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_worksheets, "Count", &[])
+                    .expect("copied Worksheets.Count")
+            ),
+            2.0
+        );
+        let copied_sheet2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    copied_worksheets,
+                    "Item",
+                    &[OmValue::Text("Sheet2".to_string())],
+                )
+                .expect("copied Worksheets.Item(Sheet2)"),
+        );
+        let copied_sheet2_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(copied_sheet2, "Range", &[OmValue::Text("B2".to_string())])
+                .expect("copied Sheet2.Range(B2)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(copied_sheet2_range, "Value", &[])
+                    .expect("copied Sheet2 B2")
+            ),
+            "collection copy"
+        );
+
+        let copied_workbook_handle = super::WorkbookHandle(copied_workbook);
+        runtime
+            .close_workbook(copied_workbook_handle)
+            .expect("close copied workbook");
+        runtime
+            .dispatch_invoke(worksheets, "Move", &[])
+            .expect("Worksheets.Move without placement");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbooks, "Count", &[])
+                    .expect("Workbooks.Count after Worksheets.Move")
+            ),
+            1.0
+        );
+        let moved_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after Worksheets.Move"),
+        );
+        let moved_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(moved_workbook, "Worksheets", &[])
+                .expect("moved Workbook.Worksheets"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(moved_worksheets, "Count", &[])
+                    .expect("moved Worksheets.Count")
+            ),
+            2.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Name", &[])
+                .expect_err("source workbook should be closed after moving all worksheets")
+                .code,
+            OmErrorCode::InvalidState
+        );
+    }
+
+    #[test]
+    fn worksheet_collection_delete_can_leave_chart_sheets() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("Workbook.Sheets"),
+        );
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+
+        runtime
+            .dispatch_invoke(charts, "Add", &[])
+            .expect("Charts.Add");
+        runtime
+            .dispatch_set(application, "DisplayAlerts", OmValue::Bool(false), &[])
+            .expect("Application.DisplayAlerts = false");
+        assert!(expect_bool(
+            runtime
+                .dispatch_invoke(worksheets, "Delete", &[])
+                .expect("Worksheets.Delete")
+        ));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(worksheets, "Count", &[])
+                    .expect("Worksheets.Count after delete")
+            ),
+            0.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Count", &[])
+                    .expect("Charts.Count after delete")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheets, "Count", &[])
+                    .expect("Sheets.Count after delete")
+            ),
+            1.0
+        );
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveChart", &[])
+                .expect("ActiveChart after Worksheets.Delete"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(active_chart, "ChartType", &[])
+                    .expect("active chart type after Worksheets.Delete")
+            ),
+            f64::from(super::XL_BAR_CLUSTERED)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(sheets, "Delete", &[])
+                .expect_err("Sheets.Delete should reject deleting the last sheet")
+                .code,
+            OmErrorCode::InvalidState
         );
     }
 
