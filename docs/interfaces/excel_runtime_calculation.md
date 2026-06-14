@@ -706,7 +706,7 @@ External data notes:
 - The evaluator is still numeric-first. It includes focused scalar text and date/time text-parse subsets, but broader string semantics, locale-sensitive date/time parsing, and richer coercion rules are not implemented.
 - Dynamic array behavior and broader `Formula2` parity are not implemented.
 - Lookup/reference support now includes workbook and worksheet scoped names, explicit multi-area references for supported functions, and 3D reference expansion for aggregate-style formulas. It is still a focused subset and does not model external workbook references or broader lookup/reference families yet.
-- Runtime Range object support preserves explicit multi-area order for address, areas, count, scalar assignment, calculation, find/replace, clear, fill, offset/resize, first-area row/column projections, and focused chart source binding. Selection and clipboard payloads are still rectangular.
+- Runtime Range object support preserves explicit multi-area order for address, areas, count, scalar assignment, calculation, find/replace, clear, fill, offset/resize, first-area row/column projections, and focused chart source binding. Selection is still rectangular; copied/cut range clipboard payloads retain `RangeSet` metadata for chart source binding, while cell paste materialization still requires a single-area source.
 - Unsupported formulas should fail predictably, but the runtime does not yet aim for 1:1 compatibility with Excel's full calculation engine.
 
 ## Test Strategy
