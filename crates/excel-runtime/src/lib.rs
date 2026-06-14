@@ -98650,6 +98650,122 @@ mod tests {
     }
 
     #[test]
+    fn charts_add_count_and_application_charts_return_chart_handles() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+
+        let added = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    charts,
+                    "Add",
+                    &[OmValue::Missing, OmValue::Missing, OmValue::Number(2.0)],
+                )
+                .expect("Charts.Add Count:=2"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Count", &[])
+                    .expect("Workbook.Charts.Count after Count add")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(added, "Name", &[])
+                    .expect("returned Charts.Add chart name")
+            ),
+            "Chart2"
+        );
+
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("Application.ActiveSheet after Charts.Add Count"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(active_sheet, "ChartType", &[])
+                .expect("ActiveSheet chart handle ChartType"),
+            runtime
+                .dispatch_get(added, "ChartType", &[])
+                .expect("returned chart ChartType")
+        );
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveChart", &[])
+                .expect("Application.ActiveChart after Charts.Add Count"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(active_chart, "ChartType", &[])
+                .expect("ActiveChart ChartType"),
+            runtime
+                .dispatch_get(added, "ChartType", &[])
+                .expect("returned chart ChartType after ActiveChart")
+        );
+
+        let application_charts = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Charts", &[])
+                .expect("Application.Charts"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application_charts, "Count", &[])
+                    .expect("Application.Charts.Count")
+            ),
+            2.0
+        );
+        let first_application_chart = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Charts", &[OmValue::Number(1.0)])
+                .expect("Application.Charts(1)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(first_application_chart, "Name", &[])
+                    .expect("Application.Charts(1).Name")
+            ),
+            "Chart1"
+        );
+        let second_application_chart = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    application,
+                    "Charts",
+                    &[OmValue::Text("Chart2".to_string())],
+                )
+                .expect("Application.Charts(\"Chart2\")"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_application_chart, "ChartType", &[])
+                .expect("Application.Charts(\"Chart2\").ChartType"),
+            runtime
+                .dispatch_get(added, "ChartType", &[])
+                .expect("returned chart ChartType after Application.Charts name lookup")
+        );
+    }
+
+    #[test]
     fn chart_sheet_rejects_worksheet_grid_apis() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
