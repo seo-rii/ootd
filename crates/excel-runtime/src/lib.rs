@@ -35402,6 +35402,16 @@ fn patch_loaded_chart_model_xml(
     existing_chart_xml: &[u8],
     chart: &ChartModel,
 ) -> OmResult<Option<Vec<u8>>> {
+    // Secondary series require separate chart groups; the loaded-chart patcher
+    // only rewrites existing element content and cannot safely reshape that tree.
+    if chart
+        .series
+        .iter()
+        .any(|series| series.axis_group == ChartAxisGroup::Secondary)
+    {
+        return Ok(None);
+    }
+
     let expected_dirty_sources = chart
         .series
         .iter()
@@ -41668,89 +41678,97 @@ fn patch_loaded_chart_model_xml(
 }
 
 fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
-    let mut series_xml = String::new();
-    for (series_index, series) in chart.series.iter().enumerate() {
-        let order = series.order.unwrap_or(series_index as u32);
-        series_xml.push_str(&format!(
-            r#"<c:ser><c:idx val="{}"/><c:order val="{}"/>"#,
-            series_index, order
-        ));
-        if let Some(explosion) = chart_explosion_xml_value(chart) {
-            series_xml.push_str(&format!(r#"<c:explosion val="{explosion}"/>"#));
-        }
-        for (point_index, point) in &series.points {
-            if let Some(explosion) = point.explosion {
+    let series_xml_for_axis_group = |axis_group: ChartAxisGroup| -> OmResult<String> {
+        let mut series_xml = String::new();
+        for (series_index, series) in chart.series.iter().enumerate() {
+            if series.axis_group != axis_group {
+                continue;
+            }
+            let order = series.order.unwrap_or(series_index as u32);
+            series_xml.push_str(&format!(
+                r#"<c:ser><c:idx val="{}"/><c:order val="{}"/>"#,
+                series_index, order
+            ));
+            if let Some(explosion) = chart_explosion_xml_value(chart) {
+                series_xml.push_str(&format!(r#"<c:explosion val="{explosion}"/>"#));
+            }
+            for (point_index, point) in &series.points {
+                if let Some(explosion) = point.explosion {
+                    series_xml.push_str(&format!(
+                        r#"<c:dPt><c:idx val="{point_index}"/><c:explosion val="{explosion}"/></c:dPt>"#
+                    ));
+                }
+            }
+            series_xml.push_str(&chart_series_data_labels_xml_string(series));
+            if chart_type_supports_series_marker(&chart.chart_type)
+                && (series.marker_style.is_some() || series.marker_size.is_some())
+            {
+                series_xml.push_str("<c:marker>");
+                if let Some(marker_style) = series.marker_style {
+                    let marker_style = chart_marker_style_xml_value(marker_style);
+                    series_xml.push_str(&format!(r#"<c:symbol val="{marker_style}"/>"#));
+                }
+                if let Some(marker_size) = series.marker_size {
+                    series_xml.push_str(&format!(r#"<c:size val="{marker_size}"/>"#));
+                }
+                series_xml.push_str("</c:marker>");
+            }
+            if let Some(name) = series.name.as_ref() {
+                series_xml.push_str(&chart_source_container_xml_string(
+                    &chart.chart_type,
+                    ChartSourceXmlSlot::Name,
+                    name,
+                )?);
+            }
+            if let Some(x_values) = series.x_values.as_ref() {
+                series_xml.push_str(&chart_source_container_xml_string(
+                    &chart.chart_type,
+                    ChartSourceXmlSlot::XValues,
+                    x_values,
+                )?);
+            }
+            if let Some(values) = series.values.as_ref() {
+                series_xml.push_str(&chart_source_container_xml_string(
+                    &chart.chart_type,
+                    ChartSourceXmlSlot::Values,
+                    values,
+                )?);
+            }
+            if chart_type_uses_bubble_size(&chart.chart_type)
+                && let Some(bubble_size) = series.bubble_size.as_ref()
+            {
+                series_xml.push_str(&chart_source_container_xml_string(
+                    &chart.chart_type,
+                    ChartSourceXmlSlot::BubbleSize,
+                    bubble_size,
+                )?);
+            }
+            if let Some(invert_if_negative) = series.invert_if_negative {
                 series_xml.push_str(&format!(
-                    r#"<c:dPt><c:idx val="{point_index}"/><c:explosion val="{explosion}"/></c:dPt>"#
+                    r#"<c:invertIfNegative val="{}"/>"#,
+                    if invert_if_negative { "1" } else { "0" }
                 ));
             }
-        }
-        series_xml.push_str(&chart_series_data_labels_xml_string(series));
-        if chart_type_supports_series_marker(&chart.chart_type)
-            && (series.marker_style.is_some() || series.marker_size.is_some())
-        {
-            series_xml.push_str("<c:marker>");
-            if let Some(marker_style) = series.marker_style {
-                let marker_style = chart_marker_style_xml_value(marker_style);
-                series_xml.push_str(&format!(r#"<c:symbol val="{marker_style}"/>"#));
+            if chart_type_supports_bar_shape(&chart.chart_type)
+                && let Some(bar_shape) = series.bar_shape
+            {
+                let bar_shape = chart_bar_shape_xml_value(bar_shape);
+                series_xml.push_str(&format!(r#"<c:shape val="{bar_shape}"/>"#));
             }
-            if let Some(marker_size) = series.marker_size {
-                series_xml.push_str(&format!(r#"<c:size val="{marker_size}"/>"#));
+            if chart_type_supports_series_smooth(&chart.chart_type)
+                && let Some(smooth) = series.smooth
+            {
+                series_xml.push_str(&format!(
+                    r#"<c:smooth val="{}"/>"#,
+                    if smooth { "1" } else { "0" }
+                ));
             }
-            series_xml.push_str("</c:marker>");
+            series_xml.push_str("</c:ser>");
         }
-        if let Some(name) = series.name.as_ref() {
-            series_xml.push_str(&chart_source_container_xml_string(
-                &chart.chart_type,
-                ChartSourceXmlSlot::Name,
-                name,
-            )?);
-        }
-        if let Some(x_values) = series.x_values.as_ref() {
-            series_xml.push_str(&chart_source_container_xml_string(
-                &chart.chart_type,
-                ChartSourceXmlSlot::XValues,
-                x_values,
-            )?);
-        }
-        if let Some(values) = series.values.as_ref() {
-            series_xml.push_str(&chart_source_container_xml_string(
-                &chart.chart_type,
-                ChartSourceXmlSlot::Values,
-                values,
-            )?);
-        }
-        if chart_type_uses_bubble_size(&chart.chart_type)
-            && let Some(bubble_size) = series.bubble_size.as_ref()
-        {
-            series_xml.push_str(&chart_source_container_xml_string(
-                &chart.chart_type,
-                ChartSourceXmlSlot::BubbleSize,
-                bubble_size,
-            )?);
-        }
-        if let Some(invert_if_negative) = series.invert_if_negative {
-            series_xml.push_str(&format!(
-                r#"<c:invertIfNegative val="{}"/>"#,
-                if invert_if_negative { "1" } else { "0" }
-            ));
-        }
-        if chart_type_supports_bar_shape(&chart.chart_type)
-            && let Some(bar_shape) = series.bar_shape
-        {
-            let bar_shape = chart_bar_shape_xml_value(bar_shape);
-            series_xml.push_str(&format!(r#"<c:shape val="{bar_shape}"/>"#));
-        }
-        if chart_type_supports_series_smooth(&chart.chart_type)
-            && let Some(smooth) = series.smooth
-        {
-            series_xml.push_str(&format!(
-                r#"<c:smooth val="{}"/>"#,
-                if smooth { "1" } else { "0" }
-            ));
-        }
-        series_xml.push_str("</c:ser>");
-    }
+        Ok(series_xml)
+    };
+    let primary_series_xml = series_xml_for_axis_group(ChartAxisGroup::Primary)?;
+    let secondary_series_xml = series_xml_for_axis_group(ChartAxisGroup::Secondary)?;
     let chart_group_name = chart_group_xml_name(&chart.chart_type).ok_or_else(|| {
         OmError::unsupported("saving dirty charts requires a supported chart type")
     })?;
@@ -41966,7 +41984,17 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
         .map(chart_data_table_xml_string)
         .unwrap_or_default();
     let chart_has_axes = chart_type_has_axes(&chart.chart_type);
-    let mut chart_group_axis_refs = String::new();
+    let has_secondary_series = !secondary_series_xml.is_empty();
+    let has_secondary_category_axis = chart.axes.iter().any(|axis| {
+        axis.axis_group == ChartAxisGroup::Secondary
+            && matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date)
+    });
+    let has_secondary_series_axis = chart.axes.iter().any(|axis| {
+        axis.axis_group == ChartAxisGroup::Secondary && axis.kind == ChartAxisKind::Series
+    });
+    let mut all_axis_refs = String::new();
+    let mut primary_axis_refs = String::new();
+    let mut secondary_axis_refs = String::new();
     let mut axes_xml = String::new();
     if chart_has_axes {
         for (axis_index, axis) in chart.axes.iter().enumerate() {
@@ -41975,7 +42003,21 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
                 .clone()
                 .unwrap_or_else(|| ((axis_index + 1) * 10).to_string());
             let escaped_axis_id = partial_escape(&axis_id).to_string();
-            chart_group_axis_refs.push_str(&format!(r#"<c:axId val="{escaped_axis_id}"/>"#));
+            let axis_ref = format!(r#"<c:axId val="{escaped_axis_id}"/>"#);
+            all_axis_refs.push_str(&axis_ref);
+            match axis.axis_group {
+                ChartAxisGroup::Primary => {
+                    primary_axis_refs.push_str(&axis_ref);
+                    if has_secondary_series
+                        && ((matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date)
+                            && !has_secondary_category_axis)
+                            || (axis.kind == ChartAxisKind::Series && !has_secondary_series_axis))
+                    {
+                        secondary_axis_refs.push_str(&axis_ref);
+                    }
+                }
+                ChartAxisGroup::Secondary => secondary_axis_refs.push_str(&axis_ref),
+            }
             let axis_tag = chart_axis_xml_name(axis.kind);
             let mut scaling_xml = String::new();
             if chart_axis_has_scaling_xml(axis) {
@@ -42166,10 +42208,34 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             ));
         }
     }
+    if primary_axis_refs.is_empty() {
+        primary_axis_refs.push_str(&all_axis_refs);
+    }
+    if secondary_axis_refs.is_empty() {
+        secondary_axis_refs.push_str(&all_axis_refs);
+    }
+    let chart_group_xml = |series_xml: &str, axis_refs: &str| {
+        format!(
+            r#"<c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{bar_shape_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{gap_depth_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{data_labels_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{axis_refs}</c:{chart_group_name}>"#
+        )
+    };
+    let chart_groups_xml = if has_secondary_series {
+        let mut chart_groups_xml = String::new();
+        if !primary_series_xml.is_empty() {
+            chart_groups_xml.push_str(&chart_group_xml(&primary_series_xml, &primary_axis_refs));
+        }
+        chart_groups_xml.push_str(&chart_group_xml(
+            &secondary_series_xml,
+            &secondary_axis_refs,
+        ));
+        chart_groups_xml
+    } else {
+        chart_group_xml(&primary_series_xml, &all_axis_refs)
+    };
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  {rounded_corners_xml}{chart_style_xml}{chart_protection_xml}<c:chart>{title_xml}{view_3d_xml}<c:plotArea><c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{bar_shape_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{gap_depth_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{data_labels_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{chart_group_axis_refs}</c:{chart_group_name}>{axes_xml}{data_table_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}{show_data_labels_over_maximum_xml}</c:chart>
+  {rounded_corners_xml}{chart_style_xml}{chart_protection_xml}<c:chart>{title_xml}{view_3d_xml}<c:plotArea>{chart_groups_xml}{axes_xml}{data_table_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}{show_data_labels_over_maximum_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -131045,6 +131111,166 @@ mod tests {
                     .expect("reopened second Series.PlotOrder")
             ),
             1.0
+        );
+    }
+
+    #[test]
+    fn chart_series_secondary_axis_group_saves_split_chart_groups() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        runtime
+            .dispatch_invoke(series_collection, "NewSeries", &[])
+            .expect("SeriesCollection.NewSeries first");
+        let second_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries second"),
+        );
+        runtime
+            .dispatch_set(
+                second_series,
+                "AxisGroup",
+                OmValue::Number(f64::from(super::XL_SECONDARY)),
+                &[],
+            )
+            .expect("set second Series.AxisGroup xlSecondary");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after secondary Series.AxisGroup");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved chart package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"</c:barChart><c:barChart>"#));
+        assert!(saved_chart_xml.contains(
+            r#"<c:ser><c:idx val="0"/><c:order val="0"/></c:ser><c:axId val="10"/><c:axId val="20"/></c:barChart>"#
+        ));
+        assert!(saved_chart_xml.contains(r#"<c:ser><c:idx val="1"/><c:order val="1"/></c:ser>"#));
+        assert!(saved_chart_xml.contains(r#"<c:axId val="10"/><c:axId val="50"/></c:barChart>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after secondary Series.AxisGroup");
+        let reopened_worksheets = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[])
+                .expect("reopened Workbook.Worksheets"),
+        );
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened Worksheets.Item(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened Chart.SeriesCollection"),
+        );
+        let reopened_second_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_series_collection, "Item", &[OmValue::Number(2.0)])
+                .expect("reopened SeriesCollection.Item(2)"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_second_series, "AxisGroup", &[])
+                    .expect("reopened second Series.AxisGroup")
+            ),
+            f64::from(super::XL_SECONDARY)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "HasAxis",
+                    &[
+                        OmValue::Number(f64::from(super::XL_VALUE)),
+                        OmValue::Number(f64::from(super::XL_SECONDARY)),
+                    ],
+                )
+                .expect("reopened Chart.HasAxis(xlValue, xlSecondary)"),
+            OmValue::Bool(true)
         );
     }
 
