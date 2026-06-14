@@ -11582,6 +11582,11 @@ impl ExcelRuntime {
                                 "Range.PasteSpecial requires an active copy or cut range",
                             )
                         })?;
+                        if clipboard.range.areas().len() != 1 {
+                            return Err(OmError::unsupported(
+                                "Range.PasteSpecial requires a single-area clipboard range for cell paste materialization",
+                            ));
+                        }
                         let (clipboard_sheet_id, clipboard_rect) =
                             Self::range_set_single_area(&clipboard.range)?;
                         let source = self.register_range_handle(
@@ -91126,6 +91131,62 @@ mod tests {
                 .expect_err("Range.PasteSpecial should reject empty clipboard")
                 .code,
             OmErrorCode::InvalidState
+        );
+    }
+
+    #[test]
+    fn range_paste_special_rejects_multi_area_clipboard_payloads() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1,C1".to_string())])
+                .expect("Range(A1,C1)"),
+        );
+        let destination = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("E5".to_string())])
+                .expect("Range(E5)"),
+        );
+
+        runtime
+            .dispatch_invoke(source, "Copy", &[])
+            .expect("multi-area Range.Copy clipboard");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode after multi-area Range.Copy")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(destination, "PasteSpecial", &[])
+                .expect_err("Range.PasteSpecial should reject multi-area clipboard")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode after rejected PasteSpecial")
+            ),
+            f64::from(super::XL_COPY)
         );
     }
 
