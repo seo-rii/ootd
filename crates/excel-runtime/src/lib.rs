@@ -131484,6 +131484,253 @@ mod tests {
     }
 
     #[test]
+    fn chart_group_series_collection_mutations_keep_axis_group() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let source_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        runtime
+            .dispatch_invoke(series_collection, "NewSeries", &[])
+            .expect("SeriesCollection.NewSeries primary");
+        let secondary_seed_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries secondary seed"),
+        );
+        runtime
+            .dispatch_set(
+                secondary_seed_series,
+                "AxisGroup",
+                OmValue::Number(f64::from(super::XL_SECONDARY)),
+                &[],
+            )
+            .expect("set seed Series.AxisGroup xlSecondary");
+        let chart_groups = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[])
+                .expect("Chart.ChartGroups"),
+        );
+        let primary_group = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_groups, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartGroups.Item(1)"),
+        );
+        let secondary_group = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_groups, "Item", &[OmValue::Number(2.0)])
+                .expect("ChartGroups.Item(2)"),
+        );
+        let primary_group_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(primary_group, "SeriesCollection", &[])
+                .expect("primary ChartGroup.SeriesCollection"),
+        );
+        let secondary_group_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(secondary_group, "SeriesCollection", &[])
+                .expect("secondary ChartGroup.SeriesCollection"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(primary_group_series_collection, "Count", &[])
+                    .expect("primary ChartGroup.SeriesCollection.Count")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(secondary_group_series_collection, "Count", &[])
+                    .expect("secondary ChartGroup.SeriesCollection.Count before mutations")
+            ),
+            1.0
+        );
+
+        let new_secondary_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(secondary_group_series_collection, "NewSeries", &[])
+                .expect("secondary ChartGroup.SeriesCollection.NewSeries"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(new_secondary_series, "AxisGroup", &[])
+                    .expect("new secondary Series.AxisGroup")
+            ),
+            f64::from(super::XL_SECONDARY)
+        );
+        let added_secondary_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    secondary_group_series_collection,
+                    "Add",
+                    &[
+                        OmValue::Object(source_range),
+                        OmValue::Number(f64::from(super::XL_PLOT_BY_COLUMNS)),
+                    ],
+                )
+                .expect("secondary ChartGroup.SeriesCollection.Add"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(added_secondary_series, "AxisGroup", &[])
+                    .expect("added secondary Series.AxisGroup")
+            ),
+            f64::from(super::XL_SECONDARY)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(secondary_group_series_collection, "Count", &[])
+                    .expect("secondary ChartGroup.SeriesCollection.Count after mutations")
+            ),
+            4.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("full SeriesCollection.Count after mutations")
+            ),
+            5.0
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after chart group series mutations");
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after chart group series mutations");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_chart_groups = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "ChartGroups", &[])
+                .expect("reopened Chart.ChartGroups"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_groups, "Count", &[])
+                    .expect("reopened ChartGroups.Count")
+            ),
+            2.0
+        );
+        let reopened_secondary_group = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_groups, "Item", &[OmValue::Number(2.0)])
+                .expect("reopened ChartGroups.Item(2)"),
+        );
+        let reopened_secondary_group_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_secondary_group, "SeriesCollection", &[])
+                .expect("reopened secondary ChartGroup.SeriesCollection"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_secondary_group_series_collection, "Count", &[])
+                    .expect("reopened secondary ChartGroup.SeriesCollection.Count")
+            ),
+            4.0
+        );
+        let reopened_added_secondary_series = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(
+                    reopened_secondary_group_series_collection,
+                    "Item",
+                    &[OmValue::Number(3.0)],
+                )
+                .expect("reopened secondary ChartGroup.SeriesCollection.Item(3)"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_added_secondary_series, "AxisGroup", &[])
+                    .expect("reopened added secondary Series.AxisGroup")
+            ),
+            f64::from(super::XL_SECONDARY)
+        );
+    }
+
+    #[test]
     fn loaded_chart_series_axis_group_follows_chart_group_axis_refs() {
         let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
             .expect("embedded chart package");
