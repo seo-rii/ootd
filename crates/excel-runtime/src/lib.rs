@@ -49502,6 +49502,92 @@ fn formula_numbervalue(
     }
 }
 
+fn formula_datevalue_text(text: &str) -> Result<f64, FormulaEvalError> {
+    let trimmed = text.trim();
+    let separator = if trimmed.contains('-') {
+        '-'
+    } else if trimmed.contains('/') {
+        '/'
+    } else {
+        return Err(FormulaEvalError::Value);
+    };
+    let parts = trimmed.split(separator).collect::<Vec<_>>();
+    if parts.len() != 3 || parts.iter().any(|part| part.trim().is_empty()) {
+        return Err(FormulaEvalError::Value);
+    }
+    let parse_part = |part: &str| -> Result<i64, FormulaEvalError> {
+        part.trim()
+            .parse::<i64>()
+            .map_err(|_| FormulaEvalError::Value)
+    };
+    let first = parse_part(parts[0])?;
+    let second = parse_part(parts[1])?;
+    let third = parse_part(parts[2])?;
+    let (year, month, day) = if parts[0].trim().len() == 4 {
+        (first, second, third)
+    } else {
+        (third, first, second)
+    };
+    if !(1900..=9999).contains(&year) || !(1..=12).contains(&month) || day < 1 {
+        return Err(FormulaEvalError::Value);
+    }
+    if year == 1900 && month == 2 && day == 29 {
+        return Ok(60.0);
+    }
+    if day > i64::from(days_in_excel_month(year, month as u32)) {
+        return Err(FormulaEvalError::Value);
+    }
+    formula_date_serial_from_args(year as f64, month as f64, day as f64)
+}
+
+fn formula_timevalue_text(text: &str) -> Result<f64, FormulaEvalError> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err(FormulaEvalError::Value);
+    }
+    let upper = trimmed.to_ascii_uppercase();
+    let (body, pm_marker) = if upper.ends_with("AM") {
+        (trimmed[..trimmed.len() - 2].trim_end(), Some(false))
+    } else if upper.ends_with("PM") {
+        (trimmed[..trimmed.len() - 2].trim_end(), Some(true))
+    } else {
+        (trimmed, None)
+    };
+    let parts = body.split(':').collect::<Vec<_>>();
+    if !(2..=3).contains(&parts.len()) || parts.iter().any(|part| part.trim().is_empty()) {
+        return Err(FormulaEvalError::Value);
+    }
+    let parse_part = |part: &str| -> Result<i64, FormulaEvalError> {
+        part.trim()
+            .parse::<i64>()
+            .map_err(|_| FormulaEvalError::Value)
+    };
+    let mut hour = parse_part(parts[0])?;
+    let minute = parse_part(parts[1])?;
+    let second = if parts.len() == 3 {
+        parse_part(parts[2])?
+    } else {
+        0
+    };
+    if !(0..=59).contains(&minute) || !(0..=59).contains(&second) {
+        return Err(FormulaEvalError::Value);
+    }
+    if let Some(is_pm) = pm_marker {
+        if !(1..=12).contains(&hour) {
+            return Err(FormulaEvalError::Value);
+        }
+        if hour == 12 {
+            hour = 0;
+        }
+        if is_pm {
+            hour += 12;
+        }
+    } else if !(0..=23).contains(&hour) {
+        return Err(FormulaEvalError::Value);
+    }
+    Ok((hour * 3600 + minute * 60 + second) as f64 / 86_400.0)
+}
+
 fn formula_value_text(text: &str) -> Result<f64, FormulaEvalError> {
     let mut body = text.trim();
     if body.is_empty() {
@@ -49552,7 +49638,37 @@ fn formula_value_text(text: &str) -> Result<f64, FormulaEvalError> {
         return Err(FormulaEvalError::Value);
     }
 
-    let mut value = formula_numbervalue(body, ".", ",")?;
+    let mut value = match formula_numbervalue(body, ".", ",") {
+        Ok(value) => value,
+        Err(FormulaEvalError::Value) if !accounting_negative && !explicit_negative => {
+            if let Ok(value) = formula_datevalue_text(body) {
+                value
+            } else if let Ok(value) = formula_timevalue_text(body) {
+                value
+            } else {
+                let mut parsed = None;
+                for (index, ch) in body.char_indices() {
+                    if !ch.is_whitespace() {
+                        continue;
+                    }
+                    let date_text = body[..index].trim_end();
+                    let time_text = body[index..].trim_start();
+                    if date_text.is_empty() || time_text.is_empty() {
+                        continue;
+                    }
+                    if let (Ok(date), Ok(time)) = (
+                        formula_datevalue_text(date_text),
+                        formula_timevalue_text(time_text),
+                    ) {
+                        parsed = Some(date + time);
+                        break;
+                    }
+                }
+                parsed.ok_or(FormulaEvalError::Value)?
+            }
+        }
+        Err(error) => return Err(error),
+    };
     if accounting_negative ^ explicit_negative {
         value = -value;
     }
@@ -57577,41 +57693,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if !self.consume_char(')') {
             return Err(FormulaEvalError::Unsupported);
         }
-        let trimmed = text.trim();
-        let separator = if trimmed.contains('-') {
-            '-'
-        } else if trimmed.contains('/') {
-            '/'
-        } else {
-            return Err(FormulaEvalError::Value);
-        };
-        let parts = trimmed.split(separator).collect::<Vec<_>>();
-        if parts.len() != 3 || parts.iter().any(|part| part.trim().is_empty()) {
-            return Err(FormulaEvalError::Value);
-        }
-        let parse_part = |part: &str| -> Result<i64, FormulaEvalError> {
-            part.trim()
-                .parse::<i64>()
-                .map_err(|_| FormulaEvalError::Value)
-        };
-        let first = parse_part(parts[0])?;
-        let second = parse_part(parts[1])?;
-        let third = parse_part(parts[2])?;
-        let (year, month, day) = if parts[0].trim().len() == 4 {
-            (first, second, third)
-        } else {
-            (third, first, second)
-        };
-        if !(1900..=9999).contains(&year) || !(1..=12).contains(&month) || day < 1 {
-            return Err(FormulaEvalError::Value);
-        }
-        if year == 1900 && month == 2 && day == 29 {
-            return Ok(60.0);
-        }
-        if day > i64::from(days_in_excel_month(year, month as u32)) {
-            return Err(FormulaEvalError::Value);
-        }
-        formula_date_serial_from_args(year as f64, month as f64, day as f64)
+        formula_datevalue_text(text.as_str())
     }
 
     fn parse_timevalue_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -57620,51 +57702,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if !self.consume_char(')') {
             return Err(FormulaEvalError::Unsupported);
         }
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            return Err(FormulaEvalError::Value);
-        }
-        let upper = trimmed.to_ascii_uppercase();
-        let (body, pm_marker) = if upper.ends_with("AM") {
-            (trimmed[..trimmed.len() - 2].trim_end(), Some(false))
-        } else if upper.ends_with("PM") {
-            (trimmed[..trimmed.len() - 2].trim_end(), Some(true))
-        } else {
-            (trimmed, None)
-        };
-        let parts = body.split(':').collect::<Vec<_>>();
-        if !(2..=3).contains(&parts.len()) || parts.iter().any(|part| part.trim().is_empty()) {
-            return Err(FormulaEvalError::Value);
-        }
-        let parse_part = |part: &str| -> Result<i64, FormulaEvalError> {
-            part.trim()
-                .parse::<i64>()
-                .map_err(|_| FormulaEvalError::Value)
-        };
-        let mut hour = parse_part(parts[0])?;
-        let minute = parse_part(parts[1])?;
-        let second = if parts.len() == 3 {
-            parse_part(parts[2])?
-        } else {
-            0
-        };
-        if !(0..=59).contains(&minute) || !(0..=59).contains(&second) {
-            return Err(FormulaEvalError::Value);
-        }
-        if let Some(is_pm) = pm_marker {
-            if !(1..=12).contains(&hour) {
-                return Err(FormulaEvalError::Value);
-            }
-            if hour == 12 {
-                hour = 0;
-            }
-            if is_pm {
-                hour += 12;
-            }
-        } else if !(0..=23).contains(&hour) {
-            return Err(FormulaEvalError::Value);
-        }
-        Ok((hour * 3600 + minute * 60 + second) as f64 / 86_400.0)
+        formula_timevalue_text(text.as_str())
     }
 
     fn parse_countif_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -79401,9 +79439,9 @@ mod tests {
                 .dispatch_invoke(
                     active_sheet,
                     "Range",
-                    &[OmValue::Text("A1:A11".to_string())],
+                    &[OmValue::Text("A1:A15".to_string())],
                 )
-                .expect("Range(A1:A11)"),
+                .expect("Range(A1:A15)"),
         );
 
         runtime
@@ -79412,7 +79450,7 @@ mod tests {
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        11,
+                        15,
                         1,
                         vec![
                             OmValue::Text(r#"=DATEVALUE("2024-02-29")"#.to_string()),
@@ -79426,6 +79464,10 @@ mod tests {
                             OmValue::Text(r#"=HOUR(TIMEVALUE("12:00 AM"))"#.to_string()),
                             OmValue::Text(r#"=HOUR(TIMEVALUE("12:30 PM"))"#.to_string()),
                             OmValue::Text(r#"=TIMEVALUE("bad")"#.to_string()),
+                            OmValue::Text(r#"=VALUE("2024-02-29")"#.to_string()),
+                            OmValue::Text(r#"=VALUE("6:00 PM")"#.to_string()),
+                            OmValue::Text(r#"=VALUE("2024-02-29 6:00 PM")"#.to_string()),
+                            OmValue::Text(r#"=VALUE("2024-02-29 bad")"#.to_string()),
                         ],
                     )
                     .expect("date/time text parse formulas"),
@@ -79457,6 +79499,10 @@ mod tests {
                 OmValue::Number(5.0),
                 OmValue::Number(0.0),
                 OmValue::Number(12.0),
+                OmValue::Error(CellError::Value),
+                OmValue::Number(45351.0),
+                OmValue::Number(0.75),
+                OmValue::Number(45351.75),
                 OmValue::Error(CellError::Value),
             ]
         );
