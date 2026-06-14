@@ -98766,6 +98766,126 @@ mod tests {
     }
 
     #[test]
+    fn charts_collection_metadata_and_item_return_chart_handles() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        let added = expect_object_handle(
+            runtime
+                .dispatch_invoke(charts, "Add", &[])
+                .expect("Charts.Add"),
+        );
+
+        let parent = expect_object_handle(
+            runtime
+                .dispatch_get(charts, "Parent", &[])
+                .expect("Charts.Parent"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(parent, "Name", &[])
+                    .expect("Charts.Parent.Name")
+            ),
+            expect_text(
+                runtime
+                    .dispatch_get(workbook.0, "Name", &[])
+                    .expect("Workbook.Name")
+            )
+        );
+        assert_eq!(
+            expect_object_handle(
+                runtime
+                    .dispatch_get(charts, "Application", &[])
+                    .expect("Charts.Application")
+            ),
+            application
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Creator", &[])
+                    .expect("Charts.Creator")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
+        );
+
+        let workbook_direct_chart = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[OmValue::Number(1.0)])
+                .expect("Workbook.Charts(1)"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook_direct_chart, "ChartType", &[])
+                .expect("Workbook.Charts(1).ChartType"),
+            runtime
+                .dispatch_get(added, "ChartType", &[])
+                .expect("added chart ChartType")
+        );
+        let item_chart = expect_object_handle(
+            runtime
+                .dispatch_get(charts, "Item", &[OmValue::Number(1.0)])
+                .expect("Charts.Item(1) property"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(item_chart, "ChartType", &[])
+                .expect("Charts.Item(1).ChartType"),
+            runtime
+                .dispatch_get(added, "ChartType", &[])
+                .expect("added chart ChartType after Item")
+        );
+        let named_chart = expect_object_handle(
+            runtime
+                .dispatch_get(charts, "Item", &[OmValue::Text("Chart1".to_string())])
+                .expect("Charts.Item(\"Chart1\") property"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(named_chart, "ChartType", &[])
+                .expect("Charts.Item(\"Chart1\").ChartType"),
+            runtime
+                .dispatch_get(added, "ChartType", &[])
+                .expect("added chart ChartType after named Item")
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(charts, "Parent", &[OmValue::Missing])
+                .expect_err("Charts.Parent rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(charts, "Application", &[OmValue::Missing])
+                .expect_err("Charts.Application rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(charts, "Creator", &[OmValue::Missing])
+                .expect_err("Charts.Creator rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
     fn chart_sheet_rejects_worksheet_grid_apis() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
