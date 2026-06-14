@@ -58647,20 +58647,27 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
     }
 
     fn parse_index_value_function(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let reference = self.parse_index_reference_function()?;
+        let (sheet_id, rect) = reference.single_area()?;
+        self.evaluator
+            .lookup_result_at(sheet_id, rect.row_first, rect.col_first)
+    }
+
+    fn parse_index_reference_function(&mut self) -> Result<FormulaReference, FormulaEvalError> {
         let reference = self.parse_reference_set_argument()?;
         self.skip_whitespace();
         if !self.consume_char(',') {
             return Err(FormulaEvalError::Unsupported);
         }
         let row_index = formula_integer_argument(self.parse_comparison()?)?;
-        if row_index < 1 {
+        if row_index < 0 {
             return Err(FormulaEvalError::Value);
         }
         let mut col_index = 1_i64;
         self.skip_whitespace();
         if self.consume_char(',') {
             col_index = formula_integer_argument(self.parse_comparison()?)?;
-            if col_index < 1 {
+            if col_index < 0 {
                 return Err(FormulaEvalError::Value);
             }
             self.skip_whitespace();
@@ -58685,9 +58692,27 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if row_index > i64::from(rect.height()) || col_index > i64::from(rect.width()) {
             return Err(FormulaEvalError::Ref);
         }
-        let row = rect.row_first + row_index as u32 - 1;
-        let col = rect.col_first + col_index as u32 - 1;
-        self.evaluator.lookup_result_at(sheet_id, row, col)
+        let (row_first, row_last) = if row_index == 0 {
+            (rect.row_first, rect.row_last)
+        } else {
+            let row = rect.row_first + row_index as u32 - 1;
+            (row, row)
+        };
+        let (col_first, col_last) = if col_index == 0 {
+            (rect.col_first, rect.col_last)
+        } else {
+            let col = rect.col_first + col_index as u32 - 1;
+            (col, col)
+        };
+        Ok(FormulaReference::single(
+            sheet_id,
+            Rect {
+                row_first,
+                row_last,
+                col_first,
+                col_last,
+            },
+        ))
     }
 
     fn parse_match_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -58979,6 +59004,10 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         &mut self,
         name: &str,
     ) -> Result<FormulaReference, FormulaEvalError> {
+        if name.eq_ignore_ascii_case("INDEX") {
+            return self.parse_index_reference_function();
+        }
+
         if name.eq_ignore_ascii_case("INDIRECT") {
             let mut reference_text = self.parse_text_value_argument()?;
             let mut a1_style = true;
@@ -61443,6 +61472,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             self.skip_whitespace();
             if self.consume_char('(')
                 && (identifier.eq_ignore_ascii_case("INDIRECT")
+                    || identifier.eq_ignore_ascii_case("INDEX")
                     || identifier.eq_ignore_ascii_case("OFFSET")
                     || identifier.eq_ignore_ascii_case("TRIMRANGE"))
             {
@@ -76784,9 +76814,9 @@ mod tests {
                 .dispatch_invoke(
                     active_sheet,
                     "Range",
-                    &[OmValue::Text("J1:J10".to_string())],
+                    &[OmValue::Text("J1:J15".to_string())],
                 )
-                .expect("Range(J1:J10)"),
+                .expect("Range(J1:J15)"),
         );
 
         runtime
@@ -76875,7 +76905,7 @@ mod tests {
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        10,
+                        15,
                         1,
                         vec![
                             OmValue::Text("=VLOOKUP(\"beta\", A1:C4, 2, FALSE)".to_string()),
@@ -76888,6 +76918,11 @@ mod tests {
                             OmValue::Text("=MATCH(35, L1:L4, -1)".to_string()),
                             OmValue::Text("=VLOOKUP(\"missing\", A1:C4, 2, FALSE)".to_string()),
                             OmValue::Text("=INDEX(A1:C4, 5, 1)".to_string()),
+                            OmValue::Text("=SUM(INDEX(A1:C4, 0, 3))".to_string()),
+                            OmValue::Text("=SUM(INDEX(A1:C4, 2, 0))".to_string()),
+                            OmValue::Text("=ROWS(INDEX(A1:C4, 0, 2))".to_string()),
+                            OmValue::Text("=COLUMNS(INDEX(A1:C4, 2, 0))".to_string()),
+                            OmValue::Text("=INDEX(A1:C4, 0, 3)".to_string()),
                         ],
                     )
                     .expect("lookup formulas"),
@@ -76919,6 +76954,11 @@ mod tests {
                 OmValue::Number(2.0),
                 OmValue::Error(CellError::NA),
                 OmValue::Error(CellError::Ref),
+                OmValue::Number(1500.0),
+                OmValue::Number(220.0),
+                OmValue::Number(4.0),
+                OmValue::Number(3.0),
+                OmValue::Number(100.0),
             ]
         );
     }
