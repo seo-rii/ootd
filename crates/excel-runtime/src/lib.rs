@@ -25529,6 +25529,14 @@ impl ExcelRuntime {
         sheet_ids: &[SheetId],
         operation: &str,
     ) -> OmResult<(WorkbookHandle, Vec<SheetId>)> {
+        let source_sheet_names = sheet_ids
+            .iter()
+            .copied()
+            .map(|sheet_id| {
+                self.worksheet_model(workbook, sheet_id)
+                    .map(|worksheet| worksheet.name.clone())
+            })
+            .collect::<OmResult<Vec<_>>>()?;
         let copied_workbook = self.create_workbook()?;
         let default_sheet_id = self
             .runtime_workbook(copied_workbook)?
@@ -25552,6 +25560,14 @@ impl ExcelRuntime {
             operation,
         )?;
         self.delete_worksheet(copied_workbook, default_sheet_id, false)?;
+        for (copied_sheet_id, source_name) in copied_sheet_ids
+            .iter()
+            .copied()
+            .zip(source_sheet_names.into_iter())
+        {
+            let copied_sheet = self.register_worksheet_handle(copied_workbook, copied_sheet_id);
+            self.dispatch_set(copied_sheet.0, "Name", OmValue::Text(source_name), &[])?;
+        }
         let active_sheet_id = copied_sheet_ids
             .first()
             .copied()
@@ -139990,6 +140006,310 @@ mod tests {
             runtime
                 .dispatch_invoke(sheets, "Delete", &[])
                 .expect_err("Sheets.Delete should reject deleting the last sheet")
+                .code,
+            OmErrorCode::InvalidState
+        );
+    }
+
+    #[test]
+    fn sheets_collection_copy_and_move_preserve_mixed_sheet_block() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Workbooks", &[])
+                .expect("Application.Workbooks"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let worksheet_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Sheet1.Range(A1)"),
+        );
+        runtime
+            .dispatch_set(
+                worksheet_range,
+                "Value",
+                OmValue::Text("mixed sheets".to_string()),
+                &[],
+            )
+            .expect("Sheet1.Range(A1).Value");
+
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(charts, "Add", &[])
+                .expect("Charts.Add"),
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_LINE)),
+                &[],
+            )
+            .expect("set chart sheet ChartType");
+        let sheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("Workbook.Sheets"),
+        );
+        let source_first_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(sheets, "Item", &[OmValue::Number(1.0)])
+                .expect("source Sheets.Item(1)"),
+        );
+        let source_second_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(sheets, "Item", &[OmValue::Number(2.0)])
+                .expect("source Sheets.Item(2)"),
+        );
+        let source_first_name = expect_text(
+            runtime
+                .dispatch_get(source_first_sheet, "Name", &[])
+                .expect("source first sheet name"),
+        );
+        let source_second_name = expect_text(
+            runtime
+                .dispatch_get(source_second_sheet, "Name", &[])
+                .expect("source second sheet name"),
+        );
+
+        runtime
+            .dispatch_invoke(sheets, "Select", &[])
+            .expect("Sheets.Select");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after Sheets.Select"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("ActiveSheet.Name after Sheets.Select")
+            ),
+            source_first_name
+        );
+
+        runtime
+            .dispatch_invoke(sheets, "Copy", &[])
+            .expect("Sheets.Copy without placement");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbooks, "Count", &[])
+                    .expect("Workbooks.Count after Sheets.Copy")
+            ),
+            2.0
+        );
+        let copied_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after Sheets.Copy"),
+        );
+        assert_ne!(copied_workbook, workbook.0);
+        let copied_sheets = expect_object_handle(
+            runtime
+                .dispatch_get(copied_workbook, "Sheets", &[])
+                .expect("copied Workbook.Sheets"),
+        );
+        let copied_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(copied_workbook, "Worksheets", &[])
+                .expect("copied Workbook.Worksheets"),
+        );
+        let copied_charts = expect_object_handle(
+            runtime
+                .dispatch_get(copied_workbook, "Charts", &[])
+                .expect("copied Workbook.Charts"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_sheets, "Count", &[])
+                    .expect("copied Sheets.Count")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_worksheets, "Count", &[])
+                    .expect("copied Worksheets.Count")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_charts, "Count", &[])
+                    .expect("copied Charts.Count")
+            ),
+            1.0
+        );
+        let copied_first_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(copied_sheets, "Item", &[OmValue::Number(1.0)])
+                .expect("copied Sheets.Item(1)"),
+        );
+        let copied_second_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(copied_sheets, "Item", &[OmValue::Number(2.0)])
+                .expect("copied Sheets.Item(2)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(copied_first_sheet, "Name", &[])
+                    .expect("copied first sheet name")
+            ),
+            source_first_name
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(copied_second_sheet, "Name", &[])
+                    .expect("copied second sheet name")
+            ),
+            source_second_name
+        );
+        let copied_worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    copied_worksheets,
+                    "Item",
+                    &[OmValue::Text("Sheet1".to_string())],
+                )
+                .expect("copied Worksheets.Item(Sheet1)"),
+        );
+        let copied_worksheet_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    copied_worksheet,
+                    "Range",
+                    &[OmValue::Text("A1".to_string())],
+                )
+                .expect("copied Sheet1.Range(A1)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(copied_worksheet_range, "Value", &[])
+                    .expect("copied worksheet A1")
+            ),
+            "mixed sheets"
+        );
+        let copied_chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(copied_charts, "Item", &[OmValue::Number(1.0)])
+                .expect("copied Charts.Item(1)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_chart, "ChartType", &[])
+                    .expect("copied chart ChartType")
+            ),
+            f64::from(super::XL_LINE)
+        );
+
+        runtime
+            .close_workbook(super::WorkbookHandle(copied_workbook))
+            .expect("close copied workbook");
+        runtime
+            .dispatch_invoke(sheets, "Move", &[])
+            .expect("Sheets.Move without placement");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbooks, "Count", &[])
+                    .expect("Workbooks.Count after Sheets.Move")
+            ),
+            1.0
+        );
+        let moved_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after Sheets.Move"),
+        );
+        let moved_sheets = expect_object_handle(
+            runtime
+                .dispatch_get(moved_workbook, "Sheets", &[])
+                .expect("moved Workbook.Sheets"),
+        );
+        let moved_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(moved_workbook, "Worksheets", &[])
+                .expect("moved Workbook.Worksheets"),
+        );
+        let moved_charts = expect_object_handle(
+            runtime
+                .dispatch_get(moved_workbook, "Charts", &[])
+                .expect("moved Workbook.Charts"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(moved_sheets, "Count", &[])
+                    .expect("moved Sheets.Count")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(moved_worksheets, "Count", &[])
+                    .expect("moved Worksheets.Count")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(moved_charts, "Count", &[])
+                    .expect("moved Charts.Count")
+            ),
+            1.0
+        );
+        let moved_chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(moved_charts, "Item", &[OmValue::Number(1.0)])
+                .expect("moved Charts.Item(1)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(moved_chart, "ChartType", &[])
+                    .expect("moved chart ChartType")
+            ),
+            f64::from(super::XL_LINE)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Name", &[])
+                .expect_err("source workbook should be closed after moving all sheets")
                 .code,
             OmErrorCode::InvalidState
         );
