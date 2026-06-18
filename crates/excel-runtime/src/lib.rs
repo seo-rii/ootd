@@ -14524,14 +14524,207 @@ impl ExcelRuntime {
                             Ok(OmValue::Object(target_chart))
                         }
                         XL_LOCATION_AS_OBJECT => {
-                            if target_name.is_none() {
+                            let Some(target_sheet_name) = target_name else {
                                 return Err(OmError::invalid_argument(
                                     "Chart.Location Name is required for xlLocationAsObject",
                                 ));
+                            };
+                            let source_chart_sheet_id =
+                                self.chart_sheet_id_for_chart(workbook, chart_id)?;
+                            let source_embedded_chart_object =
+                                self.embedded_chart_object_for_chart(workbook, chart_id)?;
+                            let source_chart_name =
+                                if let Some((_, _, name)) = source_embedded_chart_object.as_ref() {
+                                    name.clone()
+                                } else {
+                                    let chart = self
+                                        .register_chart_handle_with_chart_object_parent_origin(
+                                            workbook,
+                                            chart_id,
+                                            chart_object_parent,
+                                        );
+                                    match self.dispatch_get(chart, "Name", &[])? {
+                                        OmValue::Text(name) => name,
+                                        _ => unreachable!("Chart.Name returned a non-text value"),
+                                    }
+                                };
+                            let geometry = if let Some((_, source_chart_object_id, _)) =
+                                source_embedded_chart_object.as_ref()
+                            {
+                                let chart_object =
+                                    self.chart_object_model(workbook, *source_chart_object_id)?;
+                                [
+                                    Self::chart_object_geometry_value(chart_object, "Left")?,
+                                    Self::chart_object_geometry_value(chart_object, "Top")?,
+                                    Self::chart_object_geometry_value(chart_object, "Width")?,
+                                    Self::chart_object_geometry_value(chart_object, "Height")?,
+                                ]
+                            } else {
+                                [0.0, 0.0, 480.0, 288.0]
+                            };
+                            let source_chart = self.chart_model(workbook, chart_id)?.clone();
+                            let source_support_sheet_id = source_embedded_chart_object
+                                .as_ref()
+                                .map(|(sheet_id, _, _)| *sheet_id)
+                                .or(source_chart_sheet_id);
+                            let source_chart_support_part_sources =
+                                if let Some(source_support_sheet_id) = source_support_sheet_id {
+                                    self.chart_support_part_sources_for_chart(
+                                        workbook,
+                                        source_support_sheet_id,
+                                        source_chart.raw_part_uri.as_deref(),
+                                    )?
+                                } else {
+                                    Vec::new()
+                                };
+                            let target_sheet_id = self
+                                .runtime_workbook(workbook)?
+                                .loaded
+                                .state
+                                .worksheets
+                                .iter()
+                                .find(|worksheet| {
+                                    worksheet.name.eq_ignore_ascii_case(&target_sheet_name)
+                                })
+                                .map(|worksheet| worksheet.id)
+                                .ok_or_else(|| {
+                                    OmError::new(
+                                        OmErrorCode::NotFound,
+                                        format!(
+                                            "Chart.Location target worksheet {target_sheet_name:?} was not found"
+                                        ),
+                                    )
+                                })?;
+                            self.ensure_grid_worksheet(
+                                workbook,
+                                target_sheet_id,
+                                "Chart.Location xlLocationAsObject",
+                            )?;
+                            self.ensure_worksheet_visible(
+                                workbook,
+                                target_sheet_id,
+                                "Chart.Location xlLocationAsObject",
+                            )?;
+                            let target_worksheet =
+                                self.register_worksheet_handle(workbook, target_sheet_id);
+                            let target_chart_objects =
+                                match self.dispatch_get(target_worksheet.0, "ChartObjects", &[])? {
+                                    OmValue::Object(handle) => handle,
+                                    _ => unreachable!(
+                                        "Worksheet.ChartObjects returned a non-object value"
+                                    ),
+                                };
+                            let target_chart_object = match self.dispatch_invoke(
+                                target_chart_objects,
+                                "Add",
+                                &[
+                                    OmValue::Number(geometry[0]),
+                                    OmValue::Number(geometry[1]),
+                                    OmValue::Number(geometry[2]),
+                                    OmValue::Number(geometry[3]),
+                                ],
+                            )? {
+                                OmValue::Object(handle) => handle,
+                                _ => unreachable!("ChartObjects.Add returned a non-object value"),
+                            };
+                            let target_chart_object_id =
+                                match self.runtime_object(target_chart_object)? {
+                                    RuntimeObjectKind::ChartObject {
+                                        chart_object_id, ..
+                                    } => chart_object_id,
+                                    _ => unreachable!(
+                                        "ChartObjects.Add returned a non-ChartObject handle"
+                                    ),
+                                };
+                            let temporary_chart_id = self
+                                .chart_object_model(workbook, target_chart_object_id)?
+                                .chart_id;
+                            {
+                                let runtime = self.runtime_workbook_mut(workbook)?;
+                                let mut replaced = false;
+                                for drawing in runtime.loaded.state.drawings.values_mut() {
+                                    for object in &mut drawing.objects {
+                                        let DrawingObjectModel::ChartFrame(chart_object) = object
+                                        else {
+                                            continue;
+                                        };
+                                        if chart_object.id != target_chart_object_id {
+                                            continue;
+                                        }
+                                        chart_object.dirty = true;
+                                        drawing.dirty = true;
+                                        replaced = true;
+                                        break;
+                                    }
+                                    if replaced {
+                                        break;
+                                    }
+                                }
+                                if !replaced {
+                                    return Err(OmError::new(
+                                        OmErrorCode::NotFound,
+                                        "target chart object not found",
+                                    ));
+                                }
+                                let mut moved_chart = source_chart;
+                                moved_chart.id = temporary_chart_id;
+                                moved_chart.workbook_id = runtime.loaded.state.model.id;
+                                moved_chart.raw_part_uri = None;
+                                moved_chart.dirty = true;
+                                runtime
+                                    .loaded
+                                    .state
+                                    .charts
+                                    .insert(temporary_chart_id, moved_chart);
+                                if !source_chart_support_part_sources.is_empty() {
+                                    runtime.chart_support_part_sources.insert(
+                                        temporary_chart_id,
+                                        source_chart_support_part_sources,
+                                    );
+                                }
+                                runtime.dirty = true;
                             }
-                            Err(OmError::unsupported(
-                                "Chart.Location xlLocationAsObject is not supported yet",
-                            ))
+                            if let Some((_, source_chart_object_id, _)) =
+                                source_embedded_chart_object
+                                && source_chart_object_id != target_chart_object_id
+                            {
+                                self.delete_chart_object(workbook, source_chart_object_id)?;
+                            }
+                            if let Some(source_sheet_id) = source_chart_sheet_id {
+                                self.delete_worksheet(workbook, source_sheet_id, false)?;
+                            }
+                            self.stale_chart_handles_for_chart(workbook, chart_id);
+                            self.stale_series_handles_for_chart(workbook, chart_id);
+                            self.set_selection(workbook, target_sheet_id, Rect::single_cell(1, 1));
+                            let target_chart = self
+                                .register_chart_handle_with_chart_object_parent_origin(
+                                    workbook,
+                                    temporary_chart_id,
+                                    Some(ChartObjectsParent::Worksheet(target_sheet_id)),
+                                );
+                            self.dispatch_set(
+                                target_chart,
+                                "Name",
+                                OmValue::Text(source_chart_name),
+                                &[],
+                            )?;
+                            {
+                                let runtime = self.runtime_workbook_mut(workbook)?;
+                                if let Some(worksheet_support_parts) = runtime
+                                    .loaded
+                                    .worksheet_support_parts
+                                    .get_mut(&target_sheet_id)
+                                {
+                                    worksheet_support_parts.relationships_summary = None;
+                                    worksheet_support_parts.relationships_part_source_bytes = None;
+                                }
+                            }
+                            self.active_chart = Some((
+                                workbook,
+                                temporary_chart_id,
+                                Some(ChartObjectsParent::Worksheet(target_sheet_id)),
+                            ));
+                            Ok(OmValue::Object(target_chart))
                         }
                         XL_LOCATION_AUTOMATIC => Err(OmError::unsupported(
                             "Chart.Location xlLocationAutomatic is not supported yet",
@@ -102587,7 +102780,7 @@ mod tests {
     }
 
     #[test]
-    fn chart_location_as_new_sheet_promotes_embedded_chart_and_returns_new_chart() {
+    fn chart_location_moves_between_embedded_and_chart_sheet_hosts() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -102727,7 +102920,7 @@ mod tests {
                 .code,
             OmErrorCode::InvalidArgument
         );
-        assert_eq!(
+        let embedded_again_chart = expect_object_handle(
             runtime
                 .dispatch_invoke(
                     renamed_chart,
@@ -102737,14 +102930,86 @@ mod tests {
                         OmValue::Text("Sheet1".to_string()),
                     ],
                 )
-                .expect_err("Chart.Location xlLocationAsObject is not supported yet")
-                .code,
-            OmErrorCode::Unsupported
+                .expect("Chart.Location xlLocationAsObject"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Count", &[])
+                    .expect("Charts.Count after xlLocationAsObject")
+            ),
+            0.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count after xlLocationAsObject")
+            ),
+            1.0
+        );
+        let embedded_again_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item after xlLocationAsObject"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(embedded_again_chart_object, "Name", &[])
+                    .expect("embedded again ChartObject.Name")
+            ),
+            "Renamed Location Chart"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(embedded_again_chart_object, "Width", &[])
+                    .expect("embedded again ChartObject.Width")
+            ),
+            480.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(embedded_again_chart_object, "Height", &[])
+                    .expect("embedded again ChartObject.Height")
+            ),
+            288.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(embedded_again_chart, "Name", &[])
+                    .expect("embedded again Chart.Name")
+            ),
+            "Renamed Location Chart"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(embedded_again_chart, "ChartType", &[])
+                    .expect("embedded again Chart.ChartType")
+            ),
+            f64::from(super::XL_LINE)
+        );
+        let active_chart_after_object = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                .expect("ActiveChart after xlLocationAsObject"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_chart_after_object, "Name", &[])
+                    .expect("ActiveChart.Name after xlLocationAsObject")
+            ),
+            "Renamed Location Chart"
         );
         assert_eq!(
             runtime
                 .dispatch_invoke(
-                    renamed_chart,
+                    embedded_again_chart,
                     "Location",
                     &[OmValue::Number(f64::from(super::XL_LOCATION_AUTOMATIC))],
                 )
@@ -102777,10 +103042,49 @@ mod tests {
                 .dispatch_get(reopened_workbook.0, "Charts", &[])
                 .expect("reopened Workbook.Charts"),
         );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_charts, "Count", &[])
+                    .expect("reopened Charts.Count")
+            ),
+            0.0
+        );
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_objects, "Count", &[])
+                    .expect("reopened ChartObjects.Count")
+            ),
+            1.0
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_object, "Name", &[])
+                    .expect("reopened embedded ChartObject.Name")
+            ),
+            "Renamed Location Chart"
+        );
         let reopened_chart = expect_object_handle(
             reopened_runtime
-                .dispatch_invoke(reopened_charts, "Item", &[OmValue::Number(1.0)])
-                .expect("reopened Charts.Item(1)"),
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
         );
         assert_eq!(
             expect_text(
