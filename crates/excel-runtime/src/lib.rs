@@ -13473,14 +13473,17 @@ impl ExcelRuntime {
                                     | XL_PASTE_ALL_EXCEPT_BORDERS
                                     | XL_PASTE_ALL_MERGING_CONDITIONAL_FORMATS
                                     | XL_PASTE_ALL_USING_SOURCE_THEME
+                                    | XL_PASTE_COLUMN_WIDTHS
+                                    | XL_PASTE_COMMENTS
                                     | XL_PASTE_FORMATS
                                     | XL_PASTE_FORMULAS
                                     | XL_PASTE_FORMULAS_AND_NUMBER_FORMATS
+                                    | XL_PASTE_VALIDATION
                                     | XL_PASTE_VALUES
                                     | XL_PASTE_VALUES_AND_NUMBER_FORMATS
                             ) {
                                 return Err(OmError::invalid_argument(
-                                    "Chart.Paste Type supports all-like, xlPasteFormats, xlPasteFormulas, xlPasteFormulasAndNumberFormats, xlPasteValues, and xlPasteValuesAndNumberFormats",
+                                    "Chart.Paste Type supports all-like, xlPasteColumnWidths, xlPasteComments, xlPasteFormats, xlPasteFormulas, xlPasteFormulasAndNumberFormats, xlPasteValidation, xlPasteValues, and xlPasteValuesAndNumberFormats",
                                 ));
                             }
                             paste_type
@@ -13604,7 +13607,13 @@ impl ExcelRuntime {
                             OmValue::Array(pasted_values),
                             &[],
                         )?;
-                    } else if paste_type != XL_PASTE_FORMATS {
+                    } else if !matches!(
+                        paste_type,
+                        XL_PASTE_FORMATS
+                            | XL_PASTE_COLUMN_WIDTHS
+                            | XL_PASTE_COMMENTS
+                            | XL_PASTE_VALIDATION
+                    ) {
                         let source =
                             self.register_range_set_handle(clipboard.workbook, clipboard.range);
                         let chart = self.register_chart_handle(workbook, chart_id);
@@ -118843,6 +118852,54 @@ mod tests {
             ),
             "={10,20;30,40;50,60}"
         );
+
+        for (paste_type, label) in [
+            (super::XL_PASTE_COMMENTS, "xlPasteComments"),
+            (super::XL_PASTE_VALIDATION, "xlPasteValidation"),
+            (super::XL_PASTE_COLUMN_WIDTHS, "xlPasteColumnWidths"),
+        ] {
+            runtime
+                .dispatch_invoke(source, "Copy", &[])
+                .unwrap_or_else(|_| panic!("Range.Copy before Chart.Paste {label}"));
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(
+                        chart,
+                        "Paste",
+                        &[OmValue::Number(f64::from(paste_type))],
+                    )
+                    .unwrap_or_else(|_| panic!("Chart.Paste {label}")),
+                OmValue::Empty
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .unwrap_or_else(|_| {
+                        panic!("Application.CutCopyMode after Chart.Paste {label}")
+                    }),
+                OmValue::Bool(false)
+            );
+            let series_collection = expect_object_handle(
+                runtime
+                    .dispatch_get(chart, "SeriesCollection", &[])
+                    .unwrap_or_else(|_| panic!("Chart.SeriesCollection after Chart.Paste {label}")),
+            );
+            let series = expect_object_handle(
+                runtime
+                    .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                    .unwrap_or_else(|_| {
+                        panic!("SeriesCollection.Item(1) after Chart.Paste {label}")
+                    }),
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(series, "Values", &[])
+                        .unwrap_or_else(|_| panic!("Series.Values after Chart.Paste {label}"))
+                ),
+                "={10,20;30,40;50,60}"
+            );
+        }
 
         assert_eq!(
             runtime
