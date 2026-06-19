@@ -65314,7 +65314,7 @@ mod tests {
     }
 
     #[test]
-    fn pinned_runtime_registry_exposes_series_collection_add() {
+    fn pinned_runtime_registry_exposes_recent_chart_members() {
         let runtime = ExcelRuntime::new();
         let series_collection = runtime
             .dispatch_registry()
@@ -65328,6 +65328,20 @@ mod tests {
             .find(|member| member.name == "Add")
             .expect("SeriesCollection.Add focus member");
         assert!(matches!(add.support, office_idl::SupportState::Stub));
+        let plot_area = runtime
+            .dispatch_registry()
+            .focus_surfaces
+            .iter()
+            .find(|surface| surface.name == "PlotArea")
+            .expect("PlotArea focus surface");
+        for member_name in ["Clear", "ClearContents"] {
+            let member = plot_area
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("PlotArea.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+        }
     }
 
     #[test]

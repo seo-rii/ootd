@@ -11046,6 +11046,22 @@
           }
         },
         {
+          "name": "Clear",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "PlotArea",
+                  "sourceMember": "Clear"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "ClearFormats",
           "memberKind": "method",
           "support": "stub",
@@ -11056,6 +11072,22 @@
                   "kind": "method",
                   "sourceInterface": "PlotArea",
                   "sourceMember": "ClearFormats"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "ClearContents",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "PlotArea",
+                  "sourceMember": "ClearContents"
                 }
               ]
             }
